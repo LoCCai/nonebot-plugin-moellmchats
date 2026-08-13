@@ -4,8 +4,8 @@ import time
 
 from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import (
-    Bot,
     GROUP,
+    Bot,
     GroupMessageEvent,
     Message,
     MessageEvent,
@@ -21,6 +21,8 @@ from nonebot.rule import to_me
 
 require("nonebot_plugin_localstore")
 
+_model_refresh_task: asyncio.Task | None = None
+
 from . import moe_llm as llm
 from .chat_runtime import (
     cd,
@@ -34,25 +36,47 @@ from .messages_handler import messages_dict
 from .model_selector import model_selector
 from .moe_llm import token_usage_history
 from .request_manager import cancel_request_by_arg, format_active_requests
+from .runtime_metrics import runtime_metrics
+from .runtime_reload import runtime_reloader
 from .temperament_manager import temperament_manager
 from .token_usage_formatter import format_token_usage_history
+from .tool_contracts import (
+    ToolContext,
+    ToolEffect,
+    ToolResult,
+    ToolSpec,
+    register_tool,
+)
 from .tool_manager import tool_manager
 from .tool_runtime import reload_tools_for_commands
 from .utils import (
     close_session,
+    format_context_message,
     format_message,
+    get_member_name,
     get_reply_messages,
     init_session,
 )
 
+__all__ = [
+    "ToolContext",
+    "ToolEffect",
+    "ToolResult",
+    "ToolSpec",
+    "register_tool",
+]
 
 __plugin_meta__ = PluginMetadata(
     name="MoEllm聊天",
-    description="感谢llm，机器人变聪明了\n✨ 混合专家模型调度LLM插件 | 混合调度·联网搜索·上下文优化·个性定制·Token节约·更加拟人 ✨",
+    description=(
+        "感谢llm，机器人变聪明了\n"
+        "✨ 混合专家模型调度LLM插件 | 混合调度·联网搜索·上下文优化·个性定制·Token节约·更加拟人 ✨"
+    ),
     usage="""1.艾特或以bot的名字开头进行对话
 2.用"性格切换xx"来切换性格（每个性格设定绑定每个人账号，不共享）
 3.用"ai xx"来快速调用纯ai助手
-4.超级管理员限定：用"查看配置"、"查看模型 [搜索关键词]"(支持多关键词模糊搜索)、"刷新模型"、"切换模型"、"切换moe"、"设置moe"、"设置联网"、"设置视觉模型"、"设置分类模型"、"设置工具调用"进行系统管理
+4.超级管理员限定：用"查看配置"、"查看模型"、"刷新模型"、"切换模型"、
+  "切换moe"、"设置联网"、"设置视觉模型"、"设置分类模型"、"设置工具调用"进行系统管理
 5.超级管理员限定：用"添加/移除插件黑名单"来禁用bot的特定工具调用
 6.超级管理员限定：用"刷新工具/重载工具"来热重载新增的函数
 7.超级管理员限定：用"查看插件黑名单/插件黑名单"来查看插件的黑名单列表
@@ -62,9 +86,10 @@ __plugin_meta__ = PluginMetadata(
 11.超级管理员限定：用"添加常驻插件/移除常驻插件"、"查看常驻插件"来管理无视分类模型强制注入的工具
 12.超级管理员限定：用"查看请求"、"停止请求 [编号|all]"来查看或终止当前正在处理的 LLM 请求
 13.超级管理员限定：用"查看消耗 [数量或范围]"来查询API Token消耗记录（如：查看消耗 5、查看消耗 10-15、查看消耗 -50）
+14.超级管理员限定：用"重载LLM"原子重载运行资源，用"查看LLM状态"查看队列、缓存、工具和重载状态
 """,
     type="application",
-    homepage="https://github.com/Elflare/nonebot-plugin-moellmchats",
+    homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
     supported_adapters={"~onebot.v11"},
 )
 
@@ -74,8 +99,12 @@ message_matcher = on_message(permission=GROUP, priority=1, block=False)
 
 @message_matcher.handle()
 async def context_dict_func(bot: Bot, event: MessageEvent):
+    from .event_simulator import is_synthetic_event
+
+    if is_synthetic_event():
+        return
     if event.message.extract_plain_text().strip():  # 有文字才记录
-        if message_dict := await format_message(event, bot):
+        if message_dict := format_context_message(event):
             sender_name = event.sender.card or event.sender.nickname
             message_text = "".join(message_dict["text"])
             reply_text = (message_dict.get("reply") or "").strip()
@@ -259,23 +288,25 @@ async def _(bot: Bot, event: MessageEvent):
     await handle_llm(bot, event, llm_matcher, format_message_dict, is_ai=False)
 
 
-if config_parser.get_config("fastai_enabled"):
-    ai_matcher = on_command(
-        "ai",
-        rule=chat_rule,
-        priority=17,
-        block=True,
-    )
+ai_matcher = on_command(
+    "ai",
+    rule=chat_rule,
+    priority=17,
+    block=True,
+)
 
-    @ai_matcher.handle()
-    async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
-        if args.extract_plain_text().strip():
-            format_message_dict = await format_message(event, bot)
-            await handle_llm(bot, event, ai_matcher, format_message_dict, is_ai=True)
-        else:
-            await ai_matcher.finish(
-                Message(random.choice(get_reply_messages("hello")))
-            )  # 没有就选一个卖萌回复
+
+@ai_matcher.handle()
+async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    if not config_parser.get_config("fastai_enabled"):
+        await ai_matcher.finish("快速 AI 助手当前未启用。")
+    if args.extract_plain_text().strip():
+        format_message_dict = await format_message(event, bot)
+        await handle_llm(bot, event, ai_matcher, format_message_dict, is_ai=True)
+    else:
+        await ai_matcher.finish(
+            Message(random.choice(get_reply_messages("hello")))
+        )  # 没有就选一个卖萌回复
 
 
 set_use_tools_matcher = on_command(
@@ -415,10 +446,26 @@ async def _startup_tasks():
         logger.exception("启动时加载工具失败")
 
     # 模型拉取保持后台执行，不阻塞 Bot 启动
-    asyncio.create_task(model_selector.fetch_models_from_providers())
+    async def refresh_models_in_background():
+        try:
+            await model_selector.fetch_models_from_providers()
+            await runtime_reloader.reload("startup-model-refresh")
+        except Exception:
+            logger.exception("后台刷新模型失败，继续使用当前运行快照")
+
+    global _model_refresh_task
+    _model_refresh_task = asyncio.create_task(refresh_models_in_background())
+    runtime_reloader.start_watcher()
 
 @get_driver().on_shutdown
 async def _close_http_session():
+    if _model_refresh_task is not None and not _model_refresh_task.done():
+        _model_refresh_task.cancel()
+        try:
+            await _model_refresh_task
+        except asyncio.CancelledError:
+            pass
+    await runtime_reloader.stop_watcher()
     await close_session()
 # 超级管理员可手动触发模型刷新
 refresh_models_matcher = on_command(
@@ -433,6 +480,7 @@ async def _():
     )
     model_selector.load_providers()  # 重新读取 TOML 配置
     await model_selector.fetch_models_from_providers()  # 重新请求 API 并重载
+    await runtime_reloader.reload("model-command")
     await refresh_models_matcher.finish(
         f"更新完毕！当前系统共加载了 {len(model_selector.models)} 个模型。"
     )
@@ -608,6 +656,64 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
     )
 
 
+reload_llm_matcher = on_command(
+    "重载LLM",
+    aliases={"刷新LLM", "重载llm", "刷新llm"},
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@reload_llm_matcher.handle()
+async def _():
+    try:
+        result = await runtime_reloader.reload("command")
+    except Exception as error:
+        await reload_llm_matcher.finish(
+            f"LLM 资源重载失败，旧配置仍在使用：{str(error)[:300]}"
+        )
+    await reload_llm_matcher.finish(
+        f"LLM 资源重载完成：generation {result.generation}，"
+        f"自定义工具 {result.custom_tools}，MCP 工具 {result.mcp_tools}。"
+    )
+
+
+llm_status_matcher = on_command(
+    "查看LLM状态",
+    aliases={"LLM状态", "查看llm状态", "llm状态"},
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@llm_status_matcher.handle()
+async def _():
+    metrics = runtime_metrics.snapshot()
+    avg_category = (
+        metrics["classification_seconds"] / metrics["classification_count"]
+        if metrics["classification_count"]
+        else 0
+    )
+    await llm_status_matcher.finish(
+        "LLM 运行状态\n"
+        f"generation: {metrics['reload_generation']}\n"
+        f"请求: active={metrics['llm_active']} pending={metrics['llm_pending']} "
+        f"rejected={metrics['llm_rejected']}\n"
+        f"兼容投递: active={metrics['dispatch_active']} pending={metrics['dispatch_pending']} "
+        f"rejected={metrics['dispatch_rejected']} timeout={metrics['dispatch_timeouts']}\n"
+        f"投递模式: {metrics['dispatch_modes'] or {}}\n"
+        f"成员缓存: hit={metrics['member_cache_hits']} miss={metrics['member_cache_misses']} "
+        f"timeout={metrics['member_lookup_timeouts']}\n"
+        f"分类平均耗时: {avg_category:.2f}s\n"
+        f"工具步骤: {metrics['tool_steps']} timeout={metrics['tool_timeouts']}\n"
+        f"重载: success={metrics['reload_successes']} failure={metrics['reload_failures']} "
+        f"last_at={metrics['last_reload_at'] or '无'}\n"
+        f"最近重载错误: {metrics['last_reload_error'] or '无'}"
+    )
+
+
 # 优先级10，不会向下阻断，条件：戳一戳bot触发
 poke_ = on_notice(rule=to_me(), priority=11, block=False)
 
@@ -629,12 +735,7 @@ async def _poke_event(bot: Bot, event: PokeNotifyEvent):
     ):
         # 获取戳一戳发起者的群名片/昵称
         try:
-            member = await bot.get_group_member_info(
-                group_id=group_id, user_id=event.user_id, no_cache=False
-            )
-            sender_name = (
-                member.get("card") or member.get("nickname") or str(event.user_id)
-            )
+            sender_name = await get_member_name(group_id, event.user_id, bot)
         except Exception:
             sender_name = str(event.user_id)
 

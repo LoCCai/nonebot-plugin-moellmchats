@@ -7,7 +7,6 @@ import traceback
 
 import aiohttp
 from nonebot.log import logger
-import ujson as json
 
 from .config import config_parser
 from .llm_api import LlmApiMixin
@@ -16,7 +15,9 @@ from .llm_state import context_dict, token_usage_history
 from .llm_tools import LlmToolsMixin
 from .messages_handler import MessagesHandler
 from .model_selector import model_selector
+from .runtime_snapshot import runtime_snapshots
 from .temperament_manager import temperament_manager
+from .tool_manager import tool_manager
 from .utils import get_emotion, get_emotions_names, get_session, parse_emotion
 
 __all__ = ["MoeLlm", "context_dict", "token_usage_history"]
@@ -44,15 +45,17 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self._pending_vision_images: list = []  # 本轮工具调用返回的待处理图片
         self._current_tool_usage = Counter()
         self._last_api_error_non_retryable = False
+        runtime_snapshot = runtime_snapshots.active()
+        self.tool_snapshot = (
+            runtime_snapshot.tool_snapshot
+            if runtime_snapshot is not None
+            else tool_manager.snapshot()
+        )
 
     async def _validate_runtime_model_config(self) -> str | None:
 
-        is_valid, warnings = model_selector.validate_model_config(persist=True)
-        self._config_warnings = warnings
-        if not is_valid:
-            return warnings[0] if warnings else "当前没有可用模型"
-        for warning in warnings:
-            await self.bot.send(self.event, warning)
+        if model_selector.get_model("selected_model") is None:
+            return "当前没有可用聊天模型，请检查模型配置后重载 LLM。"
         return None
 
     def prompt_handler(self):
@@ -75,8 +78,24 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 dynamic_context_parts.append(f"Environment: QQ Group.{emotion_prompt}")
                 if context_dict[self.event.group_id]:
                     dynamic_context_parts.append("Recent_Chat_Log:")
-                    context_dict_ = list(context_dict[self.event.group_id])[:-1]
-                    dynamic_context_parts.append("\n".join(context_dict_))
+                    context_items = list(context_dict[self.event.group_id])[:-1]
+                    max_chars = config_parser.get_config("max_history_chars", 16_000)
+                    max_tokens = config_parser.get_config("max_history_tokens", 4_000)
+                    selected: list[str] = []
+                    chars = 0
+                    tokens = 0
+                    for item in reversed(context_items):
+                        item = item[:max_chars]
+                        item_tokens = max(1, (len(item) + 2) // 3)
+                        if selected and (
+                            chars + len(item) > max_chars
+                            or tokens + item_tokens > max_tokens
+                        ):
+                            break
+                        selected.append(item)
+                        chars += len(item)
+                        tokens += item_tokens
+                    dynamic_context_parts.append("\n".join(reversed(selected)))
             else:
                 dynamic_context_parts.append(
                     f"Environment: Private Chat.{emotion_prompt}"
@@ -138,7 +157,10 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         # 2. 构建 Payload
         data, current_stream_flag = self._build_payload(send_message_list)
         # DEBUG
-        logger.debug(json.dumps(data, indent=2, ensure_ascii=False))
+        logger.debug(
+            f"LLM payload: model={data.get('model')} messages={len(data.get('messages', []))} "
+            f"tools={len(data.get('tools', []))} stream={data.get('stream', False)}"
+        )
 
         headers = {
             "Authorization": self.model_info["key"],
@@ -146,11 +168,16 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             "Accept-Encoding": "identity",
         }
 
-        max_tool_rounds = config_parser.get_config("max_tool_rounds") or 3
+        max_tool_rounds = min(
+            config_parser.get_config("max_tool_rounds", 6),
+            config_parser.get_config("max_agent_steps", 6),
+        )
         max_retry_times = config_parser.get_config("max_retry_times") or 3
 
         session = get_session()
-        llm_timeout = aiohttp.ClientTimeout(total=300)
+        llm_timeout = aiohttp.ClientTimeout(
+            total=config_parser.get_config("request_timeout_seconds", 180)
+        )
         # 修改：增加上限至 max_tool_rounds + 1，以容纳最后一次强制总结
         for tool_round in range(max_tool_rounds + 1):
             result_text = ""
@@ -214,7 +241,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 except TimeoutError:
                     result_text = "网络超时呐，多半是api反应太慢（"
                 except Exception:
-                    logger.warning(str(send_message_list))
+                    logger.warning("LLM 请求异常；消息内容已从日志中省略")
                     logger.error(traceback.format_exc())
                     continue
 

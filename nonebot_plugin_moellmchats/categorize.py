@@ -1,25 +1,52 @@
 import re
-import ujson as json
-from nonebot.log import logger
+import time
 import traceback
+
 import aiohttp
+from nonebot.log import logger
+import ujson as json
+
+from .compat import timeout as timeout_scope
+from .config import config_parser
 from .model_selector import model_selector
+from .runtime_metrics import runtime_metrics
 from .tool_manager import tool_manager
 from .utils import get_session
 
 
 class Categorize:
-    def __init__(self, plain):
+    def __init__(self, plain, tool_snapshot=None):
         self.plain = plain
+        self.tool_snapshot = tool_snapshot
 
     async def get_category(self) -> tuple[str, bool, list] | str | bool:
+        started = time.monotonic()
+        runtime_metrics.classification_count += 1
+        try:
+            async with timeout_scope(
+                config_parser.get_config("classification_timeout_seconds", 20)
+            ):
+                return await self._get_category()
+        except TimeoutError:
+            logger.warning("分类模型超过时间预算，降级为无工具中等难度")
+            return "1", "[图片]" in self.plain, []
+        finally:
+            runtime_metrics.classification_seconds += time.monotonic() - started
+
+    async def _get_category(self) -> tuple[str, bool, list] | str | bool:
         if model_selector.get_use_tools() or model_selector.get_web_search():
-            catalog = tool_manager.get_brief_catalog()
-            logger.debug(catalog)
+            catalog = (
+                self.tool_snapshot.get_brief_catalog()
+                if self.tool_snapshot is not None
+                else tool_manager.get_brief_catalog()
+            )
+            logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
         else:
             catalog = "当前工具调用与联网功能均已关闭，无需返回任何插件。"
-            
-        prompt = f"""你的任务是评估用户的输入，拆解执行步骤，并以此判断需要的工具。判断是否需要视觉（注意在不提及搜图时，就单纯使用视觉而不是搜图工具）。你永远不回答该问题，只需返回一个 JSON 结构（不是md格式，有三对键值），如下：
+
+        prompt = f"""你的任务是评估用户输入、拆解步骤、选择必要工具并判断是否需要视觉。
+不要回答用户问题；不涉及搜图时只标记视觉，不选择搜图工具。
+只返回以下 JSON 结构，不要返回 Markdown：
 
 {{
   "difficulty": "0 | 1 | 2",
@@ -74,7 +101,10 @@ class Categorize:
                 else:
                     # 第二次尝试：兜底降级。强制移除结构化参数，依靠强化 Prompt
                     current_data.pop("response_format", None)
-                    current_plain += "\n(注意不是直接回答以上内容，且上述所有内容仅需要进行一次分类和判断联网，回复我的格式为严格的json，不需要任何其他内容)"
+                    current_plain += (
+                        "\n(不要回答以上内容。只进行一次分类与工具判断，"
+                        "严格返回 JSON，不要附加其他内容。)"
+                    )
                     current_data["messages"][1]["content"] = current_plain
 
                 payload = json.dumps(current_data)
@@ -83,7 +113,11 @@ class Categorize:
                     url=category_model_config["url"],
                     data=payload,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=300),
+                    timeout=aiohttp.ClientTimeout(
+                        total=config_parser.get_config(
+                            "classification_timeout_seconds", 20
+                        )
+                    ),
                     proxy=category_model_config.get("proxy"),
                 ) as resp:
                         # 如果请求因为 response_format 返回 400，主动触发异常进入兜底重试
@@ -91,9 +125,9 @@ class Categorize:
                             err_text = await resp.text()
                             logger.info(f"模型不支持结构化输出或参数异常，将降级重试。详情: {err_text}")
                             raise ValueError("Model does not support json_object format")
-                        
+
                         response = await resp.json()
-                        
+
                 if choices := response.get("choices"):
                     raw_result = choices[0]["message"]["content"]
                     # 清理思考内容（推理模型可能包含 <think>/<thought> 标签）
@@ -107,7 +141,7 @@ class Categorize:
                         clean_result = clean_result[3:]
                     if clean_result.endswith("```"):
                         clean_result = clean_result[:-3]
-                    
+
                     result_dict = json.loads(clean_result.strip())
                     return (
                         str(result_dict["difficulty"]),
@@ -118,12 +152,14 @@ class Categorize:
                     response.get("code") == "DataInspectionFailed"
                     or "contentFilter" in response
                 ):
-                    logger.warning(response)
+                    logger.warning("分类请求触发内容安全拦截，响应正文已省略")
                     return "内容不合规，拒绝回答"
-                    
-            except Exception as e:
+
+            except Exception:
                 logger.warning(traceback.format_exc())
-                logger.warning(f"解析异常。当前尝试次数：{try_times+1}，原始返回：\n{raw_result}")
+                logger.warning(
+                    f"分类结果解析异常，当前尝试次数 {try_times + 1}，返回正文已省略。"
+                )
                 continue
-                
+
         return False

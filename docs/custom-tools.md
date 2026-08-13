@@ -2,7 +2,7 @@
 
 `custom_tools/` 目录允许你直接编写原生 Python 函数，供大模型通过 Function Calling 原生调用，**无需模拟 NoneBot 消息事件**。适合编写计算器、爬虫、系统查询等轻量级扩展工具。
 
-首次运行后会自动生成该目录及示例模板 `custom_tools/example.py`。
+首次运行后会自动生成禁用的参考模板 `custom_tools/_example.py`。以下划线开头的文件和历史 `example.py` 都不会加载，复制并改名后才会成为工具，避免默认开放网络访问。
 
 ---
 
@@ -124,7 +124,13 @@ async def send_message_to_target(
 
 ## 热重载
 
-编写完成后，使用 Bot 指令 `刷新工具` 即可热重载，**无需重启 NoneBot**。
+编写完成后会自动原子重载，也可使用 `刷新工具` 或 `重载LLM`，**无需重启 NoneBot**。语法错误时旧 generation 保持可用。
+
+## 显式 ToolSpec 接口（推荐）
+
+其他 Python 插件可调用 `register_tool(ToolSpec(...))` 注册结构化工具。`ToolSpec` 描述参数 JSON Schema、`read_only`/`mutating` 属性、`user`/`superuser` 权限、超时、结果上限和依赖；处理函数可接收 `_tool_context: ToolContext` 并返回 `ToolResult`。
+
+变更型工具只有在用户文字包含 `确认执行` 且模型调用参数带 `confirm=true` 时才运行。URL 参数统一拒绝私网、环回、保留地址和云元数据地址。
 
 ---
 

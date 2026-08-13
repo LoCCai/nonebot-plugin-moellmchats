@@ -1,30 +1,65 @@
-import nonebot
-from nonebot.log import logger
-from .config import config_parser, config_path
-from random import choice
-from pathlib import Path
-from os import listdir
-from nonebot.adapters.onebot.v11 import MessageSegment, Message
-from traceback import format_exc
-import re
 import inspect
-from typing import get_type_hints, get_origin, get_args, Annotated
+from os import listdir
+from pathlib import Path
+from random import choice
+import re
+from traceback import format_exc
+from typing import Annotated, get_args, get_origin, get_type_hints
+
 import aiohttp
+import nonebot
+from nonebot.adapters.onebot.v11 import MessageSegment
+from nonebot.log import logger
+
+from .config import config_parser, config_path
+from .member_cache import member_name_cache
+
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib
 
-Bot_NICKNAME: str = list(nonebot.get_driver().config.nickname)[0]  # bot的nickname
+Bot_NICKNAME: str = next(iter(nonebot.get_driver().config.nickname))  # bot的nickname
 # 表情包名字缓存
 _emotions_cache = None
+
+_DEFAULT_REPLIES = {
+    "hello": [
+        "你好喵~",
+        "呜喵..？！",
+        "你好OvO",
+        "喵呜 ~ ，叫{bot_name}做什么呢☆",
+        "怎么啦qwq",
+        "呜喵 ~ ，干嘛喵？",
+        "呼喵 ~ 叫可爱的咱有什么事嘛OvO",
+    ],
+    "poke": [
+        "嗯？",
+        "戳我干嘛qwq",
+        "呜喵？",
+        "喵！",
+        "请不要戳{bot_name} >_<",
+    ],
+}
+
+
+def invalidate_resource_caches() -> None:
+    global _emotions_cache
+    _emotions_cache = None
 
 
 # 戳和hello消息
 def get_reply_messages(reply_type: str) -> list:
     """获取回复消息，reply_type 可选 'hello' 或 'poke'"""
+    from .runtime_snapshot import runtime_snapshots
+
+    snapshot = runtime_snapshots.active()
+    if snapshot is not None:
+        replies = snapshot.replies.get(reply_type, ("喵？",))
+        return [reply.replace("{bot_name}", Bot_NICKNAME) for reply in replies]
+
     reply_file_path = config_path / "replies.toml"
-    
+
     # 如果文件不存在，则自动创建并写入默认文案
     if not reply_file_path.exists():
         default_toml_content = """# 机器人回复文案配置
@@ -66,12 +101,9 @@ poke = [
                 f.write(default_toml_content)
         except Exception as e:
             logger.warning(f"创建 replies.toml 失败: {e}")
-            
+
         # 写入失败或创建默认值后，直接使用兜底字典
-        replies_dict = {
-            "hello": ["你好喵~", "呜喵..？！", "你好OvO", "喵呜 ~ ，叫{bot_name}做什么呢☆", "怎么啦qwq", "呜喵 ~ ，干嘛喵？", "呼喵 ~ 叫可爱的咱有什么事嘛OvO"],
-            "poke": ["嗯？", "戳我干嘛qwq", "呜喵？", "喵！", "呜...不要用力戳咱...好疼>_<", "请不要戳{bot_name} >_<", "放手啦，不给戳QAQ", "喵 ~ ！ 戳{bot_name}干嘛喵！", "戳坏了，你赔！", "呜......戳坏了", "呜呜......不要乱戳", "喵喵喵？OvO", "(。´・ω・)ん?", "怎么了喵？", "呜喵！......不许戳 (,,• ₃ •,,)", "有什么吩咐喵？", "啊呜 ~ ", "呼喵 ~ 叫可爱的咱有什么事嘛OvO"]
-        }
+        replies_dict = _DEFAULT_REPLIES
     else:
         # 文件存在则读取，tomllib 需要用 "rb" 模式
         try:
@@ -86,6 +118,33 @@ poke = [
 
     # 动态将 {bot_name} 占位符替换为真实的机器人昵称
     return [reply.replace("{bot_name}", Bot_NICKNAME) for reply in replies]
+
+
+def load_replies_candidate() -> dict[str, tuple[str, ...]]:
+    path = config_path / "replies.toml"
+    if not path.exists():
+        data = _DEFAULT_REPLIES
+    else:
+        with path.open("rb") as file:
+            data = tomllib.load(file)
+    result: dict[str, tuple[str, ...]] = {}
+    for key in ("hello", "poke"):
+        values = data.get(key)
+        if not isinstance(values, list) or not values or not all(
+            isinstance(value, str) and value for value in values
+        ):
+            raise ValueError(f"replies.toml: {key} 必须是非空字符串数组")
+        result[key] = tuple(values)
+    return result
+
+
+def load_emotions_candidate(config: dict) -> tuple[str, ...]:
+    if not config.get("emotions_enabled"):
+        return ()
+    directory = Path(str(config.get("emotions_dir") or ""))
+    if not directory.is_dir():
+        raise ValueError(f"表情目录不可用: {directory}")
+    return tuple(sorted(item.name for item in directory.iterdir()))
 
 
 def parse_emotion(text: str) -> tuple:
@@ -116,6 +175,11 @@ def parse_emotion(text: str) -> tuple:
 
 # 获取表情包名字列表
 def get_emotions_names() -> list:
+    from .runtime_snapshot import runtime_snapshots
+
+    snapshot = runtime_snapshots.active()
+    if snapshot is not None:
+        return list(snapshot.emotions)
     global _emotions_cache
     if _emotions_cache is None:
         try:
@@ -145,6 +209,21 @@ def get_emotion(emoji_name: str) -> MessageSegment:
 
 
 # 消息格式转换
+def format_context_message(event) -> dict:
+    """Extract ordinary group context without OneBot API or reply lookups."""
+    text_message = []
+    for segment in event.get_message():
+        if segment.type == "text":
+            text_message.append(segment.data.get("text", ""))
+        elif segment.type == "image":
+            text_message.append("[图片]")
+        elif segment.type == "at":
+            qq = str(segment.data.get("qq", ""))
+            if qq and qq != str(event.self_id):
+                text_message.append(f"@{qq}")
+    return {"text": text_message}
+
+
 async def format_message(event, bot) -> dict:
     text_message = []
     reply_text = ""
@@ -175,28 +254,15 @@ async def format_message(event, bot) -> dict:
             "name": reply.sender.card or reply.sender.nickname,
         }
 
-        try:
-            quoted_message = await bot.get_msg(message_id=reply.message_id)
-            message_list = quoted_message["message"]
-            if isinstance(message_list, str):
-                message_image = Message(message_list)
-                for seg in message_image:
-                    if seg.type == "image":
-                        if url := seg.data.get("url"):
-                            image_urls.append(url)
-            else:
-                for message in message_list:
-                    if message.get("type") == "image":
-                        if url := message.get("data", {}).get("url"):
-                            image_urls.append(url)
-        except Exception:
-            logger.warning("获取回复消息图片失败")
+        for seg in reply.message:
+            if seg.type == "image" and (url := seg.data.get("url")):
+                image_urls.append(url)
 
     # 2. 处理当前消息
     for msgseg in event.get_message():
         if msgseg.type == "at":
             qq = str(msgseg.data.get("qq"))
-            if qq != str(nonebot.get_bot().self_id):
+            if qq != str(bot.self_id):
                 name = await get_member_name(event.group_id, qq, bot)
                 mentions.append({"qq": qq, "name": name})
                 text_message.append(name)
@@ -224,15 +290,7 @@ async def format_message(event, bot) -> dict:
 
 
 async def get_member_name(group: int, sender_id: int, bot) -> str:  # 将QQ号转换成昵称
-    try:
-        member_info = await bot.get_group_member_info(
-            group_id=group, user_id=sender_id, no_cache=False
-        )
-        name = member_info.get("card") or member_info.get("nickname")
-    except Exception:
-        name = sender_id
-        logger.warning("获取成员info失败")
-    return str(name)
+    return await member_name_cache.get(bot, group, sender_id)
 
 
 def build_schema_from_func(func) -> dict:

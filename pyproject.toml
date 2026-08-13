@@ -1,26 +1,29 @@
 [tool.poetry]
 name = "nonebot-plugin-moellmchats"
-version = "0.22.3"
+version = "0.24.0"
 description = "A Nonebot plugin, Multi-Model Chat System | Hybrid Scheduling·Search Augmented·Persona Customization"
 license = "GPL"
-authors = ["Elflare"]
+authors = ["Elflare", "LoCCai Maintainers"]
+maintainers = ["LoCCai Maintainers"]
 readme = "README.md"
-homepage = "https://github.com/Elflare/nonebot-plugin-moellmchats"
-repository = "https://github.com/Elflare/nonebot-plugin-moellmchats"
-documentation = "https://github.com/Elflare/nonebot-plugin-moellmchats#readme"
+homepage = "https://github.com/LoCCai/nonebot-plugin-moellmchats"
+repository = "https://github.com/LoCCai/nonebot-plugin-moellmchats"
+documentation = "https://github.com/LoCCai/nonebot-plugin-moellmchats#readme"
 keywords = ["nonebot", "nonebot2", "llm", "ai", "chat"]
 
 [tool.poetry.dependencies]
 python = "^3.10"
 aiohttp = ">=3.14.0,<4.0.0"
-nonebot2 = "^2.2.0"
-nonebot-adapter-onebot = "^2.0.0"
+nonebot2 = ">=2.4.4,<3.0.0"
+nonebot-adapter-onebot = ">=2.4.6,<3.0.0"
 ujson = ">=5.12.0,<6.0.0"
 nonebot-plugin-localstore = "^0.7.0"
 python-dotenv = ">=1.2.2,<2.0.0"
 tomli = { version = "^2.0.1", python = "<3.11" }
 mcp = {extras = ["cli"], version = ">=1.28.1,<2.0.0"}
 [tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-asyncio = "^0.24.0"
 ruff = "^0.8.0"
 nonemoji = "^0.1.2"
 pre-commit = "^4.0.0"
@@ -29,6 +32,7 @@ filelock = ">=3.20.3,<4.0.0"
 [tool.ruff]
 line-length = 130
 target-version = "py310"
+extend-exclude = ["tests/.data"]
 
 [tool.ruff.format]
 line-ending = "lf"
@@ -57,6 +61,7 @@ ignore = [
     "RUF001", # ambiguous-unicode-character-string
     "RUF002", # ambiguous-unicode-character-docstring
     "RUF003", # ambiguous-unicode-character-comment
+    "TC003",  # runtime annotations intentionally import stdlib collection protocols
 ]
 
 [tool.ruff.lint.isort]

@@ -1,7 +1,7 @@
 import asyncio
+from dataclasses import dataclass
 import itertools
 import time
-from dataclasses import dataclass
 
 from nonebot.adapters.onebot.v11 import MessageEvent
 
@@ -85,6 +85,16 @@ def get_current_request_elapsed() -> float | None:
     for request in _active_requests.values():
         if request.task is task:
             return time.time() - request.started_at
+    return None
+
+
+def get_current_request_id() -> int | None:
+    task = asyncio.current_task()
+    if task is None:
+        return None
+    for request in _active_requests.values():
+        if request.task is task:
+            return request.request_id
     return None
 
 

@@ -1,13 +1,57 @@
+from collections import deque
+from copy import deepcopy
+from dataclasses import dataclass
+import importlib.util
+import inspect
+from pathlib import Path
+
 import nonebot
 from nonebot.log import logger
 import ujson as json
-import importlib.util
-from pathlib import Path
-from collections import deque
-from .model_selector import model_selector, config_path
-from .utils import build_schema_from_func
-import inspect
+
 from .mcp_manager import mcp_manager
+from .model_selector import config_path, model_selector
+from .tool_contracts import tool_registry
+from .utils import build_schema_from_func
+
+
+@dataclass(frozen=True)
+class ToolSnapshot:
+    generation: int
+    plugin_info: dict
+    custom_tools: dict
+    tool_dependencies: dict
+    mcp_tool_names: set
+
+    def expand_dependencies(self, plugins: set) -> set:
+        expanded = {p for p in plugins if not tool_manager.is_tool_blacklisted(p)}
+        queue = deque(expanded)
+        while queue:
+            current = queue.popleft()
+            for dependency in self.tool_dependencies.get(current, set()):
+                if tool_manager.is_tool_blacklisted(dependency):
+                    continue
+                if dependency not in expanded and (
+                    dependency in self.custom_tools or dependency in self.plugin_info
+                ):
+                    expanded.add(dependency)
+                    queue.append(dependency)
+        return expanded
+
+    def get_tool_schema(self, plugin_names: list, include_search: bool = False) -> list:
+        return ToolManager.build_tool_schema(
+            plugin_names,
+            include_search=include_search,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+        )
+
+    def get_brief_catalog(self) -> str:
+        return ToolManager.build_brief_catalog(
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            mcp_tool_names=self.mcp_tool_names,
+        )
 
 
 class ToolManager:
@@ -47,7 +91,7 @@ class ToolManager:
         is_first_time_dir = not self.custom_tools_dir.exists()
         self.custom_tools_dir.mkdir(parents=True, exist_ok=True)
 
-        template_file = self.custom_tools_dir / "example.py"
+        template_file = self.custom_tools_dir / "_example.py"
         # 如果是首次创建文件夹，则生成模板
         if is_first_time_dir:
             template_content = '''
@@ -84,8 +128,9 @@ async def get_current_datetime() -> str:
         now = datetime.datetime.now()
         weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
         weekday_str = weekdays[now.weekday()]
-        
-        return f"当前系统时间是: {now.strftime(f'%Y年%m月%d日 %H:%M:%S {weekday_str}')}"
+
+        formatted = now.strftime(f'%Y年%m月%d日 %H:%M:%S {weekday_str}')
+        return f"当前系统时间是: {formatted}"
     except Exception as e:
         return f"获取时间失败: {str(e)}"
 
@@ -109,30 +154,30 @@ async def extract_webpage(
         return "提取失败：请提供有效的URL（以http://或https://开头）"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (compatible; MoEllmChats custom tool example)"
     }
     timeout = aiohttp.ClientTimeout(total=30)
-    
+
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers) as response:
                 if response.status != 200:
                     return f"提取失败：网页返回状态码 {response.status}"
                 html = await response.text()
-                
+
         # 使用正则移除 script 和 style 标签及其内容
         text = re.sub(r'<(script|style).*?>.*?</\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
         # 移除所有剩余的 HTML 标签
         text = re.sub(r'<[^>]+>', ' ', text)
-        
+
         # 清理多余的空白符和空行
         text = re.sub(r'\\n\\s*\\n', '\\n', text).strip()
         text = re.sub(r' {2,}', ' ', text)
-        
+
         max_length = 4000
         if len(text) > max_length:
             text = text[:max_length] + "\\n\\n...[由于内容过长，为防止上下文超出限制，已自动截断]"
-            
+
         return f"网页提取成功，以下是内容摘要：\\n{text}"
     except Exception as e:
         return f"提取网页失败，发生错误：{str(e)}"
@@ -140,14 +185,21 @@ async def extract_webpage(
             with open(template_file, "w", encoding="utf-8") as f:
                 f.write(template_content)
 
-    def load_custom_tools(self):
+    def load_custom_tools(self, *, commit: bool = True):
         """遍历并加载 custom_tools 文件夹下的所有自定义函数"""
-        self.custom_tools.clear()
+        registered_tools = tool_registry.snapshot()
+        new_tools = {
+            name: spec.as_legacy_schema() for name, spec in registered_tools.items()
+        }
         # 每次重载前清空旧的依赖，防止热重载时叠加死循环
-        self.tool_dependencies = {}
+        new_dependencies = {
+            name: set(spec.dependencies)
+            for name, spec in registered_tools.items()
+            if spec.dependencies
+        }
         error_count = 0
         for file in self.custom_tools_dir.glob("*.py"):
-            if file.name.startswith("__"):
+            if file.name.startswith("_") or file.name == "example.py":
                 continue
             module_name = f"custom_tools_{file.stem}"
             spec = importlib.util.spec_from_file_location(module_name, file)
@@ -161,7 +213,7 @@ async def extract_webpage(
                     ):
                         for trigger_tool, deps in module.TOOL_DEPENDENCIES.items():
                             # 使用 set 防止多个脚本对同一个主工具注入了重复的依赖
-                            self.tool_dependencies.setdefault(
+                            new_dependencies.setdefault(
                                 trigger_tool, set()
                             ).update(deps)
                             logger.debug(
@@ -171,7 +223,7 @@ async def extract_webpage(
                     if hasattr(module, "TOOLS_REGISTRY"):
                         # 兼容老写法：直接读取
                         for schema in module.TOOLS_REGISTRY:
-                            self.custom_tools[schema["name"]] = schema
+                            new_tools[schema["name"]] = schema
                     else:
                         # 新写法：全自动动态扫描并注入
                         for name, obj in inspect.getmembers(
@@ -183,14 +235,19 @@ async def extract_webpage(
                                 and obj.__module__ == module.__name__
                             ):
                                 schema = build_schema_from_func(obj)
-                                self.custom_tools[schema["name"]] = schema
+                                new_tools[schema["name"]] = schema
                 except Exception as e:
                     logger.error(f"加载自定义工具文件 {file.name} 失败: {e}")
                     error_count += 1
-        self._merge_dependencies_from_custom_plugin_info()
-        logger.debug(f"最终的工具依赖拓扑: {self.tool_dependencies}")
+        self._merge_dependencies_from_custom_plugin_info(new_dependencies)
+        logger.debug(f"最终的工具依赖拓扑: {new_dependencies}")
+        if error_count:
+            raise RuntimeError(f"有 {error_count} 个自定义工具文件加载失败")
+        if commit:
+            self.custom_tools = new_tools
+            self.tool_dependencies = new_dependencies
         logger.debug(f"最终加载的自定义工具: {list(self.custom_tools.keys())}")
-        return error_count
+        return error_count if commit else (new_tools, new_dependencies)
 
     def expand_dependencies(self, plugins: set) -> set:
         """
@@ -225,17 +282,13 @@ async def extract_webpage(
         logger.debug(f"收到初始插件集合: {plugins}，依赖展开后: {expanded}")
         return expanded
 
-    def refresh_plugins(self):
-        self.plugin_info.clear()
-
+    def build_plugin_info(self) -> dict:
+        plugin_info = {}
         # 读取自定义插件描述
         custom_info = self._load_custom_plugin_info()
 
         for plugin in nonebot.plugin.get_loaded_plugins():
             if "saa" in plugin.name:
-                continue
-
-            if self.is_tool_blacklisted(plugin.name):
                 continue
 
             info = None
@@ -251,7 +304,22 @@ async def extract_webpage(
                 }
 
             if info:
-                self.plugin_info[plugin.name] = info
+                plugin_info[plugin.name] = info
+        return plugin_info
+
+    def refresh_plugins(self):
+        self.plugin_info = self.build_plugin_info()
+
+    def snapshot(self) -> ToolSnapshot:
+        from .runtime_metrics import runtime_metrics
+
+        return ToolSnapshot(
+            generation=runtime_metrics.reload_generation,
+            plugin_info=deepcopy(self.plugin_info),
+            custom_tools=dict(self.custom_tools),
+            tool_dependencies=deepcopy(self.tool_dependencies),
+            mcp_tool_names=set(self.mcp_tool_names),
+        )
 
     def get_brief_catalog(self) -> str:
         """
@@ -261,48 +329,53 @@ async def extract_webpage(
         """
         if not self.plugin_info:
             self.refresh_plugins()
+        return self.build_brief_catalog(
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            mcp_tool_names=self.mcp_tool_names,
+        )
 
+    @staticmethod
+    def build_brief_catalog(
+        *, plugin_info: dict, custom_tools: dict, mcp_tool_names: set
+    ) -> str:
         catalog = []
 
         if model_selector.get_use_tools():
             # 1. NoneBot 原生插件
-            for name, info in self.plugin_info.items():
-                if self.is_tool_blacklisted(name):
+            for name, info in plugin_info.items():
+                if tool_manager.is_tool_blacklisted(name):
                     continue
 
                 plugin_name = info.get("name") or name
                 description = info.get("description") or "无描述"
-                usage = info.get("usage") or "无用法说明"
-
                 catalog.append(
-                    f"- 插件标识: {name} | 插件名称: {plugin_name} | "
-                    f"描述: {description} | 用法: {usage}"
+                    f"- {name} | {plugin_name} | {str(description)[:160]}"
                 )
 
             # 2. 自定义函数 + MCP 工具
-            for name, info in self.custom_tools.items():
-                if self.is_tool_blacklisted(name):
+            for name, info in custom_tools.items():
+                if tool_manager.is_tool_blacklisted(name):
                     continue
 
                 tool_type = (
                     "MCP工具"
-                    if name in getattr(self, "mcp_tool_names", set())
+                    if name in mcp_tool_names
                     else "自定义函数"
                 )
 
                 description = info.get("description") or "无描述"
 
                 catalog.append(
-                    f"- 插件标识: {name} | 插件名称: {tool_type} | 描述: {description}"
+                    f"- {name} | {tool_type} | {str(description)[:160]}"
                 )
 
         # 3. 联网搜索
-        if model_selector.get_web_search() and not self.is_tool_blacklisted(
+        if model_selector.get_web_search() and not tool_manager.is_tool_blacklisted(
             "web_search"
         ):
             catalog.append(
-                "- 插件标识: web_search | 插件名称: 联网搜索 | "
-                "描述: 回答实时问题，如时间、新闻、天气、近期信息等"
+                "- web_search | 联网搜索 | 回答实时问题、新闻、天气与近期信息"
             )
 
         return (
@@ -428,14 +501,14 @@ async def extract_webpage(
     def _load_custom_plugin_info(self) -> dict:
         """读取 custom_plugin_info.json。"""
         try:
-            with open(self.custom_info_file, "r", encoding="utf-8") as f:
+            with open(self.custom_info_file, encoding="utf-8") as f:
                 data = json.load(f)
             return data if isinstance(data, dict) else {}
         except Exception as e:
             logger.error(f"读取自定义插件描述文件失败: {e}")
             return {}
 
-    def _merge_dependencies_from_custom_plugin_info(self):
+    def _merge_dependencies_from_custom_plugin_info(self, dependencies=None):
         """
         从 custom_plugin_info.json 读取 dependencies 字段，并合并进 tool_dependencies。
 
@@ -449,6 +522,7 @@ async def extract_webpage(
           }
         }
         """
+        dependencies = self.tool_dependencies if dependencies is None else dependencies
         custom_info = self._load_custom_plugin_info()
 
         for plugin_name, info in custom_info.items():
@@ -478,21 +552,28 @@ async def extract_webpage(
             if not clean_deps:
                 continue
 
-            self.tool_dependencies.setdefault(plugin_name, set()).update(clean_deps)
+            dependencies.setdefault(plugin_name, set()).update(clean_deps)
 
             logger.debug(
                 f"custom_plugin_info.json 注入依赖: {plugin_name} -> {list(clean_deps)}"
             )
 
-    def get_tool_schema(self, plugin_names: list, include_search: bool = False) -> list:
+    @staticmethod
+    def build_tool_schema(
+        plugin_names: list,
+        *,
+        include_search: bool = False,
+        plugin_info: dict,
+        custom_tools: dict,
+    ) -> list:
         tools = []
 
         for name in plugin_names:
-            if self.is_tool_blacklisted(name):
+            if tool_manager.is_tool_blacklisted(name):
                 continue
 
-            if name in self.plugin_info:
-                info = self.plugin_info[name]
+            if name in plugin_info:
+                info = plugin_info[name]
                 tools.append(
                     {
                         "type": "function",
@@ -520,8 +601,8 @@ async def extract_webpage(
                     }
                 )
 
-            elif name in self.custom_tools:
-                info = self.custom_tools[name]
+            elif name in custom_tools:
+                info = custom_tools[name]
                 tools.append(
                     {
                         "type": "function",
@@ -537,7 +618,7 @@ async def extract_webpage(
                     }
                 )
 
-        if include_search and not self.is_tool_blacklisted("web_search"):
+        if include_search and not tool_manager.is_tool_blacklisted("web_search"):
             tools.append(
                 {
                     "type": "function",
@@ -559,6 +640,14 @@ async def extract_webpage(
             )
 
         return tools
+
+    def get_tool_schema(self, plugin_names: list, include_search: bool = False) -> list:
+        return self.build_tool_schema(
+            plugin_names,
+            include_search=include_search,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+        )
 
 
 tool_manager = ToolManager()

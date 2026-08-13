@@ -5,7 +5,6 @@ import ujson as json
 
 from .categorize import Categorize
 from .model_selector import model_selector
-from .tool_manager import tool_manager
 
 
 class LlmPayloadMixin:
@@ -20,7 +19,7 @@ class LlmPayloadMixin:
             or model_selector.get_web_search()
             or model_selector.get_use_tools()
         ):
-            category = Categorize(plain)
+            category = Categorize(plain, self.tool_snapshot)
             category_result = await category.get_category()
             if isinstance(category_result, str):
                 return category_result
@@ -34,7 +33,7 @@ class LlmPayloadMixin:
 
         # 视觉任务高于 MoE 与 selected_model：只要本轮有图片，就必须使用 vision_model。
         if has_image:
-            if not model_selector.model_config.get("vision_model"):
+            if not model_selector.get_config_value("vision_model"):
                 return "检测到图片消息，但未配置视觉模型。请先使用「设置视觉模型 <模型名或编号>」配置一个支持图片输入的模型。"
 
             self.model_info = model_selector.get_model("vision_model")
@@ -123,13 +122,9 @@ class LlmPayloadMixin:
         tools_schema = []
         # 获取常驻插件并转为集合
         resident_plugins = set(model_selector.get_resident_plugins())
-        # 通过并集操作 (|) 自动合并并去重：分类模型返回的 + 历史使用的 + 常驻的
-        all_plugins_set = (
-            set(getattr(self, "required_plugins", []))
-            | self.messages_handler.get_all_used_plugins()
-            | resident_plugins
-        )
-        all_plugins_set = tool_manager.expand_dependencies(all_plugins_set)
+        # Only the current plan and explicit resident tools receive schemas.
+        all_plugins_set = set(getattr(self, "required_plugins", [])) | resident_plugins
+        all_plugins_set = self.tool_snapshot.expand_dependencies(all_plugins_set)
         logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
         all_plugins = list(all_plugins_set)
 
@@ -141,7 +136,7 @@ class LlmPayloadMixin:
             normal_plugins = [p for p in all_plugins if p != "web_search"]
             if model_supports_tools and normal_plugins:
                 tools_schema.extend(
-                    tool_manager.get_tool_schema(normal_plugins, include_search=False)
+                    self.tool_snapshot.get_tool_schema(normal_plugins, include_search=False)
                 )
             if (
                 model_supports_tools
@@ -149,7 +144,7 @@ class LlmPayloadMixin:
                 and "web_search" in all_plugins
             ):
                 tools_schema.extend(
-                    tool_manager.get_tool_schema([], include_search=True)
+                    self.tool_snapshot.get_tool_schema([], include_search=True)
                 )
 
         if tools_schema:
@@ -234,9 +229,8 @@ class LlmPayloadMixin:
                 raw_args = json.loads(raw_args_str)
             except Exception:
                 # 不是合法 JSON，就直接在原字符串层面替换占位符
-                new_call["function"]["arguments"] = self._render_history_placeholders(
-                    raw_args_str
-                )
+                rendered = self._render_history_placeholders(raw_args_str)
+                new_call["function"]["arguments"] = rendered[:300]
                 sanitized.append(new_call)
                 continue
 
@@ -253,8 +247,7 @@ class LlmPayloadMixin:
             new_call["function"]["arguments"] = json.dumps(
                 cleaned_args,
                 ensure_ascii=False,
-            )
+            )[:300]
             sanitized.append(new_call)
 
         return sanitized
-

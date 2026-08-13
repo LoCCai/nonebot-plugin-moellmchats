@@ -2,9 +2,12 @@
 
 # nonebot-plugin-moellmchats
 
+> 本项目现由 LoCCai 继续维护。感谢 Elflare 与历史贡献者完成原始设计；包名、
+> LocalStore 配置目录和用户命令保持兼容。
+
 ✨ 混合专家模型调度LLM插件 | 混合调度·联网搜索·上下文优化·个性定制·Token节约·更加拟人 ✨
 
-<a href="./LICENSE"> <img src="https://img.shields.io/github/license/Elflare/nonebot-plugin-moellmchats.svg" alt="license"> </a> <a href="https://pypi.python.org/pypi/nonebot-plugin-moellmchats"> <img src="https://img.shields.io/pypi/v/nonebot-plugin-moellmchats.svg" alt="pypi"> </a> <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="python"></div>
+<a href="./LICENSE"> <img src="https://img.shields.io/github/license/LoCCai/nonebot-plugin-moellmchats.svg" alt="license"> </a> <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="python"></div>
 
 - [🚀 核心特性](#-核心特性)
 - [📦 安装](#-安装)
@@ -24,7 +27,7 @@
 
 - **个性化对话定制**：用户级性格预设，支持动态切换与自定义模板
 
-- **工业级稳定性设计**：对话冷却时间 / 请求队列管理 / 请求失败自动重试
+- **有界稳定性设计**：全局最多 4 个活动 LLM 请求、32 个等待请求、每用户 1 活动 + 1 等待；工具兼容投递单并发且队列有界
 
 - **更加拟人的回复风格**：分段发送回复，每段根据内容长度增加延迟，支持自定义发送表情包
 
@@ -32,24 +35,28 @@
 
 - **极省Token的工具调用架构（Function Calling）**：预分类-后注入两阶段设计，仅在需要时将对应Tool Schema注入主模型；支持编写原生Python工具（`custom_tools/`）；支持覆写NoneBot插件描述（`custom_plugin_info.json`）
 
+- **分步 Agent 与安全工具接口**：每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；提供 `ToolSpec` / `ToolContext` / `ToolResult`，变更型工具要求明确确认
+
+- **原子热重载**：配置、模型、人设、回复、工具描述、自定义工具、MCP 与表情索引支持 2 秒低频检测和 `重载LLM`；坏文件会继续沿用上一代快照
+
 ## 📦 安装
 
-以下两种安装方式任选其一即可。
+LoCCai 维护版直接跟随 GitHub `master`；项目锁文件应记录实际提交。
 
-### 使用 nb-cli 安装
+### 使用 uv 安装（推荐）
 
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-nb plugin install nonebot-plugin-moellmchats
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@master"
 ```
 
-### 使用 uv 安装
+### 使用 pip 安装
 
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add nonebot-plugin-moellmchats
+pip install "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@master"
 ```
 
 
@@ -81,12 +88,12 @@ COMMAND_START=["/",""]   # 可选
 
 | 文件 | 维护方式 | 说明 | 修改后是否需重启 |
 | :--: | :------: | ---- | :--------------: |
-| `providers.toml` | 手动 | **核心**：服务商/API密钥/模型参数，支持四级参数继承 | 否（`刷新模型`指令） |
-| `config.json` | 手动 | 基础行为（历史长度、冷却、表情包等） | 是 |
-| `model_config.json` | 指令/手动 | MoE调度、视觉/工具开关，支持指令实时切换 | 指令实时；手动需重启 |
-| `temperaments.json` | 手动 | 性格预设的system prompt | 是 |
-| `custom_plugin_info.json` | 手动 | 覆写NoneBot插件描述以提升LLM调用精准度 | 是 |
-| `custom_tools/` | 手动 | 原生Python函数，供LLM直接调用 | 否（`刷新工具`指令） |
+| `providers.toml` | 手动 | **核心**：服务商/API密钥/模型参数，支持四级参数继承 | 自动或 `重载LLM` |
+| `config.json` | 手动 | 基础行为、队列、预算、热重载与兼容投递 | 自动或 `重载LLM` |
+| `model_config.json` | 指令/手动 | MoE调度、视觉/工具开关，支持指令实时切换 | 指令实时；手动自动重载 |
+| `temperaments.json` | 手动 | 性格预设的system prompt | 自动或 `重载LLM` |
+| `custom_plugin_info.json` | 手动 | 覆写NoneBot插件描述以提升LLM调用精准度 | 自动或 `重载LLM` |
+| `custom_tools/` | 手动 | 原生Python函数，供LLM直接调用 | 自动、`刷新工具` 或 `重载LLM` |
 
 **[→ 完整配置参考（含所有字段说明与示例）请见 docs 配置文档](docs/configuration.md)**
 
@@ -113,6 +120,8 @@ COMMAND_START=["/",""]   # 可选
 |        设置分类模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                    设置分类模型，如：`设置分类模型 1`                     |
 |      设置工具/函数调用      | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    |              控制是否开启函数调用机制，如：`设置工具调用 开`              |
 |          刷新工具           | 超级管理员 | 私聊 / 群聊 |         无         |                              热重载工具函数                               |
+|          重载LLM            | 超级管理员 | 私聊 / 群聊 |         无         | 原子重载全部运行资源；失败时保留上一代快照 |
+|        查看LLM状态          | 超级管理员 | 私聊 / 群聊 |         无         | 查看队列、拒绝、缓存、工具、投递与最近重载状态 |
 |         插件黑名单          | 超级管理员 | 私聊 / 群聊 |         无         |                     查看当前禁止大模型调用的插件列表                      |
 |        添加插件黑名单        | 超级管理员 | 私聊 / 群聊 |      插件标识      |                   将插件加入黑名单，禁止大模型代为调用                    |
 |        移除插件黑名单        | 超级管理员 | 私聊 / 群聊 |      插件标识      |                     从大模型调用黑名单中释放特定插件                      |

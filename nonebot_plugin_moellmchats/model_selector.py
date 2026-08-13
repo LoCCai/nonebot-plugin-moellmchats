@@ -1,17 +1,36 @@
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
 import ujson as json
 
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib
-import nonebot_plugin_localstore as store
-from nonebot.log import logger
-import aiohttp
 from collections import defaultdict
 import random
 
+import aiohttp
+from nonebot.log import logger
+import nonebot_plugin_localstore as store
+
 config_path: Path = store.get_plugin_config_dir()
+
+
+@dataclass(frozen=True)
+class ModelRuntimeState:
+    models: Mapping[str, dict[str, Any]]
+    providers: Mapping[str, dict[str, Any]]
+    global_default: Mapping[str, Any]
+    model_config: Mapping[str, Any]
+
+
+def _readonly(value: dict) -> Mapping:
+    return MappingProxyType(deepcopy(value))
 
 
 # 模型选择类
@@ -30,6 +49,68 @@ class ModelSelector:
         self.load_providers()
         self._load_all_models()
         self.model_config = self._load_model_config()
+
+    def capture_state(self) -> ModelRuntimeState:
+        return ModelRuntimeState(
+            models=_readonly(self.models),
+            providers=_readonly(self.providers),
+            global_default=_readonly(self.global_default),
+            model_config=_readonly(self.model_config),
+        )
+
+    def _active_state(self) -> ModelRuntimeState:
+        from .runtime_snapshot import runtime_snapshots
+
+        snapshot = runtime_snapshots.active()
+        if (
+            globals().get("model_selector") is self
+            and snapshot is not None
+            and snapshot.model_state is not None
+        ):
+            return snapshot.model_state
+        return self.capture_state()
+
+    def build_candidate(self) -> ModelRuntimeState:
+        """Parse and validate all model files without changing live state."""
+        with self.providers_file.open("rb") as file:
+            provider_data = tomllib.load(file)
+        providers = provider_data.get("providers", {})
+        global_default = provider_data.get("global_default", {})
+        if not isinstance(providers, dict) or not all(
+            isinstance(name, str) and isinstance(info, dict)
+            for name, info in providers.items()
+        ):
+            raise ValueError("providers.toml: providers 必须是配置表")
+        if not isinstance(global_default, dict):
+            raise ValueError("providers.toml: global_default 必须是配置表")
+
+        candidate = object.__new__(ModelSelector)
+        candidate.models_file = self.models_file
+        candidate.providers_file = self.providers_file
+        candidate.cache_file = self.cache_file
+        candidate.model_config_file = self.model_config_file
+        candidate.models = {}
+        candidate.providers = deepcopy(providers)
+        candidate.global_default = deepcopy(global_default)
+        candidate._load_all_models(strict=True)
+
+        with self.model_config_file.open(encoding="utf-8") as file:
+            model_config = json.load(file)
+        if not isinstance(model_config, dict):
+            raise ValueError("model_config.json 顶层必须是对象")
+        candidate.model_config = model_config
+        valid, warnings = candidate.validate_model_config(persist=False)
+        if not valid:
+            raise ValueError("; ".join(warnings) or "模型配置不可用")
+        for warning in warnings:
+            logger.warning(f"模型候选配置已自动修正: {warning}")
+        return candidate.capture_state()
+
+    def commit_candidate(self, candidate: ModelRuntimeState) -> None:
+        self.models = deepcopy(dict(candidate.models))
+        self.providers = deepcopy(dict(candidate.providers))
+        self.global_default = deepcopy(dict(candidate.global_default))
+        self.model_config = deepcopy(dict(candidate.model_config))
 
     def _normalize_url(self, base_url: str, endpoint: str = "/chat/completions") -> str:
         """自动处理末尾的反斜杠和补全路径"""
@@ -62,7 +143,7 @@ class ModelSelector:
             elif isinstance(raw_key, str) and raw_key.strip():
                 pool.append(raw_key)
         # 3. 过滤空值并去重
-        valid_keys = list(set([k for k in pool if k]))
+        valid_keys = list({key for key in pool if key})
         if not valid_keys:
             return ""
         # 随机抽取并严格确保拥有 Bearer 前缀
@@ -74,7 +155,7 @@ class ModelSelector:
         if not self.providers_file.exists():
             template = """# AI服务商配置文件
 # base_url: 基础API地址（直接写Base URL即可，程序会自动补全 /chat/completions 及 /models）
-# api_key: 你的API密钥（无需手动写 Bearer ，程序会自动补全）。支持填入单个字符串，或字符串列表实现随机轮询，如 ["sk-key1", "sk-key2"]
+# api_key: API 密钥，自动补齐 Bearer。支持字符串或字符串列表随机轮询。
 # proxy: [可选] 该服务商的全局代理
 # models: [可选] 手动补充的模型列表。若API不支持 /models 自动获取，或获取不全时可在这里手动指定作为补充。
 # extra_payload: [可选] 字典格式。用于透传厂商特有参数（如 Gemini 的 thinking_config ）。
@@ -132,13 +213,13 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         except Exception as e:
             logger.error(f"解析 providers.toml 失败: {e}")
 
-    def _load_all_models(self):
+    def _load_all_models(self, *, strict: bool = False):
         """合并加载：旧 models.json、缓存自动获取、TOML手动补充及模型独立配置"""
         self.models.clear()
         # 1. 兼容加载老版 models.json
         if self.models_file.exists():
             try:
-                with open(self.models_file, "r", encoding="utf-8") as f:
+                with open(self.models_file, encoding="utf-8") as f:
                     old_models = json.load(f)
                     for mid, info in old_models.items():
                         provider = "旧版配置(models.json)"
@@ -153,15 +234,19 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                         unique_mid = f"{mid} ({provider})"
                         self.models[unique_mid] = info
             except Exception as e:
+                if strict:
+                    raise ValueError(f"读取 models.json 失败: {e}") from e
                 logger.error(f"读取 models.json 失败: {e}")
 
         # 预读取缓存文件
         cached_models = {}
         if self.cache_file.exists():
             try:
-                with open(self.cache_file, "r", encoding="utf-8") as f:
+                with open(self.cache_file, encoding="utf-8") as f:
                     cached_models = json.load(f)
             except Exception as e:
+                if strict:
+                    raise ValueError(f"读取 model_cache.json 失败: {e}") from e
                 logger.error(f"读取 model_cache.json 失败: {e}")
 
         # 2. 合并并加载 TOML 中的模型及配置
@@ -212,6 +297,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     async def fetch_models_from_providers(self):
         """并发拉取各服务商的 /models 列表并落盘，然后重载内存模型字典"""
         import asyncio
+
         from .utils import get_session
 
         session = get_session()
@@ -252,9 +338,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             provider: models for provider, models in results if models is not None
         }
 
-        # 持久化到缓存
-        with open(self.cache_file, "w", encoding="utf-8") as f:
-            json.dump(new_cache, f, ensure_ascii=False, indent=4)
+        # 持久化到缓存，避免在事件循环里同步写盘。
+        await asyncio.to_thread(self._write_config, self.cache_file, new_cache)
 
         # 刷新内存
         self._load_all_models()
@@ -332,7 +417,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def _load_model_config(self):
         # 读取model_config.json文件，获取是否使用MOE及MOE难度模型等配置
         if self.model_config_file.exists():
-            with open(self.model_config_file, "r", encoding="utf-8") as f:
+            with open(self.model_config_file, encoding="utf-8") as f:
                 self.model_config = json.load(f)
         else:
             # 如果model_config.json文件不存在，使用默认配置
@@ -371,39 +456,50 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         # 将配置写入文件
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=4)
+        if Path(file_path) == self.model_config_file and hasattr(
+            self, "model_config"
+        ):
+            from .runtime_snapshot import runtime_snapshots
+
+            runtime_snapshots.patch_current(model_state=self.capture_state())
 
     def get_moe(self):
         # 获取当前是否使用MOE
-        return self.model_config["use_moe"]
+        return self._active_state().model_config["use_moe"]
 
     def get_web_search(self):
         # 获取当前是否使用联网
-        return self.model_config["use_web_search"]
+        return self._active_state().model_config["use_web_search"]
 
     def get_use_tools(self):
-        return self.model_config.get("use_tools", False)
+        return self._active_state().model_config.get("use_tools", False)
+
+    def get_config_value(self, key: str, default=None):
+        return self._active_state().model_config.get(key, default)
 
     def get_model(self, key: str) -> dict:
         # 获取单个模型的配置
-        selected_model = self.model_config.get(key)
-        if selected_model and selected_model in self.models:
-            model_data = self.models[selected_model].copy()
+        state = self._active_state()
+        selected_model = state.model_config.get(key)
+        if selected_model and selected_model in state.models:
+            model_data = state.models[selected_model].copy()
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
 
     def get_moe_current_model(self, difficulty: str) -> dict:
         # 获取当前MOE模型的配置
-        moe_models = self.model_config["moe_models"]
+        state = self._active_state()
+        moe_models = state.model_config["moe_models"]
         model_name = moe_models.get(difficulty)
-        if model_name and model_name in self.models:
-            model_data = self.models[model_name].copy()
+        if model_name and model_name in state.models:
+            model_data = state.models[model_name].copy()
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
 
     def get_tool_blacklist(self) -> list:
-        return self.model_config.get("tool_blacklist", [])
+        return self._active_state().model_config.get("tool_blacklist", [])
 
     def set_moe_model(self, model_query: str, difficulty: str) -> str:
         model_name = self.resolve_model_name(model_query)
@@ -486,15 +582,16 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         self._write_config(self.model_config_file, self.model_config)
         return f"已切换总结模型为 {model_name}"
 
-    def get_formatted_model_list(self, search_query: str = None) -> str:
+    def get_formatted_model_list(self, search_query: str | None = None) -> str:
         """获取美化后的可用模型列表，支持多关键词模糊搜索"""
+        state = self._active_state()
         sorted_names = self.get_sorted_model_names()
         grouped_models = defaultdict(list)
 
         keywords = search_query.lower().split() if search_query else []
 
         for index, unique_mid in enumerate(sorted_names, 1):
-            info = self.models[unique_mid]
+            info = state.models[unique_mid]
             provider = info.get("provider", "未知")
 
             if keywords:
@@ -512,7 +609,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             lines.append(f"🔸 【{provider}】")
             # 这里的 umid 是唯一键，但在展示时提取原始的 model 字段，防止视觉冗余
             formatted_items = [
-                f"[{idx}] {self.models[umid]['model']}" for idx, umid in m_list
+                f"[{idx}] {state.models[umid]['model']}" for idx, umid in m_list
             ]
             lines.append("  " + ", ".join(formatted_items))
 
@@ -520,17 +617,19 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def get_sorted_model_names(self) -> list:
         """获取稳定排序的模型列表（按供应商和模型名排序），确保全局编号稳定"""
+        models = self._active_state().models
         return sorted(
-            self.models.keys(),
-            key=lambda k: (self.models[k].get("provider", "未知"), k),
+            models.keys(),
+            key=lambda k: (models[k].get("provider", "未知"), k),
         )
 
     def resolve_model_name(self, query: str) -> str:
+        models = self._active_state().models
         """将用户输入的编号或名称解析为包含厂商的实际唯一键"""
         if not query:
             return None
         # 1. 精确匹配（包含厂商的完整键，如 "deepseek-chat (openai)"）
-        if query in self.models:
+        if query in models:
             return query
 
         # 2. 纯数字编号匹配
@@ -543,7 +642,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         # 3. 模糊匹配：用户只输入了模型原始名（如 "deepseek-chat"）
         matches = [
             k
-            for k, v in self.models.items()
+            for k, v in models.items()
             if v["model"] == query or k.startswith(f"{query} (")
         ]
 
@@ -555,13 +654,14 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         return None
 
     def get_resident_plugins(self) -> list:
-        return self.model_config.get("resident_plugins", [])
+        return self._active_state().model_config.get("resident_plugins", [])
 
     def _get_resolve_error_msg(self, query: str) -> str:
         """根据查询内容返回准确的错误提示与对应列表"""
+        models = self._active_state().models
         matches = [
             k
-            for k, v in self.models.items()
+            for k, v in models.items()
             if v["model"] == query or k.startswith(f"{query} (")
         ]
         if len(matches) > 1:

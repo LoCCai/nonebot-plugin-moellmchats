@@ -1,13 +1,16 @@
 import asyncio
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
 import hashlib
 import inspect
 import json
 import os
-import re
 from pathlib import Path
-from typing import Any, Awaitable, Callable
-from mcp.client.sse import sse_client
+import re
+from typing import Any
+
 from mcp import ClientSession
+from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from nonebot.log import logger
 
@@ -100,24 +103,31 @@ description = "旧版 SSE MCP 示例"
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
         self.config_file.write_text(template, encoding="utf-8")
 
+    def load_config_candidate(self) -> dict[str, dict[str, Any]]:
+        with self.config_file.open("rb") as file:
+            data = tomllib.load(file)
+        servers = data.get("mcp", {})
+        if not isinstance(servers, dict) or not all(
+            isinstance(name, str) and isinstance(conf, dict)
+            for name, conf in servers.items()
+        ):
+            raise ValueError("mcp_servers.toml: 顶层 [mcp.xxx] 必须是配置表")
+        return deepcopy(servers)
+
     def load_config(self):
         try:
-            with open(self.config_file, "rb") as f:
-                data = tomllib.load(f)
-
-            servers = data.get("mcp", {})
-            if not isinstance(servers, dict):
-                logger.error("mcp_servers.toml 格式错误：顶层 [mcp.xxx] 配置不是字典")
-                self.servers = {}
-                return
-
-            self.servers = servers
-
-        except Exception as e:
-            logger.error(f"读取 mcp_servers.toml 失败: {e}")
+            self.servers = self.load_config_candidate()
+        except Exception as error:
+            logger.error(f"读取 mcp_servers.toml 失败: {error}")
             self.servers = {}
 
-    async def discover_tools(self) -> dict:
+    async def discover_tools(
+        self,
+        *,
+        commit: bool = True,
+        servers: dict[str, dict[str, Any]] | None = None,
+        strict: bool = False,
+    ):
         """
         返回可直接并入 tool_manager.custom_tools 的 schema：
 
@@ -130,12 +140,16 @@ description = "旧版 SSE MCP 示例"
             }
         }
         """
-        self.load_config()
-        self.tool_to_server.clear()
+        candidate_servers = (
+            deepcopy(servers)
+            if servers is not None
+            else self.load_config_candidate()
+        )
+        new_mapping: dict[str, dict[str, str]] = {}
 
         result: dict[str, dict[str, Any]] = {}
 
-        for server_name, conf in self.servers.items():
+        for server_name, conf in candidate_servers.items():
             if not isinstance(conf, dict):
                 logger.warning(f"MCP Server {server_name} 配置不是字典，已跳过")
                 continue
@@ -153,13 +167,19 @@ description = "旧版 SSE MCP 示例"
 
                     full_name = self._build_tool_name(server_name, raw_tool_name)
 
-                    self.tool_to_server[full_name] = {
+                    new_mapping[full_name] = {
                         "server": server_name,
                         "tool": raw_tool_name,
                     }
 
-                    async def wrapper(_mcp_tool_name=full_name, **kwargs):
-                        return await self.call_tool(_mcp_tool_name, kwargs)
+                    async def wrapper(
+                        _mcp_conf=deepcopy(conf),
+                        _mcp_tool_name=raw_tool_name,
+                        **kwargs,
+                    ):
+                        return await self.call_tool_with_config(
+                            _mcp_conf, _mcp_tool_name, kwargs
+                        )
 
                     result[full_name] = {
                         "name": full_name,
@@ -178,9 +198,34 @@ description = "旧版 SSE MCP 示例"
                 )
 
             except Exception as e:
+                if strict:
+                    raise RuntimeError(
+                        f"MCP Server {server_name} 发现工具失败: {e}"
+                    ) from e
                 logger.warning(f"MCP Server {server_name} 加载失败: {e}")
 
-        return result
+        if commit:
+            self.servers = candidate_servers
+            self.tool_to_server = new_mapping
+            return result
+        return result, new_mapping
+
+    async def call_tool_with_config(
+        self, conf: dict[str, Any], tool_name: str, arguments: dict | None
+    ):
+        try:
+            result = await self._call_tool_on_server(
+                conf=conf,
+                tool_name=tool_name,
+                arguments=arguments or {},
+            )
+            return self._format_result(
+                result,
+                limit=self._get_int_config(conf, "result_limit", 6000),
+            )
+        except Exception as error:
+            logger.exception(f"MCP 工具调用失败: {tool_name}")
+            return f"MCP 工具调用失败: {error}"
 
     async def call_tool(self, full_tool_name: str, arguments: dict | None):
         mapping = self.tool_to_server.get(full_tool_name)
@@ -196,20 +241,7 @@ description = "旧版 SSE MCP 示例"
         if not conf:
             return f"MCP Server 不存在: {server_name}"
 
-        try:
-            result = await self._call_tool_on_server(
-                conf=conf,
-                tool_name=tool_name,
-                arguments=arguments or {},
-            )
-            return self._format_result(
-                result,
-                limit=self._get_int_config(conf, "result_limit", 6000),
-            )
-
-        except Exception as e:
-            logger.exception(f"MCP 工具调用失败: {full_tool_name}")
-            return f"MCP 工具调用失败: {e}"
+        return await self.call_tool_with_config(conf, tool_name, arguments)
 
     async def _list_tools_from_server(self, server_name: str, conf: dict) -> list:
         timeout = self._get_int_config(

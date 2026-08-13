@@ -1,9 +1,10 @@
-from collections import defaultdict, deque
 import time
-from .config import config_parser
 
-messages_dict = defaultdict(
-    lambda: deque(maxlen=config_parser.get_config("max_user_history"))
+from .config import config_parser
+from .state_store import BoundedDequeStore
+
+messages_dict = BoundedDequeStore(
+    lambda: config_parser.get_config("max_user_history", 8)
 )  # {'qq':messages_entity_list}
 # messages_entity_list = [messages_entity1, messages_entity2]
 
@@ -111,7 +112,8 @@ class MessagesHandler:
         result = []
         for messages_entity in self.messages_entity_list:
             user_msg = messages_entity.get_user_msg()
-            result.append(user_msg)
+            if user_msg:
+                result.append(user_msg)
             # 插入该轮的工具交换消息（如有）
             if messages_entity.tool_messages:
                 if supports_tools:
@@ -120,19 +122,46 @@ class MessagesHandler:
                     result.append(flattened)
             ast_msg = messages_entity.get_assistant_msg()
             # 拦截历史记录中的空 content，替换为占位符，防止触发 400
+            if not ast_msg:
+                continue
             if "content" not in ast_msg or not ast_msg["content"]:
                 ast_msg["content"] = "（执行完毕）"
             result.append(ast_msg)
 
         result.append(self.messages_entity.get_user_msg())
-        return result
+        max_chars = config_parser.get_config("max_history_chars", 16_000)
+        # Deterministic conservative estimate for multilingual OpenAI-compatible
+        # models. Exact tokenizer packages are intentionally not required.
+        max_tokens = config_parser.get_config("max_history_tokens", 4_000)
+        total = 0
+        total_tokens = 0
+        bounded = []
+        for message in reversed(result):
+            content = message.get("content", "")
+            size = len(content) if isinstance(content, str) else len(str(content))
+            estimated_tokens = max(1, (size + 2) // 3)
+            if bounded and (
+                total + size > max_chars
+                or total_tokens + estimated_tokens > max_tokens
+            ):
+                break
+            bounded.append(message)
+            total += size
+            total_tokens += estimated_tokens
+        return list(reversed(bounded))
 
     # 后处理
-    def post_process(self, assistant_msg: str = None, tool_messages: list = None):
+    def post_process(
+        self, assistant_msg: str | None = None, tool_messages: list | None = None
+    ):
         # 如果大模型最终没有输出文本，我们可以用它刚生成的隐藏记忆作为替代品存入历史
         if not assistant_msg or not assistant_msg.strip():
             if tool_messages:
-                summary = tool_messages[-1].get("content", "") if tool_messages[-1].get("role") == "tool" else ""
+                summary = (
+                    tool_messages[-1].get("content", "")
+                    if tool_messages[-1].get("role") == "tool"
+                    else ""
+                )
                 assistant_msg = f"（已在后台静默执行工具完毕，获得了相关数据：{summary[:100]}...）"
             else:
                 assistant_msg = "（已完成操作）"

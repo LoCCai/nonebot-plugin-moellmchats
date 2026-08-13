@@ -41,7 +41,7 @@ class LlmApiMixin:
         def set_if_empty(key: str, value):
             if info[key] or value is None:
                 return
-            if isinstance(value, (str, int, float)):  # noqa: UP038
+            if isinstance(value, (str, int, float)):
                 info[key] = str(value)
 
         try:
@@ -82,7 +82,9 @@ class LlmApiMixin:
         """检查是否为400错误及敏感内容拦截，返回错误提示或None"""
         if response.status == 400:
             error_content = await response.text()
-            logger.warning(f"API请求400错误: {error_content}")
+            logger.warning(
+                f"API 请求返回 400，响应正文已省略，长度 {len(error_content)}"
+            )
             # 1. 尝试解析 API 返回的具体报错信息
             error_info = self._extract_api_error_info(error_content)
             detail_msg = error_info.get("message", "")
@@ -98,18 +100,12 @@ class LlmApiMixin:
             ]
             if any(k.lower() in error_content.lower() for k in sensitive_keywords):
                 return "图片或内容可能包含敏感信息"
-            # 3. 打印完整 Payload 逻辑保持不变
             if request_data is not None:
-                if isinstance(request_data, str):
-                    try:
-                        request_data = json.loads(request_data)
-                    except Exception:
-                        pass
                 logger.warning(
-                    f"【导致400错误的完整Payload】:\n{json.dumps(request_data, ensure_ascii=False, indent=2)}"
+                    "LLM 请求返回 400；为保护群聊内容和密钥，已省略完整 Payload。"
                 )
             else:
-                logger.warning(f"看看之前的对话记录：{self.format_message_dict}")
+                logger.warning("LLM 请求失败；对话内容已从日志中省略")
 
             # 4. 组装更详细的聊天回复文本
             error_reply = "API请求被拒绝 (400)"
@@ -298,7 +294,9 @@ class LlmApiMixin:
                     )
             else:
                 error_text = await resp.text()
-                logger.warning(f"API返回非200状态码 {resp.status}: {error_text}")
+                logger.warning(
+                    f"API返回非200状态码 {resp.status}，响应正文已省略，长度 {len(error_text)}"
+                )
                 detail = self._extract_api_error_detail(error_text)
                 error_reply = f"API请求异常 (HTTP {resp.status})"
                 if detail:
@@ -319,7 +317,9 @@ class LlmApiMixin:
                 return False, error_msg, None, ""
             if resp.status != 200:
                 error_text = await resp.text()
-                logger.warning(f"API返回非200状态码 {resp.status}: {error_text}")
+                logger.warning(
+                    f"API返回非200状态码 {resp.status}，响应正文已省略，长度 {len(error_text)}"
+                )
                 detail = self._extract_api_error_detail(error_text)
                 error_reply = f"API返回异常 (HTTP {resp.status})"
                 if detail:
@@ -352,6 +352,5 @@ class LlmApiMixin:
 
             return True, content, None, reasoning_content
         else:
-            logger.warning(response)
+            logger.warning("API 返回内容安全拦截，响应正文已省略")
             return False, "API解析异常", None, ""
-

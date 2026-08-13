@@ -12,29 +12,51 @@
 
 | 文件 | 维护方式 | 说明 | 修改后是否需重启 |
 |------|----------|------|------------------|
-| `config.json` | 手动 | 基础行为配置（历史长度、冷却、表情包等） | 是 |
-| `providers.toml` | 手动 | 服务商/API 密钥/模型参数，核心配置 | 否（用指令`刷新模型`） |
-| `model_config.json` | 指令/手动 | MoE 调度、视觉/工具开关 | 指令实时生效，手动需重启 |
+| `config.json` | 手动 | 基础行为、队列、预算与重载配置 | 自动或 `重载LLM` |
+| `providers.toml` | 手动 | 服务商/API 密钥/模型参数，核心配置 | 自动或 `重载LLM`；远端列表用 `刷新模型` |
+| `model_config.json` | 指令/手动 | MoE 调度、视觉/工具开关 | 指令实时，手动自动重载 |
 | `model_cache.json` | 系统自动 | 模型列表缓存，无需手动修改 | — |
-| `models.json` | 手动（遗留） | 旧版手动模型配置，不推荐新用户使用 | 是 |
-| `temperaments.json` | 手动 | 性格预设 system prompt | 是 |
+| `models.json` | 手动（遗留） | 旧版手动模型配置，不推荐新用户使用 | 自动或 `重载LLM` |
+| `temperaments.json` | 手动 | 性格预设 system prompt | 自动或 `重载LLM` |
 | `temperament_config.json` | 指令自动 | 用户↔性格绑定关系 | 指令实时生效 |
-| `mcp_servers.toml` | 手动 | MCP Server 配置，启用后会作为 Function Calling 工具注入 | 否（用指令`刷新工具`） |
-| `custom_plugin_info.json` | 手动 | 覆写插件描述，并可声明插件依赖工具 | 否（用指令`刷新工具`） |
-| `custom_tools/` | 手动 | 原生 Python 工具函数 | 否（用指令`刷新工具`） |
+| `replies.toml` | 手动 | 空白艾特与戳一戳回复 | 自动或 `重载LLM` |
+| `mcp_servers.toml` | 手动 | MCP Server 配置，启用后会作为 Function Calling 工具注入 | 自动、`刷新工具` 或 `重载LLM` |
+| `custom_plugin_info.json` | 手动 | 覆写插件描述，并可声明插件依赖工具 | 自动、`刷新工具` 或 `重载LLM` |
+| `custom_tools/` | 手动 | 原生 Python 工具函数 | 自动、`刷新工具` 或 `重载LLM` |
 
 ---
 
 ## `config.json` — 基础配置
 
-📌 修改后需要重启。Tavily 搜索 API Key：[获取地址](https://tavily.com/)。
+📌 修改后会在约 2 秒内自动校验并原子重载，也可执行 `重载LLM`。Tavily 搜索 API Key：[获取地址](https://tavily.com/)。
 
 ```json5
 {
   "max_group_history": 10,        // 群组上下文最大保留条数
   "max_user_history": 8,          // 每个用户上下文最大保留条数
+  "max_history_chars": 16000,     // 历史字符上限
+  "max_history_tokens": 4000,     // 历史 token 估算上限
+  "max_context_sessions": 1000,   // 群聊、用户与 CD 状态最大会话数
   "max_retry_times": 3,           // LLM 请求失败时的最大重试次数
-  "max_tool_rounds": 3,           // 单轮对话中最大工具交互轮次（一次多个 tool_calls 仍算 1 轮）
+  "max_tool_rounds": 6,           // 工具交互轮次上限
+  "max_agent_steps": 6,           // Agent 总步骤上限；每步只执行一个工具
+  "max_repeated_tool_calls": 2,   // 单任务同一工具最多执行次数
+  "max_tool_result_chars": 6000,  // 单工具结果字符上限
+  "max_tool_images": 4,           // 单任务累计图片上限
+  "request_timeout_seconds": 180, // 整个 LLM 任务总预算
+  "classification_timeout_seconds": 20,
+  "tool_timeout_seconds": 30,
+  "llm_max_active": 4,
+  "llm_max_pending": 32,
+  "llm_max_per_user": 2,          // 1 个活动 + 1 个等待
+  "legacy_dispatch_max_pending": 16,
+  "legacy_dispatch_timeout_seconds": 20,
+  "legacy_full_event_plugins": [], // 只有这些遗留插件走完整事件总线
+  "member_cache_ttl_seconds": 600,
+  "member_cache_max_entries": 4096,
+  "member_lookup_timeout_seconds": 2,
+  "runtime_watch_enabled": true,
+  "runtime_watch_interval_seconds": 2,
   "user_history_expire_seconds": 600, // 用户上下文 TTL 过期时间（秒）
   "cd_seconds": 0,                // 每个用户的对话冷却时间（秒）
   "search_api": "Bearer your_tavily_key", // 联网搜索 Tavily API Key（开启搜索必填）
@@ -134,7 +156,7 @@ api_key = ["sk-key1", "sk-key2", "sk-key3"]  # 随机轮询
 
 ## `model_config.json` — 智能调度配置
 
-📌 支持 QQ 指令实时切换；手动修改需重启。**模型名称必须是 `providers.toml` 中可用的模型 ID**（可用`查看模型`指令查看）。
+📌 支持 QQ 指令实时切换；手动修改会自动原子重载。**模型名称必须是 `providers.toml` 中可用的模型 ID**（可用`查看模型`指令查看）。
 
 ```json5
 {
@@ -241,9 +263,10 @@ poke = [
 
 ## `mcp_servers.toml` — MCP Server 配置
 
-📌 首次运行后自动生成模板。修改后使用 `刷新工具` 生效，无需重启。
+📌 首次运行后自动生成模板。修改后会自动重载，也可使用 `刷新工具` 或 `重载LLM`。
 
 MCP 工具会被并入现有函数调用系统，统一受 `use_tools`、`tool_blacklist`、`resident_plugins` 控制。
+任何启用的 MCP 在发现阶段不可达都会使本次重载失败，旧 generation 继续服务；状态可用 `查看LLM状态` 查询。
 
 ```toml
 [mcp.filesystem]
@@ -271,6 +294,14 @@ description = "HTTP MCP 示例"
 # tool_timeout = 60
 # result_limit = 6000
 ```
+
+## 热重载与兼容投递
+
+- 文件检测间隔默认 2 秒并带防抖；所有资源先解析校验，最后一次性发布。
+- 活动请求固定使用其开始时的 generation，自定义工具源码更新不会切换执行中的任务。
+- 半截 JSON/TOML、错误 Python 工具或不可达 MCP 不会污染当前运行状态。
+- `legacy_full_event_plugins` 之外的 NoneBot 插件只定向执行目标插件 Matcher，不经过无关记录器/数据库链。
+- 完整事件总线兼容模式统一单并发、队列 16、默认 20 秒超时。插件源码和 Matcher 注册变化仍需重启 NoneBot。
 
 ---
 

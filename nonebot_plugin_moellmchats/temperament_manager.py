@@ -1,9 +1,9 @@
-import ujson as json
-from traceback import format_exc
-from nonebot.log import logger
 from pathlib import Path
+from traceback import format_exc
 
+from nonebot.log import logger
 import nonebot_plugin_localstore as store
+import ujson as json
 
 config_path: Path = store.get_plugin_config_dir()
 
@@ -18,28 +18,77 @@ class TemperamentManager:
         self.temperaments = self.read_temperaments()
         self.temperament_dict = self.read_temperament()
 
+    def load_candidate(self) -> tuple[dict, dict]:
+        """Parse both resources without changing the active generation."""
+        with open(self.temperaments_path, encoding="utf-8") as f:
+            temperaments = json.load(f)
+        with open(self.temperament_config, encoding="utf-8") as f:
+            assignments = json.load(f)
+        if not isinstance(temperaments, dict) or not temperaments:
+            raise ValueError("temperaments.json 必须是非空对象")
+        if not isinstance(assignments, dict):
+            raise ValueError("temperament_config.json 必须是对象")
+        return temperaments, assignments
+
+    def commit_candidate(self, candidate: tuple[dict, dict]) -> None:
+        self.temperaments, self.temperament_dict = candidate
+
     def get_temperament(self, qq=None) -> str:
         """根据qq获取每个群友的性格配置"""
+        from .runtime_snapshot import runtime_snapshots
+
+        snapshot = runtime_snapshots.active()
+        assignments = (
+            snapshot.temperament_assignments
+            if snapshot is not None
+            else self.temperament_dict
+        )
         if qq:
             qq = str(qq)
-            return self.temperament_dict.get(qq, "默认")
+            return assignments.get(qq, "默认")
         return "默认"
 
     def get_temperaments_keys(self) -> list:
-        return self.temperaments.keys()
+        from .runtime_snapshot import runtime_snapshots
+
+        snapshot = runtime_snapshots.active()
+        return (
+            snapshot.temperaments.keys()
+            if snapshot is not None
+            else self.temperaments.keys()
+        )
 
     def get_all_temperaments(self) -> str:
-        return json.dumps(self.temperaments, indent=4, ensure_ascii=False)
+        from .runtime_snapshot import runtime_snapshots
+
+        snapshot = runtime_snapshots.active()
+        temperaments = (
+            snapshot.temperaments if snapshot is not None else self.temperaments
+        )
+        return json.dumps(dict(temperaments), indent=4, ensure_ascii=False)
 
     def get_temperament_prompt(self, temperament: str) -> str:
         """根据性格获取提示词"""
-        return self.temperaments.get(temperament, "你是ai助手。回答像真人且简短")
+        from .runtime_snapshot import runtime_snapshots
+
+        snapshot = runtime_snapshots.active()
+        temperaments = (
+            snapshot.temperaments if snapshot is not None else self.temperaments
+        )
+        return temperaments.get(temperament, "你是ai助手。回答像真人且简短")
 
     def set_temperament_dict(self, qq, temperament) -> bool:
         """设置配置项的值"""
         qq = str(qq)
         self.temperament_dict[qq] = temperament
-        return self.write_temperament(qq, temperament)
+        written = self.write_temperament(qq, temperament)
+        if written:
+            from .runtime_snapshot import immutable_mapping, runtime_snapshots
+
+            runtime_snapshots.patch_current(
+                temperament_assignments=immutable_mapping(self.temperament_dict)
+            )
+        return written
 
     # 读取文件
     def read_temperament(self) -> dict:
@@ -50,7 +99,7 @@ class TemperamentManager:
                 json.dump({}, f, ensure_ascii=False, indent=4)
             return {}
         try:
-            with open(self.temperament_config, "r", encoding="utf-8") as f:
+            with open(self.temperament_config, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             logger.error(format_exc())
@@ -67,7 +116,7 @@ class TemperamentManager:
                 json.dump(default_temperaments, f, ensure_ascii=False, indent=4)
             return default_temperaments
         try:
-            with open(self.temperaments_path, "r", encoding="utf-8") as f:
+            with open(self.temperaments_path, encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     return data

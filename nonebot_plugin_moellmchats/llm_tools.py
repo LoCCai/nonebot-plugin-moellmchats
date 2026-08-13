@@ -1,3 +1,4 @@
+import asyncio
 from collections import Counter
 import inspect
 import traceback
@@ -5,8 +6,14 @@ import traceback
 from nonebot.log import logger
 import ujson as json
 
+from .compat import timeout as timeout_scope
+from .config import config_parser
 from .event_simulator import event_simulator
+from .network_safety import validate_url_arguments
+from .request_manager import get_current_request_id
+from .runtime_metrics import runtime_metrics
 from .search import Search
+from .tool_contracts import ToolContext, ToolEffect, ToolResult
 from .tool_manager import tool_manager
 from .utils import parse_emotion
 
@@ -27,7 +34,7 @@ class LlmToolsMixin:
             ):
                 call["function"]["arguments"] = "{}"
 
-        max_tool_calls_per_round = 10
+        max_tool_calls_per_round = 1
         executable_tool_calls = tool_calls[:max_tool_calls_per_round]
         skipped_tool_calls = tool_calls[max_tool_calls_per_round:]
         if skipped_tool_calls:
@@ -57,17 +64,34 @@ class LlmToolsMixin:
         send_message_list.append(assistant_msg)
         text_to_send = result_text  # 暂存大模型回复文本，防止多个插件时被重复发送
         for call in executable_tool_calls:
+            result_limit = config_parser.get_config("max_tool_result_chars", 6000)
             func_name = call["function"]["name"]
             if not hasattr(self, "_current_tool_usage"):
                 self._current_tool_usage = Counter()
             self._current_tool_usage[func_name] += 1
+            runtime_metrics.tool_steps += 1
             self.messages_handler.messages_entity.add_used_plugins({func_name})
 
             try:
                 args = json.loads(call["function"]["arguments"])
             except Exception:
                 args = {}
-            logger.info(f"准备执行函数: {func_name}，传入参数: {args}")
+            logger.info(f"准备执行函数: {func_name}，参数字段: {sorted(args)}")
+
+            repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
+            if self._current_tool_usage[func_name] > repeated_limit:
+                tool_result = (
+                    f"工具 {func_name} 已达到单任务重复调用上限 {repeated_limit}，"
+                    "请基于已有结果完成回答。"
+                )
+                send_message_list.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": tool_result,
+                    }
+                )
+                continue
 
             tool_result = "执行成功"
             if func_name == "web_search":
@@ -77,17 +101,62 @@ class LlmToolsMixin:
                     text_to_send = ""  # 消耗掉，防止下一个插件重发
                 else:
                     await self.bot.send(self.event, f"正在搜索: {query}...")
-                search_res = await Search(query).get_search()
+                try:
+                    async with timeout_scope(
+                        config_parser.get_config("tool_timeout_seconds", 30)
+                    ):
+                        search_res = await Search(query).get_search()
+                except TimeoutError:
+                    runtime_metrics.tool_timeouts += 1
+                    search_res = "联网搜索超时"
                 tool_result = search_res if search_res else "未找到相关结果"
 
-            elif func_name in tool_manager.custom_tools:
+            elif func_name in self.tool_snapshot.custom_tools:
                 if text_to_send:
                     await self.send_emotion_message(text_to_send)
                     text_to_send = ""
                 else:
                     await self.bot.send(self.event, f"正在调用函数: {func_name}...")
                 try:
-                    func = tool_manager.custom_tools[func_name]["func"]
+                    tool_entry = self.tool_snapshot.custom_tools[func_name]
+                    func = tool_entry["func"]
+                    spec = tool_entry.get("tool_spec")
+                    if spec is not None and spec.permission == "superuser":
+                        superusers = {
+                            str(user_id)
+                            for user_id in getattr(self.bot.config, "superusers", set())
+                        }
+                        if str(self.event.user_id) not in superusers:
+                            tool_result = f"工具 {func_name} 仅允许超级用户执行。"
+                            send_message_list.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call["id"],
+                                    "content": tool_result,
+                                }
+                            )
+                            continue
+                    confirmed = False
+                    if (
+                        spec is not None
+                        and spec.effect == ToolEffect.MUTATING
+                    ):
+                        confirmed = bool(args.pop("confirm", False)) and (
+                            "确认执行"
+                            in "".join(self.format_message_dict.get("text") or [])
+                        )
+                        if not confirmed:
+                            tool_result = (
+                                f"工具 {func_name} 会修改外部状态，需要用户明确确认后才能执行。"
+                            )
+                            send_message_list.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call["id"],
+                                    "content": tool_result,
+                                }
+                            )
+                            continue
                     # 依赖注入核心逻辑
                     sig = inspect.signature(func)
                     if not any(
@@ -133,13 +202,39 @@ class LlmToolsMixin:
                         args["_bot"] = self.bot
                     if "_event" in sig.parameters:
                         args["_event"] = self.event
-                    res = (
-                        await func(**args)
-                        if inspect.iscoroutinefunction(func)
-                        else func(**args)
+                    if "_tool_context" in sig.parameters:
+                        args["_tool_context"] = ToolContext(
+                            bot=self.bot,
+                            event=self.event,
+                            request_id=get_current_request_id(),
+                            confirmed=confirmed,
+                        )
+                    timeout = (
+                        spec.timeout_seconds
+                        if spec is not None and spec.timeout_seconds
+                        else config_parser.get_config("tool_timeout_seconds", 30)
                     )
+                    try:
+                        async with timeout_scope(timeout):
+                            await validate_url_arguments(args)
+                            res = (
+                                await func(**args)
+                                if inspect.iscoroutinefunction(func)
+                                else await asyncio.to_thread(func, **args)
+                            )
+                    except TimeoutError:
+                        runtime_metrics.tool_timeouts += 1
+                        raise RuntimeError(f"工具执行超过 {timeout} 秒预算") from None
 
-                    if isinstance(res, dict):
+                    result_limit = (
+                        spec.result_limit
+                        if spec is not None and spec.result_limit
+                        else config_parser.get_config("max_tool_result_chars", 6000)
+                    )
+                    if isinstance(res, ToolResult):
+                        result_text = res.text
+                        result_images = list(res.images)
+                    elif isinstance(res, dict):
                         result_text = (
                             res.get("text")
                             or res.get("content")
@@ -152,17 +247,19 @@ class LlmToolsMixin:
                             or []
                         )
 
+                    else:
+                        tool_result = str(res)
+
+                    if isinstance(res, (ToolResult, dict)):
                         if isinstance(result_images, str):
                             result_images = [result_images]
-
                         result_images = [
-                            img for img in result_images
-                            if isinstance(img, str) and img.strip()
+                            image
+                            for image in result_images
+                            if isinstance(image, str) and image.strip()
                         ]
-
                         if result_images:
                             self._pending_vision_images.extend(result_images)
-
                             if result_text:
                                 tool_result = (
                                     f"函数执行返回结果：\n{result_text}\n\n"
@@ -174,8 +271,6 @@ class LlmToolsMixin:
                                 )
                         else:
                             tool_result = str(result_text) if result_text else str(res)
-                    else:
-                        tool_result = str(res)
                 except Exception as e:
                     logger.error(traceback.format_exc())
                     tool_result = f"函数执行出错: {e!s}"
@@ -191,6 +286,7 @@ class LlmToolsMixin:
                     self.event,
                     command,
                     self.format_message_dict,
+                    plugin_name=func_name,
                 )
                 _PLUGIN_SYSTEM_HINT = (
                     "\n\n[系统提示]：上述结果已对用户可见。注意：若执行不正确或者用户的原始请求需要多个步骤，"
@@ -212,6 +308,11 @@ class LlmToolsMixin:
                 else:
                     tool_result = "插件已执行，但未返回有效文本。[系统提示]：如果有后续操作，请继续调用下一个工具。"
 
+            if len(tool_result) > result_limit:
+                tool_result = tool_result[:result_limit] + "\n...[工具结果已截断]"
+            image_limit = config_parser.get_config("max_tool_images", 4)
+            if len(self._pending_vision_images) > image_limit:
+                self._pending_vision_images = self._pending_vision_images[:image_limit]
             send_message_list.append(
                 {
                     "role": "tool",
@@ -328,4 +429,3 @@ class LlmToolsMixin:
             logger.warning("工具总结补救请求仍返回了 tool_calls，已忽略并使用兜底总结")
             return ""
         return (summary_text or "").strip()
-
