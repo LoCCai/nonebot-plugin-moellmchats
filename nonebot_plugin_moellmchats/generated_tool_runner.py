@@ -169,9 +169,13 @@ class GeneratedToolRunner:
             assert proc.stdin
             assert proc.stdout
             assert proc.stderr
-            proc.stdin.write(request)
-            await proc.stdin.drain()
-            proc.stdin.close()
+            try:
+                proc.stdin.write(request)
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                raise RuntimeError("生成工具隔离进程启动失败") from None
+            finally:
+                proc.stdin.close()
             read_tasks = [
                 asyncio.create_task(self._read_limited(proc.stdout, output_limit)),
                 asyncio.create_task(self._read_limited(proc.stderr, output_limit)),

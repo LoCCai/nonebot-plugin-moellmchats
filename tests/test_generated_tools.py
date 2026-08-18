@@ -94,7 +94,7 @@ async def test_bundle_approve_deactivate_and_rollback(tmp_path: Path) -> None:
     if _can_unshare_network():
         assert "1 passed" in await runner.run_tests(store.drafts_dir / first_id)
     else:
-        with pytest.raises(RuntimeError, match=r"隔离不可用|unshare"):
+        with pytest.raises(RuntimeError, match=r"隔离|unshare"):
             await runner.run_tests(store.drafts_dir / first_id)
     bundle_id, first_digest = store.approve(first_id, first.digest[:12])
     assert store.read_active()[bundle_id] == first_digest
