@@ -107,3 +107,34 @@ async def test_pending_request_cannot_occupy_global_slot_for_same_user() -> None
     assert gate.pending == 1
     release.set()
     await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_pending_request_releases_queue_reservation() -> None:
+    gate = AdmissionController(
+        name="llm", max_active=1, max_pending=2, max_per_key=2
+    )
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def hold(user_id: int) -> None:
+        async with gate.slot(user_id):
+            entered.set()
+            await release.wait()
+
+    active = asyncio.create_task(hold(1))
+    await entered.wait()
+    pending = asyncio.create_task(hold(2))
+    await asyncio.sleep(0)
+    assert gate.active == 1
+    assert gate.pending == 1
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+    assert gate.active == 1
+    assert gate.pending == 0
+    release.set()
+    await active
+    assert gate.active == gate.pending == 0

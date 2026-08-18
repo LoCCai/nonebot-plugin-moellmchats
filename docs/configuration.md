@@ -43,7 +43,7 @@
   "max_repeated_tool_calls": 2,   // 单任务同一工具最多执行次数
   "max_tool_result_chars": 6000,  // 单工具结果字符上限
   "max_tool_images": 4,           // 单任务累计图片上限
-  "request_timeout_seconds": 180, // 整个 LLM 任务总预算
+  "request_timeout_seconds": 180, // 整个 LLM 任务总预算（包含排队等待）
   "classification_timeout_seconds": 20,
   "tool_timeout_seconds": 30,
   "llm_max_active": 4,
@@ -58,7 +58,7 @@
   "runtime_watch_enabled": true,
   "runtime_watch_interval_seconds": 2,
   "user_history_expire_seconds": 600, // 用户上下文 TTL 过期时间（秒）
-  "cd_seconds": 0,                // 每个用户的对话冷却时间（秒）
+  "cd_seconds": 120,              // 每个用户的对话冷却时间（秒，排队前检查）
   "search_api": "Bearer your_tavily_key", // 联网搜索 Tavily API Key（开启搜索必填）
   "fastai_enabled": false,        // 快速 AI 助手开关（无角色扮演、无分段、无表情包）
   "emotions_enabled": false,      // 是否开启表情包功能

@@ -1,4 +1,5 @@
 import asyncio
+import math
 
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 
@@ -40,42 +41,54 @@ def reset_all_runtime_state() -> None:
     is_repeat_ask_dict.clear()
 
 
+def _claim_cooldown(user_id: int, event_time: int, cooldown_seconds: int) -> int:
+    """Claim a user's cooldown before queueing and return remaining seconds."""
+    cooldown_seconds = max(0, cooldown_seconds)
+    elapsed = event_time - cd[user_id]
+    if elapsed < cooldown_seconds:
+        return max(1, math.ceil(cooldown_seconds - elapsed))
+    cd[user_id] = event_time
+    return 0
+
+
 async def handle_llm(
     bot: Bot, event: MessageEvent, matcher, format_message_dict: dict, is_ai=False
 ):
     user_id = event.sender.user_id
+    cooldown_seconds = int(config_parser.get_config("cd_seconds", 120) or 0)
+    wait_seconds = _claim_cooldown(user_id, event.time, cooldown_seconds)
+    if wait_seconds:
+        sender_name = getattr(event.sender, "card", None) or event.sender.nickname
+        await matcher.finish(
+            f"{sender_name}的 LLM 对话冷却中，请在 {wait_seconds} 秒后重试。"
+        )
+
+    is_finished: str | bool = False
     try:
-        async with get_llm_controller().slot(user_id):
-            if event.time - cd[user_id] < config_parser.get_config("cd_seconds"):
-                sender_name = getattr(event.sender, "card", None) or event.sender.nickname
-                wait_seconds = int(config_parser.get_config("cd_seconds") - (
-                    event.time - cd[user_id]
-                ))
-                await matcher.finish(
-                    f"{sender_name}的 LLM 对话冷却中，请在 {max(1, wait_seconds)} 秒后重试。"
-                )
+        async with timeout_scope(
+            config_parser.get_config("request_timeout_seconds", 180)
+        ):
+            async with get_llm_controller().slot(user_id):
+                snapshot = runtime_snapshots.current()
+                with runtime_snapshots.bind(snapshot):
+                    temp = (
+                        "ai助手"
+                        if is_ai
+                        else temperament_manager.get_temperament(user_id)
+                    )
+                    if not temp:
+                        await matcher.finish("出错了，赶快喊机器人主人来修复一下吧~")
 
-            cd[user_id] = event.time
-            snapshot = runtime_snapshots.current()
-            with runtime_snapshots.bind(snapshot):
-                temp = (
-                    "ai助手" if is_ai else temperament_manager.get_temperament(user_id)
-                )
-                if not temp:
-                    await matcher.finish("出错了，赶快喊机器人主人来修复一下吧~")
-
-                llm_chat = llm.MoeLlm(
-                    bot, event, format_message_dict, temperament=temp
-                )
-                request_id = register_request(event, format_message_dict, is_ai)
-                try:
-                    async with timeout_scope(
-                        config_parser.get_config("request_timeout_seconds", 180)
-                    ):
+                    llm_chat = llm.MoeLlm(
+                        bot, event, format_message_dict, temperament=temp
+                    )
+                    request_id = register_request(event, format_message_dict, is_ai)
+                    try:
                         is_finished = await llm_chat.get_llm_chat()
-                finally:
-                    unregister_request(request_id)
+                    finally:
+                        unregister_request(request_id)
     except AdmissionRejected:
+        reset_user_runtime_state(user_id)
         await matcher.finish("当前 LLM 请求较多，队列已满或你已有等待中的请求，请稍后再试。")
     except TimeoutError:
         reset_user_runtime_state(user_id)
