@@ -19,7 +19,11 @@ class LlmPayloadMixin:
             or model_selector.get_web_search()
             or model_selector.get_use_tools()
         ):
-            category = Categorize(plain, self.tool_snapshot)
+            category = Categorize(
+                plain,
+                self.tool_snapshot,
+                is_superuser=self.is_superuser,
+            )
             category_result = await category.get_category()
             if isinstance(category_result, str):
                 return category_result
@@ -136,7 +140,11 @@ class LlmPayloadMixin:
             normal_plugins = [p for p in all_plugins if p != "web_search"]
             if model_supports_tools and normal_plugins:
                 tools_schema.extend(
-                    self.tool_snapshot.get_tool_schema(normal_plugins, include_search=False)
+                    self.tool_snapshot.get_tool_schema(
+                        normal_plugins,
+                        include_search=False,
+                        is_superuser=self.is_superuser,
+                    )
                 )
             if (
                 model_supports_tools
@@ -144,7 +152,11 @@ class LlmPayloadMixin:
                 and "web_search" in all_plugins
             ):
                 tools_schema.extend(
-                    self.tool_snapshot.get_tool_schema([], include_search=True)
+                    self.tool_snapshot.get_tool_schema(
+                        [],
+                        include_search=True,
+                        is_superuser=self.is_superuser,
+                    )
                 )
 
         if tools_schema:

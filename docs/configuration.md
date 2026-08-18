@@ -23,6 +23,7 @@
 | `mcp_servers.toml` | 手动 | MCP Server 配置，启用后会作为 Function Calling 工具注入 | 自动、`刷新工具` 或 `重载LLM` |
 | `custom_plugin_info.json` | 手动 | 覆写插件描述，并可声明插件依赖工具 | 自动、`刷新工具` 或 `重载LLM` |
 | `custom_tools/` | 手动 | 原生 Python 工具函数 | 自动、`刷新工具` 或 `重载LLM` |
+| `generated_tools/` | 系统/超管指令 | `drafts/`、只读 `versions/` 与原子 `active.json` | 批准、停用、回滚实时生效 |
 
 ---
 
@@ -66,9 +67,19 @@
   "emotions_dir": "/absolute/path/to/emotions", // 表情包根目录（绝对路径）
   "private_chat_enabled": false,  // 是否允许超级管理员私聊 Bot
   "show_datetime": false,         // 是否在 System Prompt 中注入当前时间
-  "poke_llm_rate": 0.3            // 被戳一戳时走LLM对话的概率（0~1，0为关闭；仅群聊生效，cd中或概率外则回随机默认文案）
+  "poke_llm_rate": 0.3,           // 被戳一戳时走LLM对话的概率（0~1，0为关闭；仅群聊生效，cd中或概率外则回随机默认文案）
+  "generated_tools_enabled": true,
+  "generated_tool_max_pending": 4,
+  "generated_tool_timeout_seconds": 30,
+  "generated_tool_cpu_seconds": 10,
+  "generated_tool_memory_mb": 256,
+  "generated_tool_output_bytes": 65536,
+  "generated_tool_workspace_mb": 64,
+  "generated_tool_max_processes": 16
 }
 ```
+
+生成工具全局单并发，等待队列默认 4。每次调用都启动 nobody 子进程并清除生产环境变量；墙钟、CPU、内存、进程、输出和工作目录任一越限都会终止整个进程组。无法进入 nobody 或启用硬限制时，生成/文件工具 fail closed，普通聊天、可信 `ToolSpec` 与 MCP 不受影响。
 
 ### 表情包目录结构
 

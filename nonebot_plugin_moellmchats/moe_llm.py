@@ -45,6 +45,12 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self._pending_vision_images: list = []  # 本轮工具调用返回的待处理图片
         self._current_tool_usage = Counter()
         self._last_api_error_non_retryable = False
+        bot_config = getattr(bot, "config", None)
+        superusers = {
+            str(user_id)
+            for user_id in getattr(bot_config, "superusers", set())
+        }
+        self.is_superuser = str(event.user_id) in superusers
         runtime_snapshot = runtime_snapshots.active()
         self.tool_snapshot = (
             runtime_snapshot.tool_snapshot

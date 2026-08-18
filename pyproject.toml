@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "nonebot-plugin-moellmchats"
-version = "0.24.0"
+version = "0.25.0"
 description = "A Nonebot plugin, Multi-Model Chat System | Hybrid Scheduling·Search Augmented·Persona Customization"
 license = "GPL"
 authors = ["Elflare", "LoCCai Maintainers"]

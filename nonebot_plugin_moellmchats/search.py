@@ -8,8 +8,9 @@ from .utils import get_session
 
 
 class Search:
-    def __init__(self, plain):
+    def __init__(self, plain, tool_snapshot=None):
         self.plain = plain
+        self.tool_snapshot = tool_snapshot
 
     async def get_search(self) -> str:
         url = "https://api.tavily.com/search"
@@ -36,7 +37,12 @@ class Search:
                     final_res = answer
 
                     # 动态检测：判断提取网页的自定义函数是否被用户加载
-                    has_extractor = "extract_webpage" in tool_manager.custom_tools
+                    tools = (
+                        self.tool_snapshot.custom_tools
+                        if self.tool_snapshot is not None
+                        else tool_manager.custom_tools
+                    )
+                    has_extractor = "extract_webpage" in tools
 
                     # 只有在有搜索结果且用户安装了提取工具的情况下，才暴露 URL 和诱导提示词
                     if results and has_extractor:

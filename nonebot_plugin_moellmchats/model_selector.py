@@ -2,7 +2,6 @@ from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import ujson as json
@@ -30,7 +29,9 @@ class ModelRuntimeState:
 
 
 def _readonly(value: dict) -> Mapping:
-    return MappingProxyType(deepcopy(value))
+    from .runtime_snapshot import immutable_mapping
+
+    return immutable_mapping(value)
 
 
 # 模型选择类
@@ -107,10 +108,12 @@ class ModelSelector:
         return candidate.capture_state()
 
     def commit_candidate(self, candidate: ModelRuntimeState) -> None:
-        self.models = deepcopy(dict(candidate.models))
-        self.providers = deepcopy(dict(candidate.providers))
-        self.global_default = deepcopy(dict(candidate.global_default))
-        self.model_config = deepcopy(dict(candidate.model_config))
+        from .runtime_snapshot import mutable_value
+
+        self.models = mutable_value(candidate.models)
+        self.providers = mutable_value(candidate.providers)
+        self.global_default = mutable_value(candidate.global_default)
+        self.model_config = mutable_value(candidate.model_config)
 
     def _normalize_url(self, base_url: str, endpoint: str = "/chat/completions") -> str:
         """自动处理末尾的反斜杠和补全路径"""
@@ -334,9 +337,23 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         results = await asyncio.gather(
             *[_fetch_one(p, i) for p, i in self.providers.items()]
         )
+        # Keep last-known-good provider entries on a transient /models failure.
+        try:
+            with self.cache_file.open(encoding="utf-8") as file:
+                old_cache = json.load(file)
+            if not isinstance(old_cache, dict):
+                old_cache = {}
+        except (OSError, ValueError):
+            old_cache = {}
+        configured = set(self.providers)
         new_cache = {
-            provider: models for provider, models in results if models is not None
+            provider: models
+            for provider, models in old_cache.items()
+            if provider in configured and isinstance(models, list)
         }
+        for provider, models in results:
+            if models is not None:
+                new_cache[provider] = models
 
         # 持久化到缓存，避免在事件循环里同步写盘。
         await asyncio.to_thread(self._write_config, self.cache_file, new_cache)
@@ -482,7 +499,9 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         state = self._active_state()
         selected_model = state.model_config.get(key)
         if selected_model and selected_model in state.models:
-            model_data = state.models[selected_model].copy()
+            from .runtime_snapshot import mutable_value
+
+            model_data = mutable_value(state.models[selected_model])
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
@@ -493,13 +512,15 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         moe_models = state.model_config["moe_models"]
         model_name = moe_models.get(difficulty)
         if model_name and model_name in state.models:
-            model_data = state.models[model_name].copy()
+            from .runtime_snapshot import mutable_value
+
+            model_data = mutable_value(state.models[model_name])
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
 
     def get_tool_blacklist(self) -> list:
-        return self._active_state().model_config.get("tool_blacklist", [])
+        return list(self._active_state().model_config.get("tool_blacklist", []))
 
     def set_moe_model(self, model_query: str, difficulty: str) -> str:
         model_name = self.resolve_model_name(model_query)
@@ -654,7 +675,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         return None
 
     def get_resident_plugins(self) -> list:
-        return self._active_state().model_config.get("resident_plugins", [])
+        return list(self._active_state().model_config.get("resident_plugins", []))
 
     def _get_resolve_error_msg(self, query: str) -> str:
         """根据查询内容返回准确的错误提示与对应列表"""

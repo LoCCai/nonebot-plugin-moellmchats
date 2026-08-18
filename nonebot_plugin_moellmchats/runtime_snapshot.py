@@ -3,14 +3,39 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
 
 
+def immutable_value(value: Any) -> Any:
+    """Detach and recursively freeze values published in a runtime generation."""
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): immutable_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(immutable_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(immutable_value(item) for item in value)
+    return deepcopy(value)
+
+
 def immutable_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return a detached, read-only top-level mapping for a runtime generation."""
-    return MappingProxyType(dict(value))
+    """Return a detached, recursively read-only runtime mapping."""
+    return immutable_value(value)
+
+
+def mutable_value(value: Any) -> Any:
+    """Return a detached mutable copy suitable for JSON payloads and legacy APIs."""
+    if isinstance(value, Mapping):
+        return {key: mutable_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [mutable_value(item) for item in value]
+    if isinstance(value, frozenset):
+        return {mutable_value(item) for item in value}
+    return deepcopy(value)
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 # 自定义工具开发
 
-`custom_tools/` 目录允许你直接编写原生 Python 函数，供大模型通过 Function Calling 原生调用，**无需模拟 NoneBot 消息事件**。适合编写计算器、爬虫、系统查询等轻量级扩展工具。
+`custom_tools/` 目录允许你编写原生 Python 函数，供大模型通过 Function Calling 调用，**无需模拟 NoneBot 消息事件**。0.25 起，文件工具只用 AST 提取元数据，实际调用在隔离子进程中执行，不会导入 Qiqi 主进程。
 
 首次运行后会自动生成禁用的参考模板 `custom_tools/_example.py`。以下划线开头的文件和历史 `example.py` 都不会加载，复制并改名后才会成为工具，避免默认开放网络访问。
 
@@ -81,50 +81,23 @@ async def extract_webpage(
 
 ---
 
-## 与 QQ 交互（主动发送消息）
+## 与 NoneBot / QQ 集成
 
-工具函数虽然基于纯 Python 编写，但你可以通过声明特殊参数 `_bot` 和 `_event` 来获取当前 Bot 实例和事件上下文——框架会在执行时自动注入这两个参数，且它们**不会暴露给 LLM**。
-
-```python
-from typing import Annotated
-from nonebot.adapters.onebot.v11 import Bot, MessageEvent
-
-async def send_message_to_target(
-    target_type: Annotated[str, "发送目标的类型，必须是 'user' (发给个人) 或 'group' (发给群聊)"],
-    target_id: Annotated[int, "目标用户的QQ号，或者目标群的群号"],
-    message: Annotated[str, "需要发送的具体消息内容"],
-    _bot: Bot = None,
-    _event: MessageEvent = None,
-) -> str:
-    """
-    让机器人跨窗口/跨群发送文本消息给指定的QQ号或QQ群。
-    当用户让你"去通知一下xxx群"、"给某个QQ号发xxx"时调用此工具。
-    """
-    # 校验调用者权限
-    user_id = str(_event.user_id)
-    if user_id not in _bot.config.superusers:
-        return f"发送失败：权限拒绝！该操作极其敏感，仅限超级管理员执行。越权请求者ID: {user_id}"
-
-    try:
-        if target_type == "user":
-            await _bot.send_private_msg(user_id=target_id, message=message)
-            return f"成功：已向用户({target_id})发送了该消息。"
-        elif target_type == "group":
-            await _bot.send_group_msg(group_id=target_id, message=message)
-            return f"成功：已向群聊({target_id})发送了该消息。"
-        else:
-            return f"发送失败：target_type 参数错误，收到了 '{target_type}'，只能填 'user' 或 'group'。"
-    except Exception as e:
-        return f"跨窗口发送消息失败，底层 API 报错: {str(e)}"
-```
-
-> ⚠️ 发送消息属于敏感操作，建议始终校验调用者是否为超级管理员，避免被恶意利用。
+文件工具不再支持 `_bot`、`_event` 或 `_tool_manager`。发现这些隐藏参数时会拒绝整个候选 generation，并提示迁移。需要 Bot、Event 或数据库对象的可信集成必须放在独立 NoneBot 插件中，通过 `register_tool(ToolSpec(...))` 注册；权限和变更确认仍会在执行端复核。
 
 ---
 
 ## 热重载
 
 编写完成后会自动原子重载，也可使用 `刷新工具` 或 `重载LLM`，**无需重启 NoneBot**。语法错误时旧 generation 保持可用。
+
+文件工具和 AI 生成工具均在 nobody 子进程执行，默认全局单并发、等待 4、墙钟 30 秒、CPU 10 秒、内存 256 MiB、16 个进程、64 KiB 输出和 64 MiB 工作目录。它们不会收到生产环境变量、Bot、Event 或数据库对象；超时、取消和越限会杀死整个进程组。
+
+## AI 工具包
+
+超级管理员可发送 `添加LLM功能 <需求>`。系统使用当前聊天模型生成 `manifest.json`、`tool.py` 和 `tests.py`，完成 AST/Schema/敏感字面量检查与隔离测试，再由总结模型独立复核。复核通过仍只是草稿，必须查看风险、diff 和 SHA-256 后发送 `批准LLM功能 <ID> <短哈希>`。
+
+批准版本按完整 SHA-256 保存为只读目录。升级、停用和回滚只发布新 generation；已开始的请求继续固定旧快照。普通用户看不到 `superuser` 工具的目录或 Schema，即使伪造调用也不会执行。
 
 ## 显式 ToolSpec 接口（推荐）
 
@@ -138,7 +111,7 @@ async def send_message_to_target(
 
 - 文件名任意（`.py` 后缀），但函数名不能与系统内置工具冲突
 - 同一文件中可定义多个工具函数
-- 工具函数内可通过 `_bot` / `_event` 注入主动调用 QQ 接口（详见[与 QQ 交互](#与-qq-交互主动发送消息)示例），但发送消息等敏感操作务必校验调用者权限
+- 文件工具不得声明 `_bot` / `_event` / `_tool_manager`；可信 Bot 集成请使用独立插件注册 `ToolSpec`
 - 工具执行异常时建议 `try/except` 后返回错误描述字符串，而非抛出异常
 
 ---

@@ -143,3 +143,76 @@ async def test_tool_result_and_images_are_bounded() -> None:
     assert messages[-1]["content"].startswith("函数执行返回")
     assert messages[-1]["content"].endswith("[工具结果已截断]")
     assert len(harness._pending_vision_images) == 4
+
+
+@pytest.mark.asyncio
+async def test_non_object_tool_arguments_become_tool_error() -> None:
+    harness = Harness({})
+    messages = await harness._execute_tools(
+        [_call(1, "web_search", "[]")], "", [], ""
+    )
+    assert "必须是 JSON 对象" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_missing_required_argument_becomes_tool_error() -> None:
+    harness = Harness({})
+    messages = await harness._execute_tools(
+        [_call(1, "web_search", "{}")], "", [], ""
+    )
+    assert "缺少必填参数" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_hallucinated_superuser_tool_is_rejected_without_breaking_reply() -> None:
+    executions = 0
+
+    async def admin_only():
+        nonlocal executions
+        executions += 1
+        return "secret"
+
+    spec = ToolSpec(
+        name="admin_only",
+        description="admin",
+        parameters={"type": "object", "properties": {}},
+        handler=admin_only,
+        permission="superuser",
+    )
+    harness = Harness({"admin_only": spec.as_legacy_schema()})
+    harness.event.user_id = 2
+    messages = await harness._execute_tools(
+        [_call(1, "admin_only")], "normal answer", [], ""
+    )
+    assert executions == 0
+    assert "仅允许超级用户" in messages[-1]["content"]
+    assert harness.sent == ["normal answer"]
+
+
+@pytest.mark.asyncio
+async def test_nested_argument_type_error_becomes_tool_error() -> None:
+    async def nested(payload):
+        return str(payload)
+
+    spec = ToolSpec(
+        name="nested",
+        description="nested",
+        parameters={
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "properties": {"count": {"type": "integer"}},
+                    "required": ["count"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["payload"],
+        },
+        handler=nested,
+    )
+    harness = Harness({"nested": spec.as_legacy_schema()})
+    messages = await harness._execute_tools(
+        [_call(1, "nested", '{"payload":{"count":"bad"}}')], "", [], ""
+    )
+    assert "类型错误" in messages[-1]["content"]

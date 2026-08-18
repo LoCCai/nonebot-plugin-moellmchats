@@ -22,6 +22,7 @@ from nonebot.rule import to_me
 require("nonebot_plugin_localstore")
 
 _model_refresh_task: asyncio.Task | None = None
+_runner_preflight_task: asyncio.Task | None = None
 
 from . import moe_llm as llm
 from .chat_runtime import (
@@ -32,6 +33,8 @@ from .chat_runtime import (
     reset_user_runtime_state,
 )
 from .config import config_parser
+from .generated_tool_runner import generated_tool_runner
+from .generated_tools import generated_tool_lifecycle_lock, generated_tool_store
 from .messages_handler import messages_dict
 from .model_selector import model_selector
 from .moe_llm import token_usage_history
@@ -40,6 +43,7 @@ from .runtime_metrics import runtime_metrics
 from .runtime_reload import runtime_reloader
 from .temperament_manager import temperament_manager
 from .token_usage_formatter import format_token_usage_history
+from .tool_authoring import tool_authoring_service
 from .tool_contracts import (
     ToolContext,
     ToolEffect,
@@ -87,6 +91,7 @@ __plugin_meta__ = PluginMetadata(
 12.超级管理员限定：用"查看请求"、"停止请求 [编号|all]"来查看或终止当前正在处理的 LLM 请求
 13.超级管理员限定：用"查看消耗 [数量或范围]"来查询API Token消耗记录（如：查看消耗 5、查看消耗 10-15、查看消耗 -50）
 14.超级管理员限定：用"重载LLM"原子重载运行资源，用"查看LLM状态"查看队列、缓存、工具和重载状态
+15.超级管理员限定：用"添加LLM功能"生成工具草稿，复核后用"批准LLM功能"热载入
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
@@ -453,18 +458,27 @@ async def _startup_tasks():
         except Exception:
             logger.exception("后台刷新模型失败，继续使用当前运行快照")
 
-    global _model_refresh_task
+    async def runner_preflight_in_background():
+        try:
+            await generated_tool_runner.preflight()
+            logger.info("生成工具 runner 隔离探针通过")
+        except Exception:
+            logger.exception("生成工具 runner 隔离不可用；生成工具将 fail closed")
+
+    global _model_refresh_task, _runner_preflight_task
     _model_refresh_task = asyncio.create_task(refresh_models_in_background())
+    _runner_preflight_task = asyncio.create_task(runner_preflight_in_background())
     runtime_reloader.start_watcher()
 
 @get_driver().on_shutdown
 async def _close_http_session():
-    if _model_refresh_task is not None and not _model_refresh_task.done():
-        _model_refresh_task.cancel()
-        try:
-            await _model_refresh_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_model_refresh_task, _runner_preflight_task):
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     await runtime_reloader.stop_watcher()
     await close_session()
 # 超级管理员可手动触发模型刷新
@@ -633,7 +647,7 @@ stop_request_matcher = on_command(
 
 
 @stop_request_matcher.handle()
-async def _(args: Message = CommandArg()):
+async def _(event: MessageEvent, args: Message = CommandArg()):
     arg = args.extract_plain_text().strip()
     await stop_request_matcher.finish(cancel_request_by_arg(arg))
 
@@ -679,6 +693,236 @@ async def _():
     )
 
 
+author_tool_matcher = on_command(
+    "添加LLM功能",
+    aliases={"创建LLM功能"},
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@author_tool_matcher.handle()
+async def _(event: MessageEvent, args: Message = CommandArg()):
+    requirement = args.extract_plain_text().strip()
+    if not requirement:
+        await author_tool_matcher.finish("请提供功能需求，例如：添加LLM功能 计算两个日期之间的天数")
+    await author_tool_matcher.send("正在生成、隔离测试并复核工具草稿，请稍候……")
+    try:
+        draft_id, validation, review, test_summary = await tool_authoring_service.create(
+            requirement,
+            actor_key=str(event.user_id),
+        )
+    except Exception as error:
+        logger.exception("AI 工具草稿生成失败")
+        await author_tool_matcher.finish(f"功能草稿生成失败：{str(error)[:500]}")
+    risks = "；".join(validation.risks) if validation.risks else "未发现静态高风险调用"
+    diff = await asyncio.to_thread(generated_tool_store.draft_diff, draft_id)
+    status = "复核通过，等待二次批准" if review["approved"] else "复核未通过，禁止批准"
+    await author_tool_matcher.finish(
+        f"草稿 {draft_id}：{status}\n"
+        f"工具包：{validation.manifest['bundle_id']}\n"
+        f"SHA-256：{validation.digest}\n"
+        f"测试：{test_summary[:300]}\n"
+        f"复核：{str(review.get('summary') or '')[:500]}\n"
+        f"风险：{risks[:800]}\n"
+        f"Diff：\n{diff[:1200]}\n"
+        f"查看：查看LLM功能草稿 {draft_id}\n"
+        f"批准：批准LLM功能 {draft_id} {validation.digest[:12]}"
+    )
+
+
+view_tool_draft_matcher = on_command(
+    "查看LLM功能草稿",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@view_tool_draft_matcher.handle()
+async def _(args: Message = CommandArg()):
+    draft_id = args.extract_plain_text().strip()
+    if not draft_id:
+        status = await asyncio.to_thread(generated_tool_store.list_status)
+        drafts = status["drafts"][-10:]
+        text = "\n".join(
+            f"{item['draft_id']} {item['status']} {str(item['request'])[:60]}"
+            for item in drafts
+        ) or "暂无工具草稿"
+        await view_tool_draft_matcher.finish(text)
+    try:
+        path, metadata, validation = await asyncio.to_thread(
+            generated_tool_store.get_draft, draft_id
+        )
+    except Exception as error:
+        await view_tool_draft_matcher.finish(f"读取草稿失败：{error}")
+    tools = "、".join(
+        f"{item['name']}[{item['permission']}/{item['effect']}]"
+        for item in validation.manifest["tools"]
+    )
+    source, diff = await asyncio.gather(
+        asyncio.to_thread((path / "tool.py").read_text, encoding="utf-8"),
+        asyncio.to_thread(generated_tool_store.draft_diff, draft_id),
+    )
+    await view_tool_draft_matcher.finish(
+        f"草稿：{draft_id} status={metadata.get('status')}\n"
+        f"哈希：{validation.digest}\n"
+        f"工具：{tools}\n"
+        f"复核：{str(metadata.get('review', {}).get('summary') or '')[:500]}\n"
+        f"风险：{'；'.join(validation.risks) or '无静态风险项'}\n"
+        f"Diff：\n{diff[:1800]}\n"
+        f"源码预览：\n{source[:1800]}"
+        + ("\n...[源码已截断]" if len(source) > 1800 else "")
+    )
+
+
+approve_tool_matcher = on_command(
+    "批准LLM功能",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@approve_tool_matcher.handle()
+async def _(args: Message = CommandArg()):
+    parts = args.extract_plain_text().split()
+    if len(parts) != 2:
+        await approve_tool_matcher.finish("格式：批准LLM功能 <草稿ID> <至少8位哈希>")
+    async with generated_tool_lifecycle_lock:
+        previous: dict[str, str] | None = None
+        original_metadata: dict | None = None
+        try:
+            previous = await asyncio.to_thread(generated_tool_store.read_active)
+            _, original_metadata, _ = await asyncio.to_thread(
+                generated_tool_store.get_draft, parts[0]
+            )
+            bundle_id, digest = await asyncio.to_thread(
+                generated_tool_store.approve, parts[0], parts[1]
+            )
+            result = await runtime_reloader.reload("generated-tool-approve")
+        except Exception as error:
+            rollback_errors = []
+            if previous is not None:
+                try:
+                    await asyncio.to_thread(generated_tool_store.replace_active, previous)
+                except Exception as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            if original_metadata is not None:
+                try:
+                    await asyncio.to_thread(
+                        generated_tool_store.restore_draft_metadata,
+                        parts[0],
+                        original_metadata,
+                    )
+                except Exception as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            suffix = f"；回滚异常：{'; '.join(rollback_errors)}" if rollback_errors else ""
+            await approve_tool_matcher.finish(
+                f"批准失败，旧 generation 保持使用：{str(error)[:500]}{suffix[:300]}"
+            )
+    await approve_tool_matcher.finish(
+        f"已原子载入 {bundle_id}@{digest[:12]}，generation {result.generation}"
+    )
+
+
+reject_tool_matcher = on_command(
+    "拒绝LLM功能",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@reject_tool_matcher.handle()
+async def _(args: Message = CommandArg()):
+    draft_id = args.extract_plain_text().strip()
+    try:
+        await asyncio.to_thread(generated_tool_store.reject, draft_id)
+    except Exception as error:
+        await reject_tool_matcher.finish(f"拒绝草稿失败：{error}")
+    await reject_tool_matcher.finish(f"已拒绝草稿 {draft_id}，源码保留用于审计")
+
+
+list_tools_matcher = on_command(
+    "LLM功能列表",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@list_tools_matcher.handle()
+async def _():
+    status = await asyncio.to_thread(generated_tool_store.list_status)
+    active_lines = [
+        f"{bundle_id}@{digest[:12]}" for bundle_id, digest in status["active"].items()
+    ]
+    draft_counts = {}
+    for draft in status["drafts"]:
+        state = draft.get("status") or "unknown"
+        draft_counts[state] = draft_counts.get(state, 0) + 1
+    await list_tools_matcher.finish(
+        "已激活工具包：\n"
+        + ("\n".join(active_lines) if active_lines else "无")
+        + f"\n草稿状态：{draft_counts or {}}"
+    )
+
+
+deactivate_tool_matcher = on_command(
+    "停用LLM功能",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@deactivate_tool_matcher.handle()
+async def _(args: Message = CommandArg()):
+    bundle_id = args.extract_plain_text().strip()
+    async with generated_tool_lifecycle_lock:
+        previous = await asyncio.to_thread(generated_tool_store.read_active)
+        if not await asyncio.to_thread(generated_tool_store.deactivate, bundle_id):
+            await deactivate_tool_matcher.finish("该工具包当前未激活")
+        try:
+            result = await runtime_reloader.reload("generated-tool-deactivate")
+        except Exception as error:
+            await asyncio.to_thread(generated_tool_store.replace_active, previous)
+            await deactivate_tool_matcher.finish(f"停用失败：{error}")
+    await deactivate_tool_matcher.finish(
+        f"已停用 {bundle_id}，generation {result.generation}"
+    )
+
+
+rollback_tool_matcher = on_command(
+    "回滚LLM功能",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@rollback_tool_matcher.handle()
+async def _(args: Message = CommandArg()):
+    parts = args.extract_plain_text().split()
+    if len(parts) != 2:
+        await rollback_tool_matcher.finish("格式：回滚LLM功能 <工具包> <版本哈希前缀>")
+    async with generated_tool_lifecycle_lock:
+        previous = await asyncio.to_thread(generated_tool_store.read_active)
+        try:
+            digest = await asyncio.to_thread(
+                generated_tool_store.rollback, parts[0], parts[1]
+            )
+            result = await runtime_reloader.reload("generated-tool-rollback")
+        except Exception as error:
+            await asyncio.to_thread(generated_tool_store.replace_active, previous)
+            await rollback_tool_matcher.finish(f"回滚失败：{error}")
+    await rollback_tool_matcher.finish(
+        f"已回滚 {parts[0]}@{digest[:12]}，generation {result.generation}"
+    )
+
+
 llm_status_matcher = on_command(
     "查看LLM状态",
     aliases={"LLM状态", "查看llm状态", "llm状态"},
@@ -691,6 +935,7 @@ llm_status_matcher = on_command(
 @llm_status_matcher.handle()
 async def _():
     metrics = runtime_metrics.snapshot()
+    generated_status = await asyncio.to_thread(generated_tool_store.list_status)
     avg_category = (
         metrics["classification_seconds"] / metrics["classification_count"]
         if metrics["classification_count"]
@@ -708,6 +953,17 @@ async def _():
         f"timeout={metrics['member_lookup_timeouts']}\n"
         f"分类平均耗时: {avg_category:.2f}s\n"
         f"工具步骤: {metrics['tool_steps']} timeout={metrics['tool_timeouts']}\n"
+        f"生成工具: active_bundles={len(generated_status['active'])} "
+        f"drafts={len(generated_status['drafts'])} "
+        f"runner_active={metrics['generated_runner_active']} "
+        f"runner_pending={metrics['generated_runner_pending']} "
+        f"rejected={metrics['generated_runner_rejected']} "
+        f"timeout={metrics['generated_runner_timeouts']} "
+        f"failure={metrics['generated_runner_failures']} "
+        f"killed={metrics['generated_runner_killed']} "
+        f"orphan_cleanup={metrics['generated_runner_orphan_cleanups']} "
+        f"isolation={generated_tool_runner.isolation_status}\n"
+        f"造工具任务: active={metrics['generated_authoring_active']}\n"
         f"重载: success={metrics['reload_successes']} failure={metrics['reload_failures']} "
         f"last_at={metrics['last_reload_at'] or '无'}\n"
         f"最近重载错误: {metrics['last_reload_error'] or '无'}"

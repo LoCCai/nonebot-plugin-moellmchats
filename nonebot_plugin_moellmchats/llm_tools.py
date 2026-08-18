@@ -13,12 +13,23 @@ from .network_safety import validate_url_arguments
 from .request_manager import get_current_request_id
 from .runtime_metrics import runtime_metrics
 from .search import Search
-from .tool_contracts import ToolContext, ToolEffect, ToolResult
+from .tool_contracts import (
+    ToolContext,
+    ToolEffect,
+    ToolResult,
+    validate_tool_arguments,
+)
 from .tool_manager import tool_manager
 from .utils import parse_emotion
 
 
 class LlmToolsMixin:
+    @staticmethod
+    def _validate_tool_arguments(
+        arguments: object, parameters: dict | None
+    ) -> str | None:
+        return validate_tool_arguments(arguments, parameters)
+
     async def _execute_tools(
         self,
         tool_calls: list,
@@ -74,8 +85,35 @@ class LlmToolsMixin:
 
             try:
                 args = json.loads(call["function"]["arguments"])
-            except Exception:
-                args = {}
+            except Exception as error:
+                args = None
+                argument_error = f"工具参数不是有效 JSON: {error}"
+            else:
+                parameters = None
+                if func_name == "web_search":
+                    parameters = {
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    }
+                elif func_name in self.tool_snapshot.custom_tools:
+                    parameters = self.tool_snapshot.custom_tools[func_name].get(
+                        "parameters"
+                    )
+                elif func_name in self.tool_snapshot.plugin_info:
+                    parameters = {
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    }
+                argument_error = self._validate_tool_arguments(args, parameters)
+            if argument_error:
+                send_message_list.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": f"函数参数错误：{argument_error}。请修正后重新调用。",
+                    }
+                )
+                continue
             logger.info(f"准备执行函数: {func_name}，参数字段: {sorted(args)}")
 
             repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
@@ -105,7 +143,9 @@ class LlmToolsMixin:
                     async with timeout_scope(
                         config_parser.get_config("tool_timeout_seconds", 30)
                     ):
-                        search_res = await Search(query).get_search()
+                        search_res = await Search(
+                            query, tool_snapshot=self.tool_snapshot
+                        ).get_search()
                 except TimeoutError:
                     runtime_metrics.tool_timeouts += 1
                     search_res = "联网搜索超时"

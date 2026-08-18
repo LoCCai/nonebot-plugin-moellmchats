@@ -49,6 +49,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "private_chat_enabled": False,
     "show_datetime": False,
     "poke_llm_rate": 0.3,
+    "generated_tools_enabled": True,
+    "generated_tool_max_pending": 4,
+    "generated_tool_timeout_seconds": 30,
+    "generated_tool_cpu_seconds": 10,
+    "generated_tool_memory_mb": 256,
+    "generated_tool_output_bytes": 65_536,
+    "generated_tool_workspace_mb": 64,
+    "generated_tool_max_processes": 16,
 }
 
 _POSITIVE_INTEGER_FIELDS = {
@@ -76,6 +84,13 @@ _POSITIVE_INTEGER_FIELDS = {
     "member_lookup_timeout_seconds",
     "runtime_watch_interval_seconds",
     "user_history_expire_seconds",
+    "generated_tool_max_pending",
+    "generated_tool_timeout_seconds",
+    "generated_tool_cpu_seconds",
+    "generated_tool_memory_mb",
+    "generated_tool_output_bytes",
+    "generated_tool_workspace_mb",
+    "generated_tool_max_processes",
 }
 
 

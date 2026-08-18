@@ -15,9 +15,10 @@ from .utils import get_session
 
 
 class Categorize:
-    def __init__(self, plain, tool_snapshot=None):
+    def __init__(self, plain, tool_snapshot=None, *, is_superuser: bool = False):
         self.plain = plain
         self.tool_snapshot = tool_snapshot
+        self.is_superuser = is_superuser
 
     async def get_category(self) -> tuple[str, bool, list] | str | bool:
         started = time.monotonic()
@@ -36,9 +37,13 @@ class Categorize:
     async def _get_category(self) -> tuple[str, bool, list] | str | bool:
         if model_selector.get_use_tools() or model_selector.get_web_search():
             catalog = (
-                self.tool_snapshot.get_brief_catalog()
+                self.tool_snapshot.get_brief_catalog(
+                    is_superuser=self.is_superuser
+                )
                 if self.tool_snapshot is not None
-                else tool_manager.get_brief_catalog()
+                else tool_manager.get_brief_catalog(
+                    is_superuser=self.is_superuser
+                )
             )
             logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
         else:

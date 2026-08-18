@@ -8,10 +8,16 @@ import time
 from nonebot.log import logger
 
 from .config import config_parser, config_path
+from .generated_tools import generated_tool_store
 from .mcp_manager import mcp_manager
 from .model_selector import model_selector
 from .runtime_metrics import runtime_metrics
-from .runtime_snapshot import RuntimeSnapshot, immutable_mapping, runtime_snapshots
+from .runtime_snapshot import (
+    RuntimeSnapshot,
+    immutable_mapping,
+    mutable_value,
+    runtime_snapshots,
+)
 from .temperament_manager import temperament_manager
 from .tool_manager import ToolSnapshot, tool_manager
 from .utils import (
@@ -56,6 +62,7 @@ class RuntimeReloader:
             mcp_manager.config_file,
         ]
         paths.extend(sorted(tool_manager.custom_tools_dir.glob("*.py")))
+        paths.extend(generated_tool_store.watched_paths())
         emotions_dir = Path(str(config_parser.get_config("emotions_dir", "")))
         if emotions_dir.is_dir():
             paths.extend(sorted(emotions_dir.iterdir()))
@@ -101,14 +108,27 @@ class RuntimeReloader:
 
         mcp_names: set[str] = set()
         for name, schema in mcp_tools.items():
+            if name in custom_tools or name in plugin_info:
+                raise ValueError(f"MCP 工具名与现有工具或插件冲突: {name}")
+            schema["source"] = "mcp"
             custom_tools[name] = schema
             mcp_names.add(name)
+        plugin_collisions = set(plugin_info) & set(custom_tools)
+        if plugin_collisions:
+            raise ValueError(
+                f"工具名与 NoneBot 插件冲突: {sorted(plugin_collisions)}"
+            )
+        tool_manager.validate_tool_schemas(custom_tools)
+        tool_manager.validate_dependencies(
+            dependencies,
+            set(plugin_info) | set(custom_tools),
+        )
         tool_snapshot = ToolSnapshot(
             generation=generation,
-            plugin_info=plugin_info,
-            custom_tools=custom_tools,
-            tool_dependencies=dependencies,
-            mcp_tool_names=mcp_names,
+            plugin_info=immutable_mapping(plugin_info),
+            custom_tools=immutable_mapping(custom_tools),
+            tool_dependencies=immutable_mapping(dependencies),
+            mcp_tool_names=frozenset(mcp_names),
         )
         temperaments, assignments = temperament_candidate
         snapshot = RuntimeSnapshot(
@@ -131,25 +151,54 @@ class RuntimeReloader:
     @staticmethod
     def _commit(candidate: _RuntimeCandidate) -> None:
         snapshot = candidate.snapshot
-        config_parser.commit_candidate(snapshot.config)
-        model_selector.commit_candidate(snapshot.model_state)
-        temperament_manager.commit_candidate(
-            (dict(snapshot.temperaments), dict(snapshot.temperament_assignments))
-        )
-        tools = snapshot.tool_snapshot
-        tool_manager.plugin_info = tools.plugin_info
-        tool_manager.custom_tools = tools.custom_tools
-        tool_manager.tool_dependencies = tools.tool_dependencies
-        tool_manager.mcp_tool_names = tools.mcp_tool_names
-        mcp_manager.servers = candidate.mcp_servers
-        mcp_manager.tool_to_server = {
-            name: mapping
-            for name, mapping in candidate.mcp_mapping.items()
-            if name in tools.mcp_tool_names
+        previous = {
+            "config": mutable_value(config_parser.config),
+            "model": model_selector.capture_state(),
+            "temperaments": dict(temperament_manager.temperaments),
+            "assignments": dict(temperament_manager.temperament_dict),
+            "plugin_info": tool_manager.plugin_info,
+            "custom_tools": tool_manager.custom_tools,
+            "dependencies": tool_manager.tool_dependencies,
+            "mcp_names": tool_manager.mcp_tool_names,
+            "mcp_servers": mcp_manager.servers,
+            "mcp_mapping": mcp_manager.tool_to_server,
         }
-        invalidate_resource_caches()
-        # Publish last: readers see either the complete old or complete new generation.
-        runtime_snapshots.publish(snapshot)
+        tools = snapshot.tool_snapshot
+        try:
+            config_parser.commit_candidate(mutable_value(snapshot.config))
+            model_selector.commit_candidate(snapshot.model_state)
+            temperament_manager.commit_candidate(
+                (
+                    mutable_value(snapshot.temperaments),
+                    mutable_value(snapshot.temperament_assignments),
+                )
+            )
+            tool_manager.plugin_info = mutable_value(tools.plugin_info)
+            tool_manager.custom_tools = mutable_value(tools.custom_tools)
+            tool_manager.tool_dependencies = mutable_value(tools.tool_dependencies)
+            tool_manager.mcp_tool_names = set(tools.mcp_tool_names)
+            mcp_manager.servers = mutable_value(candidate.mcp_servers)
+            mcp_manager.tool_to_server = {
+                name: mutable_value(mapping)
+                for name, mapping in candidate.mcp_mapping.items()
+                if name in tools.mcp_tool_names
+            }
+            invalidate_resource_caches()
+            # Publish last: readers see either the complete old or complete new generation.
+            runtime_snapshots.publish(snapshot)
+        except Exception:
+            config_parser.commit_candidate(previous["config"])
+            model_selector.commit_candidate(previous["model"])
+            temperament_manager.commit_candidate(
+                (previous["temperaments"], previous["assignments"])
+            )
+            tool_manager.plugin_info = previous["plugin_info"]
+            tool_manager.custom_tools = previous["custom_tools"]
+            tool_manager.tool_dependencies = previous["dependencies"]
+            tool_manager.mcp_tool_names = previous["mcp_names"]
+            mcp_manager.servers = previous["mcp_servers"]
+            mcp_manager.tool_to_server = previous["mcp_mapping"]
+            raise
 
     async def reload(self, reason: str = "manual") -> ReloadResult:
         async with self._lock:
