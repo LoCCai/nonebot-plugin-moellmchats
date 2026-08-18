@@ -155,6 +155,7 @@ class GeneratedToolRunner:
         ).encode("utf-8")
         started = time.monotonic()
         proc: asyncio.subprocess.Process | None = None
+        background_tasks: list[asyncio.Task] = []
         try:
             proc = await asyncio.create_subprocess_exec(
                 *command,
@@ -178,11 +179,13 @@ class GeneratedToolRunner:
             watcher = asyncio.create_task(
                 self._watch_workspace(workspace, workspace_limit)
             )
+            background_tasks.extend([*read_tasks, watcher])
             try:
                 async with timeout_scope(
                     config_parser.get_config("generated_tool_timeout_seconds", 30)
                 ):
                     wait_task = asyncio.create_task(proc.wait())
+                    background_tasks.append(wait_task)
                     monitored = {wait_task, watcher, *read_tasks}
                     while True:
                         done, _ = await asyncio.wait(
@@ -205,7 +208,7 @@ class GeneratedToolRunner:
                 raise RuntimeError("生成工具执行超时") from None
             finally:
                 watcher.cancel()
-                await asyncio.gather(watcher, *read_tasks, return_exceptions=True)
+                await asyncio.gather(watcher, return_exceptions=True)
             if not stdout:
                 raise RuntimeError(
                     f"生成工具未返回结构化结果: {stderr.decode('utf-8', 'replace')[:300]}"
@@ -229,6 +232,11 @@ class GeneratedToolRunner:
                 await self._kill(proc)
             raise
         finally:
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
             shutil.rmtree(workspace_root, ignore_errors=True)
             logger.debug(
                 f"生成工具 runner 完成 handler={handler} elapsed={time.monotonic() - started:.3f}s"

@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib
 import os
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -48,6 +50,25 @@ _TESTS = """async def run_tests(tool_module):
     return \"1 passed\"
 """
 
+_REQUIRES_ROOT = pytest.mark.skipif(
+    os.geteuid() != 0,
+    reason="hard runner behavior requires root so the worker can drop to nobody",
+)
+
+
+def _can_unshare_network() -> bool:
+    unshare = shutil.which("unshare")
+    if not unshare:
+        return False
+    result = subprocess.run(
+        [unshare, "--net", "--fork", "/bin/true"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=2,
+    )
+    return result.returncode == 0
+
 
 def _store(tmp_path: Path) -> GeneratedToolStore:
     current = tmp_path
@@ -70,7 +91,11 @@ async def test_bundle_approve_deactivate_and_rollback(tmp_path: Path) -> None:
         _manifest(), _SOURCE, _TESTS, request="first", review={"approved": True}
     )
     runner = GeneratedToolRunner()
-    assert "1 passed" in await runner.run_tests(store.drafts_dir / first_id)
+    if _can_unshare_network():
+        assert "1 passed" in await runner.run_tests(store.drafts_dir / first_id)
+    else:
+        with pytest.raises(RuntimeError, match=r"隔离不可用|unshare"):
+            await runner.run_tests(store.drafts_dir / first_id)
     bundle_id, first_digest = store.approve(first_id, first.digest[:12])
     assert store.read_active()[bundle_id] == first_digest
 
@@ -175,8 +200,13 @@ def test_concurrent_approvals_publish_complete_immutable_versions(tmp_path: Path
 @pytest.mark.asyncio
 async def test_runner_preflight_verifies_nobody_identity() -> None:
     runner = GeneratedToolRunner()
-    await runner.preflight()
-    assert runner.isolation_status == "ready"
+    if os.geteuid() == 0:
+        await runner.preflight()
+        assert runner.isolation_status == "ready"
+    else:
+        with pytest.raises(RuntimeError, match="nobody identity"):
+            await runner.preflight()
+        assert runner.isolation_status == "unavailable:RuntimeError"
 
 
 def test_duplicate_sources_fail_closed() -> None:
@@ -220,6 +250,7 @@ def test_superuser_tools_are_filtered_from_catalog_and_schema() -> None:
 
 
 @pytest.mark.asyncio
+@_REQUIRES_ROOT
 async def test_runner_kills_timed_out_process(tmp_path: Path, monkeypatch) -> None:
     current = tmp_path
     while current != Path("/tmp") and Path("/tmp") in current.parents:
@@ -251,6 +282,7 @@ async def test_runner_kills_timed_out_process(tmp_path: Path, monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+@_REQUIRES_ROOT
 async def test_runner_drops_privileges_and_scrubs_environment(tmp_path: Path) -> None:
     current = tmp_path
     while current != Path("/tmp") and Path("/tmp") in current.parents:
@@ -269,6 +301,7 @@ async def test_runner_drops_privileges_and_scrubs_environment(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+@_REQUIRES_ROOT
 async def test_runner_rejects_output_flood(tmp_path: Path) -> None:
     current = tmp_path
     while current != Path("/tmp") and Path("/tmp") in current.parents:
@@ -288,6 +321,7 @@ async def test_runner_rejects_output_flood(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@_REQUIRES_ROOT
 async def test_runner_cleans_spawned_descendants(tmp_path: Path) -> None:
     current = tmp_path
     while current != Path("/tmp") and Path("/tmp") in current.parents:
@@ -314,3 +348,59 @@ async def test_runner_cleans_spawned_descendants(tmp_path: Path) -> None:
     )
     if child_state is not None:
         assert child_state == "Z"
+
+
+@pytest.mark.asyncio
+@_REQUIRES_ROOT
+async def test_runner_stops_memory_expansion(tmp_path: Path) -> None:
+    current = tmp_path
+    while current != Path("/tmp") and Path("/tmp") in current.parents:
+        os.chmod(current, 0o755)
+        current = current.parent
+    source = tmp_path / "memory.py"
+    source.write_text(
+        "async def memory():\n"
+        "    blocks = []\n"
+        "    while True:\n"
+        "        blocks.append(b'x' * 16_000_000)\n",
+        encoding="utf-8",
+    )
+    source.chmod(0o644)
+    with pytest.raises(RuntimeError, match="MemoryError"):
+        await GeneratedToolRunner().execute(source, "memory", {}, {})
+
+
+@pytest.mark.asyncio
+@_REQUIRES_ROOT
+async def test_runner_cancellation_kills_process_and_releases_slot(tmp_path: Path) -> None:
+    current = tmp_path
+    while current != Path("/tmp") and Path("/tmp") in current.parents:
+        os.chmod(current, 0o755)
+        current = current.parent
+    source = tmp_path / "sleep.py"
+    source.write_text(
+        "import asyncio\n\n"
+        "async def sleep_forever():\n"
+        "    await asyncio.sleep(60)\n",
+        encoding="utf-8",
+    )
+    source.chmod(0o644)
+    runner = GeneratedToolRunner()
+    task = asyncio.create_task(runner.execute(source, "sleep_forever", {}, {}))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert runner._semaphore._value == 1
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_closed_when_nobody_transition_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root environment exercises the successful privilege drop tests")
+    source = tmp_path / "closed.py"
+    source.write_text("async def closed():\n    return 'no'\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="nobody identity"):
+        await GeneratedToolRunner().execute(source, "closed", {}, {})
