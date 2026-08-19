@@ -37,13 +37,13 @@
   "max_user_history": 8,          // 每个用户上下文最大保留条数
   "max_history_chars": 16000,     // 历史字符上限
   "max_history_tokens": 4000,     // 历史 token 估算上限
-  "max_context_sessions": 1000,   // 群聊、用户与 CD 状态最大会话数
-  "max_retry_times": 3,           // LLM 请求失败时的最大重试次数
-  "max_tool_rounds": 6,           // 工具交互轮次上限
-  "max_agent_steps": 6,           // Agent 总步骤上限；每步只执行一个工具
+  "max_context_sessions": 1000,   // 每个群聊/用户/CD 状态表各自的最大键数（LRU）
+  "max_retry_times": 3,           // LLM 请求总尝试次数（包含首次调用）
+  "max_tool_rounds": 6,           // 兼容工具交互轮次上限；与 max_agent_steps 取较小值
+  "max_agent_steps": 6,           // Agent 总步骤上限；与 max_tool_rounds 取较小值，每步一个工具
   "max_repeated_tool_calls": 2,   // 单任务同一工具最多执行次数
   "max_tool_result_chars": 6000,  // 单工具结果字符上限
-  "max_tool_images": 4,           // 单任务累计图片上限
+  "max_tool_images": 4,           // 每轮待交给视觉模型的工具图片上限
   "request_timeout_seconds": 180, // 整个 LLM 任务总预算（包含排队等待）
   "classification_timeout_seconds": 20,
   "tool_timeout_seconds": 30,
@@ -58,7 +58,7 @@
   "member_lookup_timeout_seconds": 2,
   "runtime_watch_enabled": true,
   "runtime_watch_interval_seconds": 2,
-  "user_history_expire_seconds": 600, // 用户上下文 TTL 过期时间（秒）
+  "user_history_expire_seconds": 600, // 群聊/用户上下文及 CD 临时状态的空闲 TTL（秒）
   "cd_seconds": 120,              // 每个用户的对话冷却时间（秒，排队前检查）
   "search_api": "Bearer your_tavily_key", // 联网搜索 Tavily API Key（开启搜索必填）
   "fastai_enabled": false,        // 快速 AI 助手开关（无角色扮演、无分段、无表情包）
@@ -68,18 +68,22 @@
   "private_chat_enabled": false,  // 是否允许超级管理员私聊 Bot
   "show_datetime": false,         // 是否在 System Prompt 中注入当前时间
   "poke_llm_rate": 0.3,           // 被戳一戳时走LLM对话的概率（0~1，0为关闭；仅群聊生效，cd中或概率外则回随机默认文案）
-  "generated_tools_enabled": true,
-  "generated_tool_max_pending": 4,
-  "generated_tool_timeout_seconds": 30,
-  "generated_tool_cpu_seconds": 10,
-  "generated_tool_memory_mb": 256,
-  "generated_tool_output_bytes": 65536,
-  "generated_tool_workspace_mb": 64,
-  "generated_tool_max_processes": 16
+  "generated_tools_enabled": true, // 是否允许“添加/创建LLM功能”；不自动停用已激活工具包
+  "generated_tool_max_pending": 4, // 文件/生成工具共用 runner 的最大等待数；另有 1 个活动任务
+  "generated_tool_timeout_seconds": 30, // runner 单次调用墙钟上限（秒）
+  "generated_tool_cpu_seconds": 10,     // 子进程 CPU 时间上限（秒）
+  "generated_tool_memory_mb": 256,      // 子进程地址空间上限（MiB）
+  "generated_tool_output_bytes": 65536, // stdout/stderr 读取上限（字节）
+  "generated_tool_workspace_mb": 64,    // 单文件及临时工作目录容量上限（MiB）
+  "generated_tool_max_processes": 16    // nobody UID 的进程数上限
 }
 ```
 
-生成工具全局单并发，等待队列默认 4。每次调用都启动 nobody 子进程并清除生产环境变量；墙钟、CPU、内存、进程、输出和工作目录任一越限都会终止整个进程组。无法进入 nobody 或启用硬限制时，生成/文件工具 fail closed，普通聊天、可信 `ToolSpec` 与 MCP 不受影响。
+文件工具和生成工具共用全局单并发 runner，等待队列默认 4。每次调用都启动 nobody 子进程并使用环境变量白名单；墙钟、CPU、内存、进程、输出和工作目录任一越限都会终止整个进程组。无法进入 nobody 或启用硬限制时，这两类工具 fail closed，普通聊天、可信 `ToolSpec` 与 MCP 不受影响。
+
+runner 依赖 Linux 资源限制，并要求主进程有能力切换到 UID/GID 65534。AI 工具草稿的自测试还要求 `unshare --net` 可用；不满足时生成流程失败且不会产生可批准草稿。运行期工具子进程并未进入网络 namespace，也不是完整文件系统沙箱：它仍可访问外网以及 nobody 可读的主机文件。只应批准已审查代码，详细边界见[自定义工具开发](./custom-tools.md#runner-隔离边界与运行要求)。
+
+`runtime_watch_enabled=false` 时，所有文件变更（包括重新开启该开关）都需要手动执行 `重载LLM` 才会进入运行快照。
 
 ### 表情包目录结构
 
@@ -171,7 +175,7 @@ api_key = ["sk-key1", "sk-key2", "sk-key3"]  # 随机轮询
 
 ```json5
 {
-  "use_moe": false,           // 是否启用混合专家调度（开启联网搜索也需要此项为 true）
+  "use_moe": false,           // 是否按分类难度路由 MoE 模型；不是工具或联网搜索的前提
   "moe_models": {
     "0": "deepseek-chat",     // 简单问题对应的模型
     "1": "deepseek-chat",     // 中等问题对应的模型
@@ -179,9 +183,10 @@ api_key = ["sk-key1", "sk-key2", "sk-key3"]  # 随机轮询
   },
   "vision_model": "gpt-4o",  // 视觉任务专用模型（有图片时强制使用；未配置则提示用户设置）
   "selected_model": "deepseek-reasoner", // 不启用 MoE 时使用的模型（难度分级失败时也回滚至此）
-  "category_model": "glm-4-flash",       // 分类模型（建议用免费或小型模型）
-  "use_web_search": false,    // 是否启用网络搜索（需 use_moe 为 true 才生效）
-  "use_tools": true,          // 是否启用函数调用（允许 LLM 触发其他 Bot 插件）
+  "category_model": "glm-4-flash",       // MoE 开启时的分类模型；否则分类使用 selected_model
+  "summary_model": "deepseek-chat",      // 工具包独立复核等总结任务使用的模型
+  "use_web_search": false,    // 是否把联网搜索加入候选工具；仍需 use_tools=true 且模型支持工具调用
+  "use_tools": true,          // 是否启用全部函数调用（包括联网搜索）
   "tool_blacklist": [         // 禁止 LLM 调用的插件黑名单
     "nonebot_plugin_orm",
     "nonebot_plugin_some_dangerous_plugin",
@@ -309,7 +314,7 @@ description = "HTTP MCP 示例"
 ## 热重载与兼容投递
 
 - 文件检测间隔默认 2 秒并带防抖；所有资源先解析校验，最后一次性发布。
-- 活动请求固定使用其开始时的 generation，自定义工具源码更新不会切换执行中的任务。
+- 活动请求固定使用其开始时的配置、模型与工具 Schema generation。只读版本目录中的生成工具也固定到旧版本；`custom_tools/*.py` 则在子进程启动时读取当前文件，因此编辑可能影响活动请求中尚未开始的文件工具调用。
 - 半截 JSON/TOML、错误 Python 工具或不可达 MCP 不会污染当前运行状态。
 - `legacy_full_event_plugins` 之外的 NoneBot 插件只定向执行目标插件 Matcher，不经过无关记录器/数据库链。
 - 完整事件总线兼容模式统一单并发、队列 16、默认 20 秒超时。插件源码和 Matcher 注册变化仍需重启 NoneBot。
