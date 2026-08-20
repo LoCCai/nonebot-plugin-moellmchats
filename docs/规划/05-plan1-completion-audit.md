@@ -13,9 +13,9 @@ lastmod: 2026-08-20T00:00:00+00:00
 - A、B、C 各项均已有实现和对应测试；C 的 canonical lifecycle 当前为 schema v3，并兼容读取 schema v2。
 - 本轮已先完成 Milestone A 定向复核：Python 3.12.13 + NoneBot 2.4.4 下 31 个非沙箱验收 node 与 mandatory root 下 11 个 A 相关真实 Sandbox case 全部通过；Ruff 全量通过。
 - Milestone B 定向复核为 24 个非沙箱 node 与 12 个真实 Sandbox case；C-01～C-06 定向复核为 38 个 case，均通过。
-- 最新本地总门禁已完成：四个 Python 版本普通全量各 `347 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，fresh build/Twine/checksum 与四组 checkout 外 package smoke 全部通过。
-- 计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，但尚未推送或部署；远端 `release-gate` 与 required check 尚无首次 green 证据。
-- 本轮发现并修复了 CPython 3.10 对 `MappingProxyType` frame builtins 执行 import 时的内部错误；3.10 使用拒绝公开变更入口的冻结 builtins dict 兼容层，3.11+ 保持 mapping proxy，四版本 worker 定向测试各 `14 passed`。
+- 修复后的最新本地总门禁已完成：真实非 root 隔离副本 `335 passed, 13 skipped`；root 下四个 Python 版本普通全量各 `347 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；fresh build/Twine/checksum 与四组 checkout 外 package smoke 全部通过。
+- 计划内实现 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5` 与本地门禁记录 `63f01e9fbaccf6f3c438b02340270ccb537f3831` 已推送但未部署。它们触发的首次 push/PR 门禁因非 root 测试前提过窄而失败；修复提交为 `29ccc11c0560c0ae02c10591b684af724f046197`，正在等待精确 HEAD 的远端复验与 required check 配置。
+- 本轮发现并修复了部分 CPython 3.10/早期 3.11 对 `MappingProxyType` frame builtins 执行 import 时的内部错误；worker 在不可信源码执行前探测解释器能力，受影响版本使用拒绝公开变更入口的冻结 builtins dict，其余版本保持 mapping proxy，四版本 worker 定向测试各 `14 passed`。
 
 状态定义：
 
@@ -33,8 +33,8 @@ lastmod: 2026-08-20T00:00:00+00:00
 | Mandatory Sandbox | root 下执行完整 `tests/test_sandbox_integration.py`，JUnit `tests > 0` 且 `skipped=0` | `40 passed, 0 skipped`，JUnit 复核 `failures=0, errors=0` |
 | Build | fresh sdist + wheel、Twine、checksum、来源 metadata | 通过；来源元数据标记 `local-uncommitted-worktree` |
 | Package smoke | Python 3.10/3.12 × wheel/sdist，checkout 外安装、加载与 `reload("package-smoke")` | 四组全部 `PACKAGE_SMOKE_OK`，generation=1 |
-| GitHub 聚合 | `release-gate` fail closed 聚合 test/sandbox/build/package | 本地实现提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，尚未推送，远端待验证 |
-| Promotion | job 列表完整；恰好一个精确名 `release-gate` 且 `completed/success`；下载原 run artifact | workflow 已实现，尚未对远端 run 执行 |
+| GitHub 聚合 | `release-gate` fail closed 聚合 test/sandbox/build/package | 首次 push/PR run 已按设计 fail closed；修复提交 `29ccc11c0560c0ae02c10591b684af724f046197` 待远端复验 |
+| Promotion | job 列表完整；恰好一个精确名 `release-gate` 且 `completed/success`；下载原 run artifact | 未执行；本轮不合并、不下载、不发布 PyPI |
 
 本轮分阶段证据（均对应本地实现提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5` 的内容，不代表远端或生产状态）：
 
@@ -45,6 +45,14 @@ lastmod: 2026-08-20T00:00:00+00:00
 | Milestone B 非沙箱 / Sandbox 定向验收 | Python 3.12.13 + mandatory root | `24 passed` / `12 passed` |
 | Milestone C-01～C-06 定向验收 | Python 3.12.13、NoneBot 2.4.4、OneBot 2.4.6 | `38 passed` |
 | Plan 1 完整 mandatory Sandbox | Linux root、真实 namespace / UID drop / Landlock / libseccomp 前提 | `40 passed, 0 skipped` |
+
+## 首次远端反馈与修复复验
+
+- GitHub Actions push run `32394394398` 与 pull-request run `32394400211` 均精确对应 `63f01e9fbaccf6f3c438b02340270ccb537f3831`。两个 run 的 build、mandatory root Sandbox 和四组 package smoke 均成功，且各自只有一个精确命名的 `release-gate`。
+- 四个普通 Python job 的唯一失败 node 都是原 `test_runner_fails_closed_when_nobody_transition_is_unavailable`：测试只接受 `nobody identity`，GitHub 非 root runner 则先在 `unshare: Operation not permitted` 处返回“强隔离进程启动失败，已拒绝执行”。这是安全拒绝路径的测试假设错误，不是隔离绕过；聚合 `release-gate` 因前置 job 失败而正确失败关闭。
+- 修复后的测试接受 namespace 或 UID/GID 任一强隔离前提不可用，并额外断言 runner 发布 `isolation_status=unavailable:*`；mandatory root suite 继续单独证明 UID/GID 65534 降权成功。
+- 同一修复把 CPython frame builtins 兼容从硬编码版本判断改为不可信源码执行前的一次能力探测，避免对早期 3.11 patch release 作错误假设，也不在工具源码部分执行后重试。
+- 修复内容对应 `29ccc11c0560c0ae02c10591b684af724f046197`。Ruff 通过；CPython 3.10.20、3.11.2、3.11.15、3.12.13、3.13.13 worker 定向测试各 `14 passed`；真实非 root 隔离副本为 `335 passed, 13 skipped`；四版本 root 普通矩阵各 `347 passed, 1 skipped`；mandatory root Sandbox 为 `40 passed, 0 skipped`；fresh build/Twine/checksum 与四组外部安装 smoke 全部通过。
 
 ## Milestone A：0.25.0-rc1
 
@@ -318,7 +326,7 @@ Plan 1 只有同时满足以下条件才可从“实现完成”改为“发布�
 1. [x] 最新工作树 Ruff、Python 3.10～3.13 普通矩阵、Python 3.12 + NoneBot 2.4.4 全部通过。
 2. [x] mandatory root Sandbox 在最新 UTS/socket/keyring/xattr 增量下 `40 passed, 0 skipped`。
 3. [x] fresh sdist/wheel、Twine、checksum 与四组 checkout 外 package smoke 全部通过。
-4. [x] 计划内实现提交为 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，`git diff --cached --check` 通过；未跟踪 `uv.lock` 未被纳入。
+4. [x] 计划内实现提交为 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，兼容与 CI 前提修复提交为 `29ccc11c0560c0ae02c10591b684af724f046197`；`git diff --cached --check` 通过，未跟踪 `uv.lock` 未被纳入。
 5. [ ] GitHub 对精确提交产生唯一成功的 `release-gate`，并配置为 required check。
-6. [ ] promotion 如执行，只能下载并验证该 CI run 的原 artifact；不得重新构建或自动发布 PyPI。
+6. [x] 本轮不执行 promotion；后续如另行执行，只能下载并验证 green CI run 的原 artifact，不得重新构建或自动发布 PyPI。
 7. [x] 生产切换、Qiqi 依赖更新和进程重启仍需另行授权，不属于本文的代码/文档完成状态；本轮未操作生产。

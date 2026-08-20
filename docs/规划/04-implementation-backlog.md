@@ -13,12 +13,12 @@ lastmod: 2026-08-20T00:00:00+00:00
 ## 当前实施状态（2026-08-20）
 
 - Milestone A、Milestone B 与 C-01～C-07 已在本地工作树完成实现，并按 A → B → C 顺序完成本轮定向复核：A 为 31 个非沙箱 node + 11 个真实 Sandbox case，B 为 24 个非沙箱 node + 12 个真实 Sandbox case，C-01～C-06 为 38 个定向 case。
-- 最新本地总门禁已通过：Ruff 与 Actionlint 通过；Python 3.10～3.13 普通全量各 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`。
+- 修复后的最新本地总门禁已通过：Ruff 与 Actionlint 通过；真实非 root 隔离副本为 `335 passed, 13 skipped`；root 下 Python 3.10～3.13 普通全量各 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`。
 - fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过；本地来源元数据明确标记为未提交工作树，不冒充可发布提交。
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
-- 计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`；尚待推送、首次 GitHub `release-gate` green 与 required-check 配置，不能据本地结果声称远端发布完成。
+- 计划内实现 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5` 已推送。首次 push/PR run `32394394398` / `32394400211` 的 build、Sandbox、package jobs 成功，但普通矩阵因测试未接受 GitHub 非 root 环境更早的 namespace fail-closed 而失败；聚合 gate 正确失败关闭。修复提交为 `29ccc11c0560c0ae02c10591b684af724f046197`，尚待精确 HEAD 远端 green 与 required-check 配置。
 - 每项状态只表示当前源码与测试已满足本节验收，不代表 GitHub 分支或 Qiqi 运行实例已经更新。
-- Plan 1 当前下一步是推送本地提交并核对唯一 green SHA 和 required check 配置；远端门禁完成前不进入 Plan 2。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 当前下一步是推送修复与本状态记录，并核对精确 HEAD 的唯一 green `release-gate` 和 required-check 配置；远端门禁完成前不进入 Plan 2。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -399,7 +399,7 @@ canonical durable CAS
 
 ## C-07 Sandbox Integration CI
 
-**状态：🟡 workflow 与最新本地总门禁已通过（mandatory root：`40 passed, 0 skipped`）；待推送及首次 GitHub CI green**
+**状态：🟡 workflow 与修复后本地总门禁已通过（mandatory root：`40 passed, 0 skipped`）；首次远端反馈已修复，待精确 HEAD GitHub CI green**
 
 必须真实执行：
 
