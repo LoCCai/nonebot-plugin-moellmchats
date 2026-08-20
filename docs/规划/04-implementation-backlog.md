@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b 与 D-03 已完成精确 HEAD 双 run gate；D-04 GeneratedToolProvider 实现提交 `95a57cfc7abeab59b310ae19a6e7872da0e01136` 已完成本地全门禁，正在等待精确 HEAD 双 CI，D-05 尚未解锁。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03 与 D-04 已完成精确 HEAD 双 run gate；D-04 GeneratedToolProvider 实现提交 `95a57cfc7abeab59b310ae19a6e7872da0e01136` 已由精确 HEAD `f03a8ab86bddc392b72beeaaa643c7642ed2687d` 完成远端门禁，D-05 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -482,7 +482,7 @@ timeout
 
 ## D-04 GeneratedToolProvider
 
-**状态：🟡 本地实现与全门禁完成；等待精确 HEAD 双 run 远端 gate，未部署**
+**状态：✅ 精确 HEAD `f03a8ab86bddc392b72beeaaa643c7642ed2687d` 双 run 远端 gate green；未部署**
 
 必须使用事务已准备的精确 lifecycle after-state 与 source override，不得重新读取 live canonical。
 
@@ -492,13 +492,13 @@ timeout
 
 本地门禁：实现提交 `95a57cfc7abeab59b310ae19a6e7872da0e01136`；D-04 定向 `78 passed`；Python 3.10～3.13 普通全量各 `382 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 与 Pyright `tool_providers.py` 均通过；fresh wheel/sdist 与 Twine 通过，wheel SHA256 `f6297cbbe965ea0a169148de0fbf2bbd6add0e8b0fe26bbf56dcabb55a7e47e4`、sdist SHA256 `c927af8b85d7d1cfe6b9735dae22e09f1745c6528f22e61e5ed9a1f1963f4780`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
 
-远端证据：待包含实现与本状态文档的精确 HEAD push/PR 双 run gate；在此之前不进入 D-05。未部署。
+远端证据：精确 HEAD `f03a8ab86bddc392b72beeaaa643c7642ed2687d` 对应 push run `32407494606` 与 PR run `32407498396`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 CLEAN。未部署。
 
 ---
 
 ## D-05 MCPToolProvider
 
-**状态：⏸️ 等待 D-04 精确 HEAD 双 run 远端 gate**
+**状态：🟢 D-04 依赖已解除；下一实施项**
 
 发现失败保留上一代可用快照；在 shadow parity 前不删除现有 MCP sidecar。
 
