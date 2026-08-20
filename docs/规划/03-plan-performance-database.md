@@ -10,7 +10,7 @@ lastmod: 2026-08-19T14:55:10+08:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02 与 D-01b 已完成精确 HEAD 远端 gate，D-03 FileToolProvider 已推进到本地实现提交 `72d82f7e3a4ab6fe7b40b538f45ebec817aef889`、仍待远端 gate。AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成；当前 v2 view 只描述 Registered/File discovery，不是持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02、D-01b 与 D-03 已完成精确 HEAD 远端 gate，D-04 GeneratedToolProvider 依赖已解除。AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成；当前 v2 view 只描述 Registered/File discovery，不是持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 
