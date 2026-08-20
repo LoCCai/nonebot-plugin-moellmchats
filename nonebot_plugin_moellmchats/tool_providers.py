@@ -42,6 +42,32 @@ class ToolSource(str, Enum):
     NONEBOT_PLUGIN = "nonebot_plugin"
 
 
+class ToolTrustOperation(str, Enum):
+    SELECTION = "selection"
+    EXECUTION = "execution"
+    MANAGEMENT = "management"
+
+
+class ToolExecutionBoundary(str, Enum):
+    IN_PROCESS = "in_process"
+    ISOLATED_ARTIFACT = "isolated_artifact"
+    GENERATED_SANDBOX = "generated_sandbox"
+    EXTERNAL_PROXY = "external_proxy"
+    BOUNDED_EVENT = "bounded_event"
+
+
+class ToolResultProvenance(str, Enum):
+    """Data provenance never inherits the executable adapter's trust."""
+
+    UNVERIFIED = "unverified"
+    UNTRUSTED = "untrusted"
+    EXTERNAL = "external"
+
+
+class ToolTrustPolicyError(ValueError):
+    """A catalog trust policy is missing, malformed, or cannot be applied."""
+
+
 def trust_for_source(source: ToolSource) -> ToolTrustLevel:
     """Return the stable code-origin identity assigned to one source."""
 
@@ -491,6 +517,316 @@ class DiscoveredTool:
         return self
 
 
+_TRUST_BOUNDARY_BY_SOURCE = {
+    ToolSource.REGISTERED: ToolExecutionBoundary.IN_PROCESS,
+    ToolSource.CUSTOM_FILE: ToolExecutionBoundary.ISOLATED_ARTIFACT,
+    ToolSource.GENERATED: ToolExecutionBoundary.GENERATED_SANDBOX,
+    ToolSource.MCP: ToolExecutionBoundary.EXTERNAL_PROXY,
+    ToolSource.BUILTIN: ToolExecutionBoundary.IN_PROCESS,
+    ToolSource.NONEBOT_PLUGIN: ToolExecutionBoundary.BOUNDED_EVENT,
+}
+_PROVIDER_ID_BY_SOURCE = {
+    ToolSource.REGISTERED: "registered",
+    ToolSource.CUSTOM_FILE: "custom-file",
+    ToolSource.GENERATED: "generated",
+    ToolSource.MCP: "mcp",
+    ToolSource.BUILTIN: "builtin",
+    ToolSource.NONEBOT_PLUGIN: "nonebot-plugin",
+}
+
+
+def _expected_result_provenance(
+    source: ToolSource,
+    tool_name: str,
+) -> ToolResultProvenance:
+    if source is ToolSource.MCP or (
+        source is ToolSource.BUILTIN and tool_name == "web_search"
+    ):
+        return ToolResultProvenance.EXTERNAL
+    if source is ToolSource.GENERATED:
+        return ToolResultProvenance.UNTRUSTED
+    return ToolResultProvenance.UNVERIFIED
+
+
+@dataclass(frozen=True)
+class ToolTrustDecision:
+    tool_name: str
+    provider_id: str
+    source: ToolSource
+    trust: ToolTrustLevel
+    generation: int
+    operation: ToolTrustOperation
+    boundary: ToolExecutionBoundary
+    result_provenance: ToolResultProvenance
+    permission: str
+    effect: ToolEffect
+    allowed: bool
+    reason: str
+    confirmation_required: bool
+    legacy_bounded_compatibility: bool
+    audit_required: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_name, str) or not self.tool_name:
+            raise ToolTrustPolicyError("trust decision 工具名不能为空")
+        if not isinstance(self.provider_id, str) or not _PROVIDER_ID_RE.fullmatch(
+            self.provider_id
+        ):
+            raise ToolTrustPolicyError("trust decision provider_id 非法")
+        if not isinstance(self.source, ToolSource) or not isinstance(
+            self.trust,
+            ToolTrustLevel,
+        ):
+            raise ToolTrustPolicyError("trust decision 来源身份非法")
+        if self.trust is not trust_for_source(self.source):
+            raise ToolTrustPolicyError("trust decision trust 与 source 不一致")
+        if self.provider_id != _PROVIDER_ID_BY_SOURCE[self.source]:
+            raise ToolTrustPolicyError(
+                "trust decision provider_id 与 source 不一致"
+            )
+        _require_generation(self.generation)
+        if not isinstance(self.operation, ToolTrustOperation):
+            raise ToolTrustPolicyError("trust decision operation 非法")
+        if not isinstance(self.boundary, ToolExecutionBoundary):
+            raise ToolTrustPolicyError("trust decision execution boundary 非法")
+        if self.boundary is not _TRUST_BOUNDARY_BY_SOURCE[self.source]:
+            raise ToolTrustPolicyError(
+                "trust decision execution boundary 不一致"
+            )
+        if not isinstance(self.result_provenance, ToolResultProvenance):
+            raise ToolTrustPolicyError("trust decision result provenance 非法")
+        if self.result_provenance is not _expected_result_provenance(
+            self.source,
+            self.tool_name,
+        ):
+            raise ToolTrustPolicyError(
+                "trust decision result provenance 不一致"
+            )
+        if self.permission not in {"user", "superuser"}:
+            raise ToolTrustPolicyError("trust decision permission 非法")
+        if not isinstance(self.effect, ToolEffect):
+            raise ToolTrustPolicyError("trust decision effect 非法")
+        for field_name in (
+            "allowed",
+            "confirmation_required",
+            "legacy_bounded_compatibility",
+            "audit_required",
+        ):
+            if type(getattr(self, field_name)) is not bool:
+                raise ToolTrustPolicyError(
+                    f"trust decision {field_name} 必须是 bool"
+                )
+        if not isinstance(self.reason, str) or not self.reason:
+            raise ToolTrustPolicyError("trust decision reason 不能为空")
+        expected_compatibility = self.source is ToolSource.NONEBOT_PLUGIN
+        if self.legacy_bounded_compatibility is not expected_compatibility:
+            raise ToolTrustPolicyError(
+                "trust decision legacy compatibility 不一致"
+            )
+        if expected_compatibility and self.effect is not ToolEffect.MUTATING:
+            raise ToolTrustPolicyError(
+                "NoneBot compatibility decision 必须保守标记为 mutating"
+            )
+
+    def audit_metadata(self) -> dict[str, object]:
+        """Return argument-free structured fields safe for an audit event."""
+
+        return {
+            "tool_name": self.tool_name,
+            "provider_id": self.provider_id,
+            "source": self.source.value,
+            "trust": self.trust.value,
+            "generation": self.generation,
+            "operation": self.operation.value,
+            "execution_boundary": self.boundary.value,
+            "result_provenance": self.result_provenance.value,
+            "permission": self.permission,
+            "effect": self.effect.value,
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "confirmation_required": self.confirmation_required,
+            "legacy_bounded_compatibility": (
+                self.legacy_bounded_compatibility
+            ),
+            "audit_required": self.audit_required,
+        }
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> ToolTrustDecision:
+        return self
+
+
+class ToolTrustDenied(PermissionError):
+    def __init__(self, decision: ToolTrustDecision) -> None:
+        if not isinstance(decision, ToolTrustDecision) or decision.allowed:
+            raise TypeError("ToolTrustDenied 必须绑定被拒绝的 trust decision")
+        self.decision = decision
+        super().__init__(
+            f"工具 {decision.tool_name} trust policy 拒绝"
+            f" {decision.operation.value}: {decision.reason}"
+        )
+
+
+@dataclass(frozen=True)
+class ToolTrustPolicy:
+    """Generation-bound policy derived only from one discovered tool."""
+
+    tool_name: str
+    provider_id: str
+    source: ToolSource
+    trust: ToolTrustLevel
+    generation: int
+    spec: ToolSpec
+    boundary: ToolExecutionBoundary
+    result_provenance: ToolResultProvenance
+    confirmation_required: bool
+    legacy_bounded_compatibility: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.spec, ToolSpec) or self.tool_name != self.spec.name:
+            raise ToolTrustPolicyError("trust policy 必须绑定精确 ToolSpec")
+        if not isinstance(self.source, ToolSource) or not isinstance(
+            self.trust,
+            ToolTrustLevel,
+        ):
+            raise ToolTrustPolicyError("trust policy 来源身份非法")
+        if self.trust is not trust_for_source(self.source):
+            raise ToolTrustPolicyError("trust policy trust 与 source 不一致")
+        if self.provider_id != _PROVIDER_ID_BY_SOURCE[self.source]:
+            raise ToolTrustPolicyError("trust policy provider_id 与 source 不一致")
+        _require_generation(self.generation)
+        if self.boundary is not _TRUST_BOUNDARY_BY_SOURCE[self.source]:
+            raise ToolTrustPolicyError("trust policy execution boundary 不一致")
+        if not isinstance(self.result_provenance, ToolResultProvenance):
+            raise ToolTrustPolicyError("trust policy result provenance 非法")
+        if self.result_provenance is not _expected_result_provenance(
+            self.source,
+            self.tool_name,
+        ):
+            raise ToolTrustPolicyError("trust policy result provenance 不一致")
+        for field_name in (
+            "confirmation_required",
+            "legacy_bounded_compatibility",
+        ):
+            if type(getattr(self, field_name)) is not bool:
+                raise ToolTrustPolicyError(
+                    f"trust policy {field_name} 必须是 bool"
+                )
+        expected_compatibility = self.source is ToolSource.NONEBOT_PLUGIN
+        if self.legacy_bounded_compatibility is not expected_compatibility:
+            raise ToolTrustPolicyError("trust policy legacy compatibility 不一致")
+        if expected_compatibility and self.spec.effect is not ToolEffect.MUTATING:
+            raise ToolTrustPolicyError(
+                "NoneBot compatibility tool 必须保守标记为 mutating"
+            )
+        expected_confirmation = (
+            self.spec.effect is ToolEffect.MUTATING
+            and not expected_compatibility
+        )
+        if self.confirmation_required is not expected_confirmation:
+            raise ToolTrustPolicyError("trust policy confirmation policy 不一致")
+
+    @classmethod
+    def from_discovered(cls, item: DiscoveredTool) -> ToolTrustPolicy:
+        if not isinstance(item, DiscoveredTool):
+            raise TypeError("trust policy 只能从 DiscoveredTool 构建")
+        compatibility = item.source is ToolSource.NONEBOT_PLUGIN
+        return cls(
+            tool_name=item.spec.name,
+            provider_id=item.provider_id,
+            source=item.source,
+            trust=item.trust,
+            generation=item.generation,
+            spec=item.spec,
+            boundary=_TRUST_BOUNDARY_BY_SOURCE[item.source],
+            result_provenance=_expected_result_provenance(
+                item.source,
+                item.spec.name,
+            ),
+            confirmation_required=(
+                item.spec.effect is ToolEffect.MUTATING and not compatibility
+            ),
+            legacy_bounded_compatibility=compatibility,
+        )
+
+    def decide(
+        self,
+        operation: ToolTrustOperation,
+        *,
+        is_superuser: bool,
+        confirmed: bool = False,
+    ) -> ToolTrustDecision:
+        if not isinstance(operation, ToolTrustOperation):
+            raise TypeError("trust operation 必须是 ToolTrustOperation")
+        if type(is_superuser) is not bool or type(confirmed) is not bool:
+            raise TypeError("trust actor/confirmation 标志必须是 bool")
+
+        allowed = True
+        reason = "trust policy 允许"
+        if operation is ToolTrustOperation.MANAGEMENT and not is_superuser:
+            allowed = False
+            reason = "工具管理只允许超级用户"
+        elif (
+            operation
+            in {ToolTrustOperation.SELECTION, ToolTrustOperation.EXECUTION}
+            and self.spec.permission == "superuser"
+            and not is_superuser
+        ):
+            allowed = False
+            reason = "工具契约只允许超级用户"
+        elif (
+            operation is ToolTrustOperation.EXECUTION
+            and self.confirmation_required
+            and not confirmed
+        ):
+            allowed = False
+            reason = "mutating 工具尚未完成二阶段确认"
+
+        audit_required = (
+            not allowed
+            or operation is not ToolTrustOperation.SELECTION
+            or self.trust is not ToolTrustLevel.TRUSTED
+            or self.result_provenance is not ToolResultProvenance.UNVERIFIED
+        )
+        return ToolTrustDecision(
+            tool_name=self.tool_name,
+            provider_id=self.provider_id,
+            source=self.source,
+            trust=self.trust,
+            generation=self.generation,
+            operation=operation,
+            boundary=self.boundary,
+            result_provenance=self.result_provenance,
+            permission=self.spec.permission,
+            effect=self.spec.effect,
+            allowed=allowed,
+            reason=reason,
+            confirmation_required=self.confirmation_required,
+            legacy_bounded_compatibility=(
+                self.legacy_bounded_compatibility
+            ),
+            audit_required=audit_required,
+        )
+
+    def require(
+        self,
+        operation: ToolTrustOperation,
+        *,
+        is_superuser: bool,
+        confirmed: bool = False,
+    ) -> ToolTrustDecision:
+        decision = self.decide(
+            operation,
+            is_superuser=is_superuser,
+            confirmed=confirmed,
+        )
+        if not decision.allowed:
+            raise ToolTrustDenied(decision)
+        return decision
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> ToolTrustPolicy:
+        return self
+
+
 class ToolProvider(Protocol[ProviderResourcesT]):
     @property
     def provider_id(self) -> str: ...
@@ -632,6 +968,10 @@ class ProviderCatalogSnapshot:
         init=False,
         repr=False,
     )
+    _trust_policies: Mapping[str, ToolTrustPolicy] = field(
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         _require_generation(self.generation)
@@ -651,6 +991,7 @@ class ProviderCatalogSnapshot:
         tools_by_provider: dict[str, list[str]] = {
             provider_id: [] for provider_id in registrations
         }
+        trust_policies: dict[str, ToolTrustPolicy] = {}
         for name, item in tools.items():
             if not isinstance(name, str) or not isinstance(item, DiscoveredTool):
                 raise TypeError("provider catalog tools 必须按名称映射发现记录")
@@ -667,6 +1008,12 @@ class ProviderCatalogSnapshot:
             if item.generation != self.generation:
                 raise ValueError("provider catalog generation 不一致")
             tools_by_provider[item.provider_id].append(name)
+            policy = ToolTrustPolicy.from_discovered(item)
+            if policy.spec is not item.spec:
+                raise ToolTrustPolicyError(
+                    "provider catalog trust policy ToolSpec identity 不一致"
+                )
+            trust_policies[name] = policy
 
         ordered_registrations = dict(sorted(registrations.items()))
         ordered_tools = dict(sorted(tools.items()))
@@ -676,6 +1023,11 @@ class ProviderCatalogSnapshot:
             MappingProxyType(ordered_registrations),
         )
         object.__setattr__(self, "tools", MappingProxyType(ordered_tools))
+        object.__setattr__(
+            self,
+            "_trust_policies",
+            MappingProxyType(dict(sorted(trust_policies.items()))),
+        )
         object.__setattr__(
             self,
             "_tools_by_provider",
@@ -697,6 +1049,54 @@ class ProviderCatalogSnapshot:
     ) -> tuple[DiscoveredTool, ...]:
         names = self._tools_by_provider.get(provider_id, ())
         return tuple(self.tools[name] for name in names)
+
+    @property
+    def trust_policies(self) -> Mapping[str, ToolTrustPolicy]:
+        return self._trust_policies
+
+    def trust_policy_for(self, tool_name: str) -> ToolTrustPolicy:
+        if not isinstance(tool_name, str) or not tool_name:
+            raise ToolTrustPolicyError("trust policy 工具名不能为空")
+        policy = self._trust_policies.get(tool_name)
+        if policy is None:
+            raise ToolTrustPolicyError(
+                f"provider catalog 缺少工具 trust policy: {tool_name}"
+            )
+        return policy
+
+    def decide_trust(
+        self,
+        tool_name: str,
+        operation: ToolTrustOperation,
+        *,
+        is_superuser: bool,
+        confirmed: bool = False,
+    ) -> ToolTrustDecision:
+        return self.trust_policy_for(tool_name).decide(
+            operation,
+            is_superuser=is_superuser,
+            confirmed=confirmed,
+        )
+
+    def require_trust(
+        self,
+        tool_name: str,
+        operation: ToolTrustOperation,
+        *,
+        is_superuser: bool,
+        confirmed: bool = False,
+    ) -> ToolTrustDecision:
+        return self.trust_policy_for(tool_name).require(
+            operation,
+            is_superuser=is_superuser,
+            confirmed=confirmed,
+        )
+
+    def trust_summary(self) -> Mapping[str, int]:
+        counts = {level.value: 0 for level in ToolTrustLevel}
+        for policy in self._trust_policies.values():
+            counts[policy.trust.value] += 1
+        return MappingProxyType(counts)
 
     def __deepcopy__(self, _memo: dict[int, object]) -> ProviderCatalogSnapshot:
         return self

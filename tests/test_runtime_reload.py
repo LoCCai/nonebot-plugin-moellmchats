@@ -27,6 +27,8 @@ from nonebot_plugin_moellmchats.tool_contracts import (
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot, tool_manager
 from nonebot_plugin_moellmchats.tool_providers import (
+    ToolExecutionBoundary,
+    ToolResultProvenance,
     builtin_tool_provider,
     mcp_tool_provider,
     nonebot_plugin_provider,
@@ -330,10 +332,16 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert provider_catalog.tools_for_provider("registered")[0].spec is registered
     assert provider_catalog.tools_for_provider("custom-file") == ()
     assert provider_catalog.tools_for_provider("generated") == ()
+    assert provider_catalog.trust_policy_for(registered.name).boundary is (
+        ToolExecutionBoundary.IN_PROCESS
+    )
     builtin_record = provider_catalog.tools[WEB_SEARCH_TOOL_SPEC.name]
     assert builtin_record.provider_id == "builtin"
     assert builtin_record.spec is WEB_SEARCH_TOOL_SPEC
     assert builtin_record.trust.value == "trusted"
+    assert provider_catalog.trust_policy_for(
+        WEB_SEARCH_TOOL_SPEC.name
+    ).result_provenance is ToolResultProvenance.EXTERNAL
     assert WEB_SEARCH_TOOL_SPEC.name not in snapshot.custom_tools
     plugin_entry = snapshot.plugin_info[plugin_name]
     plugin_record = provider_catalog.tools[plugin_name]
@@ -344,6 +352,9 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert plugin_record.spec.effect is ToolEffect.MUTATING
     assert plugin_record.spec.permission == "user"
     assert plugin_entry["source"] == "nonebot_plugin"
+    assert provider_catalog.trust_policy_for(plugin_name).boundary is (
+        ToolExecutionBoundary.BOUNDED_EVENT
+    )
     assert plugin_name not in snapshot.custom_tools
     mcp_entry = snapshot.custom_tools[mcp_spec.name]
     mcp_record = provider_catalog.tools[mcp_spec.name]
@@ -351,6 +362,15 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert mcp_record.spec.handler is mcp_handler
     assert mcp_entry["func"] is mcp_handler
     assert mcp_entry["source"] == "mcp"
+    assert provider_catalog.trust_policy_for(mcp_spec.name).boundary is (
+        ToolExecutionBoundary.EXTERNAL_PROXY
+    )
+    assert provider_catalog.trust_summary() == {
+        "trusted": 2,
+        "reviewed": 1,
+        "untrusted": 0,
+        "external": 1,
+    }
     assert "tool_spec" not in mcp_entry
     assert snapshot.mcp_tool_names == {mcp_spec.name}
     assert not hasattr(candidate.snapshot, "providers")
