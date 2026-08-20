@@ -26,6 +26,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     GeneratedSourceOverride,
     GeneratedToolProvider,
     GeneratedToolResources,
+    MCPToolProvider,
     MCPToolResources,
     NoneBotPluginToolResources,
     ProviderCatalogSnapshot,
@@ -40,6 +41,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     ToolTrustLevel,
     file_tool_provider,
     generated_tool_provider,
+    mcp_tool_provider,
     provider_registry,
     registered_tool_provider,
     trust_for_source,
@@ -477,6 +479,19 @@ def _generated_plan(
     )
 
 
+def _mcp_plan(
+    generation: int,
+    specs: tuple[ToolSpec, ...] = (),
+) -> ProviderDiscoveryPlan[MCPToolResources]:
+    return ProviderDiscoveryPlan(
+        provider=mcp_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=generation,
+            resources=MCPToolResources(specs),
+        ),
+    )
+
+
 def _generated_legacy_projection(
     artifacts: tuple[ToolArtifact, ...],
 ) -> tuple[dict[str, dict], dict[str, set[str]]]:
@@ -500,6 +515,24 @@ def _generated_legacy_projection(
             "tool_artifact": artifact,
             "artifact_digest": artifact.artifact_digest,
             "generation": artifact.generation,
+        }
+        if spec.dependencies:
+            dependencies[spec.name] = set(spec.dependencies)
+    return tools, dependencies
+
+
+def _mcp_legacy_projection(
+    specs: tuple[ToolSpec, ...],
+) -> tuple[dict[str, dict], dict[str, set[str]]]:
+    tools: dict[str, dict] = {}
+    dependencies: dict[str, set[str]] = {}
+    for spec in specs:
+        tools[spec.name] = {
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters,
+            "func": spec.handler,
+            "source": "mcp",
         }
         if spec.dependencies:
             dependencies[spec.name] = set(spec.dependencies)
@@ -985,6 +1018,143 @@ async def test_generated_provider_fails_closed_for_legacy_drift() -> None:
     )
 
 
+def test_mcp_resources_build_typed_specs_without_changing_legacy_view() -> None:
+    legacy_spec = _spec("mcp__demo__echo")
+    tools, _dependencies = _mcp_legacy_projection((legacy_spec,))
+    schema = tools[legacy_spec.name]
+
+    resources = MCPToolResources.from_legacy_tools(tools)
+
+    assert tuple(schema) == (
+        "name",
+        "description",
+        "parameters",
+        "func",
+        "source",
+    )
+    assert "tool_spec" not in schema
+    assert resources.specs[0].name == legacy_spec.name
+    assert resources.specs[0].handler is legacy_spec.handler
+    assert deepcopy(resources) is resources
+    tools.clear()
+    assert resources.specs[0].description == legacy_spec.description
+
+    invalid, _ = _mcp_legacy_projection((legacy_spec,))
+    invalid[legacy_spec.name]["source"] = "registered"
+    with pytest.raises(ValueError, match="source"):
+        MCPToolResources.from_legacy_tools(invalid)
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_is_deterministic_immutable_and_no_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = (_spec("mcp__demo__zeta"), _spec("mcp__demo__alpha"))
+    context = ProviderDiscoveryContext(
+        generation=29,
+        resources=MCPToolResources(specs),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("mcp provider shadow discovery must not perform I/O")
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.mcp_manager.mcp_manager.discover_tools",
+        forbidden,
+    )
+
+    first = await mcp_tool_provider.discover(context)
+    second = await mcp_tool_provider.discover(context)
+
+    assert first == second
+    assert [item.spec.name for item in first] == [
+        "mcp__demo__alpha",
+        "mcp__demo__zeta",
+    ]
+    assert all(item.provider_id == "mcp" for item in first)
+    assert all(item.source is ToolSource.MCP for item in first)
+    assert all(item.trust is ToolTrustLevel.EXTERNAL for item in first)
+    assert all(item.generation == 29 and item.artifact is None for item in first)
+    assert deepcopy(first) is first
+    assert not hasattr(mcp_tool_provider, "execute")
+    assert not hasattr(mcp_tool_provider, "reload")
+    with pytest.raises(FrozenInstanceError):
+        mcp_tool_provider.source = ToolSource.REGISTERED
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_rejects_other_resource_records() -> None:
+    provider = MCPToolProvider()
+    context = ProviderDiscoveryContext(
+        generation=1,
+        resources=RegisteredToolResources((_spec(),)),
+    )
+
+    with pytest.raises(TypeError, match="MCPToolResources"):
+        await provider.discover(context)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_accepts_complete_shadow_parity() -> None:
+    legacy_spec = _spec("mcp__demo__echo")
+    tools, dependencies = _mcp_legacy_projection((legacy_spec,))
+    resources = MCPToolResources.from_legacy_tools(tools)
+    records = await mcp_tool_provider.discover(
+        ProviderDiscoveryContext(generation=31, resources=resources)
+    )
+    dependencies[legacy_spec.name] = {"legacy_optional"}
+
+    mcp_tool_provider.validate_legacy_parity(
+        records,
+        tools,
+        dependencies,
+        {legacy_spec.name},
+        generation=31,
+        allow_additional_dependencies=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_provider_fails_closed_for_legacy_or_sidecar_drift() -> None:
+    legacy_spec = _spec("mcp__demo__echo")
+    tools, dependencies = _mcp_legacy_projection((legacy_spec,))
+    resources = MCPToolResources.from_legacy_tools(tools)
+    records = await mcp_tool_provider.discover(
+        ProviderDiscoveryContext(generation=37, resources=resources)
+    )
+
+    def reject(
+        candidate_tools: dict[str, dict],
+        names: set[str],
+        *,
+        discovery: tuple[DiscoveredTool, ...] = records,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="mcp"):
+            mcp_tool_provider.validate_legacy_parity(
+                discovery,
+                candidate_tools,
+                dependencies,
+                names,
+                generation=37,
+            )
+
+    mutated, _ = _mcp_legacy_projection((legacy_spec,))
+    mutated[legacy_spec.name]["description"] = "drifted"
+    reject(mutated, {legacy_spec.name})
+
+    mutated, _ = _mcp_legacy_projection((legacy_spec,))
+    mutated[legacy_spec.name]["tool_spec"] = legacy_spec
+    reject(mutated, {legacy_spec.name})
+
+    reject(tools, set())
+    reject(
+        tools,
+        {legacy_spec.name},
+        discovery=(replace(records[0], provider_id="other"),),
+    )
+
+
 @pytest.mark.asyncio
 async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
     specs = (_spec("zeta"), _spec("alpha"))
@@ -998,7 +1168,7 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
 
     catalog = await provider_registry.discover(
         23,
-        (plan, _file_plan(23), _generated_plan(23)),
+        (plan, _file_plan(23), _generated_plan(23), _mcp_plan(23)),
     )
 
     assert ProviderCatalogSnapshot.schema_version == 2
@@ -1006,6 +1176,7 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
     assert tuple(catalog.registrations) == (
         "custom-file",
         "generated",
+        "mcp",
         "registered",
     )
     assert tuple(catalog.tools) == ("alpha", "zeta")
@@ -1057,6 +1228,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 registered_plan,
                 _file_plan(9, (file_artifact,)),
                 _generated_plan(9),
+                _mcp_plan(9),
             ),
         )
     generated_artifact = _generated_artifact(
@@ -1070,6 +1242,17 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 registered_plan,
                 _file_plan(9),
                 _generated_plan(9, (generated_artifact,)),
+                _mcp_plan(9),
+            ),
+        )
+    with pytest.raises(ValueError, match="工具名冲突"):
+        await provider_registry.discover(
+            9,
+            (
+                registered_plan,
+                _file_plan(9),
+                _generated_plan(9),
+                _mcp_plan(9, (_spec("same_name"),)),
             ),
         )
     with pytest.raises(ValueError, match="不完整"):
@@ -1079,7 +1262,12 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
     with pytest.raises(ValueError, match="generation"):
         await provider_registry.discover(
             10,
-            (registered_plan, _file_plan(9), _generated_plan(9)),
+            (
+                registered_plan,
+                _file_plan(9),
+                _generated_plan(9),
+                _mcp_plan(9),
+            ),
         )
     with pytest.raises(ValueError, match="未注册"):
         await provider_registry.discover(9, (builtin_plan,))
@@ -1103,9 +1291,10 @@ async def test_provider_batch_and_catalog_reject_identity_or_generation_drift() 
     batch = await plan.discover_batch()
     file_batch = await _file_plan(5).discover_batch()
     generated_batch = await _generated_plan(5).discover_batch()
+    mcp_batch = await _mcp_plan(5).discover_batch()
     catalog = provider_registry.build_snapshot(
         5,
-        (batch, file_batch, generated_batch),
+        (batch, file_batch, generated_batch, mcp_batch),
     )
 
     assert isinstance(batch, ProviderDiscoveryBatch)

@@ -25,11 +25,13 @@ from .tool_manager import ToolSnapshot, tool_manager
 from .tool_providers import (
     FileToolResources,
     GeneratedToolResources,
+    MCPToolResources,
     ProviderDiscoveryContext,
     ProviderDiscoveryPlan,
     RegisteredToolResources,
     file_tool_provider,
     generated_tool_provider,
+    mcp_tool_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -161,6 +163,31 @@ class RuntimeReloader:
             ),
             asyncio.to_thread(mcp_manager.load_config_candidate),
         )
+        mcp_tools, mcp_mapping = await mcp_manager.discover_tools(
+            commit=False,
+            servers=mcp_servers,
+            strict=True,
+        )
+        if not isinstance(mcp_tools, dict) or not isinstance(mcp_mapping, dict):
+            raise TypeError("MCP discovery candidate 必须是 tools/mapping 字典")
+        for name, schema in mcp_tools.items():
+            if not isinstance(name, str) or not isinstance(schema, dict):
+                raise TypeError("MCP discovery tools 结构非法")
+            schema["source"] = "mcp"
+        mcp_names = set(mcp_tools)
+        if set(mcp_mapping) != mcp_names:
+            raise ValueError("MCP discovery tools 与 route sidecar 集合不一致")
+        for name, route in mcp_mapping.items():
+            if (
+                not isinstance(name, str)
+                or not isinstance(route, dict)
+                or set(route) != {"server", "tool"}
+                or not all(
+                    isinstance(route[field], str) and route[field]
+                    for field in ("server", "tool")
+                )
+            ):
+                raise ValueError("MCP discovery route sidecar 结构非法")
         provider_catalog = await provider_registry.discover(
             generation,
             (
@@ -193,11 +220,21 @@ class RuntimeReloader:
                         ),
                     ),
                 ),
+                ProviderDiscoveryPlan(
+                    provider=mcp_tool_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=generation,
+                        resources=MCPToolResources.from_legacy_tools(
+                            mcp_tools
+                        ),
+                    ),
+                ),
             ),
         )
         registered_discovery = provider_catalog.tools_for_provider("registered")
         file_discovery = provider_catalog.tools_for_provider("custom-file")
         generated_discovery = provider_catalog.tools_for_provider("generated")
+        mcp_discovery = provider_catalog.tools_for_provider("mcp")
         custom_tool_pair = await asyncio.to_thread(
             tool_manager.load_custom_tools,
             commit=False,
@@ -215,19 +252,19 @@ class RuntimeReloader:
             load_emotions_candidate, config_candidate
         )
         custom_tools, dependencies = custom_tool_pair
-        mcp_tools, mcp_mapping = await mcp_manager.discover_tools(
-            commit=False,
-            servers=mcp_servers,
-            strict=True,
+        mcp_tool_provider.validate_legacy_parity(
+            mcp_discovery,
+            mcp_tools,
+            dependencies,
+            mcp_names,
+            generation=generation,
+            allow_additional_dependencies=True,
         )
 
-        mcp_names: set[str] = set()
         for name, schema in mcp_tools.items():
             if name in custom_tools or name in plugin_info:
                 raise ValueError(f"MCP 工具名与现有工具或插件冲突: {name}")
-            schema["source"] = "mcp"
             custom_tools[name] = schema
-            mcp_names.add(name)
         plugin_collisions = set(plugin_info) & set(custom_tools)
         if plugin_collisions:
             raise ValueError(

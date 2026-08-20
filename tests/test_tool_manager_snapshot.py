@@ -38,6 +38,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     ToolTrustLevel,
     file_tool_provider,
     generated_tool_provider,
+    mcp_tool_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -57,6 +58,7 @@ def _registered_catalog(
     generated_registration = ProviderRegistration.from_provider(
         generated_tool_provider
     )
+    mcp_registration = ProviderRegistration.from_provider(mcp_tool_provider)
     records = tuple(
         DiscoveredTool(
             provider_id=registration.provider_id,
@@ -82,6 +84,11 @@ def _registered_catalog(
             ),
             ProviderDiscoveryBatch(
                 registration=generated_registration,
+                generation=generation,
+                tools=(),
+            ),
+            ProviderDiscoveryBatch(
+                registration=mcp_registration,
                 generation=generation,
                 tools=(),
             ),
@@ -117,6 +124,7 @@ def _file_catalog(
     registered = ProviderRegistration.from_provider(registered_tool_provider)
     custom_file = ProviderRegistration.from_provider(file_tool_provider)
     generated = ProviderRegistration.from_provider(generated_tool_provider)
+    mcp = ProviderRegistration.from_provider(mcp_tool_provider)
     record = DiscoveredTool(
         provider_id=custom_file.provider_id,
         source=custom_file.source,
@@ -131,6 +139,7 @@ def _file_catalog(
             ProviderDiscoveryBatch(registered, generation, ()),
             ProviderDiscoveryBatch(custom_file, generation, (record,)),
             ProviderDiscoveryBatch(generated, generation, ()),
+            ProviderDiscoveryBatch(mcp, generation, ()),
         ),
     )
 
@@ -204,6 +213,7 @@ def _generated_catalog(
     registered = ProviderRegistration.from_provider(registered_tool_provider)
     custom_file = ProviderRegistration.from_provider(file_tool_provider)
     generated = ProviderRegistration.from_provider(generated_tool_provider)
+    mcp = ProviderRegistration.from_provider(mcp_tool_provider)
     record = DiscoveredTool(
         provider_id=generated.provider_id,
         source=generated.source,
@@ -218,6 +228,7 @@ def _generated_catalog(
             ProviderDiscoveryBatch(registered, generation, ()),
             ProviderDiscoveryBatch(custom_file, generation, ()),
             ProviderDiscoveryBatch(generated, generation, (record,)),
+            ProviderDiscoveryBatch(mcp, generation, ()),
         ),
     )
 
@@ -262,6 +273,43 @@ def _generated_state(artifact: ToolArtifact) -> LifecycleState:
         active={artifact.bundle_id: artifact.bundle_digest},
         permission_grants={},
     )
+
+
+def _mcp_catalog(
+    spec: ToolSpec,
+    *,
+    generation: int,
+) -> ProviderCatalogSnapshot:
+    registered = ProviderRegistration.from_provider(registered_tool_provider)
+    custom_file = ProviderRegistration.from_provider(file_tool_provider)
+    generated = ProviderRegistration.from_provider(generated_tool_provider)
+    mcp = ProviderRegistration.from_provider(mcp_tool_provider)
+    record = DiscoveredTool(
+        provider_id=mcp.provider_id,
+        source=mcp.source,
+        trust=mcp.trust,
+        generation=generation,
+        spec=spec,
+    )
+    return provider_registry.build_snapshot(
+        generation,
+        (
+            ProviderDiscoveryBatch(registered, generation, ()),
+            ProviderDiscoveryBatch(custom_file, generation, ()),
+            ProviderDiscoveryBatch(generated, generation, ()),
+            ProviderDiscoveryBatch(mcp, generation, (record,)),
+        ),
+    )
+
+
+def _mcp_legacy_schema(spec: ToolSpec) -> dict:
+    return {
+        "name": spec.name,
+        "description": spec.description,
+        "parameters": spec.parameters,
+        "func": spec.handler,
+        "source": "mcp",
+    }
 
 
 def test_tool_snapshot_generated_stamp_is_detached_and_immutable() -> None:
@@ -496,6 +544,58 @@ def test_tool_snapshot_dual_view_keeps_exact_generated_artifact_identity() -> No
             generation=16,
             plugin_info={},
             custom_tools={spec.name: mutated},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+            provider_catalog=catalog,
+        )
+
+
+def test_tool_snapshot_dual_view_keeps_mcp_legacy_schema_and_sidecar() -> None:
+    spec = ToolSpec(
+        name="mcp__snapshot__echo",
+        description="snapshot mcp",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
+        handler=_handler,
+    )
+    catalog = _mcp_catalog(spec, generation=17)
+    legacy = _mcp_legacy_schema(spec)
+
+    snapshot = ToolSnapshot(
+        generation=17,
+        plugin_info={},
+        custom_tools={spec.name: legacy},
+        tool_dependencies={},
+        mcp_tool_names={spec.name},
+        provider_catalog=catalog,
+    )
+
+    discovered = snapshot.provider_catalog.tools[spec.name]
+    assert discovered.provider_id == "mcp"
+    assert discovered.spec is spec
+    assert discovered.artifact is None
+    assert snapshot.custom_tools[spec.name]["func"] is spec.handler
+    assert "tool_spec" not in snapshot.custom_tools[spec.name]
+    assert snapshot.mcp_tool_names == {spec.name}
+
+    mutated = dict(legacy)
+    mutated["description"] = "drifted"
+    with pytest.raises(ValueError, match="description"):
+        ToolSnapshot(
+            generation=17,
+            plugin_info={},
+            custom_tools={spec.name: mutated},
+            tool_dependencies={},
+            mcp_tool_names={spec.name},
+            provider_catalog=catalog,
+        )
+    with pytest.raises(ValueError, match="sidecar"):
+        ToolSnapshot(
+            generation=17,
+            plugin_info={},
+            custom_tools={spec.name: legacy},
             tool_dependencies={},
             mcp_tool_names=set(),
             provider_catalog=catalog,

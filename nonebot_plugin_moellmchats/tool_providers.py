@@ -327,6 +327,40 @@ class MCPToolResources:
     def __deepcopy__(self, _memo: dict[int, object]) -> MCPToolResources:
         return self
 
+    @classmethod
+    def from_legacy_tools(
+        cls,
+        legacy_tools: Mapping[str, object],
+    ) -> MCPToolResources:
+        """Build typed specs from one already-discovered MCP candidate."""
+
+        if not isinstance(legacy_tools, Mapping):
+            raise TypeError("MCPToolResources legacy tools 必须是映射")
+        if not all(isinstance(name, str) for name in legacy_tools):
+            raise TypeError("MCPToolResources legacy tool name 必须是字符串")
+        specs: list[ToolSpec] = []
+        for name in sorted(legacy_tools):
+            schema = legacy_tools[name]
+            if not isinstance(schema, Mapping):
+                raise TypeError("MCPToolResources legacy 工具结构非法")
+            if schema.get("source") != cls.source.value:
+                raise ValueError(
+                    f"MCPToolResources legacy 工具 {name} source 不一致"
+                )
+            if schema.get("name") != name:
+                raise ValueError(
+                    f"MCPToolResources legacy 工具 {name} identity 不一致"
+                )
+            specs.append(
+                ToolSpec(
+                    name=name,
+                    description=schema.get("description"),  # type: ignore[arg-type]
+                    parameters=schema.get("parameters"),  # type: ignore[arg-type]
+                    handler=schema.get("func"),  # type: ignore[arg-type]
+                )
+            )
+        return cls(tuple(specs))
+
 
 @dataclass(frozen=True)
 class BuiltinToolResources:
@@ -1217,16 +1251,155 @@ class GeneratedToolProvider:
                 raise ValueError(f"generated legacy 工具 {name} dependencies 不一致")
 
 
+@dataclass(frozen=True)
+class MCPToolProvider:
+    """Shadow MCP discovery from one transaction-pinned network candidate."""
+
+    provider_id: str = field(default="mcp", init=False)
+    source: ToolSource = field(default=ToolSource.MCP, init=False)
+    trust: ToolTrustLevel = field(default=ToolTrustLevel.EXTERNAL, init=False)
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[MCPToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if (
+            not isinstance(context, ProviderDiscoveryContext)
+            or type(context.resources) is not MCPToolResources
+        ):
+            raise TypeError("MCPToolProvider 只接受 MCPToolResources")
+        return tuple(
+            DiscoveredTool(
+                provider_id=self.provider_id,
+                source=self.source,
+                trust=self.trust,
+                generation=context.generation,
+                spec=spec,
+            )
+            for spec in sorted(
+                context.resources.specs,
+                key=lambda item: item.name,
+            )
+        )
+
+    def validate_legacy_parity(
+        self,
+        discovered: tuple[DiscoveredTool, ...],
+        legacy_tools: Mapping[str, object],
+        legacy_dependencies: Mapping[str, object],
+        legacy_mcp_names: AbstractSet[str],
+        *,
+        generation: int,
+        allow_additional_dependencies: bool = False,
+    ) -> None:
+        """Fail closed unless MCP provider, legacy tools and sidecar agree."""
+
+        _require_generation(generation)
+        if type(allow_additional_dependencies) is not bool:
+            raise TypeError("allow_additional_dependencies 必须是 bool")
+        if not isinstance(discovered, tuple) or not all(
+            isinstance(item, DiscoveredTool) for item in discovered
+        ):
+            raise TypeError("mcp discovery 必须是 DiscoveredTool 元组")
+        if not isinstance(legacy_tools, Mapping) or not isinstance(
+            legacy_dependencies,
+            Mapping,
+        ):
+            raise TypeError("mcp legacy parity 输入必须是映射")
+        if not isinstance(legacy_mcp_names, AbstractSet) or not all(
+            isinstance(name, str) for name in legacy_mcp_names
+        ):
+            raise TypeError("mcp legacy tool names 必须是字符串集合")
+
+        expected: dict[str, ToolSpec] = {}
+        for item in discovered:
+            if (
+                item.provider_id != self.provider_id
+                or item.source is not self.source
+                or item.trust is not self.trust
+                or item.artifact is not None
+            ):
+                raise ValueError("mcp discovery 来源身份不一致")
+            if item.generation != generation:
+                raise ValueError("mcp discovery generation 不一致")
+            if item.spec.name in expected:
+                raise ValueError("mcp discovery 不得包含重名工具")
+            expected[item.spec.name] = item.spec
+
+        actual_names = {
+            name
+            for name, schema in legacy_tools.items()
+            if isinstance(name, str)
+            and isinstance(schema, Mapping)
+            and schema.get("source") == self.source.value
+        }
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                "mcp legacy 工具集合不一致: "
+                f"missing={sorted(expected_names - actual_names)}, "
+                f"extra={sorted(actual_names - expected_names)}"
+            )
+        if set(legacy_mcp_names) != expected_names:
+            raise ValueError("mcp legacy sidecar 工具集合不一致")
+
+        for name, spec in expected.items():
+            schema = legacy_tools.get(name)
+            if not isinstance(schema, Mapping):
+                raise ValueError(f"mcp legacy 工具 {name} Schema 缺失")
+            expected_schema = {
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters,
+                "func": spec.handler,
+                "source": self.source.value,
+            }
+            if set(schema) != set(expected_schema):
+                raise ValueError(f"mcp legacy 工具 {name} 字段不一致")
+            if schema.get("func") is not spec.handler:
+                raise ValueError(f"mcp legacy 工具 {name} handler 不一致")
+            for field_name in (
+                "name",
+                "description",
+                "parameters",
+                "source",
+            ):
+                if not _legacy_value_equal(
+                    schema.get(field_name),
+                    expected_schema[field_name],
+                ):
+                    raise ValueError(
+                        f"mcp legacy 工具 {name} {field_name} 不一致"
+                    )
+
+            dependencies = legacy_dependencies.get(name, set())
+            if not isinstance(dependencies, AbstractSet) or not all(
+                isinstance(item, str) for item in dependencies
+            ):
+                raise ValueError(f"mcp legacy 工具 {name} dependencies 非法")
+            expected_dependencies = set(spec.dependencies)
+            dependencies_match = (
+                expected_dependencies <= dependencies
+                if allow_additional_dependencies
+                else expected_dependencies == dependencies
+            )
+            if not dependencies_match:
+                raise ValueError(f"mcp legacy 工具 {name} dependencies 不一致")
+
+
 registered_tool_provider = RegisteredToolProvider()
 _registered_tool_provider_contract: ToolProvider[RegisteredToolResources] = registered_tool_provider
 file_tool_provider = FileToolProvider()
 _file_tool_provider_contract: ToolProvider[FileToolResources] = file_tool_provider
 generated_tool_provider = GeneratedToolProvider()
 _generated_tool_provider_contract: ToolProvider[GeneratedToolResources] = generated_tool_provider
+mcp_tool_provider = MCPToolProvider()
+_mcp_tool_provider_contract: ToolProvider[MCPToolResources] = mcp_tool_provider
 provider_registry = ProviderRegistry(
     (
         ProviderRegistration.from_provider(registered_tool_provider),
         ProviderRegistration.from_provider(file_tool_provider),
         ProviderRegistration.from_provider(generated_tool_provider),
+        ProviderRegistration.from_provider(mcp_tool_provider),
     )
 )

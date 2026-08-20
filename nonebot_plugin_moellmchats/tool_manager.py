@@ -26,6 +26,7 @@ from .tool_providers import (
     ProviderRegistration,
     file_tool_provider,
     generated_tool_provider,
+    mcp_tool_provider,
     registered_tool_provider,
 )
 
@@ -107,6 +108,19 @@ class ToolSnapshot:
                 provider_catalog.tools_for_provider("generated"),
                 self.custom_tools,
                 self.tool_dependencies,
+                generation=self.generation,
+                allow_additional_dependencies=True,
+            )
+        mcp = provider_catalog.registrations.get("mcp")
+        if mcp is not None:
+            expected = ProviderRegistration.from_provider(mcp_tool_provider)
+            if mcp != expected:
+                raise ValueError("ToolSnapshot mcp provider identity 不一致")
+            mcp_tool_provider.validate_legacy_parity(
+                provider_catalog.tools_for_provider("mcp"),
+                self.custom_tools,
+                self.tool_dependencies,
+                self.mcp_tool_names,
                 generation=self.generation,
                 allow_additional_dependencies=True,
             )

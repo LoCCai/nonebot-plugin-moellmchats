@@ -21,7 +21,10 @@ from nonebot_plugin_moellmchats.runtime_reload import (
 from nonebot_plugin_moellmchats.runtime_snapshot import mutable_value, runtime_snapshots
 from nonebot_plugin_moellmchats.tool_contracts import ToolResult, ToolSpec
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot, tool_manager
-from nonebot_plugin_moellmchats.tool_providers import registered_tool_provider
+from nonebot_plugin_moellmchats.tool_providers import (
+    mcp_tool_provider,
+    registered_tool_provider,
+)
 
 
 @pytest.mark.asyncio
@@ -171,9 +174,19 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
         parameters={"type": "object", "properties": {}},
         handler=lambda: None,
     )
+    async def mcp_handler(**_kwargs):
+        return None
+
+    mcp_spec = ToolSpec(
+        name="mcp__runtime__shadow",
+        description="runtime mcp shadow",
+        parameters={"type": "object", "properties": {}},
+        handler=mcp_handler,
+    )
     registry_calls = 0
     file_load_calls = 0
     generated_load_calls = 0
+    mcp_discovery_calls = 0
 
     def snapshot_registered():
         nonlocal registry_calls
@@ -222,10 +235,26 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     )
 
     async def discover_mcp(*, commit: bool, servers, strict: bool):
+        nonlocal mcp_discovery_calls
+        mcp_discovery_calls += 1
         assert commit is False
         assert servers == {}
         assert strict is True
-        return {}, {}
+        schema = {
+            "name": mcp_spec.name,
+            "description": mcp_spec.description,
+            "parameters": {"type": "object", "properties": {}},
+            "func": mcp_handler,
+        }
+        return (
+            {mcp_spec.name: schema},
+            {
+                mcp_spec.name: {
+                    "server": "runtime",
+                    "tool": "shadow",
+                }
+            },
+        )
 
     monkeypatch.setattr(
         reload_module.mcp_manager,
@@ -250,6 +279,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     assert registry_calls == 1
     assert file_load_calls == 1
     assert generated_load_calls == 1
+    assert mcp_discovery_calls == 1
     assert entry["tool_spec"] is registered
     assert entry["func"] is registered.handler
     assert entry["name"] == registered.name
@@ -273,15 +303,25 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     assert tuple(provider_catalog.registrations) == (
         "custom-file",
         "generated",
+        "mcp",
         "registered",
     )
     assert provider_catalog.tools[registered.name].spec is registered
     assert provider_catalog.tools_for_provider("registered")[0].spec is registered
     assert provider_catalog.tools_for_provider("custom-file") == ()
     assert provider_catalog.tools_for_provider("generated") == ()
+    mcp_entry = snapshot.custom_tools[mcp_spec.name]
+    mcp_record = provider_catalog.tools[mcp_spec.name]
+    assert mcp_record.provider_id == "mcp"
+    assert mcp_record.spec.handler is mcp_handler
+    assert mcp_entry["func"] is mcp_handler
+    assert mcp_entry["source"] == "mcp"
+    assert "tool_spec" not in mcp_entry
+    assert snapshot.mcp_tool_names == {mcp_spec.name}
     assert not hasattr(candidate.snapshot, "providers")
     assert not hasattr(candidate.snapshot, "discovered_tools")
     assert not hasattr(registered_tool_provider, "execute")
+    assert not hasattr(mcp_tool_provider, "execute")
     assert runtime_snapshots.current() is previous
 
     original_discover = registered_tool_provider.discover
@@ -309,6 +349,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     assert registry_calls == 2
     assert file_load_calls == 2
     assert generated_load_calls == 2
+    assert mcp_discovery_calls == 2
     assert runtime_snapshots.current() is previous
 
 
@@ -426,18 +467,69 @@ async def test_mcp_tool_collision_retains_previous_generation(monkeypatch) -> No
     previous = runtime_snapshots.current()
 
     async def collide(*args, **kwargs):
+        spec = ToolSpec(
+            name="nonebot_plugin_localstore",
+            description="collision",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda: None,
+        )
+        schema = spec.as_legacy_schema()
+        schema.pop("tool_spec")
         return {
-            "nonebot_plugin_localstore": {
-                "name": "nonebot_plugin_localstore",
-                "description": "collision",
-                "parameters": {"type": "object", "properties": {}},
-                "func": lambda: None,
-            }
-        }, {}
+            spec.name: schema,
+        }, {
+            spec.name: {"server": "collision", "tool": spec.name},
+        }
 
     monkeypatch.setattr(mcp_manager, "discover_tools", collide)
     with pytest.raises(ValueError, match="MCP 工具名"):
         await runtime_reloader.reload("test-mcp-collision")
+    assert runtime_snapshots.current() is previous
+
+
+@pytest.mark.asyncio
+async def test_mcp_route_sidecar_drift_retains_previous_generation(
+    monkeypatch,
+) -> None:
+    from nonebot_plugin_moellmchats.mcp_manager import mcp_manager
+
+    await runtime_reloader.reload("test-mcp-sidecar-baseline")
+    previous = runtime_snapshots.current()
+
+    async def drift(*args, **kwargs):
+        spec = ToolSpec(
+            name="mcp__drift__echo",
+            description="route drift",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda: None,
+        )
+        schema = spec.as_legacy_schema()
+        schema.pop("tool_spec")
+        return {spec.name: schema}, {}
+
+    monkeypatch.setattr(mcp_manager, "discover_tools", drift)
+    with pytest.raises(ValueError, match="route sidecar"):
+        await runtime_reloader.reload("test-mcp-sidecar-drift")
+    assert runtime_snapshots.current() is previous
+
+    async def malformed(*args, **kwargs):
+        spec = ToolSpec(
+            name="mcp__drift__echo",
+            description="route drift",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda: None,
+        )
+        schema = spec.as_legacy_schema()
+        schema.pop("tool_spec")
+        return {
+            spec.name: schema,
+        }, {
+            spec.name: {"server": "", "tool": "echo"},
+        }
+
+    monkeypatch.setattr(mcp_manager, "discover_tools", malformed)
+    with pytest.raises(ValueError, match="结构非法"):
+        await runtime_reloader.reload("test-mcp-sidecar-malformed")
     assert runtime_snapshots.current() is previous
 
 
