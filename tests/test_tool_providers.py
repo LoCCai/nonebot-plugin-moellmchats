@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
+
+import pytest
+
+from nonebot_plugin_moellmchats.generated_tool_lifecycle import (
+    LifecycleState,
+    VersionRecord,
+    VersionState,
+)
+from nonebot_plugin_moellmchats.tool_artifacts import (
+    ToolArtifact,
+    ToolContractSnapshot,
+    canonical_bundle_digest,
+    source_sha256,
+)
+from nonebot_plugin_moellmchats.tool_contracts import ToolPolicy, ToolSpec
+from nonebot_plugin_moellmchats.tool_providers import (
+    BuiltinToolResources,
+    DiscoveredTool,
+    FileToolResources,
+    GeneratedSourceOverride,
+    GeneratedToolResources,
+    MCPToolResources,
+    NoneBotPluginToolResources,
+    ProviderDiscoveryContext,
+    RegisteredToolResources,
+    ToolSource,
+    ToolTrustLevel,
+    trust_for_source,
+)
+
+
+async def _handler(value: str = "ok") -> str:
+    return value
+
+
+def _spec(name: str = "echo") -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        description=f"{name} one value",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+
+
+def _schema(spec: ToolSpec) -> dict:
+    return {
+        "name": spec.name,
+        "description": spec.description,
+        "parameters": spec.parameters,
+    }
+
+
+def _custom_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
+    source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
+    return ToolArtifact(
+        tool_name=spec.name,
+        handler_name=spec.name,
+        source=source,
+        source_hash=source_sha256(source),
+        schema=_schema(spec),
+        spec=spec,
+        contract=ToolContractSnapshot.from_spec(spec),
+        source_type="custom_file",
+        generation=generation,
+        filename="tools.py",
+    )
+
+
+def _generated_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
+    source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
+    tests_source = b"async def run_tests(tool_module):\n    return 'ok'\n"
+    manifest = {
+        "bundle_id": "echo_bundle",
+        "description": "echo bundle",
+        "capabilities": {
+            "network": False,
+            "process": False,
+            "workspace": True,
+        },
+        "tools": [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters,
+                "handler": spec.name,
+                "permission": spec.permission,
+                "effect": spec.effect.value,
+                "timeout_seconds": spec.timeout_seconds,
+                "result_limit": spec.result_limit,
+                "dependencies": [],
+            }
+        ],
+    }
+    digest = canonical_bundle_digest(manifest, source, tests_source)
+    return ToolArtifact(
+        tool_name=spec.name,
+        handler_name=spec.name,
+        source=source,
+        source_hash=source_sha256(source),
+        schema=_schema(spec),
+        spec=spec,
+        contract=ToolContractSnapshot.from_spec(spec),
+        source_type="generated",
+        generation=generation,
+        filename="tool.py",
+        tests_source=tests_source,
+        bundle_manifest=manifest,
+        bundle_id="echo_bundle",
+        bundle_digest=digest,
+    )
+
+
+def _active_state(digest: str) -> LifecycleState:
+    version = VersionRecord(
+        bundle_id="echo_bundle",
+        digest=digest,
+        state=VersionState.ACTIVATED,
+        source_draft_id="draft000001",
+        created_at=1,
+        approved_at=2,
+        activated_at=3,
+    )
+    return LifecycleState(
+        revision=1,
+        drafts={},
+        versions={"echo_bundle": {digest: version}},
+        active={"echo_bundle": digest},
+        permission_grants={},
+    )
+
+
+def test_source_trust_identity_is_stable() -> None:
+    assert trust_for_source(ToolSource.REGISTERED) is ToolTrustLevel.TRUSTED
+    assert trust_for_source(ToolSource.CUSTOM_FILE) is ToolTrustLevel.REVIEWED
+    assert trust_for_source(ToolSource.GENERATED) is ToolTrustLevel.UNTRUSTED
+    assert trust_for_source(ToolSource.MCP) is ToolTrustLevel.EXTERNAL
+    assert trust_for_source(ToolSource.BUILTIN) is ToolTrustLevel.TRUSTED
+    assert trust_for_source(ToolSource.NONEBOT_PLUGIN) is ToolTrustLevel.REVIEWED
+    with pytest.raises(ValueError, match="ToolSource"):
+        trust_for_source("registered")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "resources_type",
+    [
+        RegisteredToolResources,
+        MCPToolResources,
+        BuiltinToolResources,
+        NoneBotPluginToolResources,
+    ],
+)
+def test_spec_resources_detach_and_freeze_input(resources_type) -> None:
+    specs = [_spec()]
+    resources = resources_type(specs)  # type: ignore[arg-type]
+    specs.clear()
+
+    assert [spec.name for spec in resources.specs] == ["echo"]
+    assert deepcopy(resources) is resources
+    with pytest.raises(FrozenInstanceError):
+        resources.specs = ()
+
+    with pytest.raises(ValueError, match="重名"):
+        resources_type((_spec(), _spec()))
+    with pytest.raises(TypeError, match="ToolSpec"):
+        resources_type((object(),))
+
+
+def test_discovery_context_rejects_raw_or_mutable_resource_shapes() -> None:
+    resources = RegisteredToolResources((_spec(),))
+    context = ProviderDiscoveryContext(generation=4, resources=resources)
+
+    assert context.resources is resources
+    assert deepcopy(context) is context
+    with pytest.raises(FrozenInstanceError):
+        context.generation = 5
+    for invalid in (-1, True, 1.5):
+        with pytest.raises(ValueError, match="非负整数"):
+            ProviderDiscoveryContext(generation=invalid, resources=resources)
+    with pytest.raises(TypeError, match="typed resource"):
+        ProviderDiscoveryContext(generation=4, resources={"specs": ()})
+
+
+def test_file_resources_bind_immutable_artifact_generation() -> None:
+    spec = _spec()
+    artifact = _custom_artifact(spec)
+    artifacts = [artifact]
+    resources = FileToolResources(artifacts)  # type: ignore[arg-type]
+    artifacts.clear()
+
+    assert resources.artifacts == (artifact,)
+    ProviderDiscoveryContext(generation=4, resources=resources)
+    with pytest.raises(ValueError, match="generation"):
+        ProviderDiscoveryContext(generation=5, resources=resources)
+    with pytest.raises(ValueError, match="来源类型"):
+        FileToolResources((_generated_artifact(spec),))
+
+
+def test_generated_resources_pin_after_state_and_typed_source_override(
+    tmp_path: Path,
+) -> None:
+    digest = "a" * 64
+    state = _active_state(digest)
+    overrides = [
+        GeneratedSourceOverride(
+            bundle_id="echo_bundle",
+            bundle_digest=digest,
+            source_directory=tmp_path,
+        )
+    ]
+    resources = GeneratedToolResources(
+        lifecycle_state=state,
+        source_overrides=overrides,  # type: ignore[arg-type]
+    )
+    overrides.clear()
+
+    assert resources.lifecycle_state is state
+    assert resources.source_overrides[0].source_directory == tmp_path
+    assert deepcopy(resources) is resources
+    with pytest.raises(FrozenInstanceError):
+        resources.source_overrides = ()
+    with pytest.raises(TypeError, match="GeneratedSourceOverride"):
+        GeneratedToolResources(state, (("echo_bundle", digest),))
+    with pytest.raises(ValueError, match="after-state active"):
+        GeneratedToolResources(
+            state,
+            (
+                GeneratedSourceOverride(
+                    bundle_id="echo_bundle",
+                    bundle_digest="b" * 64,
+                    source_directory=tmp_path,
+                ),
+            ),
+        )
+
+
+def test_discovered_tool_enforces_artifact_and_generation_boundaries() -> None:
+    spec = _spec()
+    custom = _custom_artifact(spec)
+    discovered = DiscoveredTool(
+        provider_id="custom-file",
+        source=ToolSource.CUSTOM_FILE,
+        trust=ToolTrustLevel.REVIEWED,
+        generation=4,
+        spec=spec,
+        artifact=custom,
+    )
+
+    assert deepcopy(discovered) is discovered
+    with pytest.raises(FrozenInstanceError):
+        discovered.generation = 5
+    with pytest.raises(ValueError, match="generation"):
+        replace(discovered, generation=5)
+    with pytest.raises(ValueError, match="稳定身份"):
+        replace(discovered, trust=ToolTrustLevel.TRUSTED)
+    with pytest.raises(ValueError, match="安全小写标识"):
+        replace(discovered, provider_id="Custom File")
+    with pytest.raises(ValueError, match="精确 ToolSpec"):
+        replace(discovered, spec=_spec())
+
+
+def test_artifact_requirement_depends_only_on_source_identity() -> None:
+    spec = _spec()
+    generated = _generated_artifact(spec)
+    DiscoveredTool(
+        provider_id="generated",
+        source=ToolSource.GENERATED,
+        trust=ToolTrustLevel.UNTRUSTED,
+        generation=4,
+        spec=spec,
+        artifact=generated,
+    )
+    DiscoveredTool(
+        provider_id="registered",
+        source=ToolSource.REGISTERED,
+        trust=ToolTrustLevel.TRUSTED,
+        generation=4,
+        spec=spec,
+    )
+
+    with pytest.raises(ValueError, match="必须携带"):
+        DiscoveredTool(
+            provider_id="generated",
+            source=ToolSource.GENERATED,
+            trust=ToolTrustLevel.UNTRUSTED,
+            generation=4,
+            spec=spec,
+        )
+    with pytest.raises(ValueError, match="不得伪造"):
+        DiscoveredTool(
+            provider_id="registered",
+            source=ToolSource.REGISTERED,
+            trust=ToolTrustLevel.TRUSTED,
+            generation=4,
+            spec=spec,
+            artifact=_custom_artifact(spec),
+        )
+    with pytest.raises(ValueError, match="source_type"):
+        DiscoveredTool(
+            provider_id="generated",
+            source=ToolSource.GENERATED,
+            trust=ToolTrustLevel.UNTRUSTED,
+            generation=4,
+            spec=spec,
+            artifact=_custom_artifact(spec),
+        )
