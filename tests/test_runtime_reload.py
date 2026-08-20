@@ -242,12 +242,16 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
         "custom_tools",
         "tool_dependencies",
         "mcp_tool_names",
+        "provider_catalog",
         "generated_state_revision",
         "generated_state_digest",
         "generated_active",
     }
-    assert not hasattr(snapshot, "providers")
-    assert not hasattr(snapshot, "discovered_tools")
+    provider_catalog = snapshot.provider_catalog
+    assert provider_catalog is not None
+    assert provider_catalog.schema_version == 2
+    assert provider_catalog.tools[registered.name].spec is registered
+    assert provider_catalog.tools_for_provider("registered")[0].spec is registered
     assert not hasattr(candidate.snapshot, "providers")
     assert not hasattr(candidate.snapshot, "discovered_tools")
     assert not hasattr(registered_tool_provider, "execute")
@@ -266,7 +270,12 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     monkeypatch.setattr(
         reload_module,
         "registered_tool_provider",
-        SimpleNamespace(discover=discover_mutated),
+        SimpleNamespace(
+            provider_id=registered_tool_provider.provider_id,
+            source=registered_tool_provider.source,
+            trust=registered_tool_provider.trust,
+            discover=discover_mutated,
+        ),
     )
     with pytest.raises(ValueError, match="ToolSpec"):
         await reloader._build_candidate(42, generated_state=state)

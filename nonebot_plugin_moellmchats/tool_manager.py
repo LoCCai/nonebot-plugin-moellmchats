@@ -20,7 +20,12 @@ from .runtime_snapshot import (
 )
 from .tool_artifacts import ToolArtifact
 from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
-from .tool_providers import DiscoveredTool, registered_tool_provider
+from .tool_providers import (
+    DiscoveredTool,
+    ProviderCatalogSnapshot,
+    ProviderRegistration,
+    registered_tool_provider,
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,7 @@ class ToolSnapshot:
     custom_tools: Mapping[str, Mapping[str, Any]]
     tool_dependencies: Mapping[str, AbstractSet[str]]
     mcp_tool_names: AbstractSet[str]
+    provider_catalog: ProviderCatalogSnapshot | None = None
     generated_state_revision: int = 0
     generated_state_digest: str = ""
     generated_active: Mapping[str, str] = field(default_factory=dict)
@@ -45,6 +51,28 @@ class ToolSnapshot:
         ):
             raise ValueError("ToolSnapshot.mcp_tool_names 必须是工具名集合")
         object.__setattr__(self, "mcp_tool_names", frozenset(self.mcp_tool_names))
+        provider_catalog = self.provider_catalog
+        if provider_catalog is None:
+            provider_catalog = ProviderCatalogSnapshot.empty(self.generation)
+        if not isinstance(provider_catalog, ProviderCatalogSnapshot):
+            raise ValueError("ToolSnapshot.provider_catalog 必须是 v2 provider catalog")
+        if provider_catalog.generation != self.generation:
+            raise ValueError("ToolSnapshot.provider_catalog generation 不一致")
+        object.__setattr__(self, "provider_catalog", provider_catalog)
+        registered = provider_catalog.registrations.get("registered")
+        if registered is not None:
+            expected = ProviderRegistration.from_provider(
+                registered_tool_provider
+            )
+            if registered != expected:
+                raise ValueError("ToolSnapshot registered provider identity 不一致")
+            registered_tool_provider.validate_legacy_parity(
+                provider_catalog.tools_for_provider("registered"),
+                self.custom_tools,
+                self.tool_dependencies,
+                generation=self.generation,
+                allow_additional_dependencies=True,
+            )
         object.__setattr__(
             self,
             "generated_active",

@@ -24,7 +24,9 @@ from .tool_contracts import tool_registry
 from .tool_manager import ToolSnapshot, tool_manager
 from .tool_providers import (
     ProviderDiscoveryContext,
+    ProviderDiscoveryPlan,
     RegisteredToolResources,
+    provider_registry,
     registered_tool_provider,
 )
 from .utils import (
@@ -128,14 +130,21 @@ class RuntimeReloader:
                 generated_tool_store.read_lifecycle_state
             )
         registered_tools = tool_registry.snapshot()
-        registered_discovery = await registered_tool_provider.discover(
-            ProviderDiscoveryContext(
-                generation=generation,
-                resources=RegisteredToolResources(
-                    tuple(registered_tools.values())
+        provider_catalog = await provider_registry.discover(
+            generation,
+            (
+                ProviderDiscoveryPlan(
+                    provider=registered_tool_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=generation,
+                        resources=RegisteredToolResources(
+                            tuple(registered_tools.values())
+                        ),
+                    ),
                 ),
-            )
+            ),
         )
+        registered_discovery = provider_catalog.tools_for_provider("registered")
         (
             config_candidate,
             model_candidate,
@@ -194,6 +203,7 @@ class RuntimeReloader:
             custom_tools=immutable_mapping(custom_tools),
             tool_dependencies=immutable_mapping(dependencies),
             mcp_tool_names=frozenset(mcp_names),
+            provider_catalog=provider_catalog,
             generated_state_revision=generated_state.revision,
             generated_state_digest=generated_state.state_digest,
             generated_active=generated_state.active,

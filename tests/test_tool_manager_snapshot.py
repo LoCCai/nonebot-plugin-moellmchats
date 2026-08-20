@@ -15,14 +15,49 @@ from nonebot_plugin_moellmchats.tool_manager import (
     tool_manager,
 )
 from nonebot_plugin_moellmchats.tool_providers import (
+    DiscoveredTool,
+    ProviderCatalogSnapshot,
+    ProviderDiscoveryBatch,
     ProviderDiscoveryContext,
+    ProviderRegistration,
     RegisteredToolResources,
+    ToolSource,
+    ToolTrustLevel,
+    provider_registry,
     registered_tool_provider,
 )
 
 
 async def _handler(value: str) -> str:
     return value
+
+
+def _registered_catalog(
+    specs: tuple[ToolSpec, ...],
+    *,
+    generation: int,
+) -> ProviderCatalogSnapshot:
+    registration = ProviderRegistration.from_provider(registered_tool_provider)
+    records = tuple(
+        DiscoveredTool(
+            provider_id=registration.provider_id,
+            source=registration.source,
+            trust=registration.trust,
+            generation=generation,
+            spec=spec,
+        )
+        for spec in specs
+    )
+    return provider_registry.build_snapshot(
+        generation,
+        (
+            ProviderDiscoveryBatch(
+                registration=registration,
+                generation=generation,
+                tools=records,
+            ),
+        ),
+    )
 
 
 def test_tool_snapshot_generated_stamp_is_detached_and_immutable() -> None:
@@ -58,6 +93,120 @@ def test_legacy_tool_snapshot_constructor_gets_empty_generated_stamp() -> None:
     assert snapshot.generated_state_revision == 0
     assert snapshot.generated_state_digest == ""
     assert snapshot.generated_active == {}
+    assert snapshot.provider_catalog is not None
+    assert snapshot.provider_catalog.schema_version == 2
+    assert snapshot.provider_catalog.registrations == {}
+    assert snapshot.provider_catalog.tools == {}
+
+
+def test_tool_snapshot_dual_view_keeps_exact_registered_identity() -> None:
+    helper = ToolSpec(
+        name="snapshot_helper",
+        description="snapshot helper",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    registered = ToolSpec(
+        name="snapshot_registered",
+        description="snapshot registered",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
+        handler=_handler,
+        dependencies=("snapshot_helper",),
+    )
+    catalog = _registered_catalog((registered, helper), generation=12)
+    legacy_tools = {
+        spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        for spec in (registered, helper)
+    }
+
+    snapshot = ToolSnapshot(
+        generation=12,
+        plugin_info={"optional_plugin": {}},
+        custom_tools=legacy_tools,
+        tool_dependencies={
+            "snapshot_registered": {"snapshot_helper", "optional_plugin"}
+        },
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+
+    assert snapshot.provider_catalog is catalog
+    assert snapshot.custom_tools[registered.name]["tool_spec"] is registered
+    assert catalog.tools[registered.name].spec is registered
+    assert catalog.tools_for_provider("registered")[1].spec is registered
+
+
+def test_tool_snapshot_dual_view_fails_closed_for_drift() -> None:
+    helper = ToolSpec(
+        name="parity_helper",
+        description="parity helper",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    registered = ToolSpec(
+        name="parity_registered",
+        description="parity registered",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        dependencies=("parity_helper",),
+    )
+    catalog = _registered_catalog((registered, helper), generation=13)
+    legacy_tools = {
+        spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        for spec in (registered, helper)
+    }
+    common = {
+        "generation": 13,
+        "plugin_info": {},
+        "custom_tools": legacy_tools,
+        "tool_dependencies": {"parity_registered": {"parity_helper"}},
+        "mcp_tool_names": set(),
+        "provider_catalog": catalog,
+    }
+
+    missing = dict(legacy_tools)
+    missing.pop("parity_registered")
+    with pytest.raises(ValueError, match="工具集合"):
+        ToolSnapshot(**{**common, "custom_tools": missing})
+
+    mutated = {name: dict(schema) for name, schema in legacy_tools.items()}
+    mutated["parity_registered"]["tool_spec"] = ToolSpec(
+        name="parity_registered",
+        description="parity registered",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        dependencies=("parity_helper",),
+    )
+    with pytest.raises(ValueError, match="ToolSpec"):
+        ToolSnapshot(**{**common, "custom_tools": mutated})
+
+    with pytest.raises(ValueError, match="dependencies"):
+        ToolSnapshot(**{**common, "tool_dependencies": {}})
+    with pytest.raises(ValueError, match="generation"):
+        ToolSnapshot(**{**common, "generation": 14})
+
+    wrong_registration = ProviderRegistration(
+        provider_id="registered",
+        source=ToolSource.BUILTIN,
+        trust=ToolTrustLevel.TRUSTED,
+    )
+    wrong_catalog = ProviderCatalogSnapshot(
+        generation=13,
+        registrations={"registered": wrong_registration},
+        tools={},
+    )
+    with pytest.raises(ValueError, match="identity"):
+        ToolSnapshot(
+            generation=13,
+            plugin_info={},
+            custom_tools={},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+            provider_catalog=wrong_catalog,
+        )
 
 
 def test_load_custom_tools_forwards_generated_state_and_source_overrides(

@@ -26,11 +26,17 @@ from nonebot_plugin_moellmchats.tool_providers import (
     GeneratedToolResources,
     MCPToolResources,
     NoneBotPluginToolResources,
+    ProviderCatalogSnapshot,
+    ProviderDiscoveryBatch,
     ProviderDiscoveryContext,
+    ProviderDiscoveryPlan,
+    ProviderRegistration,
+    ProviderRegistry,
     RegisteredToolProvider,
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    provider_registry,
     registered_tool_provider,
     trust_for_source,
 )
@@ -38,6 +44,39 @@ from nonebot_plugin_moellmchats.tool_providers import (
 
 async def _handler(value: str = "ok") -> str:
     return value
+
+
+class _BuiltinProvider:
+    __slots__ = ()
+
+    @property
+    def provider_id(self) -> str:
+        return "builtin"
+
+    @property
+    def source(self) -> ToolSource:
+        return ToolSource.BUILTIN
+
+    @property
+    def trust(self) -> ToolTrustLevel:
+        return ToolTrustLevel.TRUSTED
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[BuiltinToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if type(context.resources) is not BuiltinToolResources:
+            raise TypeError("builtin provider resources mismatch")
+        return tuple(
+            DiscoveredTool(
+                provider_id=self.provider_id,
+                source=self.source,
+                trust=self.trust,
+                generation=context.generation,
+                spec=spec,
+            )
+            for spec in context.resources.specs
+        )
 
 
 def _spec(name: str = "echo") -> ToolSpec:
@@ -470,3 +509,108 @@ async def test_registered_provider_fails_closed_for_every_legacy_mismatch() -> N
         dependencies,
         discovery=(replace(records[0], provider_id="other"), records[1]),
     )
+
+
+@pytest.mark.asyncio
+async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
+    specs = (_spec("zeta"), _spec("alpha"))
+    plan = ProviderDiscoveryPlan(
+        provider=registered_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=23,
+            resources=RegisteredToolResources(specs),
+        ),
+    )
+
+    catalog = await provider_registry.discover(23, (plan,))
+
+    assert ProviderCatalogSnapshot.schema_version == 2
+    assert catalog.generation == 23
+    assert tuple(catalog.registrations) == ("registered",)
+    assert tuple(catalog.tools) == ("alpha", "zeta")
+    assert [
+        item.spec.name for item in catalog.tools_for_provider("registered")
+    ] == ["alpha", "zeta"]
+    assert catalog.tools_for_provider("missing") == ()
+    assert deepcopy(catalog) is catalog
+    assert deepcopy(provider_registry) is provider_registry
+    with pytest.raises(TypeError):
+        catalog.tools["other"] = catalog.tools["alpha"]
+    with pytest.raises(TypeError):
+        catalog.registrations["other"] = catalog.registrations["registered"]
+    with pytest.raises(FrozenInstanceError):
+        catalog.generation = 24
+
+
+@pytest.mark.asyncio
+async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() -> None:
+    registered_plan = ProviderDiscoveryPlan(
+        provider=registered_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=9,
+            resources=RegisteredToolResources((_spec("same_name"),)),
+        ),
+    )
+    builtin_provider = _BuiltinProvider()
+    builtin_plan = ProviderDiscoveryPlan(
+        provider=builtin_provider,
+        context=ProviderDiscoveryContext(
+            generation=9,
+            resources=BuiltinToolResources((_spec("same_name"),)),
+        ),
+    )
+    registry = ProviderRegistry(
+        (
+            ProviderRegistration.from_provider(registered_tool_provider),
+            ProviderRegistration.from_provider(builtin_provider),
+        )
+    )
+
+    with pytest.raises(ValueError, match="工具名冲突"):
+        await registry.discover(9, (registered_plan, builtin_plan))
+    with pytest.raises(ValueError, match="不完整"):
+        await provider_registry.discover(9, ())
+    with pytest.raises(ValueError, match="重复执行"):
+        await provider_registry.discover(9, (registered_plan, registered_plan))
+    with pytest.raises(ValueError, match="generation"):
+        await provider_registry.discover(10, (registered_plan,))
+    with pytest.raises(ValueError, match="未注册"):
+        await provider_registry.discover(9, (builtin_plan,))
+    with pytest.raises(TypeError, match="typed plan"):
+        await provider_registry.discover(9, (object(),))  # type: ignore[arg-type]
+
+    duplicate = ProviderRegistration.from_provider(registered_tool_provider)
+    with pytest.raises(ValueError, match="重复 provider_id"):
+        ProviderRegistry((duplicate, duplicate))
+
+
+@pytest.mark.asyncio
+async def test_provider_batch_and_catalog_reject_identity_or_generation_drift() -> None:
+    plan = ProviderDiscoveryPlan(
+        provider=registered_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=5,
+            resources=RegisteredToolResources((_spec(),)),
+        ),
+    )
+    batch = await plan.discover_batch()
+    catalog = provider_registry.build_snapshot(5, (batch,))
+
+    assert isinstance(batch, ProviderDiscoveryBatch)
+    assert catalog.tools["echo"].spec is batch.tools[0].spec
+    with pytest.raises(ValueError, match="generation"):
+        replace(batch, generation=6)
+    with pytest.raises(ValueError, match="generation"):
+        provider_registry.build_snapshot(6, (batch,))
+    with pytest.raises(ValueError, match="name"):
+        ProviderCatalogSnapshot(
+            generation=5,
+            registrations=catalog.registrations,
+            tools={"renamed": batch.tools[0]},
+        )
+    with pytest.raises(ValueError, match="未注册"):
+        ProviderCatalogSnapshot(
+            generation=5,
+            registrations={},
+            tools={"echo": batch.tools[0]},
+        )
