@@ -8,6 +8,11 @@ import pytest
 
 from nonebot_plugin_moellmchats.runtime_metrics import runtime_metrics
 from nonebot_plugin_moellmchats.runtime_snapshot import runtime_snapshots
+from nonebot_plugin_moellmchats.tool_artifacts import (
+    ToolArtifact,
+    ToolContractSnapshot,
+    source_sha256,
+)
 from nonebot_plugin_moellmchats.tool_contracts import ToolSpec
 from nonebot_plugin_moellmchats.tool_manager import (
     ToolSnapshot,
@@ -16,6 +21,7 @@ from nonebot_plugin_moellmchats.tool_manager import (
 )
 from nonebot_plugin_moellmchats.tool_providers import (
     DiscoveredTool,
+    FileToolResources,
     ProviderCatalogSnapshot,
     ProviderDiscoveryBatch,
     ProviderDiscoveryContext,
@@ -23,6 +29,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    file_tool_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -38,6 +45,7 @@ def _registered_catalog(
     generation: int,
 ) -> ProviderCatalogSnapshot:
     registration = ProviderRegistration.from_provider(registered_tool_provider)
+    file_registration = ProviderRegistration.from_provider(file_tool_provider)
     records = tuple(
         DiscoveredTool(
             provider_id=registration.provider_id,
@@ -56,8 +64,70 @@ def _registered_catalog(
                 generation=generation,
                 tools=records,
             ),
+            ProviderDiscoveryBatch(
+                registration=file_registration,
+                generation=generation,
+                tools=(),
+            ),
         ),
     )
+
+
+def _file_artifact(spec: ToolSpec, *, generation: int) -> ToolArtifact:
+    source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
+    return ToolArtifact(
+        tool_name=spec.name,
+        handler_name=spec.name,
+        source=source,
+        source_hash=source_sha256(source),
+        schema={
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters,
+        },
+        spec=spec,
+        contract=ToolContractSnapshot.from_spec(spec),
+        source_type="custom_file",
+        generation=generation,
+        filename="snapshot_tools.py",
+    )
+
+
+def _file_catalog(
+    artifact: ToolArtifact,
+    *,
+    generation: int,
+) -> ProviderCatalogSnapshot:
+    registered = ProviderRegistration.from_provider(registered_tool_provider)
+    custom_file = ProviderRegistration.from_provider(file_tool_provider)
+    record = DiscoveredTool(
+        provider_id=custom_file.provider_id,
+        source=custom_file.source,
+        trust=custom_file.trust,
+        generation=generation,
+        spec=artifact.spec,
+        artifact=artifact,
+    )
+    return provider_registry.build_snapshot(
+        generation,
+        (
+            ProviderDiscoveryBatch(registered, generation, ()),
+            ProviderDiscoveryBatch(custom_file, generation, (record,)),
+        ),
+    )
+
+
+def _file_legacy_schema(artifact: ToolArtifact) -> dict:
+    spec = artifact.spec
+    return {
+        **spec.as_legacy_schema(),
+        "source": "custom_file",
+        "declared_effect": artifact.contract.declared_effect.value,
+        "effective_effect": spec.effect.value,
+        "tool_artifact": artifact,
+        "artifact_digest": artifact.artifact_digest,
+        "generation": artifact.generation,
+    }
 
 
 def test_tool_snapshot_generated_stamp_is_detached_and_immutable() -> None:
@@ -209,6 +279,48 @@ def test_tool_snapshot_dual_view_fails_closed_for_drift() -> None:
         )
 
 
+def test_tool_snapshot_dual_view_keeps_exact_file_artifact_identity() -> None:
+    spec = ToolSpec(
+        name="snapshot_file",
+        description="snapshot file",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
+        handler=_handler,
+    )
+    artifact = _file_artifact(spec, generation=15)
+    catalog = _file_catalog(artifact, generation=15)
+    legacy = _file_legacy_schema(artifact)
+
+    snapshot = ToolSnapshot(
+        generation=15,
+        plugin_info={"optional_plugin": {}},
+        custom_tools={spec.name: legacy},
+        tool_dependencies={spec.name: {"optional_plugin"}},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+
+    discovered = snapshot.provider_catalog.tools[spec.name]
+    assert discovered.artifact is artifact
+    assert discovered.spec is artifact.spec
+    assert snapshot.custom_tools[spec.name]["tool_artifact"] is artifact
+    assert snapshot.custom_tools[spec.name]["tool_spec"] is artifact.spec
+
+    mutated = dict(legacy)
+    mutated["artifact_digest"] = "0" * 64
+    with pytest.raises(ValueError, match="artifact_digest"):
+        ToolSnapshot(
+            generation=15,
+            plugin_info={},
+            custom_tools={spec.name: mutated},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+            provider_catalog=catalog,
+        )
+
+
 def test_load_custom_tools_forwards_generated_state_and_source_overrides(
     monkeypatch,
 ) -> None:
@@ -353,6 +465,56 @@ async def test_load_custom_tools_uses_explicit_registered_shadow_snapshot(
         "source": "registered",
     }
     assert dependencies == {"registered_shadow": {"registered_helper"}}
+
+
+@pytest.mark.asyncio
+async def test_load_custom_tools_reuses_explicit_file_candidate(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+    spec = ToolSpec(
+        name="file_shadow",
+        description="file shadow",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    artifact = _file_artifact(spec, generation=32)
+    file_tools = {spec.name: _file_legacy_schema(artifact)}
+    file_dependencies = {spec.name: {"legacy_optional"}}
+    discovery = await file_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=32,
+            resources=FileToolResources.from_legacy_tools(file_tools),
+        )
+    )
+
+    def forbidden_load(*_args, **_kwargs):
+        raise AssertionError("legacy merge must reuse the transaction file candidate")
+
+    monkeypatch.setattr(manager_module, "load_file_tools", forbidden_load)
+    monkeypatch.setattr(
+        manager_module.generated_tool_store,
+        "load_active_tools",
+        lambda **_kwargs: ({}, {}),
+    )
+    monkeypatch.setattr(
+        tool_manager,
+        "_merge_dependencies_from_custom_plugin_info",
+        lambda _dependencies: None,
+    )
+
+    tools, dependencies = tool_manager.load_custom_tools(
+        commit=False,
+        generation=32,
+        registered_tools={},
+        registered_discovery=(),
+        file_tool_candidate=(file_tools, file_dependencies),
+        file_discovery=discovery,
+    )
+
+    assert tools[spec.name]["tool_artifact"] is artifact
+    assert tools[spec.name]["tool_spec"] is artifact.spec
+    assert dependencies == {spec.name: {"legacy_optional"}}
 
 
 def test_tool_manager_snapshot_returns_active_runtime_snapshot(monkeypatch) -> None:

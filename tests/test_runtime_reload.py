@@ -103,6 +103,12 @@ async def test_runtime_generation_pins_custom_tool_source(
         assert artifact.generation == entry["generation"] == result.generation
         assert artifact.artifact_digest == entry["artifact_digest"]
         assert artifact.source == original_source
+        provider_catalog = snapshot.tool_snapshot.provider_catalog
+        assert provider_catalog is not None
+        discovered = provider_catalog.tools["artifact_generation_test"]
+        assert discovered.provider_id == "custom-file"
+        assert discovered.artifact is artifact
+        assert discovered.spec is artifact.spec
 
         path.write_text(
             "async def artifact_generation_test():\n"
@@ -166,11 +172,17 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
         handler=lambda: None,
     )
     registry_calls = 0
+    file_load_calls = 0
 
     def snapshot_registered():
         nonlocal registry_calls
         registry_calls += 1
         return {registered.name: registered}
+
+    def load_files(*_args, **_kwargs):
+        nonlocal file_load_calls
+        file_load_calls += 1
+        return {}, {}
 
     monkeypatch.setattr(reload_module.tool_registry, "snapshot", snapshot_registered)
     monkeypatch.setattr(reload_module.config_parser, "load_candidate", lambda: {})
@@ -185,7 +197,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     monkeypatch.setattr(
         manager_module,
         "load_file_tools",
-        lambda *_args, **_kwargs: ({}, {}),
+        load_files,
     )
     monkeypatch.setattr(
         manager_module.generated_tool_store,
@@ -230,6 +242,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     entry = snapshot.custom_tools[registered.name]
 
     assert registry_calls == 1
+    assert file_load_calls == 1
     assert entry["tool_spec"] is registered
     assert entry["func"] is registered.handler
     assert entry["name"] == registered.name
@@ -250,8 +263,13 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     provider_catalog = snapshot.provider_catalog
     assert provider_catalog is not None
     assert provider_catalog.schema_version == 2
+    assert tuple(provider_catalog.registrations) == (
+        "custom-file",
+        "registered",
+    )
     assert provider_catalog.tools[registered.name].spec is registered
     assert provider_catalog.tools_for_provider("registered")[0].spec is registered
+    assert provider_catalog.tools_for_provider("custom-file") == ()
     assert not hasattr(candidate.snapshot, "providers")
     assert not hasattr(candidate.snapshot, "discovered_tools")
     assert not hasattr(registered_tool_provider, "execute")
@@ -280,6 +298,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     with pytest.raises(ValueError, match="ToolSpec"):
         await reloader._build_candidate(42, generated_state=state)
     assert registry_calls == 2
+    assert file_load_calls == 2
     assert runtime_snapshots.current() is previous
 
 

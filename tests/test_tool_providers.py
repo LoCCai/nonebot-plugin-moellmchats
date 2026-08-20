@@ -21,6 +21,7 @@ from nonebot_plugin_moellmchats.tool_contracts import ToolPolicy, ToolSpec
 from nonebot_plugin_moellmchats.tool_providers import (
     BuiltinToolResources,
     DiscoveredTool,
+    FileToolProvider,
     FileToolResources,
     GeneratedSourceOverride,
     GeneratedToolResources,
@@ -36,6 +37,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    file_tool_provider,
     provider_registry,
     registered_tool_provider,
     trust_for_source,
@@ -415,6 +417,40 @@ def _registered_legacy_projection(
     return tools, dependencies
 
 
+def _file_legacy_projection(
+    artifacts: tuple[ToolArtifact, ...],
+) -> tuple[dict[str, dict], dict[str, set[str]]]:
+    tools: dict[str, dict] = {}
+    dependencies: dict[str, set[str]] = {}
+    for artifact in artifacts:
+        spec = artifact.spec
+        tools[spec.name] = {
+            **spec.as_legacy_schema(),
+            "source": "custom_file",
+            "declared_effect": artifact.contract.declared_effect.value,
+            "effective_effect": spec.effect.value,
+            "tool_artifact": artifact,
+            "artifact_digest": artifact.artifact_digest,
+            "generation": artifact.generation,
+        }
+        if spec.dependencies:
+            dependencies[spec.name] = set(spec.dependencies)
+    return tools, dependencies
+
+
+def _file_plan(
+    generation: int,
+    artifacts: tuple[ToolArtifact, ...] = (),
+) -> ProviderDiscoveryPlan[FileToolResources]:
+    return ProviderDiscoveryPlan(
+        provider=file_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=generation,
+            resources=FileToolResources(artifacts),
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_registered_provider_accepts_complete_legacy_parity() -> None:
     helper = _spec("helper")
@@ -511,6 +547,189 @@ async def test_registered_provider_fails_closed_for_every_legacy_mismatch() -> N
     )
 
 
+def test_file_resources_bind_exact_legacy_artifacts() -> None:
+    artifact = _custom_artifact(_spec())
+    tools, _dependencies = _file_legacy_projection((artifact,))
+
+    resources = FileToolResources.from_legacy_tools(tools)
+    tools.clear()
+
+    assert resources.artifacts == (artifact,)
+    with pytest.raises(ValueError, match="source"):
+        FileToolResources.from_legacy_tools(
+            {"echo": {"source": "generated", "tool_artifact": artifact}}
+        )
+    with pytest.raises(ValueError, match="ToolArtifact"):
+        FileToolResources.from_legacy_tools(
+            {"echo": {"source": "custom_file"}}
+        )
+    with pytest.raises(ValueError, match="identity"):
+        FileToolResources.from_legacy_tools(
+            {"renamed": {"source": "custom_file", "tool_artifact": artifact}}
+        )
+
+
+@pytest.mark.asyncio
+async def test_file_provider_is_deterministic_immutable_and_no_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = (
+        _custom_artifact(_spec("zeta"), generation=19),
+        _custom_artifact(_spec("alpha"), generation=19),
+    )
+    context = ProviderDiscoveryContext(
+        generation=19,
+        resources=FileToolResources(artifacts),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("file discovery must not read source or rerun AST policy")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.custom_tool_loader.analyze_ast_policy",
+        forbidden,
+    )
+
+    first = await file_tool_provider.discover(context)
+    second = await file_tool_provider.discover(context)
+
+    assert first == second
+    assert [item.spec.name for item in first] == ["alpha", "zeta"]
+    assert all(item.provider_id == "custom-file" for item in first)
+    assert all(item.source is ToolSource.CUSTOM_FILE for item in first)
+    assert all(item.trust is ToolTrustLevel.REVIEWED for item in first)
+    assert all(item.generation == 19 for item in first)
+    assert [item.artifact for item in first] == [artifacts[1], artifacts[0]]
+    assert deepcopy(first) is first
+    assert not hasattr(file_tool_provider, "execute")
+    assert not hasattr(file_tool_provider, "reload")
+    with pytest.raises(FrozenInstanceError):
+        file_tool_provider.source = ToolSource.GENERATED
+
+
+@pytest.mark.asyncio
+async def test_file_provider_rejects_other_resource_records() -> None:
+    provider = FileToolProvider()
+    context = ProviderDiscoveryContext(
+        generation=1,
+        resources=RegisteredToolResources((_spec(),)),
+    )
+
+    with pytest.raises(TypeError, match="FileToolResources"):
+        await provider.discover(context)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_file_provider_accepts_complete_legacy_parity() -> None:
+    helper = _custom_artifact(_spec("helper"), generation=7)
+    echo_spec = replace(_spec("echo"), dependencies=("helper",))
+    echo = _custom_artifact(echo_spec, generation=7)
+    artifacts = (echo, helper)
+    records = await file_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=7,
+            resources=FileToolResources(artifacts),
+        )
+    )
+    tools, dependencies = _file_legacy_projection(artifacts)
+    dependencies["echo"].add("legacy_plugin_dependency")
+
+    file_tool_provider.validate_legacy_parity(
+        records,
+        tools,
+        dependencies,
+        generation=7,
+        allow_additional_dependencies=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_provider_fails_closed_for_every_legacy_mismatch() -> None:
+    helper = _custom_artifact(_spec("helper"), generation=7)
+    echo_spec = replace(_spec("echo"), dependencies=("helper",))
+    echo = _custom_artifact(echo_spec, generation=7)
+    artifacts = (echo, helper)
+    records = await file_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=7,
+            resources=FileToolResources(artifacts),
+        )
+    )
+
+    def reject(
+        tools: dict[str, dict],
+        dependencies: dict[str, set[str]],
+        *,
+        discovery: tuple[DiscoveredTool, ...] = records,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="custom-file"):
+            file_tool_provider.validate_legacy_parity(
+                discovery,
+                tools,
+                dependencies,
+                generation=7,
+            )
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    tools.pop("echo")
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    extra = _custom_artifact(_spec("extra"), generation=7)
+    tools.update(_file_legacy_projection((extra,))[0])
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    tools["echo"]["tool_artifact"] = _custom_artifact(
+        echo_spec,
+        generation=7,
+    )
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    tools["echo"]["tool_spec"] = replace(echo_spec)
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    tools["echo"]["func"] = lambda: None
+    reject(tools, dependencies)
+
+    for field_name, value in (
+        ("name", "renamed"),
+        ("description", "mutated description"),
+        ("parameters", {"type": "object", "properties": {}}),
+        ("source", "generated"),
+        ("declared_effect", "external_side_effect"),
+        ("effective_effect", "external_side_effect"),
+        ("artifact_digest", "0" * 64),
+        ("generation", 8),
+    ):
+        tools, dependencies = _file_legacy_projection(artifacts)
+        tools["echo"][field_name] = value
+        reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    tools["echo"]["unexpected"] = True
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    dependencies["echo"] = set()
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    dependencies["echo"].add("extra")
+    reject(tools, dependencies)
+
+    tools, dependencies = _file_legacy_projection(artifacts)
+    reject(
+        tools,
+        dependencies,
+        discovery=(replace(records[0], provider_id="other"), records[1]),
+    )
+
+
 @pytest.mark.asyncio
 async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
     specs = (_spec("zeta"), _spec("alpha"))
@@ -522,11 +741,11 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
         ),
     )
 
-    catalog = await provider_registry.discover(23, (plan,))
+    catalog = await provider_registry.discover(23, (plan, _file_plan(23)))
 
     assert ProviderCatalogSnapshot.schema_version == 2
     assert catalog.generation == 23
-    assert tuple(catalog.registrations) == ("registered",)
+    assert tuple(catalog.registrations) == ("custom-file", "registered")
     assert tuple(catalog.tools) == ("alpha", "zeta")
     assert [
         item.spec.name for item in catalog.tools_for_provider("registered")
@@ -568,12 +787,21 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
 
     with pytest.raises(ValueError, match="工具名冲突"):
         await registry.discover(9, (registered_plan, builtin_plan))
+    file_artifact = _custom_artifact(_spec("same_name"), generation=9)
+    with pytest.raises(ValueError, match="工具名冲突"):
+        await provider_registry.discover(
+            9,
+            (registered_plan, _file_plan(9, (file_artifact,))),
+        )
     with pytest.raises(ValueError, match="不完整"):
         await provider_registry.discover(9, ())
     with pytest.raises(ValueError, match="重复执行"):
         await provider_registry.discover(9, (registered_plan, registered_plan))
     with pytest.raises(ValueError, match="generation"):
-        await provider_registry.discover(10, (registered_plan,))
+        await provider_registry.discover(
+            10,
+            (registered_plan, _file_plan(9)),
+        )
     with pytest.raises(ValueError, match="未注册"):
         await provider_registry.discover(9, (builtin_plan,))
     with pytest.raises(TypeError, match="typed plan"):
@@ -594,7 +822,8 @@ async def test_provider_batch_and_catalog_reject_identity_or_generation_drift() 
         ),
     )
     batch = await plan.discover_batch()
-    catalog = provider_registry.build_snapshot(5, (batch,))
+    file_batch = await _file_plan(5).discover_batch()
+    catalog = provider_registry.build_snapshot(5, (batch, file_batch))
 
     assert isinstance(batch, ProviderDiscoveryBatch)
     assert catalog.tools["echo"].spec is batch.tools[0].spec

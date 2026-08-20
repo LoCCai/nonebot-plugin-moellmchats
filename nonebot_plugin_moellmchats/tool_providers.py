@@ -143,6 +143,32 @@ class FileToolResources:
     def __deepcopy__(self, _memo: dict[int, object]) -> FileToolResources:
         return self
 
+    @classmethod
+    def from_legacy_tools(
+        cls,
+        legacy_tools: Mapping[str, object],
+    ) -> FileToolResources:
+        """Bind the exact artifacts produced by one legacy file-load pass."""
+
+        if not isinstance(legacy_tools, Mapping):
+            raise TypeError("FileToolResources legacy tools 必须是映射")
+        if not all(isinstance(name, str) for name in legacy_tools):
+            raise TypeError("FileToolResources legacy tool name 必须是字符串")
+        artifacts: list[ToolArtifact] = []
+        for name in sorted(legacy_tools):
+            schema = legacy_tools[name]
+            if not isinstance(schema, Mapping):
+                raise TypeError(f"FileToolResources legacy 工具 {name} Schema 非法")
+            if schema.get("source") != cls.source.value:
+                raise ValueError(f"FileToolResources legacy 工具 {name} source 不一致")
+            artifact = schema.get("tool_artifact")
+            if not isinstance(artifact, ToolArtifact):
+                raise ValueError(f"FileToolResources legacy 工具 {name} 缺少 ToolArtifact")
+            if artifact.tool_name != name:
+                raise ValueError(f"FileToolResources legacy 工具 {name} artifact identity 不一致")
+            artifacts.append(artifact)
+        return cls(tuple(artifacts))
+
 
 @dataclass(frozen=True)
 class GeneratedSourceOverride:
@@ -750,8 +776,168 @@ class RegisteredToolProvider:
                 raise ValueError(f"registered legacy 工具 {name} dependencies 不一致")
 
 
+@dataclass(frozen=True)
+class FileToolProvider:
+    """Discover artifacts prepared by the current runtime transaction only."""
+
+    provider_id: str = field(default="custom-file", init=False)
+    source: ToolSource = field(default=ToolSource.CUSTOM_FILE, init=False)
+    trust: ToolTrustLevel = field(default=ToolTrustLevel.REVIEWED, init=False)
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[FileToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if (
+            not isinstance(context, ProviderDiscoveryContext)
+            or type(context.resources) is not FileToolResources
+        ):
+            raise TypeError("FileToolProvider 只接受 FileToolResources")
+        discovered: list[DiscoveredTool] = []
+        for artifact in sorted(
+            context.resources.artifacts,
+            key=lambda item: item.tool_name,
+        ):
+            artifact.verify(
+                expected_artifact_digest=artifact.artifact_digest,
+                expected_bundle_digest=None,
+                generation=context.generation,
+            )
+            discovered.append(
+                DiscoveredTool(
+                    provider_id=self.provider_id,
+                    source=self.source,
+                    trust=self.trust,
+                    generation=context.generation,
+                    spec=artifact.spec,
+                    artifact=artifact,
+                )
+            )
+        return tuple(discovered)
+
+    def validate_legacy_parity(
+        self,
+        discovered: tuple[DiscoveredTool, ...],
+        legacy_tools: Mapping[str, object],
+        legacy_dependencies: Mapping[str, object],
+        *,
+        generation: int,
+        allow_additional_dependencies: bool = False,
+    ) -> None:
+        """Fail closed unless file discovery and its legacy view are equivalent."""
+
+        _require_generation(generation)
+        if type(allow_additional_dependencies) is not bool:
+            raise TypeError("allow_additional_dependencies 必须是 bool")
+        if not isinstance(discovered, tuple) or not all(
+            isinstance(item, DiscoveredTool) for item in discovered
+        ):
+            raise TypeError("custom-file discovery 必须是 DiscoveredTool 元组")
+        if not isinstance(legacy_tools, Mapping) or not isinstance(
+            legacy_dependencies,
+            Mapping,
+        ):
+            raise TypeError("custom-file legacy parity 输入必须是映射")
+
+        expected: dict[str, ToolArtifact] = {}
+        for item in discovered:
+            if (
+                item.provider_id != self.provider_id
+                or item.source is not self.source
+                or item.trust is not self.trust
+                or not isinstance(item.artifact, ToolArtifact)
+            ):
+                raise ValueError("custom-file discovery 来源身份不一致")
+            if item.generation != generation:
+                raise ValueError("custom-file discovery generation 不一致")
+            if item.spec is not item.artifact.spec:
+                raise ValueError("custom-file discovery ToolSpec identity 不一致")
+            if item.spec.name in expected:
+                raise ValueError("custom-file discovery 不得包含重名工具")
+            expected[item.spec.name] = item.artifact
+
+        actual_names = {
+            name
+            for name, schema in legacy_tools.items()
+            if isinstance(name, str)
+            and isinstance(schema, Mapping)
+            and schema.get("source") == self.source.value
+        }
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                "custom-file legacy 工具集合不一致: "
+                f"missing={sorted(expected_names - actual_names)}, "
+                f"extra={sorted(actual_names - expected_names)}"
+            )
+
+        for name, artifact in expected.items():
+            schema = legacy_tools.get(name)
+            if not isinstance(schema, Mapping):
+                raise ValueError(f"custom-file legacy 工具 {name} Schema 缺失")
+            spec = artifact.spec
+            expected_schema = {
+                **spec.as_legacy_schema(),
+                "source": self.source.value,
+                "declared_effect": artifact.contract.declared_effect.value,
+                "effective_effect": spec.effect.value,
+                "tool_artifact": artifact,
+                "artifact_digest": artifact.artifact_digest,
+                "generation": generation,
+            }
+            if set(schema) != set(expected_schema):
+                raise ValueError(f"custom-file legacy 工具 {name} 字段不一致")
+            if schema.get("tool_artifact") is not artifact:
+                raise ValueError(f"custom-file legacy 工具 {name} ToolArtifact 不一致")
+            if schema.get("tool_spec") is not spec:
+                raise ValueError(f"custom-file legacy 工具 {name} ToolSpec 不一致")
+            if schema.get("func") is not spec.handler:
+                raise ValueError(f"custom-file legacy 工具 {name} handler 不一致")
+            for field_name in (
+                "name",
+                "description",
+                "parameters",
+                "source",
+                "declared_effect",
+                "effective_effect",
+                "artifact_digest",
+                "generation",
+            ):
+                if not _legacy_value_equal(
+                    schema.get(field_name),
+                    expected_schema[field_name],
+                ):
+                    raise ValueError(
+                        f"custom-file legacy 工具 {name} {field_name} 不一致"
+                    )
+            artifact.verify(
+                expected_artifact_digest=artifact.artifact_digest,
+                expected_bundle_digest=None,
+                generation=generation,
+            )
+
+            dependencies = legacy_dependencies.get(name, set())
+            if not isinstance(dependencies, AbstractSet) or not all(
+                isinstance(item, str) for item in dependencies
+            ):
+                raise ValueError(f"custom-file legacy 工具 {name} dependencies 非法")
+            expected_dependencies = set(spec.dependencies)
+            dependencies_match = (
+                expected_dependencies <= dependencies
+                if allow_additional_dependencies
+                else expected_dependencies == dependencies
+            )
+            if not dependencies_match:
+                raise ValueError(f"custom-file legacy 工具 {name} dependencies 不一致")
+
+
 registered_tool_provider = RegisteredToolProvider()
 _registered_tool_provider_contract: ToolProvider[RegisteredToolResources] = registered_tool_provider
+file_tool_provider = FileToolProvider()
+_file_tool_provider_contract: ToolProvider[FileToolResources] = file_tool_provider
 provider_registry = ProviderRegistry(
-    (ProviderRegistration.from_provider(registered_tool_provider),)
+    (
+        ProviderRegistration.from_provider(registered_tool_provider),
+        ProviderRegistration.from_provider(file_tool_provider),
+    )
 )

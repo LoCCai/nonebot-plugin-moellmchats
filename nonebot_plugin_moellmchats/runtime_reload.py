@@ -23,9 +23,11 @@ from .temperament_manager import temperament_manager
 from .tool_contracts import tool_registry
 from .tool_manager import ToolSnapshot, tool_manager
 from .tool_providers import (
+    FileToolResources,
     ProviderDiscoveryContext,
     ProviderDiscoveryPlan,
     RegisteredToolResources,
+    file_tool_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -130,6 +132,26 @@ class RuntimeReloader:
                 generated_tool_store.read_lifecycle_state
             )
         registered_tools = tool_registry.snapshot()
+        (
+            config_candidate,
+            model_candidate,
+            temperament_candidate,
+            replies_candidate,
+            plugin_info,
+            file_tool_candidate,
+            mcp_servers,
+        ) = await asyncio.gather(
+            asyncio.to_thread(config_parser.load_candidate),
+            asyncio.to_thread(model_selector.build_candidate),
+            asyncio.to_thread(temperament_manager.load_candidate),
+            asyncio.to_thread(load_replies_candidate),
+            asyncio.to_thread(tool_manager.build_plugin_info),
+            asyncio.to_thread(
+                tool_manager.load_file_tools_candidate,
+                generation=generation,
+            ),
+            asyncio.to_thread(mcp_manager.load_config_candidate),
+        )
         provider_catalog = await provider_registry.discover(
             generation,
             (
@@ -142,33 +164,29 @@ class RuntimeReloader:
                         ),
                     ),
                 ),
+                ProviderDiscoveryPlan(
+                    provider=file_tool_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=generation,
+                        resources=FileToolResources.from_legacy_tools(
+                            file_tool_candidate[0]
+                        ),
+                    ),
+                ),
             ),
         )
         registered_discovery = provider_catalog.tools_for_provider("registered")
-        (
-            config_candidate,
-            model_candidate,
-            temperament_candidate,
-            replies_candidate,
-            plugin_info,
-            custom_tool_pair,
-            mcp_servers,
-        ) = await asyncio.gather(
-            asyncio.to_thread(config_parser.load_candidate),
-            asyncio.to_thread(model_selector.build_candidate),
-            asyncio.to_thread(temperament_manager.load_candidate),
-            asyncio.to_thread(load_replies_candidate),
-            asyncio.to_thread(tool_manager.build_plugin_info),
-            asyncio.to_thread(
-                tool_manager.load_custom_tools,
-                commit=False,
-                generation=generation,
-                generated_state=generated_state,
-                generated_source_overrides=generated_source_overrides,
-                registered_tools=registered_tools,
-                registered_discovery=registered_discovery,
-            ),
-            asyncio.to_thread(mcp_manager.load_config_candidate),
+        file_discovery = provider_catalog.tools_for_provider("custom-file")
+        custom_tool_pair = await asyncio.to_thread(
+            tool_manager.load_custom_tools,
+            commit=False,
+            generation=generation,
+            generated_state=generated_state,
+            generated_source_overrides=generated_source_overrides,
+            registered_tools=registered_tools,
+            registered_discovery=registered_discovery,
+            file_tool_candidate=file_tool_candidate,
+            file_discovery=file_discovery,
         )
         emotions = await asyncio.to_thread(
             load_emotions_candidate, config_candidate

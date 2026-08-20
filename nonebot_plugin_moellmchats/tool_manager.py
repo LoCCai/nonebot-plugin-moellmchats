@@ -24,8 +24,14 @@ from .tool_providers import (
     DiscoveredTool,
     ProviderCatalogSnapshot,
     ProviderRegistration,
+    file_tool_provider,
     registered_tool_provider,
 )
+
+_FileToolCandidate = tuple[
+    Mapping[str, Mapping[str, Any]],
+    Mapping[str, AbstractSet[str]],
+]
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,18 @@ class ToolSnapshot:
                 raise ValueError("ToolSnapshot registered provider identity 不一致")
             registered_tool_provider.validate_legacy_parity(
                 provider_catalog.tools_for_provider("registered"),
+                self.custom_tools,
+                self.tool_dependencies,
+                generation=self.generation,
+                allow_additional_dependencies=True,
+            )
+        custom_file = provider_catalog.registrations.get("custom-file")
+        if custom_file is not None:
+            expected = ProviderRegistration.from_provider(file_tool_provider)
+            if custom_file != expected:
+                raise ValueError("ToolSnapshot custom-file provider identity 不一致")
+            file_tool_provider.validate_legacy_parity(
+                provider_catalog.tools_for_provider("custom-file"),
                 self.custom_tools,
                 self.tool_dependencies,
                 generation=self.generation,
@@ -253,6 +271,47 @@ async def extract_webpage(
             with open(template_file, "w", encoding="utf-8") as f:
                 f.write(template_content)
 
+    def load_file_tools_candidate(
+        self,
+        *,
+        generation: int = 0,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+        """Build one file-tool candidate for legacy and Provider dual views."""
+
+        return load_file_tools(
+            self.custom_tools_dir.glob("*.py"),
+            generation=generation,
+        )
+
+    @staticmethod
+    def _copy_file_tool_candidate(
+        candidate: object,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+        if not isinstance(candidate, tuple) or len(candidate) != 2:
+            raise TypeError("file_tool_candidate 必须是 tools/dependencies 元组")
+        raw_tools, raw_dependencies = candidate
+        if not isinstance(raw_tools, Mapping) or not isinstance(
+            raw_dependencies,
+            Mapping,
+        ):
+            raise TypeError("file_tool_candidate 必须包含两个映射")
+
+        tools: dict[str, dict[str, Any]] = {}
+        for name, schema in raw_tools.items():
+            if not isinstance(name, str) or not isinstance(schema, Mapping):
+                raise TypeError("file_tool_candidate tools 结构非法")
+            tools[name] = dict(schema)
+        dependencies: dict[str, set[str]] = {}
+        for name, items in raw_dependencies.items():
+            if (
+                not isinstance(name, str)
+                or not isinstance(items, AbstractSet)
+                or not all(isinstance(item, str) for item in items)
+            ):
+                raise TypeError("file_tool_candidate dependencies 结构非法")
+            dependencies[name] = set(items)
+        return tools, dependencies
+
     def load_custom_tools(
         self,
         *,
@@ -262,6 +321,8 @@ async def extract_webpage(
         generated_source_overrides=None,
         registered_tools: Mapping[str, ToolSpec] | None = None,
         registered_discovery: tuple[DiscoveredTool, ...] | None = None,
+        file_tool_candidate: _FileToolCandidate | None = None,
+        file_discovery: tuple[DiscoveredTool, ...] | None = None,
     ):
         """Parse file tools without importing them into the NoneBot process."""
         if (
@@ -299,10 +360,26 @@ async def extract_webpage(
                 new_dependencies,
                 generation=generation,
             )
-        file_tools, file_dependencies = load_file_tools(
-            self.custom_tools_dir.glob("*.py"),
-            generation=generation,
+        candidate_was_provided = file_tool_candidate is not None
+        if file_tool_candidate is None:
+            file_tool_candidate = self.load_file_tools_candidate(
+                generation=generation
+            )
+        file_tools, file_dependencies = self._copy_file_tool_candidate(
+            file_tool_candidate
         )
+        if file_discovery is not None:
+            if not candidate_was_provided:
+                raise ValueError(
+                    "file discovery 必须复用显式 transaction file candidate"
+                )
+            file_tool_provider.validate_legacy_parity(
+                file_discovery,
+                file_tools,
+                file_dependencies,
+                generation=generation,
+                allow_additional_dependencies=True,
+            )
         self._merge_unique_tools(new_tools, file_tools)
         for trigger, dependencies in file_dependencies.items():
             new_dependencies.setdefault(trigger, set()).update(dependencies)
