@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib
 import json
 from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
 from nonebot_plugin_moellmchats.generated_tool_lifecycle import (
     LifecycleState,
     VersionRecord,
@@ -36,6 +38,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
@@ -46,6 +49,21 @@ from nonebot_plugin_moellmchats.tool_providers import (
 
 async def _handler(value: str) -> str:
     return value
+
+
+def _builtin_batch(generation: int) -> ProviderDiscoveryBatch:
+    registration = ProviderRegistration.from_provider(builtin_tool_provider)
+    records = tuple(
+        DiscoveredTool(
+            provider_id=registration.provider_id,
+            source=registration.source,
+            trust=registration.trust,
+            generation=generation,
+            spec=spec,
+        )
+        for spec in builtin_tool_specs()
+    )
+    return ProviderDiscoveryBatch(registration, generation, records)
 
 
 def _registered_catalog(
@@ -92,6 +110,7 @@ def _registered_catalog(
                 generation=generation,
                 tools=(),
             ),
+            _builtin_batch(generation),
         ),
     )
 
@@ -140,6 +159,7 @@ def _file_catalog(
             ProviderDiscoveryBatch(custom_file, generation, (record,)),
             ProviderDiscoveryBatch(generated, generation, ()),
             ProviderDiscoveryBatch(mcp, generation, ()),
+            _builtin_batch(generation),
         ),
     )
 
@@ -229,6 +249,7 @@ def _generated_catalog(
             ProviderDiscoveryBatch(custom_file, generation, ()),
             ProviderDiscoveryBatch(generated, generation, (record,)),
             ProviderDiscoveryBatch(mcp, generation, ()),
+            _builtin_batch(generation),
         ),
     )
 
@@ -298,6 +319,7 @@ def _mcp_catalog(
             ProviderDiscoveryBatch(custom_file, generation, ()),
             ProviderDiscoveryBatch(generated, generation, ()),
             ProviderDiscoveryBatch(mcp, generation, (record,)),
+            _builtin_batch(generation),
         ),
     )
 
@@ -389,6 +411,44 @@ def test_tool_snapshot_dual_view_keeps_exact_registered_identity() -> None:
     assert snapshot.custom_tools[registered.name]["tool_spec"] is registered
     assert catalog.tools[registered.name].spec is registered
     assert catalog.tools_for_provider("registered")[1].spec is registered
+
+
+def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None:
+    catalog = _registered_catalog((), generation=14)
+    builtin_spec = builtin_tool_specs()[0]
+    record = catalog.tools[builtin_spec.name]
+
+    snapshot = ToolSnapshot(
+        generation=14,
+        plugin_info={"optional_plugin": {}},
+        custom_tools={},
+        tool_dependencies={builtin_spec.name: {"optional_plugin"}},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+
+    assert snapshot.provider_catalog.tools_for_provider("builtin") == (record,)
+    assert record.spec is builtin_spec
+    assert builtin_spec.name not in snapshot.custom_tools
+
+    drifted = replace(
+        record,
+        spec=replace(builtin_spec, description="drifted builtin"),
+    )
+    drifted_catalog = ProviderCatalogSnapshot(
+        generation=14,
+        registrations=catalog.registrations,
+        tools={builtin_spec.name: drifted},
+    )
+    with pytest.raises(ValueError, match="ToolSpec"):
+        ToolSnapshot(
+            generation=14,
+            plugin_info={},
+            custom_tools={},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+            provider_catalog=drifted_catalog,
+        )
 
 
 def test_tool_snapshot_dual_view_fails_closed_for_drift() -> None:

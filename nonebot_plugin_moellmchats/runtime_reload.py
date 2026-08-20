@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from nonebot.log import logger
 
+from .builtin_tools import builtin_tool_specs
 from .config import config_parser, config_path
 from .generated_tools import PreparedLifecycleChange, generated_tool_store
 from .mcp_manager import mcp_manager
@@ -23,12 +24,14 @@ from .temperament_manager import temperament_manager
 from .tool_contracts import tool_registry
 from .tool_manager import ToolSnapshot, tool_manager
 from .tool_providers import (
+    BuiltinToolResources,
     FileToolResources,
     GeneratedToolResources,
     MCPToolResources,
     ProviderDiscoveryContext,
     ProviderDiscoveryPlan,
     RegisteredToolResources,
+    builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
@@ -136,6 +139,7 @@ class RuntimeReloader:
                 generated_tool_store.read_lifecycle_state
             )
         registered_tools = tool_registry.snapshot()
+        builtin_specs = builtin_tool_specs()
         (
             config_candidate,
             model_candidate,
@@ -229,12 +233,20 @@ class RuntimeReloader:
                         ),
                     ),
                 ),
+                ProviderDiscoveryPlan(
+                    provider=builtin_tool_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=generation,
+                        resources=BuiltinToolResources(builtin_specs),
+                    ),
+                ),
             ),
         )
         registered_discovery = provider_catalog.tools_for_provider("registered")
         file_discovery = provider_catalog.tools_for_provider("custom-file")
         generated_discovery = provider_catalog.tools_for_provider("generated")
         mcp_discovery = provider_catalog.tools_for_provider("mcp")
+        builtin_discovery = provider_catalog.tools_for_provider("builtin")
         custom_tool_pair = await asyncio.to_thread(
             tool_manager.load_custom_tools,
             commit=False,
@@ -252,6 +264,13 @@ class RuntimeReloader:
             load_emotions_candidate, config_candidate
         )
         custom_tools, dependencies = custom_tool_pair
+        builtin_tool_provider.validate_legacy_parity(
+            builtin_discovery,
+            builtin_specs,
+            dependencies,
+            generation=generation,
+            allow_additional_dependencies=True,
+        )
         mcp_tool_provider.validate_legacy_parity(
             mcp_discovery,
             mcp_tools,
@@ -265,6 +284,14 @@ class RuntimeReloader:
             if name in custom_tools or name in plugin_info:
                 raise ValueError(f"MCP 工具名与现有工具或插件冲突: {name}")
             custom_tools[name] = schema
+        builtin_plugin_collisions = {
+            spec.name for spec in builtin_specs
+        } & set(plugin_info)
+        if builtin_plugin_collisions:
+            raise ValueError(
+                "内置工具名与 NoneBot 插件冲突: "
+                f"{sorted(builtin_plugin_collisions)}"
+            )
         plugin_collisions = set(plugin_info) & set(custom_tools)
         if plugin_collisions:
             raise ValueError(

@@ -19,6 +19,7 @@ from nonebot_plugin_moellmchats.tool_artifacts import (
 )
 from nonebot_plugin_moellmchats.tool_contracts import ToolPolicy, ToolSpec
 from nonebot_plugin_moellmchats.tool_providers import (
+    BuiltinToolProvider,
     BuiltinToolResources,
     DiscoveredTool,
     FileToolProvider,
@@ -39,6 +40,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
@@ -52,27 +54,27 @@ async def _handler(value: str = "ok") -> str:
     return value
 
 
-class _BuiltinProvider:
+class _UnregisteredProvider:
     __slots__ = ()
 
     @property
     def provider_id(self) -> str:
-        return "builtin"
+        return "unregistered"
 
     @property
     def source(self) -> ToolSource:
-        return ToolSource.BUILTIN
+        return ToolSource.NONEBOT_PLUGIN
 
     @property
     def trust(self) -> ToolTrustLevel:
-        return ToolTrustLevel.TRUSTED
+        return ToolTrustLevel.REVIEWED
 
     async def discover(
         self,
-        context: ProviderDiscoveryContext[BuiltinToolResources],
+        context: ProviderDiscoveryContext[NoneBotPluginToolResources],
     ) -> tuple[DiscoveredTool, ...]:
-        if type(context.resources) is not BuiltinToolResources:
-            raise TypeError("builtin provider resources mismatch")
+        if type(context.resources) is not NoneBotPluginToolResources:
+            raise TypeError("unregistered provider resources mismatch")
         return tuple(
             DiscoveredTool(
                 provider_id=self.provider_id,
@@ -488,6 +490,19 @@ def _mcp_plan(
         context=ProviderDiscoveryContext(
             generation=generation,
             resources=MCPToolResources(specs),
+        ),
+    )
+
+
+def _builtin_plan(
+    generation: int,
+    specs: tuple[ToolSpec, ...] = (),
+) -> ProviderDiscoveryPlan[BuiltinToolResources]:
+    return ProviderDiscoveryPlan(
+        provider=builtin_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=generation,
+            resources=BuiltinToolResources(specs),
         ),
     )
 
@@ -1156,6 +1171,120 @@ async def test_mcp_provider_fails_closed_for_legacy_or_sidecar_drift() -> None:
 
 
 @pytest.mark.asyncio
+async def test_builtin_provider_is_deterministic_immutable_and_no_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = (_spec("builtin_zeta"), _spec("builtin_alpha"))
+    context = ProviderDiscoveryContext(
+        generation=41,
+        resources=BuiltinToolResources(specs),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("builtin provider shadow discovery must not perform I/O")
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.search.Search.get_search",
+        forbidden,
+    )
+
+    first = await builtin_tool_provider.discover(context)
+    second = await builtin_tool_provider.discover(context)
+
+    assert first == second
+    assert [item.spec.name for item in first] == [
+        "builtin_alpha",
+        "builtin_zeta",
+    ]
+    assert all(item.provider_id == "builtin" for item in first)
+    assert all(item.source is ToolSource.BUILTIN for item in first)
+    assert all(item.trust is ToolTrustLevel.TRUSTED for item in first)
+    assert all(item.generation == 41 and item.artifact is None for item in first)
+    assert deepcopy(first) is first
+    assert not hasattr(builtin_tool_provider, "execute")
+    assert not hasattr(builtin_tool_provider, "reload")
+    with pytest.raises(FrozenInstanceError):
+        builtin_tool_provider.trust = ToolTrustLevel.EXTERNAL
+
+
+@pytest.mark.asyncio
+async def test_builtin_provider_rejects_other_resource_records() -> None:
+    provider = BuiltinToolProvider()
+    context = ProviderDiscoveryContext(
+        generation=1,
+        resources=RegisteredToolResources((_spec(),)),
+    )
+
+    with pytest.raises(TypeError, match="BuiltinToolResources"):
+        await provider.discover(context)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_builtin_provider_accepts_exact_code_branch_parity() -> None:
+    helper = _spec("builtin_helper")
+    primary = replace(
+        _spec("builtin_primary"),
+        dependencies=(helper.name,),
+    )
+    legacy_specs = (primary, helper)
+    records = await builtin_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=43,
+            resources=BuiltinToolResources(legacy_specs),
+        )
+    )
+
+    builtin_tool_provider.validate_legacy_parity(
+        records,
+        legacy_specs,
+        {primary.name: {helper.name, "legacy_optional"}},
+        generation=43,
+        allow_additional_dependencies=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_builtin_provider_fails_closed_for_branch_or_dependency_drift() -> None:
+    helper = _spec("builtin_helper")
+    primary = replace(
+        _spec("builtin_primary"),
+        dependencies=(helper.name,),
+    )
+    legacy_specs = (primary, helper)
+    dependencies = {primary.name: {helper.name}}
+    records = await builtin_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=47,
+            resources=BuiltinToolResources(legacy_specs),
+        )
+    )
+
+    def reject(
+        specs: tuple[ToolSpec, ...] = legacy_specs,
+        deps: object = dependencies,
+        *,
+        discovery: tuple[DiscoveredTool, ...] = records,
+        generation: int = 47,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="builtin"):
+            builtin_tool_provider.validate_legacy_parity(
+                discovery,
+                specs,
+                deps,  # type: ignore[arg-type]
+                generation=generation,
+            )
+
+    reject((helper,))
+    reject((*legacy_specs, _spec("builtin_extra")))
+    reject((replace(primary), helper))
+    reject(deps={})
+    reject(deps={primary.name: [helper.name]})
+    reject(discovery=(replace(records[0], provider_id="other"), records[1]))
+    reject(discovery=(replace(records[0], generation=48), records[1]))
+
+
+@pytest.mark.asyncio
 async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
     specs = (_spec("zeta"), _spec("alpha"))
     plan = ProviderDiscoveryPlan(
@@ -1168,12 +1297,19 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
 
     catalog = await provider_registry.discover(
         23,
-        (plan, _file_plan(23), _generated_plan(23), _mcp_plan(23)),
+        (
+            plan,
+            _file_plan(23),
+            _generated_plan(23),
+            _mcp_plan(23),
+            _builtin_plan(23),
+        ),
     )
 
     assert ProviderCatalogSnapshot.schema_version == 2
     assert catalog.generation == 23
     assert tuple(catalog.registrations) == (
+        "builtin",
         "custom-file",
         "generated",
         "mcp",
@@ -1203,18 +1339,11 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
             resources=RegisteredToolResources((_spec("same_name"),)),
         ),
     )
-    builtin_provider = _BuiltinProvider()
-    builtin_plan = ProviderDiscoveryPlan(
-        provider=builtin_provider,
-        context=ProviderDiscoveryContext(
-            generation=9,
-            resources=BuiltinToolResources((_spec("same_name"),)),
-        ),
-    )
+    builtin_plan = _builtin_plan(9, (_spec("same_name"),))
     registry = ProviderRegistry(
         (
             ProviderRegistration.from_provider(registered_tool_provider),
-            ProviderRegistration.from_provider(builtin_provider),
+            ProviderRegistration.from_provider(builtin_tool_provider),
         )
     )
 
@@ -1229,6 +1358,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _file_plan(9, (file_artifact,)),
                 _generated_plan(9),
                 _mcp_plan(9),
+                _builtin_plan(9),
             ),
         )
     generated_artifact = _generated_artifact(
@@ -1243,6 +1373,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _file_plan(9),
                 _generated_plan(9, (generated_artifact,)),
                 _mcp_plan(9),
+                _builtin_plan(9),
             ),
         )
     with pytest.raises(ValueError, match="工具名冲突"):
@@ -1253,6 +1384,26 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _file_plan(9),
                 _generated_plan(9),
                 _mcp_plan(9, (_spec("same_name"),)),
+                _builtin_plan(9),
+            ),
+        )
+    with pytest.raises(ValueError, match="工具名冲突"):
+        await provider_registry.discover(
+            9,
+            (
+                ProviderDiscoveryPlan(
+                    provider=registered_tool_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=9,
+                        resources=RegisteredToolResources(
+                            (_spec("web_search"),)
+                        ),
+                    ),
+                ),
+                _file_plan(9),
+                _generated_plan(9),
+                _mcp_plan(9),
+                _builtin_plan(9, (_spec("web_search"),)),
             ),
         )
     with pytest.raises(ValueError, match="不完整"):
@@ -1267,10 +1418,19 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _file_plan(9),
                 _generated_plan(9),
                 _mcp_plan(9),
+                _builtin_plan(9),
             ),
         )
+    unregistered_provider = _UnregisteredProvider()
+    unregistered_plan = ProviderDiscoveryPlan(
+        provider=unregistered_provider,
+        context=ProviderDiscoveryContext(
+            generation=9,
+            resources=NoneBotPluginToolResources((_spec("unregistered"),)),
+        ),
+    )
     with pytest.raises(ValueError, match="未注册"):
-        await provider_registry.discover(9, (builtin_plan,))
+        await provider_registry.discover(9, (unregistered_plan,))
     with pytest.raises(TypeError, match="typed plan"):
         await provider_registry.discover(9, (object(),))  # type: ignore[arg-type]
 
@@ -1292,9 +1452,10 @@ async def test_provider_batch_and_catalog_reject_identity_or_generation_drift() 
     file_batch = await _file_plan(5).discover_batch()
     generated_batch = await _generated_plan(5).discover_batch()
     mcp_batch = await _mcp_plan(5).discover_batch()
+    builtin_batch = await _builtin_plan(5).discover_batch()
     catalog = provider_registry.build_snapshot(
         5,
-        (batch, file_batch, generated_batch, mcp_batch),
+        (batch, file_batch, generated_batch, mcp_batch, builtin_batch),
     )
 
     assert isinstance(batch, ProviderDiscoveryBatch)

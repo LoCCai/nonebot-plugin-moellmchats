@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.builtin_tools import WEB_SEARCH_TOOL_SPEC
 from nonebot_plugin_moellmchats.generated_tool_lifecycle import LifecycleState
 from nonebot_plugin_moellmchats.generated_tool_runner import generated_tool_runner
 from nonebot_plugin_moellmchats.runtime_reload import (
@@ -22,6 +23,7 @@ from nonebot_plugin_moellmchats.runtime_snapshot import mutable_value, runtime_s
 from nonebot_plugin_moellmchats.tool_contracts import ToolResult, ToolSpec
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot, tool_manager
 from nonebot_plugin_moellmchats.tool_providers import (
+    builtin_tool_provider,
     mcp_tool_provider,
     registered_tool_provider,
 )
@@ -163,7 +165,7 @@ def test_tool_manager_forwards_generation_to_both_artifact_loaders(
 
 
 @pytest.mark.asyncio
-async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover(
+async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reload_module = importlib.import_module("nonebot_plugin_moellmchats.runtime_reload")
@@ -301,6 +303,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     assert provider_catalog is not None
     assert provider_catalog.schema_version == 2
     assert tuple(provider_catalog.registrations) == (
+        "builtin",
         "custom-file",
         "generated",
         "mcp",
@@ -310,6 +313,11 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     assert provider_catalog.tools_for_provider("registered")[0].spec is registered
     assert provider_catalog.tools_for_provider("custom-file") == ()
     assert provider_catalog.tools_for_provider("generated") == ()
+    builtin_record = provider_catalog.tools[WEB_SEARCH_TOOL_SPEC.name]
+    assert builtin_record.provider_id == "builtin"
+    assert builtin_record.spec is WEB_SEARCH_TOOL_SPEC
+    assert builtin_record.trust.value == "trusted"
+    assert WEB_SEARCH_TOOL_SPEC.name not in snapshot.custom_tools
     mcp_entry = snapshot.custom_tools[mcp_spec.name]
     mcp_record = provider_catalog.tools[mcp_spec.name]
     assert mcp_record.provider_id == "mcp"
@@ -322,6 +330,7 @@ async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover
     assert not hasattr(candidate.snapshot, "discovered_tools")
     assert not hasattr(registered_tool_provider, "execute")
     assert not hasattr(mcp_tool_provider, "execute")
+    assert not hasattr(builtin_tool_provider, "execute")
     assert runtime_snapshots.current() is previous
 
     original_discover = registered_tool_provider.discover
@@ -484,6 +493,54 @@ async def test_mcp_tool_collision_retains_previous_generation(monkeypatch) -> No
     monkeypatch.setattr(mcp_manager, "discover_tools", collide)
     with pytest.raises(ValueError, match="MCP 工具名"):
         await runtime_reloader.reload("test-mcp-collision")
+    assert runtime_snapshots.current() is previous
+
+
+@pytest.mark.asyncio
+async def test_builtin_tool_collision_retains_previous_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import runtime_reload as reload_module
+
+    await runtime_reloader.reload("test-builtin-collision-baseline")
+    previous = runtime_snapshots.current()
+    collision = replace(
+        WEB_SEARCH_TOOL_SPEC,
+        handler=lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        reload_module.tool_registry,
+        "snapshot",
+        lambda: {collision.name: collision},
+    )
+
+    with pytest.raises(ValueError, match="provider 工具名冲突"):
+        await runtime_reloader.reload("test-builtin-registered-collision")
+    assert runtime_snapshots.current() is previous
+
+
+@pytest.mark.asyncio
+async def test_builtin_plugin_collision_retains_previous_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import runtime_reload as reload_module
+
+    await runtime_reloader.reload("test-builtin-plugin-collision-baseline")
+    previous = runtime_snapshots.current()
+    monkeypatch.setattr(
+        reload_module.tool_manager,
+        "build_plugin_info",
+        lambda: {
+            WEB_SEARCH_TOOL_SPEC.name: {
+                "name": "collision",
+                "description": "collision",
+                "usage": "collision",
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="内置工具名与 NoneBot 插件冲突"):
+        await runtime_reloader.reload("test-builtin-plugin-collision")
     assert runtime_snapshots.current() is previous
 
 

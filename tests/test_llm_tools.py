@@ -217,6 +217,36 @@ async def test_missing_required_argument_becomes_tool_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_search_legacy_branch_uses_canonical_builtin_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import search as search_module
+
+    calls = []
+
+    class FakeSearch:
+        def __init__(self, query, tool_snapshot=None) -> None:
+            calls.append((query, tool_snapshot))
+
+        async def get_search(self) -> str:
+            return "external observation"
+
+    monkeypatch.setattr(search_module, "Search", FakeSearch)
+    harness = Harness({})
+
+    messages = await harness._execute_tools(
+        [_call(1, "web_search", '{"query":"latest"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert calls == [("latest", harness.tool_snapshot)]
+    assert harness.bot.sent == ["正在搜索: latest..."]
+    assert "external observation" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_hallucinated_superuser_tool_is_rejected_without_breaking_reply() -> None:
     executions = 0
 

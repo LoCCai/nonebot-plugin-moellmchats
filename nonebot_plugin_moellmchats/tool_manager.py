@@ -9,6 +9,7 @@ import nonebot
 from nonebot.log import logger
 import ujson as json
 
+from .builtin_tools import WEB_SEARCH_TOOL_SPEC, builtin_tool_specs
 from .custom_tool_loader import load_file_tools
 from .generated_tools import generated_tool_store
 from .mcp_manager import mcp_manager
@@ -24,6 +25,7 @@ from .tool_providers import (
     DiscoveredTool,
     ProviderCatalogSnapshot,
     ProviderRegistration,
+    builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
@@ -121,6 +123,18 @@ class ToolSnapshot:
                 self.custom_tools,
                 self.tool_dependencies,
                 self.mcp_tool_names,
+                generation=self.generation,
+                allow_additional_dependencies=True,
+            )
+        builtin = provider_catalog.registrations.get("builtin")
+        if builtin is not None:
+            expected = ProviderRegistration.from_provider(builtin_tool_provider)
+            if builtin != expected:
+                raise ValueError("ToolSnapshot builtin provider identity 不一致")
+            builtin_tool_provider.validate_legacy_parity(
+                provider_catalog.tools_for_provider("builtin"),
+                builtin_tool_specs(),
+                self.tool_dependencies,
                 generation=self.generation,
                 allow_additional_dependencies=True,
             )
@@ -512,7 +526,9 @@ async def extract_webpage(
 
     @staticmethod
     def validate_dependencies(dependencies: dict, known_tools: set[str]) -> None:
-        known = set(known_tools) | {"web_search"}
+        known = set(known_tools) | {
+            spec.name for spec in builtin_tool_specs()
+        }
         for trigger, items in dependencies.items():
             if trigger not in known:
                 # custom_plugin_info.json may describe an optional plugin that is
@@ -693,10 +709,11 @@ async def extract_webpage(
 
         # 3. 联网搜索
         if model_selector.get_web_search() and not tool_manager.is_tool_blacklisted(
-            "web_search"
+            WEB_SEARCH_TOOL_SPEC.name
         ):
             catalog.append(
-                "- web_search | 联网搜索 | 回答实时问题、新闻、天气与近期信息"
+                f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | "
+                "回答实时问题、新闻、天气与近期信息"
             )
 
         return (
@@ -755,7 +772,7 @@ async def extract_webpage(
         if not tool_name:
             return False, "工具标识不能为空"
 
-        if tool_name == "web_search":
+        if tool_name == WEB_SEARCH_TOOL_SPEC.name:
             return True, "联网搜索工具"
 
         loaded_plugin_names = {
@@ -963,23 +980,18 @@ async def extract_webpage(
                     }
                 )
 
-        if include_search and not tool_manager.is_tool_blacklisted("web_search"):
+        if include_search and not tool_manager.is_tool_blacklisted(
+            WEB_SEARCH_TOOL_SPEC.name
+        ):
             tools.append(
                 {
                     "type": "function",
                     "function": {
-                        "name": "web_search",
-                        "description": "进行互联网搜索以获取最新信息或解答未知问题。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "搜索关键词或短语",
-                                }
-                            },
-                            "required": ["query"],
-                        },
+                        "name": WEB_SEARCH_TOOL_SPEC.name,
+                        "description": WEB_SEARCH_TOOL_SPEC.description,
+                        "parameters": mutable_value(
+                            WEB_SEARCH_TOOL_SPEC.parameters
+                        ),
                     },
                 }
             )

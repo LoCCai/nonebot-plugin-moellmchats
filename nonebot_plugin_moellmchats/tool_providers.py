@@ -1387,6 +1387,111 @@ class MCPToolProvider:
                 raise ValueError(f"mcp legacy 工具 {name} dependencies 不一致")
 
 
+@dataclass(frozen=True)
+class BuiltinToolProvider:
+    """Shadow code-defined builtin adapters without trusting external results."""
+
+    provider_id: str = field(default="builtin", init=False)
+    source: ToolSource = field(default=ToolSource.BUILTIN, init=False)
+    trust: ToolTrustLevel = field(default=ToolTrustLevel.TRUSTED, init=False)
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[BuiltinToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if (
+            not isinstance(context, ProviderDiscoveryContext)
+            or type(context.resources) is not BuiltinToolResources
+        ):
+            raise TypeError("BuiltinToolProvider 只接受 BuiltinToolResources")
+        return tuple(
+            DiscoveredTool(
+                provider_id=self.provider_id,
+                source=self.source,
+                trust=self.trust,
+                generation=context.generation,
+                spec=spec,
+            )
+            for spec in sorted(
+                context.resources.specs,
+                key=lambda item: item.name,
+            )
+        )
+
+    def validate_legacy_parity(
+        self,
+        discovered: tuple[DiscoveredTool, ...],
+        legacy_specs: tuple[ToolSpec, ...],
+        legacy_dependencies: Mapping[str, object],
+        *,
+        generation: int,
+        allow_additional_dependencies: bool = False,
+    ) -> None:
+        """Fail closed unless the code-defined branch and catalog are exact."""
+
+        _require_generation(generation)
+        if type(allow_additional_dependencies) is not bool:
+            raise TypeError("allow_additional_dependencies 必须是 bool")
+        if not isinstance(discovered, tuple) or not all(
+            isinstance(item, DiscoveredTool) for item in discovered
+        ):
+            raise TypeError("builtin discovery 必须是 DiscoveredTool 元组")
+        if not isinstance(legacy_specs, tuple) or not all(
+            isinstance(spec, ToolSpec) for spec in legacy_specs
+        ):
+            raise TypeError("builtin legacy specs 必须是 ToolSpec 元组")
+        if not isinstance(legacy_dependencies, Mapping):
+            raise TypeError("builtin legacy dependencies 必须是映射")
+
+        expected: dict[str, ToolSpec] = {}
+        for item in discovered:
+            if (
+                item.provider_id != self.provider_id
+                or item.source is not self.source
+                or item.trust is not self.trust
+                or item.artifact is not None
+            ):
+                raise ValueError("builtin discovery 来源身份不一致")
+            if item.generation != generation:
+                raise ValueError("builtin discovery generation 不一致")
+            if item.spec.name in expected:
+                raise ValueError("builtin discovery 不得包含重名工具")
+            expected[item.spec.name] = item.spec
+
+        actual: dict[str, ToolSpec] = {}
+        for spec in legacy_specs:
+            if spec.name in actual:
+                raise ValueError("builtin legacy specs 不得包含重名工具")
+            actual[spec.name] = spec
+        expected_names = set(expected)
+        actual_names = set(actual)
+        if actual_names != expected_names:
+            raise ValueError(
+                "builtin legacy 工具集合不一致: "
+                f"missing={sorted(expected_names - actual_names)}, "
+                f"extra={sorted(actual_names - expected_names)}"
+            )
+
+        for name, spec in expected.items():
+            if actual[name] is not spec:
+                raise ValueError(f"builtin legacy 工具 {name} ToolSpec 不一致")
+            dependencies = legacy_dependencies.get(name, set())
+            if not isinstance(dependencies, AbstractSet) or not all(
+                isinstance(item, str) for item in dependencies
+            ):
+                raise ValueError(f"builtin legacy 工具 {name} dependencies 非法")
+            expected_dependencies = set(spec.dependencies)
+            dependencies_match = (
+                expected_dependencies <= dependencies
+                if allow_additional_dependencies
+                else expected_dependencies == dependencies
+            )
+            if not dependencies_match:
+                raise ValueError(
+                    f"builtin legacy 工具 {name} dependencies 不一致"
+                )
+
+
 registered_tool_provider = RegisteredToolProvider()
 _registered_tool_provider_contract: ToolProvider[RegisteredToolResources] = registered_tool_provider
 file_tool_provider = FileToolProvider()
@@ -1395,11 +1500,14 @@ generated_tool_provider = GeneratedToolProvider()
 _generated_tool_provider_contract: ToolProvider[GeneratedToolResources] = generated_tool_provider
 mcp_tool_provider = MCPToolProvider()
 _mcp_tool_provider_contract: ToolProvider[MCPToolResources] = mcp_tool_provider
+builtin_tool_provider = BuiltinToolProvider()
+_builtin_tool_provider_contract: ToolProvider[BuiltinToolResources] = builtin_tool_provider
 provider_registry = ProviderRegistry(
     (
         ProviderRegistration.from_provider(registered_tool_provider),
         ProviderRegistration.from_provider(file_tool_provider),
         ProviderRegistration.from_provider(generated_tool_provider),
         ProviderRegistration.from_provider(mcp_tool_provider),
+        ProviderRegistration.from_provider(builtin_tool_provider),
     )
 )

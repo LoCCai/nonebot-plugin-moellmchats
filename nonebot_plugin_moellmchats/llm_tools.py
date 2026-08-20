@@ -1,15 +1,17 @@
 from collections import Counter
+from collections.abc import Mapping
 import traceback
+from typing import Any
 
 from nonebot.log import logger
 import ujson as json
 
+from .builtin_tools import WEB_SEARCH_TOOL_SPEC
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .event_simulator import event_simulator
 from .pending_actions import PendingActionError, pending_action_store
 from .runtime_metrics import runtime_metrics
-from .search import Search
 from .tool_contracts import (
     ToolEffect,
     validate_tool_arguments,
@@ -25,7 +27,8 @@ from .utils import parse_emotion
 class LlmToolsMixin:
     @staticmethod
     def _validate_tool_arguments(
-        arguments: object, parameters: dict | None
+        arguments: object,
+        parameters: Mapping[str, Any] | None,
     ) -> str | None:
         return validate_tool_arguments(arguments, parameters)
 
@@ -89,11 +92,8 @@ class LlmToolsMixin:
                 argument_error = f"工具参数不是有效 JSON: {error}"
             else:
                 parameters = None
-                if func_name == "web_search":
-                    parameters = {
-                        "properties": {"query": {"type": "string"}},
-                        "required": ["query"],
-                    }
+                if func_name == WEB_SEARCH_TOOL_SPEC.name:
+                    parameters = WEB_SEARCH_TOOL_SPEC.parameters
                 elif func_name in self.tool_snapshot.custom_tools:
                     parameters = self.tool_snapshot.custom_tools[func_name].get(
                         "parameters"
@@ -131,7 +131,7 @@ class LlmToolsMixin:
                 continue
 
             tool_result = "执行成功"
-            if func_name == "web_search":
+            if func_name == WEB_SEARCH_TOOL_SPEC.name:
                 query = args.get("query", "")
                 if text_to_send:
                     await self.send_emotion_message(text_to_send)
@@ -142,9 +142,10 @@ class LlmToolsMixin:
                     async with timeout_scope(
                         config_parser.get_config("tool_timeout_seconds", 30)
                     ):
-                        search_res = await Search(
-                            query, tool_snapshot=self.tool_snapshot
-                        ).get_search()
+                        search_res = await WEB_SEARCH_TOOL_SPEC.handler(
+                            query=query,
+                            tool_snapshot=self.tool_snapshot,
+                        )
                 except TimeoutError:
                     runtime_metrics.tool_timeouts += 1
                     search_res = "联网搜索超时"
