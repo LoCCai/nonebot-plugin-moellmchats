@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05 与 D-05a 已完成精确 HEAD 双 run gate；D-05a BuiltinToolProvider 实现提交 `a09be4836318ddfcf7d72f7b2b8232fd67c6906c` 已由精确 HEAD `7a10d2ad575674fad063ffd3971e786bbb996854` 完成远端门禁，D-05b 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05 与 D-05a 已完成精确 HEAD 双 run gate；D-05b NoneBotPluginProvider 实现提交 `51686d0bd28f64f7cae7469db330033dc39b9109` 已完成本地门禁，远端 gate 待完成，D-06 未启动。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -530,9 +530,15 @@ timeout
 
 ## D-05b NoneBotPluginProvider
 
-状态：🟢 D-05a 依赖已解除；下一实施项。
+**状态：🟡 实现提交 `51686d0bd28f64f7cae7469db330033dc39b9109` 与本地门禁完成；精确 HEAD 远端 gate 待完成；未部署**
 
 将受控伪事件适配器纳入统一目录；显式工具接口未覆盖的遗留插件仍保持当前权限语义与有界兼容通道。
+
+实现落点：新增 `nonebot_plugin_tools.py` 与 frozen `NoneBotPluginProvider`，稳定身份为 `nonebot-plugin / NONEBOT_PLUGIN / REVIEWED`。每个 runtime candidate 从同一次 legacy `plugin_info` 构建 canonical `ToolSpec` 并保留精确 identity；默认权限继续为 `user`，遗留插件命令的 effect 保守标记为 `MUTATING`。Provider 只消费事务传入的 `NoneBotPluginToolResources`，不执行插件、不读 I/O、无 artifact。Registry 现包含 Registered/File/Generated/MCP/Builtin/NoneBot plugin 六个 Provider，并在 legacy merge 前集中拒绝跨来源重名。
+
+等价门禁：candidate merge 与最终 `ToolSnapshot` 双重验证插件工具集合、精确 `ToolSpec` identity、description、permission/effect、generation、source/trust、artifact absence 与 Provider 声明 dependencies。canonical Schema 同时供 `build_tool_schema()` 和参数校验使用；canonical handler 仍进入已有 admission、队列、超时、结果与图片上限约束的 `EventSimulator`。本阶段 legacy `llm_tools` consumer 仍直接调用原 `dispatch_event()` 分支，未因 `MUTATING` 标记新增确认流程；categorize、LLM payload、pending action、search、管理命令和 MCP sidecar 均未切换，也未修改 `ToolSnapshot` / `RuntimeSnapshot` dataclass schema。
+
+本地门禁：D-05b 定向 `102 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4）与 3.13.13 普通全量各 `411 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，JUnit 为 0 failure / 0 error / 0 skip；Ruff 0.16.2 通过，Pyright 对 `nonebot_plugin_tools.py` / `tool_providers.py` 为 `0 errors, 0 warnings`。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `6a11e634ce272701d8d84441386c97dbd3729230397b055e00cccf91cea9470d`、sdist SHA256 `98200816ed260b6eb774894f4f34929c1d69a3edf747f51d5defcfde32fa1cee`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
 
 ---
 
