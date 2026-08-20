@@ -26,6 +26,8 @@ from .tool_providers import (
     DiscoveredTool,
     ProviderCatalogSnapshot,
     ProviderRegistration,
+    ToolSource,
+    ToolTrustOperation,
     builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
@@ -42,6 +44,21 @@ _GeneratedToolCandidate = tuple[
     Mapping[str, Mapping[str, Any]],
     Mapping[str, AbstractSet[str]],
 ]
+
+_CATEGORIZE_PROVIDER_IDS = frozenset(
+    {
+        "registered",
+        "custom-file",
+        "generated",
+        "mcp",
+        "builtin",
+        "nonebot-plugin",
+    }
+)
+
+
+class ProviderConsumerParityError(RuntimeError):
+    """A cut-over Provider view no longer matches its legacy rollback view."""
 
 
 @dataclass(frozen=True)
@@ -196,13 +213,48 @@ class ToolSnapshot:
             is_superuser=is_superuser,
         )
 
-    def get_brief_catalog(self, *, is_superuser: bool = False) -> str:
-        return ToolManager.build_brief_catalog(
+    def get_brief_catalog(
+        self,
+        *,
+        is_superuser: bool = False,
+        provider_cutover: bool | None = None,
+    ) -> str:
+        legacy_catalog = ToolManager.build_brief_catalog(
             plugin_info=self.plugin_info,
             custom_tools=self.custom_tools,
             mcp_tool_names=self.mcp_tool_names,
             is_superuser=is_superuser,
         )
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_categorize_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("categorize Provider cutover 开关必须是布尔值")
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not provider_cutover
+            or provider_catalog.schema_version < 3
+            or not _CATEGORIZE_PROVIDER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return legacy_catalog
+        catalog = ToolManager.build_provider_brief_catalog(
+            provider_catalog=provider_catalog,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=is_superuser,
+        )
+        if catalog != legacy_catalog:
+            raise ProviderConsumerParityError(
+                "categorize Provider catalog 与 legacy rollback view 不一致"
+            )
+        return catalog
 
 
 class ToolManager:
@@ -738,12 +790,7 @@ async def extract_webpage(
         """
         if not self.plugin_info:
             self.refresh_plugins()
-        return self.build_brief_catalog(
-            plugin_info=self.plugin_info,
-            custom_tools=self.custom_tools,
-            mcp_tool_names=self.mcp_tool_names,
-            is_superuser=is_superuser,
-        )
+        return self.snapshot().get_brief_catalog(is_superuser=is_superuser)
 
     @staticmethod
     def build_brief_catalog(
@@ -794,6 +841,103 @@ async def extract_webpage(
                 f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | "
                 "回答实时问题、新闻、天气与近期信息"
             )
+
+        return (
+            "\n".join(catalog)
+            if catalog
+            else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
+        )
+
+    @staticmethod
+    def build_provider_brief_catalog(
+        *,
+        provider_catalog: ProviderCatalogSnapshot,
+        plugin_info: Mapping[str, Mapping[str, Any]],
+        custom_tools: Mapping[str, Mapping[str, Any]],
+        is_superuser: bool = False,
+    ) -> str:
+        """Build the categorize view from canonical Provider identities.
+
+        Legacy mappings are retained only for stable presentation order and
+        historical NoneBot display fields. Authorization, source identity,
+        permission, and non-NoneBot descriptions come from the
+        generation-bound Provider catalog.
+        """
+
+        if not isinstance(provider_catalog, ProviderCatalogSnapshot):
+            raise TypeError("categorize provider_catalog 非法")
+        if type(is_superuser) is not bool:
+            raise TypeError("categorize is_superuser 必须是布尔值")
+        catalog: list[str] = []
+
+        if model_selector.get_use_tools():
+            for name, info in plugin_info.items():
+                item = provider_catalog.tools.get(name)
+                if item is None or item.source is not ToolSource.NONEBOT_PLUGIN:
+                    raise ProviderConsumerParityError(
+                        f"categorize NoneBot Provider identity 缺失: {name}"
+                    )
+                if tool_manager.is_tool_blacklisted(name):
+                    continue
+                decision = provider_catalog.decide_trust(
+                    name,
+                    ToolTrustOperation.SELECTION,
+                    is_superuser=is_superuser,
+                )
+                if not decision.allowed:
+                    continue
+                plugin_name = info.get("name") or name
+                description = info.get("description") or "无描述"
+                catalog.append(
+                    f"- {name} | {plugin_name} | {str(description)[:160]}"
+                )
+
+            for name in custom_tools:
+                item = provider_catalog.tools.get(name)
+                if item is None or item.source in {
+                    ToolSource.BUILTIN,
+                    ToolSource.NONEBOT_PLUGIN,
+                }:
+                    raise ProviderConsumerParityError(
+                        f"categorize Tool Provider identity 缺失: {name}"
+                    )
+                if tool_manager.is_tool_blacklisted(name):
+                    continue
+                decision = provider_catalog.decide_trust(
+                    name,
+                    ToolTrustOperation.SELECTION,
+                    is_superuser=is_superuser,
+                )
+                if not decision.allowed:
+                    continue
+                tool_type = (
+                    "MCP工具"
+                    if item.source is ToolSource.MCP
+                    else "自定义函数"
+                )
+                catalog.append(
+                    f"- {name} | {tool_type} | "
+                    f"{item.spec.description[:160]}"
+                )
+
+        if model_selector.get_web_search() and not tool_manager.is_tool_blacklisted(
+            WEB_SEARCH_TOOL_SPEC.name
+        ):
+            item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)
+            if item is None or item.source is not ToolSource.BUILTIN:
+                raise ProviderConsumerParityError(
+                    "categorize builtin web_search Provider identity 缺失"
+                )
+            decision = provider_catalog.decide_trust(
+                WEB_SEARCH_TOOL_SPEC.name,
+                ToolTrustOperation.SELECTION,
+                is_superuser=is_superuser,
+            )
+            if decision.allowed:
+                catalog.append(
+                    f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | "
+                    "回答实时问题、新闻、天气与近期信息"
+                )
 
         return (
             "\n".join(catalog)

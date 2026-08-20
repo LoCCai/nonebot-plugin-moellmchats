@@ -51,6 +51,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "member_lookup_timeout_seconds": 2,
     "runtime_watch_enabled": True,
     "runtime_watch_interval_seconds": 2,
+    "provider_catalog_categorize_enabled": True,
     "user_history_expire_seconds": 600,
     "cd_seconds": 120,
     "search_api": "your api",
@@ -183,6 +184,10 @@ class ConfigParser:
             isinstance(item, str) and item.strip() for item in full_event_plugins
         ):
             raise ValueError("config.json: legacy_full_event_plugins 必须是字符串数组")
+        if type(candidate.get("provider_catalog_categorize_enabled")) is not bool:
+            raise ValueError(
+                "config.json: provider_catalog_categorize_enabled 必须是布尔值"
+            )
 
     def commit_candidate(self, candidate: Mapping[str, Any]) -> None:
         self._config = MappingProxyType(deepcopy(dict(candidate)))

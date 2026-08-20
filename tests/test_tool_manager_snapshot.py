@@ -8,6 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
+from nonebot_plugin_moellmchats.config import (
+    DEFAULT_CONFIG,
+    ConfigParser,
+    config_parser,
+)
 from nonebot_plugin_moellmchats.generated_tool_lifecycle import (
     LifecycleState,
     VersionRecord,
@@ -30,6 +35,8 @@ from nonebot_plugin_moellmchats.tool_contracts import (
     ToolSpec,
 )
 from nonebot_plugin_moellmchats.tool_manager import (
+    ProviderConsumerParityError,
+    ToolManager,
     ToolSnapshot,
     model_selector,
     tool_manager,
@@ -1163,6 +1170,23 @@ def test_tool_manager_snapshot_bootstrap_falls_back_to_detached_mirrors(
         snapshot.custom_tools["tool"]["description"] = "tampered"
 
 
+def test_tool_manager_brief_catalog_delegates_to_current_snapshot(
+    monkeypatch,
+) -> None:
+    calls: list[bool] = []
+
+    class AuthoritativeSnapshot:
+        def get_brief_catalog(self, *, is_superuser: bool = False) -> str:
+            calls.append(is_superuser)
+            return "provider catalog"
+
+    monkeypatch.setattr(tool_manager, "plugin_info", {"loaded": {}})
+    monkeypatch.setattr(tool_manager, "snapshot", AuthoritativeSnapshot)
+
+    assert tool_manager.get_brief_catalog(is_superuser=True) == "provider catalog"
+    assert calls == [True]
+
+
 def test_real_frozen_snapshot_filters_permissions_and_thaws_model_schema(
     monkeypatch,
 ) -> None:
@@ -1203,6 +1227,422 @@ def test_real_frozen_snapshot_filters_permissions_and_thaws_model_schema(
         ["value"]["type"]
         == "string"
     )
+
+
+def test_categorize_provider_cutover_matches_legacy_and_filters_trust(
+    monkeypatch,
+) -> None:
+    user_spec = ToolSpec(
+        name="user_tool",
+        description="user tool",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    admin_spec = ToolSpec(
+        name="admin_tool",
+        description="admin tool",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        permission="superuser",
+        policy=ToolPolicy.configured(),
+    )
+    catalog = _registered_catalog(
+        (user_spec, admin_spec),
+        generation=41,
+    )
+    snapshot = ToolSnapshot(
+        generation=41,
+        plugin_info={},
+        custom_tools={
+            user_spec.name: {
+                **user_spec.as_legacy_schema(),
+                "source": "registered",
+            },
+            admin_spec.name: {
+                **admin_spec.as_legacy_schema(),
+                "source": "registered",
+            },
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: True)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    user_legacy = snapshot.get_brief_catalog(
+        is_superuser=False,
+        provider_cutover=False,
+    )
+    user_provider = snapshot.get_brief_catalog(
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert user_provider == user_legacy
+    assert "user_tool" in user_provider
+    assert "admin_tool" not in user_provider
+    assert "web_search" in user_provider
+
+    admin_legacy = snapshot.get_brief_catalog(
+        is_superuser=True,
+        provider_cutover=False,
+    )
+    admin_provider = snapshot.get_brief_catalog(
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert admin_provider == admin_legacy
+    assert "admin_tool" in admin_provider
+
+
+def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
+    monkeypatch,
+) -> None:
+    generation = 45
+    registered_spec = ToolSpec(
+        name="catalog_registered",
+        description="registered description",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    file_spec = ToolSpec(
+        name="catalog_file",
+        description="file description",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    generated_spec = ToolSpec(
+        name="catalog_generated",
+        description="generated description",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    mcp_spec = ToolSpec(
+        name="mcp__catalog__echo",
+        description="mcp description",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    plugin_info, plugin_specs = build_nonebot_plugin_candidate(
+        {
+            "catalog_plugin": {
+                "name": "Catalog Plugin",
+                "description": "plugin description",
+                "usage": "/catalog",
+            }
+        }
+    )
+    file_artifact = _file_artifact(file_spec, generation=generation)
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=generation,
+    )
+    base = _registered_catalog((registered_spec,), generation=generation)
+    nonebot_registration = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    nonebot_record = DiscoveredTool(
+        provider_id=nonebot_registration.provider_id,
+        source=nonebot_registration.source,
+        trust=nonebot_registration.trust,
+        generation=generation,
+        spec=plugin_specs[0],
+    )
+    catalog = ProviderCatalogSnapshot(
+        generation=generation,
+        registrations=base.registrations,
+        tools={
+            **base.tools,
+            file_spec.name: _file_catalog(
+                file_artifact,
+                generation=generation,
+            ).tools[file_spec.name],
+            generated_spec.name: _generated_catalog(
+                generated_artifact,
+                generation=generation,
+            ).tools[generated_spec.name],
+            mcp_spec.name: _mcp_catalog(
+                mcp_spec,
+                generation=generation,
+            ).tools[mcp_spec.name],
+            plugin_specs[0].name: nonebot_record,
+        },
+    )
+    snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info=plugin_info,
+        custom_tools={
+            registered_spec.name: {
+                **registered_spec.as_legacy_schema(),
+                "source": "registered",
+            },
+            file_spec.name: _file_legacy_schema(file_artifact),
+            generated_spec.name: _generated_legacy_schema(
+                generated_artifact
+            ),
+            mcp_spec.name: _mcp_legacy_schema(mcp_spec),
+        },
+        tool_dependencies={},
+        mcp_tool_names={mcp_spec.name},
+        provider_catalog=catalog,
+    )
+    feature_flags = {"tools": True, "search": True}
+    blacklist: list[str] = []
+    monkeypatch.setattr(
+        model_selector,
+        "get_use_tools",
+        lambda: feature_flags["tools"],
+    )
+    monkeypatch.setattr(
+        model_selector,
+        "get_web_search",
+        lambda: feature_flags["search"],
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: blacklist)
+
+    expected = "\n".join(
+        (
+            "- catalog_plugin | Catalog Plugin | plugin description",
+            "- catalog_registered | 自定义函数 | registered description",
+            "- catalog_file | 自定义函数 | file description",
+            "- catalog_generated | 自定义函数 | generated description",
+            "- mcp__catalog__echo | MCP工具 | mcp description",
+            "- web_search | 联网搜索 | 回答实时问题、新闻、天气与近期信息",
+        )
+    )
+    assert snapshot.get_brief_catalog(provider_cutover=True) == expected
+    assert snapshot.get_brief_catalog(provider_cutover=False) == expected
+
+    blacklist.extend(
+        (
+            "catalog_plugin",
+            "catalog_file",
+            "mcp__catalog__*",
+            "web_search",
+        )
+    )
+    filtered = "\n".join(
+        (
+            "- catalog_registered | 自定义函数 | registered description",
+            "- catalog_generated | 自定义函数 | generated description",
+        )
+    )
+    assert snapshot.get_brief_catalog(provider_cutover=True) == filtered
+    assert snapshot.get_brief_catalog(provider_cutover=False) == filtered
+
+    blacklist.clear()
+    feature_flags["tools"] = False
+    assert snapshot.get_brief_catalog(provider_cutover=True) == (
+        "- web_search | 联网搜索 | 回答实时问题、新闻、天气与近期信息"
+    )
+    feature_flags["search"] = False
+    assert snapshot.get_brief_catalog(provider_cutover=True) == (
+        "当前工具调用与联网功能均已关闭，无需返回任何插件。"
+    )
+
+
+def test_categorize_provider_cutover_handles_empty_and_legacy_snapshots(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+    complete_empty = ToolSnapshot(
+        generation=46,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((), generation=46),
+    )
+    assert complete_empty.get_brief_catalog(provider_cutover=True) == (
+        "当前工具调用与联网功能均已关闭，无需返回任何插件。"
+    )
+
+    legacy_spec = ToolSpec(
+        name="legacy_catalog",
+        description="legacy catalog",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    legacy_snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={legacy_spec.name: legacy_spec.as_legacy_schema()},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_brief_catalog",
+        lambda **_kwargs: pytest.fail("旧快照不应进入 Provider consumer"),
+    )
+    assert legacy_snapshot.get_brief_catalog(provider_cutover=True) == (
+        "- legacy_catalog | 自定义函数 | legacy catalog"
+    )
+
+
+def test_categorize_provider_cutover_fails_closed_on_parity_drift(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="provider_parity",
+        description="provider parity",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=42,
+        plugin_info={},
+        custom_tools={
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=42),
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_brief_catalog",
+        lambda **_kwargs: "drifted provider catalog",
+    )
+
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.get_brief_catalog(provider_cutover=True)
+    assert (
+        snapshot.get_brief_catalog(provider_cutover=False)
+        == "- provider_parity | 自定义函数 | provider parity"
+    )
+
+
+def test_categorize_provider_cutover_is_enabled_by_default(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="provider_default",
+        description="provider default",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    catalog = _registered_catalog((spec,), generation=43)
+    snapshot = ToolSnapshot(
+        generation=43,
+        plugin_info={},
+        custom_tools={
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    def get_cutover_config(key: str, default=None):
+        assert key == "provider_catalog_categorize_enabled"
+        assert default is True
+        return DEFAULT_CONFIG[key]
+
+    provider_calls = []
+    original_builder = ToolManager.build_provider_brief_catalog
+
+    def track_provider_call(**kwargs):
+        provider_calls.append(kwargs["provider_catalog"])
+        return original_builder(**kwargs)
+
+    monkeypatch.setattr(config_parser, "get_config", get_cutover_config)
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_brief_catalog",
+        track_provider_call,
+    )
+
+    assert snapshot.get_brief_catalog() == (
+        "- provider_default | 自定义函数 | provider default"
+    )
+    assert provider_calls == [catalog]
+
+
+def test_categorize_provider_cutover_config_can_rollback_to_legacy(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="provider_rollback",
+        description="provider rollback",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=44,
+        plugin_info={},
+        custom_tools={
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=44),
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+    monkeypatch.setattr(config_parser, "get_config", lambda *_args: False)
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_brief_catalog",
+        lambda **_kwargs: pytest.fail("rollback 不应读取 Provider consumer"),
+    )
+
+    assert snapshot.get_brief_catalog() == (
+        "- provider_rollback | 自定义函数 | provider rollback"
+    )
+
+
+@pytest.mark.parametrize("flag", [1, "true", [], {}])
+def test_categorize_provider_cutover_rejects_non_boolean_override(flag) -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    with pytest.raises(ValueError, match="cutover"):
+        snapshot.get_brief_catalog(provider_cutover=flag)
+
+
+@pytest.mark.parametrize("flag", [None, 1, "true", [], {}])
+def test_categorize_provider_cutover_config_requires_boolean(flag) -> None:
+    candidate = dict(DEFAULT_CONFIG)
+    candidate["provider_catalog_categorize_enabled"] = flag
+
+    with pytest.raises(
+        ValueError,
+        match="provider_catalog_categorize_enabled",
+    ):
+        ConfigParser._validate(candidate)
 
 
 def test_permission_filter_fails_closed_for_malformed_entries() -> None:
