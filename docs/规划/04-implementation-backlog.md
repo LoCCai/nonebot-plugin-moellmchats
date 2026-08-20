@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b 与 D-06 已完成精确 HEAD 双 run gate；D-07 Capability Policy Merge 实现提交 `c2ca76332b9bfa97fadc7fc8f994b50b7e44dfdd` 已完成本地发布门禁，待 push/PR 双 run 远端 gate，D-08 尚未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06 与 D-07 已完成精确 HEAD 双 run gate；D-07 Capability Policy Merge 实现提交 `c2ca76332b9bfa97fadc7fc8f994b50b7e44dfdd` 已由精确 HEAD `8846acd8334953367bd5ee2aa48844c992d2e9df` 完成远端门禁，D-08 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -571,7 +571,7 @@ external
 
 ## D-07 Capability Policy Merge
 
-**状态：🟡 实现提交 `c2ca76332b9bfa97fadc7fc8f994b50b7e44dfdd` 与本地发布门禁完成；待双 run 远端 gate；未部署**
+**状态：✅ 精确 HEAD `8846acd8334953367bd5ee2aa48844c992d2e9df` 双 run 远端 gate green；未部署**
 
 ```text
 requested
@@ -589,11 +589,13 @@ admin policy
 
 本地门禁：D-07 + Provider/Snapshot/Reload 定向 `238 passed, 1 skipped`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 普通全量各 `442 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，五份 JUnit 均为 0 failure / 0 error，Sandbox 为 0 skip；Ruff 0.16.2 通过，D-07 核心模块定向 Pyright 为 `0 errors, 0 warnings`。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `51b394c59dcc1624444ff4bde2915bf4191f7cfacf8d31361f9605a151e8d844`、sdist SHA256 `c325c0267e9aeb68eef97867f008c827fef8016ed48cb83049c45f219f7c0d1d`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")` 以及 packaged contract v2 / artifact v2 / catalog schema v3 检查全部通过。
 
-远端证据：尚未执行；D-08 在 D-07 精确 HEAD 双 run gate 关闭前保持阻塞。未合并、未发布、未部署。
+远端证据：包含 D-07 的精确 HEAD `8846acd8334953367bd5ee2aa48844c992d2e9df` 对应 push run `32425100008` 与 PR run `32425104856`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 CLEAN。未合并、未发布、未部署。
 
 ---
 
 ## D-08 Consumer Cutover
+
+状态：🟢 D-07 依赖已解除；下一实施项。
 
 按 `categorize → llm_payload → llm_tools → pending action → search → 管理命令` 逐个切换，每个消费端单独保留新旧视图等价回归与可回滚开关。
 
