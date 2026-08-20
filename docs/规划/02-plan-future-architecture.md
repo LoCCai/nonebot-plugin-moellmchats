@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02 与 D-01b 已完成精确 HEAD 远端 gate。D-03 FileToolProvider 实现提交 `72d82f7e3a4ab6fe7b40b538f45ebec817aef889` 已由精确 HEAD `38a2da9cbec25e7dfeb07fb3cdd172a5e13396c9` 的 push run `32405397700` / PR run `32405401518` 完成远端 gate，D-04 依赖解除。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b 与 D-03 已完成精确 HEAD 远端 gate。D-04 GeneratedToolProvider 实现提交 `95a57cfc7abeab59b310ae19a6e7872da0e01136` 已完成本地全门禁，尚待包含实现与状态文档的精确 HEAD 双 CI；D-05 在该远端 gate 前保持阻塞。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -160,6 +160,8 @@ D-02 实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed` 新增 frozen `Regi
 D-01b 实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2` 新增 frozen `ProviderRegistration`、typed `ProviderDiscoveryPlan/Batch`、不可变 `ProviderRegistry` 和 schema version 2 的 `ProviderCatalogSnapshot`。Registry 要求每个已注册 Provider 在候选 generation 中恰好一个 typed plan，统一拒绝缺失、重复、未注册或 identity/generation 漂移的 operation/batch，并在生成 catalog 前集中拒绝跨 Provider 工具重名。`ToolSnapshot` dual-publish legacy 四字段与 `provider_catalog`，构造时再次校验 Registered slice 的工具集合、`ToolSpec`/handler/Schema/source/dependencies 等价；额外 legacy plugin dependency 可保留，但 Registered 声明依赖不得丢失。所有现有 consumer 仍读 legacy 字段，未新增 Provider 执行接口。四版本普通全量各 `368 passed, 1 skipped`，mandatory root Sandbox `40 passed`，fresh build/Twine/checksum 与四组外加载均通过；包含该实现的精确 HEAD `c8a4211560f2f7214b971109c54d817628f843d5` 双 run 远端 gate 已 green，未部署。
 
 D-03 实现提交 `72d82f7e3a4ab6fe7b40b538f45ebec817aef889` 新增 frozen `FileToolProvider`（`custom-file / CUSTOM_FILE / REVIEWED`）并把它加入 Registry。每个 runtime candidate 只运行一次既有文件加载器；`FileToolResources.from_legacy_tools()` 从该次 legacy 结果固定精确 `ToolArtifact`，Provider 只做纯内存 digest/generation/discovery，不重读源码、不重跑 AST Policy、不执行工具。同一 candidate 随后复用于 legacy merge，Provider parity 与最终 `ToolSnapshot` 分别验证工具集合、artifact/source snapshot/digest、精确 `ToolSpec`/handler、schema/source/effect/generation 和 Provider 声明依赖；文件级或 plugin 追加依赖可共存，但声明依赖不得丢失。Registry 在 legacy 合并前集中拒绝 Registered/File 重名。现有 consumer、执行路径、MCP 镜像与 `RuntimeSnapshot` schema 均未切换。四版本普通全量各 `375 passed, 1 skipped`，mandatory root Sandbox `40 passed`，fresh build/Twine/checksum 与四组外加载均通过；包含该实现的精确 HEAD `38a2da9cbec25e7dfeb07fb3cdd172a5e13396c9` 双 run 远端 gate 已 green，未部署。
+
+D-04 实现提交 `95a57cfc7abeab59b310ae19a6e7872da0e01136` 新增 frozen `GeneratedToolProvider`（`generated / GENERATED / UNTRUSTED`）并把它加入 Registry。每个 runtime candidate 只运行一次既有 Generated loader；`GeneratedToolResources.from_legacy_tools()` 将该次结果绑定到事务精确 lifecycle after-state、source override 与 `ToolArtifact`，Provider 只做纯内存验证与 discovery，不重读 live canonical、源码或验证入口，也不执行工具。同一 candidate 随后复用于 legacy merge，Provider parity 与最终 `ToolSnapshot` 分别验证 active bundle 集合、bundle/artifact digest、精确 `ToolSpec`/handler、权限、effect、capability、generation 和声明依赖；Registry 在 legacy 合并前集中拒绝 Registered/File/Generated 跨来源重名。现有 consumer、执行路径、MCP 镜像与 `RuntimeSnapshot` schema 均未切换。D-04 定向 `78 passed`；Python 3.10～3.13 普通全量各 `382 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff、Pyright、fresh build/Twine/checksum 与 Python 3.10/3.12 × wheel/sdist 四组包外加载均通过。尚待精确 HEAD 双 run 远端 gate，未部署。
 
 ---
 
