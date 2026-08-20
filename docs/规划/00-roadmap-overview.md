@@ -8,7 +8,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 的 D-01a 已由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 完成远端门禁；D-02 Registered shadow pilot 实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed` 及规划提交所在精确 HEAD `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 也已完成 push/PR 双 run：四版本普通全量各 `363 passed, 1 skipped`，mandatory root Sandbox `40 passed`，build 与四组 package smoke 全绿。D-02 未切换执行、Snapshot schema 或任何 consumer，未部署；D-01b 依赖现已解除。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 的 D-01a 与 D-02 均已完成精确 HEAD 远端门禁；随后按依赖完成 D-01b ProviderRegistry / ToolSnapshot v2 dual view 本地实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`：四版本普通全量各 `368 passed, 1 skipped`，mandatory root Sandbox `40 passed`，fresh build/Twine/checksum 与四组 package smoke 均通过。v2 目前只覆盖 Registered slice，legacy 字段与全部 consumer 读路径保留；D-01b 仍待精确 HEAD 远端 gate，D-03 在其 green 前不开始，未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

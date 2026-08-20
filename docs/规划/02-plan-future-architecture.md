@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a 已由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 的 push run `32397753076` / PR run `32397766968` 完成远端 gate。D-02 Registered shadow pilot 实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed` 已包含在精确 HEAD `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e`，其 push run `32400562125` / PR run `32400564965` 也已完成远端 gate；D-01b 依赖解除。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a 已由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 完成远端 gate，D-02 也已由精确 HEAD `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 完成远端 gate。D-01b ProviderRegistry / ToolSnapshot v2 dual view 已形成本地实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`，仍待精确 HEAD 远端复验；在其 green 前不开始 D-03。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -156,6 +156,8 @@ class ToolProvider(Protocol[CandidateResourcesT]):
 实施状态（2026-08-20）：D-01a 已在 `nonebot_plugin_moellmchats/tool_providers.py` 定义上述发现契约与六类来源专属 resource record，并由 `tests/test_tool_providers.py` 覆盖深冻结、generation、source/trust、artifact 和 Generated after-state/source override 边界。实现提交 `67638980b8abe3d515ca8146ab68381692f6ac74` 保持 type-only/shadow，包含它的精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 已完成 push/PR 远端 gate。
 
 D-02 实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed` 新增 frozen `RegisteredToolProvider`。runtime candidate 只截取一次 registry snapshot，同一份 `ToolSpec` identity 同时输入无 I/O discovery 与 legacy 构造；完整比较注册工具集合、legacy 字段、handler、精确 `ToolSpec`、parameters、source、dependencies 和 generation，任一偏差均 fail closed。shadow 结果校验后丢弃，当前 `ToolSnapshot` / `RuntimeSnapshot` schema、执行/选择/catalog consumer、MCP 镜像均未改变。四版本定向各 `59 passed`、普通全量各 `363 passed, 1 skipped`，mandatory root Sandbox `40 passed`，fresh build/Twine/checksum 与 Python 3.10/3.12 × wheel/sdist 外加载 reload 均通过；包含该实现的精确 HEAD `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 双 run 远端 gate 已 green，未部署。
+
+D-01b 本地实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2` 新增 frozen `ProviderRegistration`、typed `ProviderDiscoveryPlan/Batch`、不可变 `ProviderRegistry` 和 schema version 2 的 `ProviderCatalogSnapshot`。Registry 要求每个已注册 Provider 在候选 generation 中恰好一个 typed plan，统一拒绝缺失、重复、未注册或 identity/generation 漂移的 operation/batch，并在生成 catalog 前集中拒绝跨 Provider 工具重名。`ToolSnapshot` dual-publish legacy 四字段与 `provider_catalog`，构造时再次校验 Registered slice 的工具集合、`ToolSpec`/handler/Schema/source/dependencies 等价；额外 legacy plugin dependency 可保留，但 Registered 声明依赖不得丢失。所有现有 consumer 仍读 legacy 字段，未新增 Provider 执行接口。四版本普通全量各 `368 passed, 1 skipped`，mandatory root Sandbox `40 passed`，fresh build/Twine/checksum 与四组外加载均通过；当前等待精确远端 gate。
 
 ---
 

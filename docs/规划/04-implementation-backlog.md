@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a 已由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 完成 push/PR 远端 gate；随后按依赖完成的 D-02 实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed` 也已由精确 HEAD `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 完成双 run gate，D-01b 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02 已分别由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` / `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 完成双 run gate；随后按依赖完成 D-01b 本地实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`，其远端 gate green 前不进入 D-03。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -450,13 +450,21 @@ timeout
 
 ## D-01b ProviderRegistry / ToolSnapshot v2 Dual View
 
-**状态：🟢 D-02 依赖已解除；下一实施项**
+**状态：🟡 本地实现已提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`；待精确 HEAD 远端 gate**
 
 在 Registered pilot 证明发现契约后，集中冲突规则并 dual-publish / dual-read。新旧视图必须等价，不允许一次替换 `plugin_info/custom_tools/tool_dependencies/mcp_tool_names`。
+
+实现落点：新增 frozen `ProviderRegistration`、泛型 `ProviderDiscoveryPlan`、不可变 `ProviderDiscoveryBatch`、`ProviderRegistry` 与 schema version 2 的 `ProviderCatalogSnapshot`。Registry 对每个注册 identity 要求同 generation 恰好一个 typed operation/batch，缺失、重复、未注册、source/trust/generation 漂移和跨 Provider 重名均 fail closed。runtime candidate 通过 Registry 构建 Registered catalog，再把它与 legacy 四字段一起写入 `ToolSnapshot`；Snapshot 构造时再次验证 Registered 新旧视图的工具集合、精确 `ToolSpec`、handler、字段、source 与依赖保留。当前 legacy plugin 追加依赖允许共存，但 Provider 声明依赖不能丢失。
+
+兼容边界：旧 `ToolSnapshot(...)` 构造会获得同 generation 的空 v2 catalog；正式 runtime candidate 必须发布含 Registered registration 的 v2 catalog。现有 categorize、LLM payload、执行、pending action、search、管理命令和 MCP 镜像仍只消费 legacy 字段；没有 Provider `execute()` / `reload()`，没有删除 sidecar，也未部署。
+
+本地门禁：Pyright `0 errors, 0 warnings`；D-01b 定向 `64 passed`；Python 3.10～3.13 普通全量各 `368 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
 
 ---
 
 ## D-03 FileToolProvider
+
+**状态：⏸️ 等待 D-01b 精确远端 green**
 
 保留 ToolArtifact 源码快照、AST Policy 和 generation 绑定。
 
