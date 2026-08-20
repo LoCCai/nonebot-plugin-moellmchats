@@ -39,6 +39,7 @@ def _custom_artifact(
     workspace: bool = True,
     host_filesystem: bool = False,
     secrets: bool = False,
+    policy: ToolPolicy | None = None,
 ) -> ToolArtifact:
     async def placeholder(value: str = "") -> str:
         return value
@@ -50,7 +51,7 @@ def _custom_artifact(
         host_filesystem=host_filesystem,
         secrets=secrets,
     )
-    policy = ToolPolicy(requested=capability, admin=capability)
+    policy = policy or ToolPolicy(requested=capability, admin=capability)
     parameters = {
         "type": "object",
         "properties": {},
@@ -439,6 +440,41 @@ async def test_artifact_entry_rejects_unpinned_digest_before_dispatch(
             {},
             {},
             expected_artifact_digest="0" * 64,
+            expected_bundle_digest=None,
+            generation=artifact.generation,
+        )
+    assert invoked is False
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_scoped_v2_capability_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = ToolPolicy.configured(
+        {
+            "network": {"allow": ["api.example"]},
+            "filesystem": {"workspace": True, "host": False},
+        }
+    ).with_detected(ToolCapability(network=True, workspace=False))
+    artifact = _custom_artifact(
+        b"async def snapshot_echo():\n    return 'ok'\n",
+        policy=policy,
+    )
+    invoked = False
+
+    async def invoke_snapshot(*_args, **_kwargs):
+        nonlocal invoked
+        invoked = True
+        return {"ok": True, "text": "unexpected", "images": []}
+
+    runner = GeneratedToolRunner()
+    monkeypatch.setattr(runner, "_invoke_snapshot", invoke_snapshot)
+    with pytest.raises(ValueError, match="尚未迁移"):
+        await runner.execute_artifact(
+            artifact,
+            {},
+            {},
+            expected_artifact_digest=artifact.artifact_digest,
             expected_bundle_digest=None,
             generation=artifact.generation,
         )

@@ -319,7 +319,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     }
     provider_catalog = snapshot.provider_catalog
     assert provider_catalog is not None
-    assert provider_catalog.schema_version == 2
+    assert provider_catalog.schema_version == 3
     assert tuple(provider_catalog.registrations) == (
         "builtin",
         "custom-file",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
+import json
 
 import pytest
 
@@ -15,6 +17,8 @@ from nonebot_plugin_moellmchats.tool_artifacts import (
     source_sha256,
 )
 from nonebot_plugin_moellmchats.tool_contracts import (
+    ToolCapability,
+    ToolCapabilityV2,
     ToolEffect,
     ToolPolicy,
     ToolSpec,
@@ -263,3 +267,211 @@ def test_artifact_survives_runtime_snapshot_freeze_without_mappingproxy_copy() -
     assert mutable["artifact"] is artifact
     with pytest.raises(TypeError):
         artifact.spec.parameters["properties"]["value"]["type"] = "integer"
+
+
+def test_contract_and_artifact_v2_bind_detected_policy_and_digest_version() -> None:
+    source = b"async def echo(value):\n    return value\n"
+    base_spec = _spec()
+    assert base_spec.policy is not None
+    detected_policy = base_spec.policy.with_detected(
+        ToolCapability(workspace=True)
+    )
+    detected_spec = replace(base_spec, policy=detected_policy)
+    base = ToolArtifact(
+        tool_name="echo",
+        handler_name="echo",
+        source=source,
+        source_hash=source_sha256(source),
+        schema=_schema(base_spec),
+        spec=base_spec,
+        contract=ToolContractSnapshot.from_spec(base_spec),
+        source_type="custom_file",
+        generation=9,
+        filename="tools.py",
+    )
+    detected = ToolArtifact(
+        tool_name="echo",
+        handler_name="echo",
+        source=source,
+        source_hash=source_sha256(source),
+        schema=_schema(detected_spec),
+        spec=detected_spec,
+        contract=ToolContractSnapshot.from_spec(detected_spec),
+        source_type="custom_file",
+        generation=9,
+        filename="tools.py",
+    )
+
+    assert base.contract.contract_version == 2
+    assert base.artifact_version == 2
+    assert base.contract.as_dict()["contract_version"] == 2
+    assert detected.contract.detected_capabilities["workspace"] is True
+    assert base.artifact_digest != detected.artifact_digest
+    with pytest.raises(ValueError, match="detected capability"):
+        replace(
+            base.contract,
+            detected_capabilities={
+                "network": True,
+                "process": False,
+                "workspace": False,
+                "host_filesystem": False,
+                "secrets": False,
+            },
+        )
+    with pytest.raises(ValueError, match="版本"):
+        replace(base, artifact_version=1, artifact_digest="")
+
+
+@pytest.mark.parametrize("version", [True, False, 0, 3, 1.5, "2"])
+def test_contract_and_artifact_versions_require_supported_exact_integers(
+    version: object,
+) -> None:
+    source = b"async def echo(value):\n    return value\n"
+    spec = _spec()
+    contract = ToolContractSnapshot.from_spec(spec)
+    artifact = ToolArtifact(
+        tool_name="echo",
+        handler_name="echo",
+        source=source,
+        source_hash=source_sha256(source),
+        schema=_schema(spec),
+        spec=spec,
+        contract=contract,
+        source_type="custom_file",
+        generation=9,
+        filename="tools.py",
+    )
+
+    with pytest.raises(ValueError, match="contract_version"):
+        replace(contract, contract_version=version)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="artifact_version"):
+        replace(
+            artifact,
+            artifact_version=version,  # type: ignore[arg-type]
+            artifact_digest="",
+        )
+
+
+def test_v1_contract_rejects_structured_capability_scope() -> None:
+    scoped = ToolCapabilityV2.from_mapping(
+        {
+            "network": {"allow": ["api.example"]},
+            "filesystem": {"workspace": True, "host": False},
+        }
+    )
+    base = _spec()
+    spec = replace(base, policy=ToolPolicy.configured(scoped))
+
+    with pytest.raises(ValueError, match="v1 无法表示 v2 capability policy"):
+        ToolContractSnapshot.from_spec(spec, contract_version=1)
+
+
+def test_v1_generated_artifact_rejects_structured_manifest_scope() -> None:
+    source = b"async def echo(value):\n    return value\n"
+    tests_source = b"async def run_tests(tool_module):\n    return 'ok'\n"
+    base = _spec(permission="superuser")
+    legacy_network = ToolCapability(network=True)
+    spec = replace(
+        base,
+        policy=ToolPolicy.generated(
+            legacy_network,
+            admin=legacy_network,
+        ),
+    )
+    manifest = {
+        "bundle_id": "echo_bundle",
+        "description": "echo",
+        "capabilities": {
+            "network": {"allow": ["api.example"]},
+            "filesystem": {"workspace": True, "host": False},
+        },
+        "tools": [
+            {
+                "name": "echo",
+                "description": spec.description,
+                "parameters": spec.parameters,
+                "handler": "echo",
+                "permission": "user",
+                "effect": "read_only",
+                "timeout_seconds": 30,
+                "result_limit": 6000,
+                "dependencies": [],
+            }
+        ],
+    }
+    digest = canonical_bundle_digest(manifest, source, tests_source)
+
+    with pytest.raises(ValueError, match="v1 无法表示 v2 capability policy"):
+        ToolArtifact(
+            tool_name="echo",
+            handler_name="echo",
+            source=source,
+            source_hash=source_sha256(source),
+            schema=_schema(spec),
+            spec=spec,
+            contract=ToolContractSnapshot.from_spec(
+                spec,
+                requested_permission="user",
+                contract_version=1,
+            ),
+            source_type="generated",
+            generation=10,
+            filename="tool.py",
+            tests_source=tests_source,
+            bundle_manifest=manifest,
+            bundle_id="echo_bundle",
+            bundle_digest=digest,
+        )
+
+
+def test_v1_contract_and_artifact_digest_remain_verifiable() -> None:
+    source = b"async def echo(value):\n    return value\n"
+    spec = _spec()
+    contract = ToolContractSnapshot.from_spec(spec, contract_version=1)
+    artifact = ToolArtifact(
+        tool_name="echo",
+        handler_name="echo",
+        source=source,
+        source_hash=source_sha256(source),
+        schema=_schema(spec),
+        spec=spec,
+        contract=contract,
+        source_type="custom_file",
+        generation=10,
+        filename="tools.py",
+    )
+    metadata = {
+        "contract": contract.as_dict(),
+        "handler_name": "echo",
+        "source_hash": artifact.source_hash,
+        "schema": mutable_value(_schema(spec)),
+        "source_type": "custom_file",
+        "generation": 10,
+        "filename": "tools.py",
+        "bundle_id": None,
+        "bundle_digest": None,
+    }
+    canonical = json.dumps(
+        metadata,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    expected = hashlib.sha256(
+        b"moellm-tool-artifact-v1\0"
+        + canonical
+        + b"\0"
+        + source
+        + b"\0\0"
+    ).hexdigest()
+
+    assert contract.contract_version == 1
+    assert "contract_version" not in contract.as_dict()
+    assert artifact.artifact_version == 1
+    assert artifact.artifact_digest == expected
+    artifact.verify(
+        expected_artifact_digest=expected,
+        expected_bundle_digest=None,
+        generation=10,
+    )

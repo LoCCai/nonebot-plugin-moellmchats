@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import re
 from types import MappingProxyType
@@ -12,6 +12,18 @@ _JSON_TYPES = {"array", "boolean", "integer", "null", "number", "object", "strin
 _CAPABILITY_FIELDS = frozenset(
     {"network", "process", "workspace", "host_filesystem", "secrets"}
 )
+_CAPABILITY_V2_FIELDS = frozenset(
+    {"network", "process", "filesystem", "database", "bot", "secrets"}
+)
+_NETWORK_TARGET_RE = re.compile(
+    r"^(?:\*|(?:\*\.)?(?=.{1,253}$)"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)$"
+)
+_SECRET_NAME_RE = re.compile(r"^(?:\*|[A-Za-z_][A-Za-z0-9_]{0,127})$")
+
+CAPABILITY_SCHEMA_VERSION = 2
+CAPABILITY_DETECTOR_VERSION = 1
 
 
 class ToolEffect(str, Enum):
@@ -70,6 +82,50 @@ class ToolCapability:
             secrets=self.secrets and ceiling.secrets,
         )
 
+    @classmethod
+    def none(cls) -> ToolCapability:
+        """Return an empty set for detector evidence.
+
+        The normal constructor intentionally keeps the historical private
+        workspace default. Static analysis evidence must not inherit that
+        operational default, otherwise an unobserved capability would appear
+        to have been detected.
+        """
+
+        return cls(workspace=False)
+
+    def union(self, other: ToolCapability) -> ToolCapability:
+        if not isinstance(other, ToolCapability):
+            raise ValueError("工具 capabilities union 必须是 ToolCapability")
+        return ToolCapability(
+            network=self.network or other.network,
+            process=self.process or other.process,
+            workspace=self.workspace or other.workspace,
+            host_filesystem=(
+                self.host_filesystem or other.host_filesystem
+            ),
+            secrets=self.secrets or other.secrets,
+        )
+
+    def is_subset_of(self, ceiling: ToolCapability) -> bool:
+        if not isinstance(ceiling, ToolCapability):
+            raise ValueError("工具 capability ceiling 必须是 ToolCapability")
+        return all(
+            not getattr(self, name) or getattr(ceiling, name)
+            for name in _CAPABILITY_FIELDS
+        )
+
+    def missing_from(self, ceiling: ToolCapability) -> tuple[str, ...]:
+        if not isinstance(ceiling, ToolCapability):
+            raise ValueError("工具 capability ceiling 必须是 ToolCapability")
+        return tuple(
+            sorted(
+                name
+                for name in _CAPABILITY_FIELDS
+                if getattr(self, name) and not getattr(ceiling, name)
+            )
+        )
+
     def as_dict(self) -> dict[str, bool]:
         return {
             "network": self.network,
@@ -78,6 +134,324 @@ class ToolCapability:
             "host_filesystem": self.host_filesystem,
             "secrets": self.secrets,
         }
+
+
+def _normalize_capability_names(
+    value: Any,
+    *,
+    label: str,
+    pattern: re.Pattern[str],
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(item, str) and pattern.fullmatch(item) for item in value
+    ):
+        raise ValueError(f"工具 {label} 必须是安全字符串数组")
+    if len(set(value)) != len(value):
+        raise ValueError(f"工具 {label} 不得包含重复项")
+    if "*" in value and len(value) != 1:
+        raise ValueError(f"工具 {label} 的通配符不得与其他项混用")
+    return tuple(sorted(value))
+
+
+def _bool_access(value: Any, *, label: str) -> tuple[bool, bool]:
+    if type(value) is bool:
+        return value, value
+    if not isinstance(value, Mapping) or set(value) - {"read", "write"}:
+        raise ValueError(f"工具 {label} 必须是布尔值或 read/write 映射")
+    read = value.get("read", False)
+    write = value.get("write", False)
+    if type(read) is not bool or type(write) is not bool:
+        raise ValueError(f"工具 {label}.read/write 必须是布尔值")
+    if write and not read:
+        raise ValueError(f"工具 {label}.write 不能在 read=false 时启用")
+    return read, write
+
+
+def _intersect_allowlists(
+    requested: tuple[str, ...],
+    ceiling: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not requested or not ceiling:
+        return ()
+    if requested == ("*",):
+        return ceiling
+    if ceiling == ("*",):
+        return requested
+    return tuple(sorted(set(requested) & set(ceiling)))
+
+
+@dataclass(frozen=True)
+class ToolCapabilityV2:
+    """Structured, deny-by-default capability profile.
+
+    Version 2 can express network and secret allow-lists, separate workspace
+    and host read/write access, and reserved database/bot rights. The current
+    isolated runner still accepts only profiles that have an exact legacy-v1
+    projection; scoped or new rights remain fail closed until their consumer is
+    migrated in D-08.
+    """
+
+    network_allow: tuple[str, ...] = ()
+    process: bool = False
+    workspace_read: bool = False
+    workspace_write: bool = False
+    host_filesystem_read: bool = False
+    host_filesystem_write: bool = False
+    database_read: bool = False
+    database_write: bool = False
+    bot_read: bool = False
+    bot_send: bool = False
+    bot_manage: bool = False
+    secret_names: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in (
+            "process",
+            "workspace_read",
+            "workspace_write",
+            "host_filesystem_read",
+            "host_filesystem_write",
+            "database_read",
+            "database_write",
+            "bot_read",
+            "bot_send",
+            "bot_manage",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"工具 capability v2.{name} 必须是布尔值")
+        network_allow = _normalize_capability_names(
+            self.network_allow,
+            label="capability v2 network.allow",
+            pattern=_NETWORK_TARGET_RE,
+        )
+        secret_names = _normalize_capability_names(
+            self.secret_names,
+            label="capability v2 secrets.allow",
+            pattern=_SECRET_NAME_RE,
+        )
+        if self.workspace_write and not self.workspace_read:
+            raise ValueError("工具 capability v2 workspace.write 需要 read")
+        if self.host_filesystem_write and not self.host_filesystem_read:
+            raise ValueError("工具 capability v2 host filesystem.write 需要 read")
+        if self.database_write and not self.database_read:
+            raise ValueError("工具 capability v2 database.write 需要 read")
+        if self.bot_manage and not self.bot_send:
+            raise ValueError("工具 capability v2 bot.manage 需要 send")
+        if self.bot_send and not self.bot_read:
+            raise ValueError("工具 capability v2 bot.send 需要 read")
+        object.__setattr__(self, "network_allow", network_allow)
+        object.__setattr__(self, "secret_names", secret_names)
+
+    @classmethod
+    def from_legacy(cls, value: ToolCapability) -> ToolCapabilityV2:
+        if not isinstance(value, ToolCapability):
+            raise ValueError("工具 legacy capability 必须是 ToolCapability")
+        return cls(
+            network_allow=("*",) if value.network else (),
+            process=value.process,
+            workspace_read=value.workspace,
+            workspace_write=value.workspace,
+            host_filesystem_read=value.host_filesystem,
+            host_filesystem_write=value.host_filesystem,
+            secret_names=("*",) if value.secrets else (),
+        )
+
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any] | None,
+    ) -> ToolCapabilityV2:
+        """Parse either the strict legacy mapping or the structured v2 form."""
+
+        if value is None:
+            return cls.from_legacy(ToolCapability())
+        if not isinstance(value, Mapping):
+            raise ValueError("工具 capabilities 必须是映射")
+        if "workspace" in value or "host_filesystem" in value:
+            if "filesystem" in value or "database" in value or "bot" in value:
+                raise ValueError("工具 capabilities 不得混用 v1 与 v2 filesystem 字段")
+            return cls.from_legacy(ToolCapability.from_mapping(value))
+        unknown = set(value) - _CAPABILITY_V2_FIELDS
+        if unknown:
+            raise ValueError(
+                f"工具 capabilities 包含未知字段: {sorted(map(str, unknown))}"
+            )
+
+        network = value.get("network", False)
+        if type(network) is bool:
+            network_allow = ("*",) if network else ()
+        elif isinstance(network, Mapping) and set(network) == {"allow"}:
+            network_allow = _normalize_capability_names(
+                network["allow"],
+                label="capability network.allow",
+                pattern=_NETWORK_TARGET_RE,
+            )
+        else:
+            raise ValueError("工具 capability network 必须是布尔值或 allow 映射")
+
+        process = value.get("process", False)
+        if type(process) is not bool:
+            raise ValueError("工具 capability process 必须是布尔值")
+
+        filesystem = value.get("filesystem")
+        if filesystem is None:
+            workspace_read = True
+            workspace_write = True
+            host_read = False
+            host_write = False
+        else:
+            if not isinstance(filesystem, Mapping) or set(filesystem) - {
+                "workspace",
+                "host",
+            }:
+                raise ValueError("工具 capability filesystem 字段非法")
+            workspace_read, workspace_write = _bool_access(
+                filesystem.get("workspace", False),
+                label="capability filesystem.workspace",
+            )
+            host_read, host_write = _bool_access(
+                filesystem.get("host", False),
+                label="capability filesystem.host",
+            )
+
+        database_read, database_write = _bool_access(
+            value.get("database", False),
+            label="capability database",
+        )
+        bot = value.get("bot", False)
+        if type(bot) is bool:
+            bot_read = bot
+            bot_send = bot
+            bot_manage = bot
+        elif isinstance(bot, Mapping) and not set(bot) - {
+            "read",
+            "send",
+            "manage",
+        }:
+            bot_read = bot.get("read", False)
+            bot_send = bot.get("send", False)
+            bot_manage = bot.get("manage", False)
+            if not all(type(item) is bool for item in (bot_read, bot_send, bot_manage)):
+                raise ValueError("工具 capability bot 字段必须是布尔值")
+        else:
+            raise ValueError("工具 capability bot 必须是布尔值或权限映射")
+
+        secrets = value.get("secrets", False)
+        if type(secrets) is bool:
+            secret_names = ("*",) if secrets else ()
+        elif isinstance(secrets, Mapping) and set(secrets) == {"allow"}:
+            secret_names = _normalize_capability_names(
+                secrets["allow"],
+                label="capability secrets.allow",
+                pattern=_SECRET_NAME_RE,
+            )
+        else:
+            raise ValueError("工具 capability secrets 必须是布尔值或 allow 映射")
+
+        return cls(
+            network_allow=network_allow,
+            process=process,
+            workspace_read=workspace_read,
+            workspace_write=workspace_write,
+            host_filesystem_read=host_read,
+            host_filesystem_write=host_write,
+            database_read=database_read,
+            database_write=database_write,
+            bot_read=bot_read,
+            bot_send=bot_send,
+            bot_manage=bot_manage,
+            secret_names=secret_names,
+        )
+
+    def restrict(self, ceiling: ToolCapabilityV2) -> ToolCapabilityV2:
+        if not isinstance(ceiling, ToolCapabilityV2):
+            raise ValueError("工具 admin capability v2 必须是 ToolCapabilityV2")
+        return ToolCapabilityV2(
+            network_allow=_intersect_allowlists(
+                self.network_allow,
+                ceiling.network_allow,
+            ),
+            process=self.process and ceiling.process,
+            workspace_read=self.workspace_read and ceiling.workspace_read,
+            workspace_write=self.workspace_write and ceiling.workspace_write,
+            host_filesystem_read=(
+                self.host_filesystem_read and ceiling.host_filesystem_read
+            ),
+            host_filesystem_write=(
+                self.host_filesystem_write and ceiling.host_filesystem_write
+            ),
+            database_read=self.database_read and ceiling.database_read,
+            database_write=self.database_write and ceiling.database_write,
+            bot_read=self.bot_read and ceiling.bot_read,
+            bot_send=self.bot_send and ceiling.bot_send,
+            bot_manage=self.bot_manage and ceiling.bot_manage,
+            secret_names=_intersect_allowlists(
+                self.secret_names,
+                ceiling.secret_names,
+            ),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "network": {"allow": list(self.network_allow)},
+            "process": self.process,
+            "filesystem": {
+                "workspace": {
+                    "read": self.workspace_read,
+                    "write": self.workspace_write,
+                },
+                "host": {
+                    "read": self.host_filesystem_read,
+                    "write": self.host_filesystem_write,
+                },
+            },
+            "database": {
+                "read": self.database_read,
+                "write": self.database_write,
+            },
+            "bot": {
+                "read": self.bot_read,
+                "send": self.bot_send,
+                "manage": self.bot_manage,
+            },
+            "secrets": {"allow": list(self.secret_names)},
+        }
+
+    def to_legacy(self) -> ToolCapability:
+        return ToolCapability(
+            network=bool(self.network_allow),
+            process=self.process,
+            workspace=self.workspace_write,
+            host_filesystem=(
+                self.host_filesystem_read or self.host_filesystem_write
+            ),
+            secrets=bool(self.secret_names),
+        )
+
+    @property
+    def legacy_runner_compatible(self) -> bool:
+        return (
+            self.network_allow in {(), ("*",)}
+            and self.workspace_read == self.workspace_write
+            and self.host_filesystem_read == self.host_filesystem_write
+            and not self.database_read
+            and not self.database_write
+            and not self.bot_read
+            and not self.bot_send
+            and not self.bot_manage
+            and self.secret_names in {(), ("*",)}
+        )
+
+
+def parse_capability_profile(
+    value: ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None,
+) -> tuple[ToolCapability, ToolCapabilityV2]:
+    if isinstance(value, ToolCapability):
+        return value, ToolCapabilityV2.from_legacy(value)
+    if isinstance(value, ToolCapabilityV2):
+        return value.to_legacy(), value
+    structured = ToolCapabilityV2.from_mapping(value)
+    return structured.to_legacy(), structured
 
 
 @dataclass(frozen=True)
@@ -91,35 +465,110 @@ class ToolPolicy:
 
     requested: ToolCapability = field(default_factory=ToolCapability)
     admin: ToolCapability = field(default_factory=ToolCapability)
+    detected: ToolCapability = field(default_factory=ToolCapability.none)
+    requested_v2: ToolCapabilityV2 | None = None
+    admin_v2: ToolCapabilityV2 | None = None
     effective: ToolCapability = field(init=False)
+    effective_v2: ToolCapabilityV2 = field(init=False)
+
+    capability_schema_version = CAPABILITY_SCHEMA_VERSION
+    detector_version = CAPABILITY_DETECTOR_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.requested, ToolCapability):
             raise ValueError("工具 requested capabilities 必须是 ToolCapability")
         if not isinstance(self.admin, ToolCapability):
             raise ValueError("工具 admin capabilities 必须是 ToolCapability")
-        object.__setattr__(self, "effective", self.requested.restrict(self.admin))
+        if not isinstance(self.detected, ToolCapability):
+            raise ValueError("工具 detected capabilities 必须是 ToolCapability")
+        requested_v2 = (
+            ToolCapabilityV2.from_legacy(self.requested)
+            if self.requested_v2 is None
+            else self.requested_v2
+        )
+        admin_v2 = (
+            ToolCapabilityV2.from_legacy(self.admin)
+            if self.admin_v2 is None
+            else self.admin_v2
+        )
+        if not isinstance(requested_v2, ToolCapabilityV2):
+            raise ValueError("工具 requested capability v2 必须是 ToolCapabilityV2")
+        if not isinstance(admin_v2, ToolCapabilityV2):
+            raise ValueError("工具 admin capability v2 必须是 ToolCapabilityV2")
+        if requested_v2.to_legacy() != self.requested:
+            raise ValueError("工具 requested v1/v2 capability 投影不一致")
+        if admin_v2.to_legacy() != self.admin:
+            raise ValueError("工具 admin v1/v2 capability 投影不一致")
+        effective_v2 = requested_v2.restrict(admin_v2)
+        effective = effective_v2.to_legacy()
+        missing = self.detected.missing_from(effective)
+        if missing:
+            raise ValueError(
+                "工具 detected capabilities 未同时获得 requested/admin 授权: "
+                f"{list(missing)}"
+            )
+        object.__setattr__(self, "requested_v2", requested_v2)
+        object.__setattr__(self, "admin_v2", admin_v2)
+        object.__setattr__(self, "effective_v2", effective_v2)
+        object.__setattr__(self, "effective", effective)
 
     @classmethod
     def generated(
         cls,
-        requested: ToolCapability | Mapping[str, Any] | None = None,
+        requested: (
+            ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None
+        ) = None,
         *,
-        admin: ToolCapability | Mapping[str, Any] | None = None,
+        admin: (
+            ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None
+        ) = None,
     ) -> ToolPolicy:
         """Build a generated-tool policy with a conservative admin ceiling."""
 
-        requested_value = (
-            requested
-            if isinstance(requested, ToolCapability)
-            else ToolCapability.from_mapping(requested)
+        requested_value, requested_v2 = parse_capability_profile(requested)
+        admin_value, admin_v2 = parse_capability_profile(admin)
+        return cls(
+            requested=requested_value,
+            admin=admin_value,
+            requested_v2=requested_v2,
+            admin_v2=admin_v2,
         )
-        admin_value = (
-            admin
-            if isinstance(admin, ToolCapability)
-            else ToolCapability.from_mapping(admin)
+
+    @classmethod
+    def configured(
+        cls,
+        requested: (
+            ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None
+        ) = None,
+    ) -> ToolPolicy:
+        """Use one administrator-maintained profile as request and ceiling."""
+
+        requested_value, requested_v2 = parse_capability_profile(requested)
+        return cls(
+            requested=requested_value,
+            admin=requested_value,
+            requested_v2=requested_v2,
+            admin_v2=requested_v2,
         )
-        return cls(requested=requested_value, admin=admin_value)
+
+    def with_detected(self, detected: ToolCapability) -> ToolPolicy:
+        """Bind static evidence without allowing it to grant a capability."""
+
+        if not isinstance(detected, ToolCapability):
+            raise ValueError("工具 detected capabilities 必须是 ToolCapability")
+        return replace(self, detected=detected)
+
+    def capability_contract(self) -> dict[str, Any]:
+        assert self.requested_v2 is not None
+        assert self.admin_v2 is not None
+        return {
+            "schema_version": self.capability_schema_version,
+            "detector_version": self.detector_version,
+            "requested": self.requested_v2.as_dict(),
+            "detected": self.detected.as_dict(),
+            "admin": self.admin_v2.as_dict(),
+            "effective": self.effective_v2.as_dict(),
+        }
 
 
 @dataclass(frozen=True)

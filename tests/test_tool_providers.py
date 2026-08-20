@@ -42,6 +42,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     ProviderRegistry,
     RegisteredToolProvider,
     RegisteredToolResources,
+    ToolCapabilityPolicyError,
     ToolSource,
     ToolTrustLevel,
     builtin_tool_provider,
@@ -117,7 +118,12 @@ def _schema(spec: ToolSpec) -> dict:
     }
 
 
-def _custom_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
+def _custom_artifact(
+    spec: ToolSpec,
+    *,
+    generation: int = 4,
+    contract_version: int = 2,
+) -> ToolArtifact:
     source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
     return ToolArtifact(
         tool_name=spec.name,
@@ -126,14 +132,22 @@ def _custom_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
         source_hash=source_sha256(source),
         schema=_schema(spec),
         spec=spec,
-        contract=ToolContractSnapshot.from_spec(spec),
+        contract=ToolContractSnapshot.from_spec(
+            spec,
+            contract_version=contract_version,
+        ),
         source_type="custom_file",
         generation=generation,
         filename="tools.py",
     )
 
 
-def _generated_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
+def _generated_artifact(
+    spec: ToolSpec,
+    *,
+    generation: int = 4,
+    contract_version: int = 2,
+) -> ToolArtifact:
     source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
     tests_source = b"async def run_tests(tool_module):\n    return 'ok'\n"
     manifest = {
@@ -166,7 +180,10 @@ def _generated_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
         source_hash=source_sha256(source),
         schema=_schema(spec),
         spec=spec,
-        contract=ToolContractSnapshot.from_spec(spec),
+        contract=ToolContractSnapshot.from_spec(
+            spec,
+            contract_version=contract_version,
+        ),
         source_type="generated",
         generation=generation,
         filename="tool.py",
@@ -435,6 +452,7 @@ def _file_legacy_projection(
     dependencies: dict[str, set[str]] = {}
     for artifact in artifacts:
         spec = artifact.spec
+        assert spec.policy is not None
         tools[spec.name] = {
             **spec.as_legacy_schema(),
             "source": "custom_file",
@@ -444,6 +462,24 @@ def _file_legacy_projection(
             "artifact_digest": artifact.artifact_digest,
             "generation": artifact.generation,
         }
+        if artifact.artifact_version == 2:
+            tools[spec.name].update(
+                {
+                    "tool_contract_version": artifact.contract.contract_version,
+                    "artifact_digest_version": artifact.artifact_version,
+                    "requested_capabilities": (
+                        artifact.contract.requested_capabilities
+                    ),
+                    "detected_capabilities": (
+                        artifact.contract.detected_capabilities
+                    ),
+                    "admin_capabilities": artifact.contract.admin_capabilities,
+                    "effective_capabilities": (
+                        artifact.contract.effective_capabilities
+                    ),
+                    "capability_policy": spec.policy.capability_contract(),
+                }
+            )
         if spec.dependencies:
             dependencies[spec.name] = set(spec.dependencies)
     return tools, dependencies
@@ -532,6 +568,7 @@ def _generated_legacy_projection(
     dependencies: dict[str, set[str]] = {}
     for artifact in artifacts:
         spec = artifact.spec
+        assert spec.policy is not None
         contract = artifact.contract
         tools[spec.name] = {
             **spec.as_legacy_schema(),
@@ -549,6 +586,16 @@ def _generated_legacy_projection(
             "artifact_digest": artifact.artifact_digest,
             "generation": artifact.generation,
         }
+        if artifact.artifact_version == 2:
+            tools[spec.name].update(
+                {
+                    "tool_contract_version": contract.contract_version,
+                    "artifact_digest_version": artifact.artifact_version,
+                    "detected_capabilities": contract.detected_capabilities,
+                    "admin_capabilities": contract.admin_capabilities,
+                    "capability_policy": spec.policy.capability_contract(),
+                }
+            )
         if spec.dependencies:
             dependencies[spec.name] = set(spec.dependencies)
     return tools, dependencies
@@ -767,6 +814,57 @@ async def test_file_provider_accepts_complete_legacy_parity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_artifact_providers_keep_v1_contract_projection_compatibility() -> None:
+    file_artifact = _custom_artifact(
+        _spec("legacy_file"),
+        generation=8,
+        contract_version=1,
+    )
+    file_records = await file_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=8,
+            resources=FileToolResources((file_artifact,)),
+        )
+    )
+    file_tools, file_dependencies = _file_legacy_projection((file_artifact,))
+    file_tool_provider.validate_legacy_parity(
+        file_records,
+        file_tools,
+        file_dependencies,
+        generation=8,
+    )
+    assert "tool_contract_version" not in file_tools["legacy_file"]
+
+    generated_artifact = _generated_artifact(
+        _spec("legacy_generated"),
+        generation=8,
+        contract_version=1,
+    )
+    assert generated_artifact.bundle_digest is not None
+    generated_records = await generated_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=8,
+            resources=GeneratedToolResources(
+                lifecycle_state=_active_state(
+                    generated_artifact.bundle_digest
+                ),
+                artifacts=(generated_artifact,),
+            ),
+        )
+    )
+    generated_tools, generated_dependencies = _generated_legacy_projection(
+        (generated_artifact,)
+    )
+    generated_tool_provider.validate_legacy_parity(
+        generated_records,
+        generated_tools,
+        generated_dependencies,
+        generation=8,
+    )
+    assert "tool_contract_version" not in generated_tools["legacy_generated"]
+
+
+@pytest.mark.asyncio
 async def test_file_provider_fails_closed_for_every_legacy_mismatch() -> None:
     helper = _custom_artifact(_spec("helper"), generation=7)
     echo_spec = replace(_spec("echo"), dependencies=("helper",))
@@ -824,6 +922,13 @@ async def test_file_provider_fails_closed_for_every_legacy_mismatch() -> None:
         ("source", "generated"),
         ("declared_effect", "external_side_effect"),
         ("effective_effect", "external_side_effect"),
+        ("tool_contract_version", 1),
+        ("artifact_digest_version", 1),
+        ("requested_capabilities", {}),
+        ("detected_capabilities", {}),
+        ("admin_capabilities", {}),
+        ("effective_capabilities", {}),
+        ("capability_policy", {}),
         ("artifact_digest", "0" * 64),
         ("generation", 8),
     ):
@@ -1030,8 +1135,13 @@ async def test_generated_provider_fails_closed_for_legacy_drift() -> None:
         ("declared_effect", "mutating"),
         ("effective_effect", "mutating"),
         ("user_policy_approved", False),
+        ("tool_contract_version", 1),
+        ("artifact_digest_version", 1),
         ("requested_capabilities", {}),
+        ("detected_capabilities", {}),
+        ("admin_capabilities", {}),
         ("effective_capabilities", {}),
+        ("capability_policy", {}),
         ("artifact_digest", "0" * 64),
         ("generation", 8),
     ):
@@ -1429,7 +1539,7 @@ async def test_nonebot_plugin_provider_fails_closed_for_legacy_drift() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
+async def test_provider_registry_builds_deterministic_immutable_v3_catalog() -> None:
     specs = (_spec("zeta"), _spec("alpha"))
     plan = ProviderDiscoveryPlan(
         provider=registered_tool_provider,
@@ -1451,7 +1561,7 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
         ),
     )
 
-    assert ProviderCatalogSnapshot.schema_version == 2
+    assert ProviderCatalogSnapshot.schema_version == 3
     assert catalog.generation == 23
     assert tuple(catalog.registrations) == (
         "builtin",
@@ -1466,12 +1576,18 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
         item.spec.name for item in catalog.tools_for_provider("registered")
     ] == ["alpha", "zeta"]
     assert catalog.tools_for_provider("missing") == ()
+    assert catalog.capability_policy_for("alpha") is specs[1].policy
+    assert tuple(catalog.capability_policies) == ("alpha", "zeta")
     assert deepcopy(catalog) is catalog
     assert deepcopy(provider_registry) is provider_registry
     with pytest.raises(TypeError):
         catalog.tools["other"] = catalog.tools["alpha"]
     with pytest.raises(TypeError):
         catalog.registrations["other"] = catalog.registrations["registered"]
+    with pytest.raises(TypeError):
+        catalog.capability_policies["other"] = specs[0].policy
+    with pytest.raises(ToolCapabilityPolicyError, match="没有 capability policy"):
+        catalog.capability_policy_for("missing")
     with pytest.raises(FrozenInstanceError):
         catalog.generation = 24
 

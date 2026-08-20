@@ -14,13 +14,7 @@ from .tool_artifacts import (
     ToolContractSnapshot,
     source_sha256,
 )
-from .tool_contracts import (
-    ToolCapability,
-    ToolContext,
-    ToolEffect,
-    ToolPolicy,
-    ToolSpec,
-)
+from .tool_contracts import ToolContext, ToolEffect, ToolPolicy, ToolSpec
 
 _TYPE_NAMES = {
     "str": "string",
@@ -326,9 +320,7 @@ def load_file_tools(
             except (TypeError, ValueError) as error:
                 raise ValueError(f"{path.name}:{name} effect 非法") from error
             try:
-                requested_capabilities = ToolCapability.from_mapping(
-                    entry.get("capabilities")
-                )
+                policy = ToolPolicy.configured(entry.get("capabilities"))
             except ValueError as error:
                 raise ValueError(
                     f"{path.name}:{name} capabilities 非法: {error}"
@@ -336,10 +328,6 @@ def load_file_tools(
             # custom_tools/*.py is an administrator-maintained trust domain. Its
             # literal registry entry is both the explicit request and local policy;
             # tools without a registry remain deny-by-default for network/process.
-            policy = ToolPolicy(
-                requested=requested_capabilities,
-                admin=requested_capabilities,
-            )
             handler_policies[name] = policy
             prepared.append((entry, effect, policy, dependencies_value))
 
@@ -358,6 +346,9 @@ def load_file_tools(
                     f"{path.name}:{name} AST policy 拒绝: "
                     f"{_blocking_policy_message(handler_report)}"
                 )
+            policy = policy.with_detected(
+                handler_report.detected_capabilities
+            )
             effective_effect = handler_report.effective_effect(declared_effect)
             artifact_holder: dict[str, ToolArtifact] = {}
             spec = ToolSpec(
@@ -401,6 +392,13 @@ def load_file_tools(
             schema["source"] = "custom_file"
             schema["declared_effect"] = declared_effect.value
             schema["effective_effect"] = spec.effect.value
+            schema["tool_contract_version"] = contract.contract_version
+            schema["artifact_digest_version"] = artifact.artifact_version
+            schema["requested_capabilities"] = policy.requested.as_dict()
+            schema["detected_capabilities"] = policy.detected.as_dict()
+            schema["admin_capabilities"] = policy.admin.as_dict()
+            schema["effective_capabilities"] = policy.effective.as_dict()
+            schema["capability_policy"] = policy.capability_contract()
             schema["tool_artifact"] = artifact
             schema["artifact_digest"] = artifact.artifact_digest
             schema["generation"] = generation

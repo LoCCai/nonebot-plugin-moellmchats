@@ -584,6 +584,65 @@ async def extract_webpage(
                 raise ValueError(f"工具 {name} ToolSpec 与 ToolArtifact 不一致")
             if schema.get("func") is not artifact.spec.handler:
                 raise ValueError(f"工具 {name} handler 与 ToolArtifact 不一致")
+            policy = artifact.spec.policy
+            if policy is None:
+                raise ValueError(f"工具 {name} 缺少 capability policy")
+            expected_capability_fields = {}
+            if artifact.artifact_version == 2:
+                expected_capability_fields = {
+                    "artifact_digest_version": artifact.artifact_version,
+                    "tool_contract_version": (
+                        artifact.contract.contract_version
+                    ),
+                    "requested_capabilities": (
+                        artifact.contract.requested_capabilities
+                    ),
+                    "detected_capabilities": (
+                        artifact.contract.detected_capabilities
+                    ),
+                    "admin_capabilities": artifact.contract.admin_capabilities,
+                    "effective_capabilities": (
+                        artifact.contract.effective_capabilities
+                    ),
+                    "capability_policy": policy.capability_contract(),
+                }
+            elif source == "generated":
+                expected_capability_fields = {
+                    "requested_capabilities": (
+                        artifact.contract.requested_capabilities
+                    ),
+                    "effective_capabilities": (
+                        artifact.contract.effective_capabilities
+                    ),
+                }
+                unexpected = {
+                    "artifact_digest_version",
+                    "tool_contract_version",
+                    "detected_capabilities",
+                    "admin_capabilities",
+                    "capability_policy",
+                } & set(schema)
+                if unexpected:
+                    raise ValueError(
+                        f"工具 {name} v1 Schema 混入 v2 字段: {sorted(unexpected)}"
+                    )
+            else:
+                unexpected = {
+                    "artifact_digest_version",
+                    "tool_contract_version",
+                    "requested_capabilities",
+                    "detected_capabilities",
+                    "admin_capabilities",
+                    "effective_capabilities",
+                    "capability_policy",
+                } & set(schema)
+                if unexpected:
+                    raise ValueError(
+                        f"工具 {name} v1 Schema 混入 v2 字段: {sorted(unexpected)}"
+                    )
+            for field_name, expected in expected_capability_fields.items():
+                if schema.get(field_name) != expected:
+                    raise ValueError(f"工具 {name} {field_name} 不一致")
             bundle_digest = schema.get("bundle_digest") if source == "generated" else None
             artifact.verify(
                 expected_artifact_digest=artifact.artifact_digest,

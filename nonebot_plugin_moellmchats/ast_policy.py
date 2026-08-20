@@ -8,7 +8,7 @@ import os
 from types import MappingProxyType
 from typing import Any
 
-from .tool_contracts import ToolEffect, ToolPolicy
+from .tool_contracts import ToolCapability, ToolEffect, ToolPolicy
 
 
 class PolicyDecision(str, Enum):
@@ -85,6 +85,23 @@ class HandlerPolicyReport:
     def effective_effect(self, declared: ToolEffect) -> ToolEffect:
         return _effective_effect(declared, self.detected_effect)
 
+    @property
+    def detected_capabilities(self) -> ToolCapability:
+        """Return coarse static evidence, never an authorization decision."""
+
+        names = {
+            item.capability
+            for item in self.findings
+            if item.capability is not None
+        }
+        return ToolCapability(
+            network="network" in names,
+            process="process" in names,
+            workspace="workspace" in names,
+            host_filesystem="host_filesystem" in names,
+            secrets="secrets" in names,
+        )
+
     def messages(self) -> tuple[str, ...]:
         return tuple(_format_finding(item) for item in self.findings)
 
@@ -145,6 +162,26 @@ class AstPolicyReport:
 
     def effective_effect(self, declared: ToolEffect) -> ToolEffect:
         return _effective_effect(declared, self.detected_effect)
+
+    @property
+    def detected_capabilities(self) -> ToolCapability:
+        detected = ToolCapability.none()
+        if self.handler_reports:
+            for report in self.handler_reports.values():
+                detected = detected.union(report.detected_capabilities)
+            return detected
+        names = {
+            item.capability
+            for item in self.module_findings
+            if item.capability is not None
+        }
+        return ToolCapability(
+            network="network" in names,
+            process="process" in names,
+            workspace="workspace" in names,
+            host_filesystem="host_filesystem" in names,
+            secrets="secrets" in names,
+        )
 
     def messages(self) -> tuple[str, ...]:
         return tuple(_format_finding(item) for item in self.findings)

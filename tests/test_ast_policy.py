@@ -76,6 +76,13 @@ def test_missing_network_capability_is_structured_blocker() -> None:
     assert allowed.decision is PolicyDecision.RISK
     assert allowed.allowed is True
     assert {item.capability for item in denied.findings} == {"network"}
+    assert denied.for_handler("probe").detected_capabilities == ToolCapability(
+        network=True,
+        workspace=False,
+    )
+    assert allowed.for_handler("probe").detected_capabilities == (
+        denied.for_handler("probe").detected_capabilities
+    )
 
 
 def test_detected_mutation_overrides_read_only_declaration() -> None:

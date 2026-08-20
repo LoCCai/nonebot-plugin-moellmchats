@@ -510,6 +510,12 @@ def test_custom_capability_is_checked_for_each_handler_call_graph(
     tools, _ = load_file_tools([source])
     assert tools["online"]["tool_spec"].policy.effective.network
     assert not tools["local"]["tool_spec"].policy.effective.network
+    assert tools["online"]["tool_spec"].policy.detected.network
+    assert not tools["local"]["tool_spec"].policy.detected.network
+    assert tools["online"]["detected_capabilities"]["network"] is True
+    assert tools["local"]["detected_capabilities"]["network"] is False
+    assert tools["online"]["tool_contract_version"] == 2
+    assert tools["online"]["artifact_digest_version"] == 2
 
     source.write_text(template.replace("NETWORK", "False"), encoding="utf-8")
     with pytest.raises(

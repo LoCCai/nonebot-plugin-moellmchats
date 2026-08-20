@@ -76,6 +76,9 @@ async def test_custom_file_network_requires_explicit_literal_policy(
         assert artifact.artifact_digest == schema["artifact_digest"]
         assert artifact.contract.declared_effect.value == "read_only"
         assert artifact.contract.effective_effect.value == "read_only"
+        assert schema["tool_contract_version"] == 2
+        assert schema["artifact_digest_version"] == 2
+        assert schema["capability_policy"]["schema_version"] == 2
     implicit.write_text(
         "raise RuntimeError('active file must not be reread')\n",
         encoding="utf-8",
@@ -129,6 +132,35 @@ def test_custom_file_accepts_static_explicit_host_capabilities(
     capability = tools["host"]["tool_spec"].policy.effective
     assert capability.host_filesystem is True
     assert capability.secrets is True
+
+
+def test_custom_file_publishes_scoped_v2_capability_without_legacy_widening(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "scoped.py"
+    source.write_text(
+        "async def scoped():\n    return 'ok'\n\n"
+        "TOOLS_REGISTRY = [{\n"
+        "  'name': 'scoped', 'description': 'scoped policy',\n"
+        "  'parameters': {'type': 'object', 'properties': {}},\n"
+        "  'func': scoped,\n"
+        "  'capabilities': {\n"
+        "    'network': {'allow': ['api.example']},\n"
+        "    'filesystem': {'workspace': True, 'host': False},\n"
+        "  },\n"
+        "}]\n",
+        encoding="utf-8",
+    )
+
+    tools, _ = load_file_tools([source])
+    policy = tools["scoped"]["tool_spec"].policy
+
+    assert policy.requested_v2.network_allow == ("api.example",)
+    assert policy.effective.network is True
+    assert policy.effective_v2.legacy_runner_compatible is False
+    assert tools["scoped"]["capability_policy"]["effective"]["network"] == {
+        "allow": ["api.example"]
+    }
 
 
 @pytest.mark.parametrize("generation", [True, -1, 1.5, "1"])

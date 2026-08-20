@@ -55,6 +55,7 @@ from .token_usage_formatter import format_token_usage_history
 from .tool_authoring import tool_authoring_service
 from .tool_contracts import (
     ToolCapability,
+    ToolCapabilityV2,
     ToolContext,
     ToolEffect,
     ToolPolicy,
@@ -82,6 +83,7 @@ __all__ = [
     "PendingAction",
     "PendingActionStore",
     "ToolCapability",
+    "ToolCapabilityV2",
     "ToolContext",
     "ToolEffect",
     "ToolPolicy",

@@ -63,7 +63,6 @@ from .tool_artifacts import (
     source_sha256,
 )
 from .tool_contracts import (
-    ToolCapability,
     ToolContext,
     ToolEffect,
     ToolPolicy,
@@ -106,6 +105,7 @@ class BundleValidation:
     digest: str
     risks: tuple[str, ...]
     policy: ToolPolicy
+    tool_policies: Mapping[str, ToolPolicy]
     tool_ast_report: AstPolicyReport
     tests_ast_report: AstPolicyReport
     source: bytes
@@ -797,6 +797,7 @@ class GeneratedToolStore:
         bundle_id = str(validation.manifest["bundle_id"])
         result = []
         for tool in validation.manifest["tools"]:
+            tool_policy = validation.tool_policies[tool["handler"]]
             effective, grant = self._effective_permission(
                 bundle_id=bundle_id,
                 digest=validation.digest,
@@ -811,8 +812,11 @@ class GeneratedToolStore:
                     "user_policy_approved": grant is not None,
                     "approved_by": grant.get("approved_by") if grant else None,
                     "approved_at": grant.get("approved_at") if grant else None,
-                    "requested_capabilities": (validation.policy.requested.as_dict()),
-                    "effective_capabilities": (validation.policy.effective.as_dict()),
+                    "requested_capabilities": tool_policy.requested.as_dict(),
+                    "detected_capabilities": tool_policy.detected.as_dict(),
+                    "admin_capabilities": tool_policy.admin.as_dict(),
+                    "effective_capabilities": tool_policy.effective.as_dict(),
+                    "capability_policy": tool_policy.capability_contract(),
                 }
             )
         return result
@@ -917,7 +921,7 @@ class GeneratedToolStore:
         if not isinstance(manifest, dict):
             raise ValueError("manifest.json 顶层必须是对象")
         try:
-            policy = ToolPolicy.generated(ToolCapability.from_mapping(manifest.get("capabilities")))
+            policy = ToolPolicy.generated(manifest.get("capabilities"))
         except ValueError as error:
             raise ValueError(f"manifest capabilities 非法: {error}") from error
         bundle_id = str(manifest.get("bundle_id") or "")
@@ -990,6 +994,20 @@ class GeneratedToolStore:
         _reject_blocking_policy("tool.py", tool_ast_report)
         _reject_blocking_policy("tests.py", tests_ast_report)
 
+        tests_detected = tests_ast_report.detected_capabilities
+        tool_policies = MappingProxyType(
+            {
+                handler: policy.with_detected(
+                    tool_ast_report.for_handler(handler)
+                    .detected_capabilities.union(tests_detected)
+                )
+                for handler in sorted(handlers)
+            }
+        )
+        policy = policy.with_detected(
+            tool_ast_report.detected_capabilities.union(tests_detected)
+        )
+
         digest = canonical_bundle_digest(
             manifest,
             source_bytes,
@@ -1001,6 +1019,7 @@ class GeneratedToolStore:
             digest=digest,
             risks=risks,
             policy=policy,
+            tool_policies=tool_policies,
             tool_ast_report=tool_ast_report,
             tests_ast_report=tests_ast_report,
             source=source_bytes,
@@ -1387,9 +1406,13 @@ class GeneratedToolStore:
             )
         risk_rows = list(validation.risks)
         capability_rows = {
-            "admin": validation.policy.admin.as_dict(),
-            "effective": validation.policy.effective.as_dict(),
-            "requested": validation.policy.requested.as_dict(),
+            **validation.policy.capability_contract(),
+            "tools": {
+                item["name"]: validation.tool_policies[
+                    item["handler"]
+                ].detected.as_dict()
+                for item in validation.manifest["tools"]
+            },
         }
         # Canonical lifecycle fields are deliberately assigned last so
         # tampered legacy metadata can never override the review decision.
@@ -1879,6 +1902,7 @@ class GeneratedToolStore:
                             f"result={result_kind}"
                         )
 
+                policy = validation.tool_policies[handler_name]
                 spec = ToolSpec(
                     name=name,
                     description=item["description"],
@@ -1894,7 +1918,7 @@ class GeneratedToolStore:
                     timeout_seconds=float(item.get("timeout_seconds", 30)),
                     result_limit=int(item.get("result_limit", 6000)),
                     dependencies=tuple(item.get("dependencies") or ()),
-                    policy=validation.policy,
+                    policy=policy,
                 )
                 contract = ToolContractSnapshot.from_spec(
                     spec,
@@ -1931,8 +1955,13 @@ class GeneratedToolStore:
                 schema["declared_effect"] = declared_effect.value
                 schema["effective_effect"] = spec.effect.value
                 schema["user_policy_approved"] = spec.permission == "user"
-                schema["requested_capabilities"] = validation.policy.requested.as_dict()
-                schema["effective_capabilities"] = validation.policy.effective.as_dict()
+                schema["tool_contract_version"] = contract.contract_version
+                schema["artifact_digest_version"] = artifact.artifact_version
+                schema["requested_capabilities"] = policy.requested.as_dict()
+                schema["detected_capabilities"] = policy.detected.as_dict()
+                schema["admin_capabilities"] = policy.admin.as_dict()
+                schema["effective_capabilities"] = policy.effective.as_dict()
+                schema["capability_policy"] = policy.capability_contract()
                 schema["tool_artifact"] = artifact
                 schema["artifact_digest"] = artifact.artifact_digest
                 schema["generation"] = generation

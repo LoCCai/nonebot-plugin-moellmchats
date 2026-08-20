@@ -144,7 +144,12 @@ def _registered_catalog(
     )
 
 
-def _file_artifact(spec: ToolSpec, *, generation: int) -> ToolArtifact:
+def _file_artifact(
+    spec: ToolSpec,
+    *,
+    generation: int,
+    contract_version: int = 2,
+) -> ToolArtifact:
     source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
     return ToolArtifact(
         tool_name=spec.name,
@@ -157,7 +162,10 @@ def _file_artifact(spec: ToolSpec, *, generation: int) -> ToolArtifact:
             "parameters": spec.parameters,
         },
         spec=spec,
-        contract=ToolContractSnapshot.from_spec(spec),
+        contract=ToolContractSnapshot.from_spec(
+            spec,
+            contract_version=contract_version,
+        ),
         source_type="custom_file",
         generation=generation,
         filename="snapshot_tools.py",
@@ -196,7 +204,8 @@ def _file_catalog(
 
 def _file_legacy_schema(artifact: ToolArtifact) -> dict:
     spec = artifact.spec
-    return {
+    assert spec.policy is not None
+    schema = {
         **spec.as_legacy_schema(),
         "source": "custom_file",
         "declared_effect": artifact.contract.declared_effect.value,
@@ -205,9 +214,31 @@ def _file_legacy_schema(artifact: ToolArtifact) -> dict:
         "artifact_digest": artifact.artifact_digest,
         "generation": artifact.generation,
     }
+    if artifact.artifact_version == 2:
+        schema.update(
+            {
+                "tool_contract_version": artifact.contract.contract_version,
+                "artifact_digest_version": artifact.artifact_version,
+                "requested_capabilities": (
+                    artifact.contract.requested_capabilities
+                ),
+                "detected_capabilities": artifact.contract.detected_capabilities,
+                "admin_capabilities": artifact.contract.admin_capabilities,
+                "effective_capabilities": (
+                    artifact.contract.effective_capabilities
+                ),
+                "capability_policy": spec.policy.capability_contract(),
+            }
+        )
+    return schema
 
 
-def _generated_artifact(spec: ToolSpec, *, generation: int) -> ToolArtifact:
+def _generated_artifact(
+    spec: ToolSpec,
+    *,
+    generation: int,
+    contract_version: int = 2,
+) -> ToolArtifact:
     source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
     tests_source = b"async def run_tests(tool_module):\n    return 'ok'\n"
     manifest = {
@@ -244,7 +275,10 @@ def _generated_artifact(spec: ToolSpec, *, generation: int) -> ToolArtifact:
             "parameters": spec.parameters,
         },
         spec=spec,
-        contract=ToolContractSnapshot.from_spec(spec),
+        contract=ToolContractSnapshot.from_spec(
+            spec,
+            contract_version=contract_version,
+        ),
         source_type="generated",
         generation=generation,
         filename="tool.py",
@@ -287,8 +321,9 @@ def _generated_catalog(
 
 def _generated_legacy_schema(artifact: ToolArtifact) -> dict:
     spec = artifact.spec
+    assert spec.policy is not None
     contract = artifact.contract
-    return {
+    schema = {
         **spec.as_legacy_schema(),
         "source": "generated",
         "bundle_id": artifact.bundle_id,
@@ -304,6 +339,17 @@ def _generated_legacy_schema(artifact: ToolArtifact) -> dict:
         "artifact_digest": artifact.artifact_digest,
         "generation": artifact.generation,
     }
+    if artifact.artifact_version == 2:
+        schema.update(
+            {
+                "tool_contract_version": contract.contract_version,
+                "artifact_digest_version": artifact.artifact_version,
+                "detected_capabilities": contract.detected_capabilities,
+                "admin_capabilities": contract.admin_capabilities,
+                "capability_policy": spec.policy.capability_contract(),
+            }
+        )
+    return schema
 
 
 def _generated_state(artifact: ToolArtifact) -> LifecycleState:
@@ -400,7 +446,7 @@ def test_legacy_tool_snapshot_constructor_gets_empty_generated_stamp() -> None:
     assert snapshot.generated_state_digest == ""
     assert snapshot.generated_active == {}
     assert snapshot.provider_catalog is not None
-    assert snapshot.provider_catalog.schema_version == 2
+    assert snapshot.provider_catalog.schema_version == 3
     assert snapshot.provider_catalog.registrations == {}
     assert snapshot.provider_catalog.tools == {}
 
@@ -623,6 +669,7 @@ def test_tool_snapshot_dual_view_keeps_exact_file_artifact_identity() -> None:
             "properties": {"value": {"type": "string"}},
         },
         handler=_handler,
+        policy=ToolPolicy.configured(),
     )
     artifact = _file_artifact(spec, generation=15)
     catalog = _file_catalog(artifact, generation=15)
@@ -701,6 +748,67 @@ def test_tool_snapshot_dual_view_keeps_exact_generated_artifact_identity() -> No
             mcp_tool_names=set(),
             provider_catalog=catalog,
         )
+
+
+def test_tool_snapshot_dual_reads_v1_artifact_sidecars() -> None:
+    file_spec = ToolSpec(
+        name="legacy_snapshot_file",
+        description="legacy snapshot file",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    file_artifact = _file_artifact(
+        file_spec,
+        generation=18,
+        contract_version=1,
+    )
+    file_snapshot = ToolSnapshot(
+        generation=18,
+        plugin_info={},
+        custom_tools={
+            file_spec.name: _file_legacy_schema(file_artifact)
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_file_catalog(file_artifact, generation=18),
+    )
+    assert file_snapshot.custom_tools[file_spec.name][
+        "tool_artifact"
+    ].artifact_version == 1
+
+    generated_spec = ToolSpec(
+        name="legacy_snapshot_generated",
+        description="legacy snapshot generated",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=19,
+        contract_version=1,
+    )
+    generated_snapshot = ToolSnapshot(
+        generation=19,
+        plugin_info={},
+        custom_tools={
+            generated_spec.name: _generated_legacy_schema(
+                generated_artifact
+            )
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_generated_catalog(
+            generated_artifact,
+            generation=19,
+        ),
+    )
+    assert generated_snapshot.custom_tools[generated_spec.name][
+        "tool_artifact"
+    ].artifact_version == 1
 
 
 def test_tool_snapshot_dual_view_keeps_mcp_legacy_schema_and_sidecar() -> None:
@@ -911,6 +1019,7 @@ async def test_load_custom_tools_reuses_explicit_file_candidate(
         description="file shadow",
         parameters={"type": "object", "properties": {}},
         handler=_handler,
+        policy=ToolPolicy.configured(),
     )
     artifact = _file_artifact(spec, generation=32)
     file_tools = {spec.name: _file_legacy_schema(artifact)}

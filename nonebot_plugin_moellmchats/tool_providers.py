@@ -19,7 +19,7 @@ from typing import (
 
 from .generated_tool_lifecycle import LifecycleState
 from .tool_artifacts import ToolArtifact
-from .tool_contracts import ToolEffect, ToolSpec
+from .tool_contracts import ToolEffect, ToolPolicy, ToolSpec
 
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _BUNDLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -66,6 +66,10 @@ class ToolResultProvenance(str, Enum):
 
 class ToolTrustPolicyError(ValueError):
     """A catalog trust policy is missing, malformed, or cannot be applied."""
+
+
+class ToolCapabilityPolicyError(ValueError):
+    """A catalog capability policy is missing or not generation-bound."""
 
 
 def trust_for_source(source: ToolSource) -> ToolTrustLevel:
@@ -963,12 +967,16 @@ class ProviderCatalogSnapshot:
     generation: int
     registrations: Mapping[str, ProviderRegistration]
     tools: Mapping[str, DiscoveredTool]
-    schema_version: ClassVar[int] = 2
+    schema_version: ClassVar[int] = 3
     _tools_by_provider: Mapping[str, tuple[str, ...]] = field(
         init=False,
         repr=False,
     )
     _trust_policies: Mapping[str, ToolTrustPolicy] = field(
+        init=False,
+        repr=False,
+    )
+    _capability_policies: Mapping[str, ToolPolicy] = field(
         init=False,
         repr=False,
     )
@@ -992,6 +1000,7 @@ class ProviderCatalogSnapshot:
             provider_id: [] for provider_id in registrations
         }
         trust_policies: dict[str, ToolTrustPolicy] = {}
+        capability_policies: dict[str, ToolPolicy] = {}
         for name, item in tools.items():
             if not isinstance(name, str) or not isinstance(item, DiscoveredTool):
                 raise TypeError("provider catalog tools 必须按名称映射发现记录")
@@ -1014,6 +1023,17 @@ class ProviderCatalogSnapshot:
                     "provider catalog trust policy ToolSpec identity 不一致"
                 )
             trust_policies[name] = policy
+            if item.spec.policy is not None:
+                capability_policies[name] = item.spec.policy
+            if item.artifact is not None:
+                if item.spec.policy is None:
+                    raise ToolCapabilityPolicyError(
+                        "artifact provider 工具缺少 capability policy"
+                    )
+                if item.artifact.contract.contract_version not in {1, 2}:
+                    raise ToolCapabilityPolicyError(
+                        "artifact provider 工具 contract version 非法"
+                    )
 
         ordered_registrations = dict(sorted(registrations.items()))
         ordered_tools = dict(sorted(tools.items()))
@@ -1027,6 +1047,11 @@ class ProviderCatalogSnapshot:
             self,
             "_trust_policies",
             MappingProxyType(dict(sorted(trust_policies.items()))),
+        )
+        object.__setattr__(
+            self,
+            "_capability_policies",
+            MappingProxyType(dict(sorted(capability_policies.items()))),
         )
         object.__setattr__(
             self,
@@ -1061,6 +1086,22 @@ class ProviderCatalogSnapshot:
         if policy is None:
             raise ToolTrustPolicyError(
                 f"provider catalog 缺少工具 trust policy: {tool_name}"
+            )
+        return policy
+
+    @property
+    def capability_policies(self) -> Mapping[str, ToolPolicy]:
+        return self._capability_policies
+
+    def capability_policy_for(self, tool_name: str) -> ToolPolicy:
+        if not isinstance(tool_name, str) or not tool_name:
+            raise ToolCapabilityPolicyError(
+                "capability policy 工具名不能为空"
+            )
+        policy = self._capability_policies.get(tool_name)
+        if policy is None:
+            raise ToolCapabilityPolicyError(
+                f"provider catalog 工具没有 capability policy: {tool_name}"
             )
         return policy
 
@@ -1425,6 +1466,32 @@ class FileToolProvider:
                 "artifact_digest": artifact.artifact_digest,
                 "generation": generation,
             }
+            if artifact.artifact_version == 2:
+                expected_schema.update(
+                    {
+                        "tool_contract_version": (
+                            artifact.contract.contract_version
+                        ),
+                        "artifact_digest_version": artifact.artifact_version,
+                        "requested_capabilities": (
+                            artifact.contract.requested_capabilities
+                        ),
+                        "detected_capabilities": (
+                            artifact.contract.detected_capabilities
+                        ),
+                        "admin_capabilities": (
+                            artifact.contract.admin_capabilities
+                        ),
+                        "effective_capabilities": (
+                            artifact.contract.effective_capabilities
+                        ),
+                        "capability_policy": (
+                            spec.policy.capability_contract()
+                            if spec.policy is not None
+                            else None
+                        ),
+                    }
+                )
             if set(schema) != set(expected_schema):
                 raise ValueError(f"custom-file legacy 工具 {name} 字段不一致")
             if schema.get("tool_artifact") is not artifact:
@@ -1433,16 +1500,11 @@ class FileToolProvider:
                 raise ValueError(f"custom-file legacy 工具 {name} ToolSpec 不一致")
             if schema.get("func") is not spec.handler:
                 raise ValueError(f"custom-file legacy 工具 {name} handler 不一致")
-            for field_name in (
-                "name",
-                "description",
-                "parameters",
-                "source",
-                "declared_effect",
-                "effective_effect",
-                "artifact_digest",
-                "generation",
-            ):
+            for field_name in set(expected_schema) - {
+                "func",
+                "tool_spec",
+                "tool_artifact",
+            }:
                 if not _legacy_value_equal(
                     schema.get(field_name),
                     expected_schema[field_name],
@@ -1598,6 +1660,20 @@ class GeneratedToolProvider:
                 "artifact_digest": artifact.artifact_digest,
                 "generation": generation,
             }
+            if artifact.artifact_version == 2:
+                expected_schema.update(
+                    {
+                        "tool_contract_version": contract.contract_version,
+                        "artifact_digest_version": artifact.artifact_version,
+                        "detected_capabilities": contract.detected_capabilities,
+                        "admin_capabilities": contract.admin_capabilities,
+                        "capability_policy": (
+                            spec.policy.capability_contract()
+                            if spec.policy is not None
+                            else None
+                        ),
+                    }
+                )
             if set(schema) != set(expected_schema):
                 raise ValueError(f"generated legacy 工具 {name} 字段不一致")
             if schema.get("tool_artifact") is not artifact:
@@ -1606,23 +1682,11 @@ class GeneratedToolProvider:
                 raise ValueError(f"generated legacy 工具 {name} ToolSpec 不一致")
             if schema.get("func") is not spec.handler:
                 raise ValueError(f"generated legacy 工具 {name} handler 不一致")
-            for field_name in (
-                "name",
-                "description",
-                "parameters",
-                "source",
-                "bundle_id",
-                "bundle_digest",
-                "requested_permission",
-                "effective_permission",
-                "declared_effect",
-                "effective_effect",
-                "user_policy_approved",
-                "requested_capabilities",
-                "effective_capabilities",
-                "artifact_digest",
-                "generation",
-            ):
+            for field_name in set(expected_schema) - {
+                "func",
+                "tool_spec",
+                "tool_artifact",
+            }:
                 if not _legacy_value_equal(
                     schema.get(field_name),
                     expected_schema[field_name],

@@ -9,7 +9,15 @@ import re
 from types import MappingProxyType
 from typing import Any
 
-from .tool_contracts import ToolEffect, ToolSpec
+from .tool_contracts import (
+    CAPABILITY_DETECTOR_VERSION,
+    CAPABILITY_SCHEMA_VERSION,
+    ToolCapability,
+    ToolCapabilityV2,
+    ToolEffect,
+    ToolSpec,
+    parse_capability_profile,
+)
 
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -102,6 +110,13 @@ class ToolContractSnapshot:
     requested_capabilities: Mapping[str, bool] | None
     admin_capabilities: Mapping[str, bool] | None
     effective_capabilities: Mapping[str, bool] | None
+    contract_version: int = 2
+    capability_schema_version: int | None = None
+    capability_detector_version: int | None = None
+    detected_capabilities: Mapping[str, bool] | None = None
+    requested_capabilities_v2: Mapping[str, Any] | None = None
+    admin_capabilities_v2: Mapping[str, Any] | None = None
+    effective_capabilities_v2: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not _TOOL_NAME_RE.fullmatch(self.name):
@@ -145,6 +160,11 @@ class ToolContractSnapshot:
             raise ValueError("ToolContractSnapshot dependencies 非法")
         if len(set(self.dependencies)) != len(self.dependencies):
             raise ValueError("ToolContractSnapshot dependencies 不得重复")
+        if type(self.contract_version) is not int or self.contract_version not in {
+            1,
+            2,
+        }:
+            raise ValueError("ToolContractSnapshot contract_version 非法")
 
         object.__setattr__(self, "parameters", _freeze_json(self.parameters))
         for field_name in (
@@ -167,6 +187,118 @@ class ToolContractSnapshot:
                     )
                 object.__setattr__(self, field_name, frozen)
 
+        legacy_values = (
+            self.requested_capabilities,
+            self.admin_capabilities,
+            self.effective_capabilities,
+        )
+        if any(value is None for value in legacy_values) and any(
+            value is not None for value in legacy_values
+        ):
+            raise ValueError("ToolContractSnapshot capability v1 字段必须同时存在")
+        if self.contract_version == 1:
+            if any(
+                value is not None
+                for value in (
+                    self.capability_schema_version,
+                    self.capability_detector_version,
+                    self.detected_capabilities,
+                    self.requested_capabilities_v2,
+                    self.admin_capabilities_v2,
+                    self.effective_capabilities_v2,
+                )
+            ):
+                raise ValueError("ToolContractSnapshot v1 不得包含 capability v2 字段")
+            self._verify_legacy_capability_merge()
+            return
+
+        if all(value is None for value in legacy_values):
+            if any(
+                value is not None
+                for value in (
+                    self.capability_schema_version,
+                    self.capability_detector_version,
+                    self.detected_capabilities,
+                    self.requested_capabilities_v2,
+                    self.admin_capabilities_v2,
+                    self.effective_capabilities_v2,
+                )
+            ):
+                raise ValueError("无 capability 的 ToolContractSnapshot 不得伪造 v2 policy")
+            return
+        if self.capability_schema_version != CAPABILITY_SCHEMA_VERSION:
+            raise ValueError("ToolContractSnapshot capability schema version 非法")
+        if (
+            type(self.capability_detector_version) is not int
+            or self.capability_detector_version != CAPABILITY_DETECTOR_VERSION
+        ):
+            raise ValueError("ToolContractSnapshot capability detector version 非法")
+        if self.detected_capabilities is None:
+            raise ValueError("ToolContractSnapshot 缺少 detected capabilities")
+        detected = _freeze_json(self.detected_capabilities)
+        if set(detected) != {
+            "network",
+            "process",
+            "workspace",
+            "host_filesystem",
+            "secrets",
+        } or not all(type(item) is bool for item in detected.values()):
+            raise ValueError("ToolContractSnapshot detected_capabilities capability 非法")
+        object.__setattr__(self, "detected_capabilities", detected)
+
+        structured_values = (
+            self.requested_capabilities_v2,
+            self.admin_capabilities_v2,
+            self.effective_capabilities_v2,
+        )
+        if any(value is None for value in structured_values):
+            raise ValueError("ToolContractSnapshot capability v2 字段必须同时存在")
+        requested_v2 = ToolCapabilityV2.from_mapping(
+            self.requested_capabilities_v2
+        )
+        admin_v2 = ToolCapabilityV2.from_mapping(self.admin_capabilities_v2)
+        effective_v2 = ToolCapabilityV2.from_mapping(
+            self.effective_capabilities_v2
+        )
+        if effective_v2 != requested_v2.restrict(admin_v2):
+            raise ValueError("ToolContractSnapshot capability v2 merge 不一致")
+        requested = ToolCapability.from_mapping(self.requested_capabilities)
+        admin = ToolCapability.from_mapping(self.admin_capabilities)
+        effective = ToolCapability.from_mapping(self.effective_capabilities)
+        detected_value = ToolCapability.from_mapping(detected)
+        if (
+            requested_v2.to_legacy() != requested
+            or admin_v2.to_legacy() != admin
+            or effective_v2.to_legacy() != effective
+        ):
+            raise ValueError("ToolContractSnapshot capability v1/v2 投影不一致")
+        if not detected_value.is_subset_of(effective):
+            raise ValueError("ToolContractSnapshot detected capability 未获授权")
+        object.__setattr__(
+            self,
+            "requested_capabilities_v2",
+            _freeze_json(requested_v2.as_dict()),
+        )
+        object.__setattr__(
+            self,
+            "admin_capabilities_v2",
+            _freeze_json(admin_v2.as_dict()),
+        )
+        object.__setattr__(
+            self,
+            "effective_capabilities_v2",
+            _freeze_json(effective_v2.as_dict()),
+        )
+
+    def _verify_legacy_capability_merge(self) -> None:
+        if self.requested_capabilities is None:
+            return
+        requested = ToolCapability.from_mapping(self.requested_capabilities)
+        admin = ToolCapability.from_mapping(self.admin_capabilities)
+        effective = ToolCapability.from_mapping(self.effective_capabilities)
+        if requested.restrict(admin) != effective:
+            raise ValueError("ToolContractSnapshot capability v1 merge 不一致")
+
     @classmethod
     def from_spec(
         cls,
@@ -174,14 +306,44 @@ class ToolContractSnapshot:
         *,
         requested_permission: str | None = None,
         declared_effect: ToolEffect | None = None,
+        contract_version: int = 2,
     ) -> ToolContractSnapshot:
         requested_capabilities = None
         admin_capabilities = None
         effective_capabilities = None
+        capability_schema_version = None
+        capability_detector_version = None
+        detected_capabilities = None
+        requested_capabilities_v2 = None
+        admin_capabilities_v2 = None
+        effective_capabilities_v2 = None
         if spec.policy is not None:
-            requested_capabilities = spec.policy.requested.as_dict()
-            admin_capabilities = spec.policy.admin.as_dict()
-            effective_capabilities = spec.policy.effective.as_dict()
+            policy = spec.policy
+            assert policy.requested_v2 is not None
+            assert policy.admin_v2 is not None
+            requested_capabilities = policy.requested.as_dict()
+            admin_capabilities = policy.admin.as_dict()
+            effective_capabilities = policy.effective.as_dict()
+            if contract_version == 1:
+                if (
+                    policy.detected != ToolCapability.none()
+                    or policy.requested_v2
+                    != ToolCapabilityV2.from_legacy(policy.requested)
+                    or policy.admin_v2
+                    != ToolCapabilityV2.from_legacy(policy.admin)
+                ):
+                    raise ValueError("ToolContractSnapshot v1 无法表示 v2 capability policy")
+            elif contract_version == 2:
+                capability_schema_version = policy.capability_schema_version
+                capability_detector_version = policy.detector_version
+                detected_capabilities = policy.detected.as_dict()
+                requested_capabilities_v2 = policy.requested_v2.as_dict()
+                admin_capabilities_v2 = policy.admin_v2.as_dict()
+                effective_capabilities_v2 = policy.effective_v2.as_dict()
+            else:
+                raise ValueError("ToolContractSnapshot contract_version 非法")
+        elif contract_version not in {1, 2}:
+            raise ValueError("ToolContractSnapshot contract_version 非法")
         return cls(
             name=spec.name,
             description=spec.description,
@@ -200,10 +362,17 @@ class ToolContractSnapshot:
             requested_capabilities=requested_capabilities,
             admin_capabilities=admin_capabilities,
             effective_capabilities=effective_capabilities,
+            contract_version=contract_version,
+            capability_schema_version=capability_schema_version,
+            capability_detector_version=capability_detector_version,
+            detected_capabilities=detected_capabilities,
+            requested_capabilities_v2=requested_capabilities_v2,
+            admin_capabilities_v2=admin_capabilities_v2,
+            effective_capabilities_v2=effective_capabilities_v2,
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "description": self.description,
             "parameters": mutable_json(self.parameters),
@@ -218,12 +387,29 @@ class ToolContractSnapshot:
             "admin_capabilities": mutable_json(self.admin_capabilities),
             "effective_capabilities": mutable_json(self.effective_capabilities),
         }
+        if self.contract_version == 1:
+            return payload
+        return {
+            "contract_version": self.contract_version,
+            **payload,
+            "capability_schema_version": self.capability_schema_version,
+            "capability_detector_version": self.capability_detector_version,
+            "detected_capabilities": mutable_json(self.detected_capabilities),
+            "requested_capabilities_v2": mutable_json(
+                self.requested_capabilities_v2
+            ),
+            "admin_capabilities_v2": mutable_json(self.admin_capabilities_v2),
+            "effective_capabilities_v2": mutable_json(
+                self.effective_capabilities_v2
+            ),
+        }
 
     def verify_spec(self, spec: ToolSpec) -> None:
         current = ToolContractSnapshot.from_spec(
             spec,
             requested_permission=self.requested_permission,
             declared_effect=self.declared_effect,
+            contract_version=self.contract_version,
         )
         if current.as_dict() != self.as_dict():
             raise ValueError("ToolArtifact ToolSpec 与固化安全契约不一致")
@@ -251,6 +437,7 @@ class ToolArtifact:
     bundle_id: str | None = None
     bundle_digest: str | None = None
     artifact_digest: str = ""
+    artifact_version: int | None = None
 
     def __post_init__(self) -> None:
         if self.source_type not in _SOURCE_TYPES:
@@ -259,6 +446,16 @@ class ToolArtifact:
             raise ValueError("ToolArtifact spec 必须是 ToolSpec")
         if not isinstance(self.contract, ToolContractSnapshot):
             raise ValueError("ToolArtifact contract 非法")
+        artifact_version = (
+            self.contract.contract_version
+            if self.artifact_version is None
+            else self.artifact_version
+        )
+        if type(artifact_version) is not int or artifact_version not in {1, 2}:
+            raise ValueError("ToolArtifact artifact_version 非法")
+        if artifact_version != self.contract.contract_version:
+            raise ValueError("ToolArtifact 与 ToolContractSnapshot 版本不一致")
+        object.__setattr__(self, "artifact_version", artifact_version)
         if self.tool_name != self.spec.name or self.tool_name != self.contract.name:
             raise ValueError("ToolArtifact 工具名与安全契约不一致")
         if (
@@ -357,18 +554,27 @@ class ToolArtifact:
             or tuple(item.get("dependencies") or ()) != self.contract.dependencies
         ):
             raise ValueError("Generated ToolArtifact 与 manifest 工具契约不一致")
-        manifest_capabilities = {
-            "network": False,
-            "process": False,
-            "workspace": True,
-            "host_filesystem": False,
-            "secrets": False,
-            **(manifest.get("capabilities") or {}),
-        }
-        if manifest_capabilities != mutable_json(
+        manifest_capabilities, manifest_capabilities_v2 = (
+            parse_capability_profile(manifest.get("capabilities"))
+        )
+        if manifest_capabilities.as_dict() != mutable_json(
             self.contract.requested_capabilities
         ):
             raise ValueError("Generated ToolArtifact capability 与 manifest 不一致")
+        if self.contract.contract_version == 1 and (
+            manifest_capabilities_v2
+            != ToolCapabilityV2.from_legacy(manifest_capabilities)
+        ):
+            raise ValueError(
+                "Generated ToolArtifact v1 无法表示 v2 capability policy"
+            )
+        if self.contract.contract_version == 2 and (
+            manifest_capabilities_v2.as_dict()
+            != mutable_json(self.contract.requested_capabilities_v2)
+        ):
+            raise ValueError(
+                "Generated ToolArtifact capability v2 与 manifest 不一致"
+            )
         if self.bundle_digest != canonical_bundle_digest(
             manifest,
             self.source,
@@ -388,13 +594,20 @@ class ToolArtifact:
             "bundle_id": self.bundle_id,
             "bundle_digest": self.bundle_digest,
         }
+        if self.artifact_version == 2:
+            metadata["artifact_version"] = self.artifact_version
         manifest = (
             _canonical_json(mutable_json(self.bundle_manifest))
             if self.bundle_manifest is not None
             else b""
         )
-        return hashlib.sha256(
+        prefix = (
             b"moellm-tool-artifact-v1\0"
+            if self.artifact_version == 1
+            else b"moellm-tool-artifact-v2\0"
+        )
+        return hashlib.sha256(
+            prefix
             + _canonical_json(metadata)
             + b"\0"
             + self.source

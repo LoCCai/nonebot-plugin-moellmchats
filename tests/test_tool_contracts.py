@@ -6,7 +6,10 @@ import json
 import pytest
 
 from nonebot_plugin_moellmchats.tool_contracts import (
+    CAPABILITY_DETECTOR_VERSION,
+    CAPABILITY_SCHEMA_VERSION,
     ToolCapability,
+    ToolCapabilityV2,
     ToolEffect,
     ToolPolicy,
     ToolRegistry,
@@ -197,3 +200,82 @@ def test_host_filesystem_and_secrets_are_deny_by_default() -> None:
     assert default.secrets is False
     requested = ToolCapability(host_filesystem=True, secrets=True)
     assert requested.restrict(default) == default
+
+
+def test_structured_capability_profile_intersects_scopes_deterministically() -> None:
+    requested = ToolCapabilityV2.from_mapping(
+        {
+            "network": {"allow": ["weather.example", "api.example"]},
+            "process": True,
+            "filesystem": {
+                "workspace": {"read": True, "write": True},
+                "host": False,
+            },
+            "database": {"read": True, "write": False},
+            "bot": {"read": True, "send": True, "manage": False},
+            "secrets": {"allow": ["WEATHER_TOKEN"]},
+        }
+    )
+    admin = ToolCapabilityV2.from_mapping(
+        {
+            "network": {"allow": ["api.example"]},
+            "process": False,
+            "filesystem": {"workspace": True, "host": False},
+            "database": True,
+            "bot": {"read": True, "send": False, "manage": False},
+            "secrets": {"allow": ["WEATHER_TOKEN"]},
+        }
+    )
+    policy = ToolPolicy.generated(requested, admin=admin)
+
+    assert policy.effective_v2.network_allow == ("api.example",)
+    assert policy.effective_v2.process is False
+    assert policy.effective_v2.database_read is True
+    assert policy.effective_v2.database_write is False
+    assert policy.effective_v2.bot_read is True
+    assert policy.effective_v2.bot_send is False
+    assert policy.effective_v2.secret_names == ("WEATHER_TOKEN",)
+    assert policy.effective.network is True
+    assert policy.effective.process is False
+
+
+def test_detected_capability_is_bound_but_never_grants_authority() -> None:
+    denied = ToolPolicy.generated(
+        {"network": True},
+        admin={"network": False},
+    )
+    with pytest.raises(ValueError, match=r"detected.*requested/admin"):
+        denied.with_detected(ToolCapability(network=True, workspace=False))
+
+    authorized = ToolPolicy.configured({"network": True}).with_detected(
+        ToolCapability(network=True, workspace=False)
+    )
+    assert authorized.detected.network is True
+    assert authorized.effective.network is True
+    assert authorized.effective == ToolPolicy.configured(
+        {"network": True}
+    ).effective
+    contract = authorized.capability_contract()
+    assert contract["schema_version"] == CAPABILITY_SCHEMA_VERSION
+    assert contract["detector_version"] == CAPABILITY_DETECTOR_VERSION
+    assert contract["detected"]["network"] is True
+    json.dumps(contract)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"network": {"allow": ["* "]}},
+        {"network": {"allow": ["*", "api.example"]}},
+        {"filesystem": {"workspace": {"read": False, "write": True}}},
+        {"database": {"read": False, "write": True}},
+        {"bot": {"read": False, "send": True}},
+        {"secrets": {"allow": ["bad-name"]}},
+        {"workspace": True, "filesystem": {"workspace": True}},
+    ],
+)
+def test_structured_capability_profile_rejects_ambiguous_or_unsafe_values(
+    value,
+) -> None:
+    with pytest.raises(ValueError, match="capabilit"):
+        ToolCapabilityV2.from_mapping(value)

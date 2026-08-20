@@ -261,6 +261,52 @@ def test_generated_capabilities_are_bounded_by_safe_policy(tmp_path: Path) -> No
     assert not schema["tool_spec"].policy.effective.process
     assert not schema["tool_spec"].policy.effective.host_filesystem
     assert not schema["tool_spec"].policy.effective.secrets
+    assert schema["tool_contract_version"] == 2
+    assert schema["artifact_digest_version"] == 2
+    assert schema["detected_capabilities"] == {
+        "network": False,
+        "process": False,
+        "workspace": False,
+        "host_filesystem": False,
+        "secrets": False,
+    }
+
+
+def test_generated_structured_request_is_digest_bound_but_not_auto_granted(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    manifest = _manifest()
+    manifest["capabilities"] = {
+        "network": {"allow": ["api.example"]},
+        "filesystem": {"workspace": True, "host": False},
+        "database": {"read": True, "write": False},
+        "bot": False,
+        "secrets": False,
+    }
+    draft_id, validation = store.create_draft(
+        manifest,
+        _SOURCE,
+        _TESTS,
+        request="structured capabilities",
+        review={"approved": True},
+    )
+    _approve_fixture(store, draft_id, validation.digest)
+    tools, _ = store.load_active_tools()
+    schema = tools["date_difference"]
+    policy = schema["tool_spec"].policy
+
+    assert policy.requested_v2.network_allow == ("api.example",)
+    assert policy.requested_v2.database_read is True
+    assert policy.effective_v2.network_allow == ()
+    assert policy.effective_v2.database_read is False
+    assert policy.effective.network is False
+    assert schema["capability_policy"]["requested"]["network"] == {
+        "allow": ["api.example"]
+    }
+    assert schema["tool_artifact"].contract.requested_capabilities_v2[
+        "database"
+    ]["read"] is True
 
 
 def test_generated_manifest_rejects_unknown_capability(tmp_path: Path) -> None:

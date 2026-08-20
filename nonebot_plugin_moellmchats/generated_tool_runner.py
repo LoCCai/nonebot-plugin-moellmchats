@@ -13,7 +13,7 @@ import stat
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, cast
 
 from nonebot.log import logger
 
@@ -21,7 +21,7 @@ from .compat import timeout as timeout_scope
 from .config import config_parser
 from .runtime_metrics import runtime_metrics
 from .tool_artifacts import ToolArtifact
-from .tool_contracts import ToolResult
+from .tool_contracts import ToolCapabilityV2, ToolResult
 
 _PROTOCOL_VERSION = 1
 _MAX_SOURCE_BYTES = 65_536
@@ -689,6 +689,17 @@ class GeneratedToolRunner:
             )
         ):
             raise ValueError("ToolArtifact effective capabilities 非法")
+        if artifact.contract.contract_version == 2:
+            structured = artifact.contract.effective_capabilities_v2
+            if not isinstance(structured, Mapping):
+                raise ValueError("ToolArtifact 缺少固化 capability v2 policy")
+            effective_v2 = ToolCapabilityV2.from_mapping(structured)
+            if effective_v2.to_legacy().as_dict() != dict(capabilities):
+                raise ValueError("ToolArtifact capability v1/v2 投影不一致")
+            if not effective_v2.legacy_runner_compatible:
+                raise ValueError(
+                    "ToolArtifact capability v2 尚未迁移到当前 runner consumer"
+                )
         if artifact.source_type == "generated" and (
             allow_network
             or allow_process
@@ -700,11 +711,11 @@ class GeneratedToolRunner:
                 "host_filesystem/secrets"
             )
         return (
-            allow_network,
-            allow_process,
-            allow_workspace,
-            allow_host_filesystem,
-            allow_secrets,
+            cast("bool", allow_network),
+            cast("bool", allow_process),
+            cast("bool", allow_workspace),
+            cast("bool", allow_host_filesystem),
+            cast("bool", allow_secrets),
         )
 
     async def execute_artifact(
