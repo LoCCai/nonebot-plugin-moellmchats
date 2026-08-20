@@ -4,15 +4,122 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 import re
+from types import MappingProxyType
 from typing import Any
 
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _JSON_TYPES = {"array", "boolean", "integer", "null", "number", "object", "string"}
+_CAPABILITY_FIELDS = frozenset(
+    {"network", "process", "workspace", "host_filesystem", "secrets"}
+)
 
 
 class ToolEffect(str, Enum):
     READ_ONLY = "read_only"
     MUTATING = "mutating"
+
+
+@dataclass(frozen=True)
+class ToolCapability:
+    """A small, deny-by-default capability set for isolated tools.
+
+    ``workspace`` remains enabled by default because generated tools receive a
+    private, bounded working directory. Network, child-process, host filesystem,
+    and secret access must be requested and approved explicitly. ``secrets`` is
+    reserved for a future broker; the current runner never injects host secrets.
+    """
+
+    network: bool = False
+    process: bool = False
+    workspace: bool = True
+    host_filesystem: bool = False
+    secrets: bool = False
+
+    def __post_init__(self) -> None:
+        for name in _CAPABILITY_FIELDS:
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"工具 capability.{name} 必须是布尔值")
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | None) -> ToolCapability:
+        """Parse a manifest/config mapping without accepting unknown rights."""
+
+        if value is None:
+            return cls()
+        if not isinstance(value, Mapping):
+            raise ValueError("工具 capabilities 必须是映射")
+        unknown = [key for key in value if key not in _CAPABILITY_FIELDS]
+        if unknown:
+            raise ValueError(
+                f"工具 capabilities 包含未知字段: {sorted(map(str, unknown))}"
+            )
+        return cls(**dict(value))
+
+    def restrict(self, ceiling: ToolCapability) -> ToolCapability:
+        """Return the strict intersection of requested and administrative rights."""
+
+        if not isinstance(ceiling, ToolCapability):
+            raise ValueError("工具 admin capabilities 必须是 ToolCapability")
+        return ToolCapability(
+            network=self.network and ceiling.network,
+            process=self.process and ceiling.process,
+            workspace=self.workspace and ceiling.workspace,
+            host_filesystem=(
+                self.host_filesystem and ceiling.host_filesystem
+            ),
+            secrets=self.secrets and ceiling.secrets,
+        )
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "network": self.network,
+            "process": self.process,
+            "workspace": self.workspace,
+            "host_filesystem": self.host_filesystem,
+            "secrets": self.secrets,
+        }
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Requested rights bounded by an administrator-controlled ceiling.
+
+    ``effective`` is derived internally so a manifest cannot provide or widen
+    it. ``ToolPolicy.generated()`` is the safe default for generated tools:
+    private workspace access only, with network and process access denied.
+    """
+
+    requested: ToolCapability = field(default_factory=ToolCapability)
+    admin: ToolCapability = field(default_factory=ToolCapability)
+    effective: ToolCapability = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.requested, ToolCapability):
+            raise ValueError("工具 requested capabilities 必须是 ToolCapability")
+        if not isinstance(self.admin, ToolCapability):
+            raise ValueError("工具 admin capabilities 必须是 ToolCapability")
+        object.__setattr__(self, "effective", self.requested.restrict(self.admin))
+
+    @classmethod
+    def generated(
+        cls,
+        requested: ToolCapability | Mapping[str, Any] | None = None,
+        *,
+        admin: ToolCapability | Mapping[str, Any] | None = None,
+    ) -> ToolPolicy:
+        """Build a generated-tool policy with a conservative admin ceiling."""
+
+        requested_value = (
+            requested
+            if isinstance(requested, ToolCapability)
+            else ToolCapability.from_mapping(requested)
+        )
+        admin_value = (
+            admin
+            if isinstance(admin, ToolCapability)
+            else ToolCapability.from_mapping(admin)
+        )
+        return cls(requested=requested_value, admin=admin_value)
 
 
 @dataclass(frozen=True)
@@ -31,6 +138,34 @@ class ToolResult:
 
 
 ToolHandler = Callable[..., Awaitable[Any] | Any]
+
+
+def _freeze_schema_value(value: Any) -> Any:
+    """Detach and recursively freeze the JSON values owned by a ToolSpec."""
+
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError("工具 parameters 字段名必须是字符串")
+        return MappingProxyType(
+            {key: _freeze_schema_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_schema_value(item) for item in value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise ValueError(
+        f"工具 parameters 包含不可序列化类型: {type(value).__name__}"
+    )
+
+
+def _mutable_schema_value(value: Any) -> Any:
+    """Return a detached JSON-compatible copy for model and legacy payloads."""
+
+    if isinstance(value, Mapping):
+        return {key: _mutable_schema_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_mutable_schema_value(item) for item in value]
+    return value
 
 
 def _schema_types(schema: Mapping[str, Any], path: str) -> tuple[str, ...]:
@@ -163,6 +298,7 @@ class ToolSpec:
     timeout_seconds: float | None = None
     result_limit: int | None = None
     dependencies: tuple[str, ...] = ()
+    policy: ToolPolicy | None = None
 
     def __post_init__(self) -> None:
         if not _TOOL_NAME_RE.fullmatch(self.name):
@@ -173,7 +309,9 @@ class ToolSpec:
             raise ValueError("工具 effect 仅支持 read_only 或 mutating")
         if self.permission not in {"user", "superuser"}:
             raise ValueError("工具 permission 仅支持 user 或 superuser")
-        validate_parameters_schema(self.parameters)
+        frozen_parameters = _freeze_schema_value(self.parameters)
+        validate_parameters_schema(frozen_parameters)
+        object.__setattr__(self, "parameters", frozen_parameters)
         if not callable(self.handler):
             raise ValueError("工具 handler 必须可调用")
         if self.timeout_seconds is not None and (
@@ -195,18 +333,13 @@ class ToolSpec:
             raise ValueError("工具 dependencies 必须是安全工具名元组")
         if len(set(self.dependencies)) != len(self.dependencies):
             raise ValueError("工具 dependencies 不得重复")
+        if self.policy is not None and not isinstance(self.policy, ToolPolicy):
+            raise ValueError("工具 policy 必须是 ToolPolicy")
 
     def as_legacy_schema(self) -> dict[str, Any]:
-        parameters = dict(self.parameters)
+        parameters = _mutable_schema_value(self.parameters)
         parameters["properties"] = dict(parameters.get("properties") or {})
         parameters["required"] = list(parameters.get("required") or [])
-        if self.effect == ToolEffect.MUTATING:
-            parameters["properties"]["confirm"] = {
-                "type": "boolean",
-                "description": "仅当用户明确说出“确认执行”时设置为 true",
-            }
-            if "confirm" not in parameters["required"]:
-                parameters["required"].append("confirm")
         return {
             "name": self.name,
             "description": self.description,
@@ -214,6 +347,9 @@ class ToolSpec:
             "func": self.handler,
             "tool_spec": self,
         }
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> ToolSpec:
+        return self
 
 
 class ToolRegistry:

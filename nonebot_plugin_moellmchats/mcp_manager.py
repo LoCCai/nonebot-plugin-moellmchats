@@ -20,6 +20,7 @@ except ImportError:
     import tomli as tomllib
 
 from .model_selector import config_path
+from .private_files import atomic_write_private_text, ensure_private_file
 
 
 class McpManager:
@@ -45,6 +46,7 @@ class McpManager:
 
     def _init_file(self):
         if self.config_file.exists():
+            ensure_private_file(self.config_file)
             return
 
         template = """# MCP Server 配置文件
@@ -100,10 +102,10 @@ description = "旧版 SSE MCP 示例"
 # result_limit = 6000
 
 """
-        self.config_file.parent.mkdir(parents=True, exist_ok=True)
-        self.config_file.write_text(template, encoding="utf-8")
+        atomic_write_private_text(self.config_file, template)
 
     def load_config_candidate(self) -> dict[str, dict[str, Any]]:
+        ensure_private_file(self.config_file)
         with self.config_file.open("rb") as file:
             data = tomllib.load(file)
         servers = data.get("mcp", {})

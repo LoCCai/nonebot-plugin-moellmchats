@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -17,6 +19,12 @@ import aiohttp
 from nonebot.log import logger
 import nonebot_plugin_localstore as store
 
+from .private_files import (
+    atomic_write_private_text,
+    ensure_private_directory,
+    ensure_private_file,
+)
+
 config_path: Path = store.get_plugin_config_dir()
 
 
@@ -26,6 +34,18 @@ class ModelRuntimeState:
     providers: Mapping[str, dict[str, Any]]
     global_default: Mapping[str, Any]
     model_config: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        from .runtime_snapshot import immutable_mapping
+
+        for field_name in ("models", "providers", "global_default", "model_config"):
+            value = getattr(self, field_name)
+            if not isinstance(value, Mapping):
+                raise ValueError(f"ModelRuntimeState.{field_name} 必须是映射")
+            object.__setattr__(self, field_name, immutable_mapping(value))
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> ModelRuntimeState:
+        return self
 
 
 def _readonly(value: dict) -> Mapping:
@@ -42,6 +62,12 @@ class ModelSelector:
         self.providers_file = Path(config_path / "providers.toml")
         self.cache_file = Path(config_path / "model_cache.json")
         self.model_config_file = Path(config_path / "model_config.json")
+        self._ensure_private_storage(
+            self.models_file,
+            self.providers_file,
+            self.cache_file,
+            self.model_config_file,
+        )
 
         self.models = {}
         self.providers = {}
@@ -50,6 +76,16 @@ class ModelSelector:
         self.load_providers()
         self._load_all_models()
         self.model_config = self._load_model_config()
+
+    @staticmethod
+    def _ensure_private_storage(*paths: Path) -> None:
+        """Revalidate every runtime-read path instead of trusting startup state."""
+
+        normalized = tuple(Path(path) for path in paths)
+        for parent in {path.parent for path in normalized}:
+            ensure_private_directory(parent)
+        for path in normalized:
+            ensure_private_file(path)
 
     def capture_state(self) -> ModelRuntimeState:
         return ModelRuntimeState(
@@ -73,6 +109,12 @@ class ModelSelector:
 
     def build_candidate(self) -> ModelRuntimeState:
         """Parse and validate all model files without changing live state."""
+        self._ensure_private_storage(
+            self.providers_file,
+            self.models_file,
+            self.cache_file,
+            self.model_config_file,
+        )
         with self.providers_file.open("rb") as file:
             provider_data = tomllib.load(file)
         providers = provider_data.get("providers", {})
@@ -153,8 +195,9 @@ class ModelSelector:
         chosen_key = random.choice(valid_keys)
         return self._normalize_key(chosen_key)
 
-    def load_providers(self):
+    def load_providers(self, *, strict: bool = False):
         """初始化并读取 providers.toml，如果不存在则自动生成模板"""
+        self._ensure_private_storage(self.providers_file)
         if not self.providers_file.exists():
             template = """# AI服务商配置文件
 # base_url: 基础API地址（直接写Base URL即可，程序会自动补全 /chat/completions 及 /models）
@@ -204,9 +247,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                    # 设置后：本次请求不会注入 tool schema，历史中的工具消息也会自动转为普通文本传入
 # extra_payload = { extra_body = { google = { thinking_config = { thinking_level = "low" } } } } # <-- 示例：透传厂商私有参数
 """
-            self.providers_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.providers_file, "w", encoding="utf-8") as f:
-                f.write(template)
+            atomic_write_private_text(self.providers_file, template)
 
         try:
             with open(self.providers_file, "rb") as f:
@@ -214,10 +255,13 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 self.providers = config.get("providers", {})
                 self.global_default = config.get("global_default", {})
         except Exception as e:
+            if strict:
+                raise ValueError(f"解析 providers.toml 失败: {e}") from e
             logger.error(f"解析 providers.toml 失败: {e}")
 
     def _load_all_models(self, *, strict: bool = False):
         """合并加载：旧 models.json、缓存自动获取、TOML手动补充及模型独立配置"""
+        self._ensure_private_storage(self.models_file, self.cache_file)
         self.models.clear()
         # 1. 兼容加载老版 models.json
         if self.models_file.exists():
@@ -303,6 +347,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         from .utils import get_session
 
+        # Re-read the exact owner-private, no-follow checked provider file before
+        # any API request.  A startup-era in-memory copy is not sufficient after
+        # an editor may have replaced the file.
+        await asyncio.to_thread(self.load_providers, strict=True)
         session = get_session()
         timeout = aiohttp.ClientTimeout(total=15)
 
@@ -338,6 +386,9 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             *[_fetch_one(p, i) for p, i in self.providers.items()]
         )
         # Keep last-known-good provider entries on a transient /models failure.
+        # The cache is a separate runtime read: revalidate it immediately before
+        # opening rather than relying on startup checks or the later atomic write.
+        await asyncio.to_thread(self._ensure_private_storage, self.cache_file)
         try:
             with self.cache_file.open(encoding="utf-8") as file:
                 old_cache = json.load(file)
@@ -433,6 +484,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def _load_model_config(self):
         # 读取model_config.json文件，获取是否使用MOE及MOE难度模型等配置
+        self._ensure_private_storage(self.model_config_file)
         if self.model_config_file.exists():
             with open(self.model_config_file, encoding="utf-8") as f:
                 self.model_config = json.load(f)
@@ -471,8 +523,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def _write_config(self, file_path, config_data):
         # 将配置写入文件
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=4)
+        atomic_write_private_text(
+            Path(file_path),
+            json.dumps(config_data, ensure_ascii=False, indent=4),
+        )
         if Path(file_path) == self.model_config_file and hasattr(
             self, "model_config"
         ):

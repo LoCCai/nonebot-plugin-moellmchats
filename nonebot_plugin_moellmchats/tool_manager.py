@@ -1,7 +1,9 @@
 from collections import deque
-from copy import deepcopy
-from dataclasses import dataclass
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import nonebot
 from nonebot.log import logger
@@ -11,16 +13,46 @@ from .custom_tool_loader import load_file_tools
 from .generated_tools import generated_tool_store
 from .mcp_manager import mcp_manager
 from .model_selector import config_path, model_selector
-from .tool_contracts import tool_registry, validate_parameters_schema
+from .runtime_snapshot import (
+    immutable_mapping,
+    mutable_value,
+    validate_generated_stamp,
+)
+from .tool_artifacts import ToolArtifact
+from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
 
 
 @dataclass(frozen=True)
 class ToolSnapshot:
     generation: int
-    plugin_info: dict
-    custom_tools: dict
-    tool_dependencies: dict
-    mcp_tool_names: set
+    plugin_info: Mapping[str, Mapping[str, Any]]
+    custom_tools: Mapping[str, Mapping[str, Any]]
+    tool_dependencies: Mapping[str, AbstractSet[str]]
+    mcp_tool_names: AbstractSet[str]
+    generated_state_revision: int = 0
+    generated_state_digest: str = ""
+    generated_active: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for field_name in ("plugin_info", "custom_tools", "tool_dependencies"):
+            value = getattr(self, field_name)
+            if not isinstance(value, Mapping):
+                raise ValueError(f"ToolSnapshot.{field_name} 必须是映射")
+            object.__setattr__(self, field_name, immutable_mapping(value))
+        if not isinstance(self.mcp_tool_names, AbstractSet) or not all(
+            isinstance(name, str) for name in self.mcp_tool_names
+        ):
+            raise ValueError("ToolSnapshot.mcp_tool_names 必须是工具名集合")
+        object.__setattr__(self, "mcp_tool_names", frozenset(self.mcp_tool_names))
+        object.__setattr__(
+            self,
+            "generated_active",
+            validate_generated_stamp(
+                self.generated_state_revision,
+                self.generated_state_digest,
+                self.generated_active,
+            ),
+        )
 
     def expand_dependencies(self, plugins: set) -> set:
         expanded = {p for p in plugins if not tool_manager.is_tool_blacklisted(p)}
@@ -192,8 +224,21 @@ async def extract_webpage(
             with open(template_file, "w", encoding="utf-8") as f:
                 f.write(template_content)
 
-    def load_custom_tools(self, *, commit: bool = True):
+    def load_custom_tools(
+        self,
+        *,
+        commit: bool = True,
+        generation: int = 0,
+        generated_state=None,
+        generated_source_overrides=None,
+    ):
         """Parse file tools without importing them into the NoneBot process."""
+        if (
+            not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 0
+        ):
+            raise ValueError("generation 必须是非负整数")
         registered_tools = tool_registry.snapshot()
         new_tools = {
             name: {**spec.as_legacy_schema(), "source": "registered"}
@@ -206,12 +251,21 @@ async def extract_webpage(
             if spec.dependencies
         }
         file_tools, file_dependencies = load_file_tools(
-            self.custom_tools_dir.glob("*.py")
+            self.custom_tools_dir.glob("*.py"),
+            generation=generation,
         )
         self._merge_unique_tools(new_tools, file_tools)
         for trigger, dependencies in file_dependencies.items():
             new_dependencies.setdefault(trigger, set()).update(dependencies)
-        generated_tools, generated_dependencies = generated_tool_store.load_active_tools()
+        generated_load_kwargs = {"generation": generation}
+        if generated_state is not None or generated_source_overrides is not None:
+            generated_load_kwargs.update(
+                generated_state=generated_state,
+                generated_source_overrides=generated_source_overrides,
+            )
+        generated_tools, generated_dependencies = (
+            generated_tool_store.load_active_tools(**generated_load_kwargs)
+        )
         self._merge_unique_tools(new_tools, generated_tools)
         for trigger, dependencies in generated_dependencies.items():
             new_dependencies.setdefault(trigger, set()).update(dependencies)
@@ -259,6 +313,27 @@ async def extract_webpage(
             validate_parameters_schema(schema.get("parameters"))
             if not callable(schema.get("func")):
                 raise ValueError(f"工具 {name} handler 必须可调用")
+            source = schema.get("source")
+            if source not in {"custom_file", "generated"}:
+                continue
+            artifact = schema.get("tool_artifact")
+            if not isinstance(artifact, ToolArtifact):
+                raise ValueError(f"工具 {name} 缺少 ToolArtifact")
+            generation = schema.get("generation")
+            if generation != artifact.generation:
+                raise ValueError(f"工具 {name} generation 与 ToolArtifact 不一致")
+            if schema.get("artifact_digest") != artifact.artifact_digest:
+                raise ValueError(f"工具 {name} artifact digest 不一致")
+            if schema.get("tool_spec") is not artifact.spec:
+                raise ValueError(f"工具 {name} ToolSpec 与 ToolArtifact 不一致")
+            if schema.get("func") is not artifact.spec.handler:
+                raise ValueError(f"工具 {name} handler 与 ToolArtifact 不一致")
+            bundle_digest = schema.get("bundle_digest") if source == "generated" else None
+            artifact.verify(
+                expected_artifact_digest=artifact.artifact_digest,
+                expected_bundle_digest=bundle_digest,
+                generation=generation,
+            )
 
     def expand_dependencies(self, plugins: set) -> set:
         """
@@ -322,14 +397,20 @@ async def extract_webpage(
         self.plugin_info = self.build_plugin_info()
 
     def snapshot(self) -> ToolSnapshot:
+        from .runtime_snapshot import runtime_snapshots
+
+        runtime_snapshot = runtime_snapshots.active()
+        if runtime_snapshot is not None:
+            return runtime_snapshot.tool_snapshot
+
         from .runtime_metrics import runtime_metrics
 
         return ToolSnapshot(
             generation=runtime_metrics.reload_generation,
-            plugin_info=deepcopy(self.plugin_info),
-            custom_tools=dict(self.custom_tools),
-            tool_dependencies=deepcopy(self.tool_dependencies),
-            mcp_tool_names=set(self.mcp_tool_names),
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            tool_dependencies=self.tool_dependencies,
+            mcp_tool_names=self.mcp_tool_names,
         )
 
     def get_brief_catalog(self, *, is_superuser: bool = False) -> str:
@@ -350,9 +431,9 @@ async def extract_webpage(
     @staticmethod
     def build_brief_catalog(
         *,
-        plugin_info: dict,
-        custom_tools: dict,
-        mcp_tool_names: set,
+        plugin_info: Mapping[str, Mapping[str, Any]],
+        custom_tools: Mapping[str, Mapping[str, Any]],
+        mcp_tool_names: AbstractSet[str],
         is_superuser: bool = False,
     ) -> str:
         catalog = []
@@ -426,8 +507,14 @@ async def extract_webpage(
         return False
 
     @staticmethod
-    def is_tool_allowed(schema: dict, *, is_superuser: bool) -> bool:
-        spec = schema.get("tool_spec") if isinstance(schema, dict) else None
+    def is_tool_allowed(
+        schema: Mapping[str, Any], *, is_superuser: bool
+    ) -> bool:
+        if not isinstance(schema, Mapping):
+            return False
+        spec = schema.get("tool_spec")
+        if spec is not None and not isinstance(spec, ToolSpec):
+            return False
         return not (
             spec is not None
             and spec.permission == "superuser"
@@ -589,11 +676,11 @@ async def extract_webpage(
 
     @staticmethod
     def build_tool_schema(
-        plugin_names: list,
+        plugin_names: list[str],
         *,
         include_search: bool = False,
-        plugin_info: dict,
-        custom_tools: dict,
+        plugin_info: Mapping[str, Mapping[str, Any]],
+        custom_tools: Mapping[str, Mapping[str, Any]],
         is_superuser: bool = False,
     ) -> list:
         tools = []
@@ -643,11 +730,13 @@ async def extract_webpage(
                         "function": {
                             "name": name,
                             "description": info.get("description") or name,
-                            "parameters": info.get("parameters")
-                            or {
-                                "type": "object",
-                                "properties": {},
-                            },
+                            "parameters": mutable_value(
+                                info.get("parameters")
+                                or {
+                                    "type": "object",
+                                    "properties": {},
+                                }
+                            ),
                         },
                     }
                 )

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-import os
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 import nonebot_plugin_localstore as store
 import ujson as json
+
+from .private_files import (
+    atomic_write_private_text,
+    ensure_private_directory,
+    ensure_private_file,
+    harden_private_tree,
+)
 
 config_path: Path = store.get_plugin_config_dir()
 
@@ -28,6 +34,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "request_timeout_seconds": 180,
     "classification_timeout_seconds": 20,
     "tool_timeout_seconds": 30,
+    "pending_action_ttl_seconds": 120,
+    "pending_action_max_entries": 256,
+    "pending_action_max_argument_bytes": 16_384,
+    "pending_action_failure_window_seconds": 60,
+    "pending_action_max_failures": 8,
+    "pending_action_max_failure_keys": 4_096,
     "llm_max_active": 4,
     "llm_max_pending": 32,
     "llm_max_per_user": 2,
@@ -56,6 +68,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "generated_tool_memory_mb": 256,
     "generated_tool_output_bytes": 65_536,
     "generated_tool_workspace_mb": 64,
+    "generated_tool_workspace_max_files": 256,
+    "generated_tool_workspace_max_depth": 8,
+    "generated_tool_workspace_max_file_bytes": 8_388_608,
     "generated_tool_max_processes": 16,
 }
 
@@ -74,6 +89,12 @@ _POSITIVE_INTEGER_FIELDS = {
     "request_timeout_seconds",
     "classification_timeout_seconds",
     "tool_timeout_seconds",
+    "pending_action_ttl_seconds",
+    "pending_action_max_entries",
+    "pending_action_max_argument_bytes",
+    "pending_action_failure_window_seconds",
+    "pending_action_max_failures",
+    "pending_action_max_failure_keys",
     "llm_max_active",
     "llm_max_pending",
     "llm_max_per_user",
@@ -90,6 +111,9 @@ _POSITIVE_INTEGER_FIELDS = {
     "generated_tool_memory_mb",
     "generated_tool_output_bytes",
     "generated_tool_workspace_mb",
+    "generated_tool_workspace_max_files",
+    "generated_tool_workspace_max_depth",
+    "generated_tool_workspace_max_file_bytes",
     "generated_tool_max_processes",
 }
 
@@ -112,16 +136,28 @@ class ConfigParser:
         self._config = MappingProxyType(deepcopy(dict(value)))
 
     def _load_initial(self) -> None:
+        self._harden_storage()
         if not self.filepath.exists():
-            self.filepath.parent.mkdir(parents=True, exist_ok=True)
             self._write(DEFAULT_CONFIG)
         self.commit_candidate(self.load_candidate())
+
+    def _harden_storage(self) -> None:
+        ensure_private_directory(self.filepath.parent)
+        # Approved versions are separately managed as owner-readable immutable
+        # artifacts. Do not accidentally add write bits while tightening config.
+        versions_dir = self.filepath.parent / "generated_tools" / "versions"
+        harden_private_tree(
+            self.filepath.parent,
+            skip_children=(versions_dir,),
+        )
 
     def parse_config(self) -> dict[str, Any]:
         """Compatibility alias returning a validated mutable copy."""
         return self.load_candidate()
 
     def load_candidate(self) -> dict[str, Any]:
+        self._harden_storage()
+        ensure_private_file(self.filepath)
         with self.filepath.open("r", encoding="utf-8") as file:
             loaded = json.load(file)
         if not isinstance(loaded, dict):
@@ -174,13 +210,11 @@ class ConfigParser:
         runtime_snapshots.patch_current(config=immutable_mapping(candidate))
 
     def _write(self, config: Mapping[str, Any]) -> None:
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.filepath.with_suffix(f".json.tmp.{os.getpid()}")
-        with temporary.open("w", encoding="utf-8") as file:
-            json.dump(dict(config), file, indent=4, ensure_ascii=False)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary, self.filepath)
+        self._harden_storage()
+        atomic_write_private_text(
+            self.filepath,
+            json.dumps(dict(config), indent=4, ensure_ascii=False),
+        )
 
 
 config_parser = ConfigParser()

@@ -1,6 +1,4 @@
-import asyncio
 from collections import Counter
-import inspect
 import traceback
 
 from nonebot.log import logger
@@ -9,17 +7,18 @@ import ujson as json
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .event_simulator import event_simulator
-from .network_safety import validate_url_arguments
-from .request_manager import get_current_request_id
+from .pending_actions import PendingActionError, pending_action_store
 from .runtime_metrics import runtime_metrics
 from .search import Search
 from .tool_contracts import (
-    ToolContext,
     ToolEffect,
-    ToolResult,
     validate_tool_arguments,
 )
-from .tool_manager import tool_manager
+from .tool_execution import (
+    ToolExecutionError,
+    execute_custom_tool,
+    validate_pending_custom_tool,
+)
 from .utils import parse_emotion
 
 
@@ -159,158 +158,88 @@ class LlmToolsMixin:
                     await self.bot.send(self.event, f"正在调用函数: {func_name}...")
                 try:
                     tool_entry = self.tool_snapshot.custom_tools[func_name]
-                    func = tool_entry["func"]
                     spec = tool_entry.get("tool_spec")
-                    if spec is not None and spec.permission == "superuser":
-                        superusers = {
-                            str(user_id)
-                            for user_id in getattr(self.bot.config, "superusers", set())
-                        }
-                        if str(self.event.user_id) not in superusers:
-                            tool_result = f"工具 {func_name} 仅允许超级用户执行。"
+                    if spec is not None and spec.effect == ToolEffect.MUTATING:
+                        # A model-provided flag or confirmation phrase in the original
+                        # request is never authorization. Freeze the exact call and wait
+                        # for a separate, user-bound nonce message instead.
+                        args.pop("confirm", None)
+                        try:
+                            await validate_pending_custom_tool(
+                                func_name,
+                                tool_entry,
+                                args,
+                                bot=self.bot,
+                                event=self.event,
+                            )
+                        except ToolExecutionError as error:
                             send_message_list.append(
                                 {
                                     "role": "tool",
                                     "tool_call_id": call["id"],
-                                    "content": tool_result,
+                                    "content": f"工具 {func_name} 未执行：{error}。",
                                 }
                             )
                             continue
-                    confirmed = False
-                    if (
-                        spec is not None
-                        and spec.effect == ToolEffect.MUTATING
-                    ):
-                        confirmed = bool(args.pop("confirm", False)) and (
-                            "确认执行"
-                            in "".join(self.format_message_dict.get("text") or [])
-                        )
-                        if not confirmed:
-                            tool_result = (
-                                f"工具 {func_name} 会修改外部状态，需要用户明确确认后才能执行。"
+                        try:
+                            action = await pending_action_store.create(
+                                bot=self.bot,
+                                event=self.event,
+                                tool_name=func_name,
+                                arguments=args,
+                                generation=getattr(self.tool_snapshot, "generation", 0),
+                                bundle_digest=tool_entry.get("bundle_digest"),
                             )
-                            send_message_list.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call["id"],
-                                    "content": tool_result,
-                                }
-                            )
-                            continue
-                    # 依赖注入核心逻辑
-                    sig = inspect.signature(func)
-                    if not any(
-                        param.kind == inspect.Parameter.VAR_KEYWORD
-                        for param in sig.parameters.values()
-                    ):
-                        unexpected_args = [
-                            key for key in args
-                            if key not in sig.parameters
-                        ]
-                        if unexpected_args:
-                            available_args = [
-                                key for key, param in sig.parameters.items()
-                                if not key.startswith("_")
-                                and param.kind
-                                in (
-                                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                                    inspect.Parameter.KEYWORD_ONLY,
-                                )
-                            ]
-                            tool_result = (
-                                f"函数参数错误：{func_name} 不支持参数 "
-                                f"{', '.join(unexpected_args)}。"
-                                f"可用参数：{', '.join(available_args) or '无'}。"
-                                "请根据可用参数重新调用该工具。"
-                            )
-                            logger.warning(
-                                f"函数 {func_name} 收到未声明参数: {unexpected_args}，"
-                                f"可用参数: {available_args}"
-                            )
-                            send_message_list.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call["id"],
-                                    "content": tool_result,
-                                }
-                            )
-                            continue
-                    if "_tool_manager" in sig.parameters:
-                        args["_tool_manager"] = tool_manager
-                    # 注入 bot 和 event
-                    if "_bot" in sig.parameters:
-                        args["_bot"] = self.bot
-                    if "_event" in sig.parameters:
-                        args["_event"] = self.event
-                    if "_tool_context" in sig.parameters:
-                        args["_tool_context"] = ToolContext(
-                            bot=self.bot,
-                            event=self.event,
-                            request_id=get_current_request_id(),
-                            confirmed=confirmed,
-                        )
-                    timeout = (
-                        spec.timeout_seconds
-                        if spec is not None and spec.timeout_seconds
-                        else config_parser.get_config("tool_timeout_seconds", 30)
-                    )
-                    try:
-                        async with timeout_scope(timeout):
-                            await validate_url_arguments(args)
-                            res = (
-                                await func(**args)
-                                if inspect.iscoroutinefunction(func)
-                                else await asyncio.to_thread(func, **args)
-                            )
-                    except TimeoutError:
-                        runtime_metrics.tool_timeouts += 1
-                        raise RuntimeError(f"工具执行超过 {timeout} 秒预算") from None
-
-                    result_limit = (
-                        spec.result_limit
-                        if spec is not None and spec.result_limit
-                        else config_parser.get_config("max_tool_result_chars", 6000)
-                    )
-                    if isinstance(res, ToolResult):
-                        result_text = res.text
-                        result_images = list(res.images)
-                    elif isinstance(res, dict):
-                        result_text = (
-                            res.get("text")
-                            or res.get("content")
-                            or res.get("message")
-                            or ""
-                        )
-                        result_images = (
-                            res.get("images")
-                            or res.get("image_urls")
-                            or []
-                        )
-
-                    else:
-                        tool_result = str(res)
-
-                    if isinstance(res, (ToolResult, dict)):
-                        if isinstance(result_images, str):
-                            result_images = [result_images]
-                        result_images = [
-                            image
-                            for image in result_images
-                            if isinstance(image, str) and image.strip()
-                        ]
-                        if result_images:
-                            self._pending_vision_images.extend(result_images)
-                            if result_text:
-                                tool_result = (
-                                    f"函数执行返回结果：\n{result_text}\n\n"
-                                    f"[系统提示]：该函数还返回了 {len(result_images)} 张图片。"
-                                )
-                            else:
-                                tool_result = (
-                                    f"函数执行完毕并返回了 {len(result_images)} 张图片。"
-                                )
+                        except PendingActionError as error:
+                            tool_result = f"工具 {func_name} 未执行：{error}。"
                         else:
-                            tool_result = str(result_text) if result_text else str(res)
+                            remaining = pending_action_store.remaining_ttl_seconds(
+                                action
+                            )
+                            confirmation = (
+                                f"工具 {func_name} 会修改外部状态，尚未执行。\n"
+                                f"请在 {remaining} 秒内单独发送：确认执行 {action.nonce}"
+                            )
+                            await self.bot.send(self.event, confirmation)
+                            tool_result = (
+                                f"{confirmation}\n"
+                                "[系统提示]：确认指令已直接发送给用户，"
+                                "不得代替用户确认或声称操作已经完成。"
+                            )
+                        send_message_list.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call["id"],
+                                "content": tool_result,
+                            }
+                        )
+                        continue
+                    result = await execute_custom_tool(
+                        func_name,
+                        tool_entry,
+                        args,
+                        bot=self.bot,
+                        event=self.event,
+                    )
+                    # The shared executor has already applied the ToolSpec-specific
+                    # text and image contract. Do not override it with the global
+                    # fallback below.
+                    result_limit = None
+                    result_text = result.text
+                    result_images = list(result.images)
+                    if result_images:
+                        self._pending_vision_images.extend(result_images)
+                        if result_text:
+                            tool_result = (
+                                f"函数执行返回结果：\n{result_text}\n\n"
+                                f"[系统提示]：该函数还返回了 {len(result_images)} 张图片。"
+                            )
+                        else:
+                            tool_result = (
+                                f"函数执行完毕并返回了 {len(result_images)} 张图片。"
+                            )
+                    else:
+                        tool_result = result_text
                 except Exception as e:
                     logger.error(traceback.format_exc())
                     tool_result = f"函数执行出错: {e!s}"
@@ -348,7 +277,7 @@ class LlmToolsMixin:
                 else:
                     tool_result = "插件已执行，但未返回有效文本。[系统提示]：如果有后续操作，请继续调用下一个工具。"
 
-            if len(tool_result) > result_limit:
+            if result_limit is not None and len(tool_result) > result_limit:
                 tool_result = tool_result[:result_limit] + "\n...[工具结果已截断]"
             image_limit = config_parser.get_config("max_tool_images", 4)
             if len(self._pending_vision_images) > image_limit:

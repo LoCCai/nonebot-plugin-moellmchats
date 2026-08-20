@@ -6,9 +6,21 @@ from pathlib import Path
 import re
 from typing import Any
 
+from .ast_policy import HandlerPolicyReport, analyze_ast_policy
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import _validate_top_level
-from .tool_contracts import ToolContext, ToolEffect, ToolSpec
+from .tool_artifacts import (
+    ToolArtifact,
+    ToolContractSnapshot,
+    source_sha256,
+)
+from .tool_contracts import (
+    ToolCapability,
+    ToolContext,
+    ToolEffect,
+    ToolPolicy,
+    ToolSpec,
+)
 
 _TYPE_NAMES = {
     "str": "string",
@@ -20,6 +32,20 @@ _TYPE_NAMES = {
 }
 _FORBIDDEN_CONTEXT = {"_bot", "_event", "_tool_manager"}
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _blocking_policy_message(report: HandlerPolicyReport) -> str:
+    messages: list[str] = []
+    for item in report.blocking_findings[:5]:
+        location = item.scope or ""
+        if item.line is not None:
+            location = (
+                f"{location}:line {item.line}"
+                if location
+                else f"line {item.line}"
+            )
+        messages.append(f"{location}: {item.message}" if location else item.message)
+    return "; ".join(messages)
 
 
 def _annotation(annotation: ast.expr | None) -> tuple[str, str | None]:
@@ -147,6 +173,7 @@ def _registry_entries(tree: ast.Module) -> list[dict[str, Any]] | None:
             "timeout_seconds",
             "result_limit",
             "dependencies",
+            "capabilities",
         }
         if unknown:
             raise ValueError(f"TOOLS_REGISTRY 包含未知字段: {sorted(unknown)}")
@@ -178,6 +205,7 @@ def _registry_entries(tree: ast.Module) -> list[dict[str, Any]] | None:
                 "timeout_seconds": _literal_field(fields, "timeout_seconds"),
                 "result_limit": _literal_field(fields, "result_limit"),
                 "dependencies": _literal_field(fields, "dependencies", []),
+                "capabilities": _literal_field(fields, "capabilities"),
             }
         )
     return entries
@@ -191,7 +219,11 @@ def _function_context_parameters(node: ast.FunctionDef | ast.AsyncFunctionDef) -
     }
 
 
-def _make_handler(source: Path, handler_name: str):
+def _make_handler(
+    artifact_holder: dict[str, ToolArtifact],
+    *,
+    generation: int,
+):
     async def handler(_tool_context: ToolContext | None = None, **kwargs):
         context = {}
         if _tool_context is not None:
@@ -203,20 +235,42 @@ def _make_handler(source: Path, handler_name: str):
                 "group_id": str(getattr(event, "group_id", "")),
                 "message_type": getattr(event, "message_type", ""),
             }
-        return await generated_tool_runner.execute(source, handler_name, kwargs, context)
+        artifact = artifact_holder["artifact"]
+        return await generated_tool_runner.execute_artifact(
+            artifact,
+            kwargs,
+            context,
+            expected_artifact_digest=artifact.artifact_digest,
+            expected_bundle_digest=None,
+            generation=generation,
+        )
 
     return handler
 
 
-def load_file_tools(files: Iterable[Path]) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+def load_file_tools(
+    files: Iterable[Path],
+    *,
+    generation: int = 0,
+) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 0
+    ):
+        raise ValueError("generation 必须是非负整数")
     tools: dict[str, dict[str, Any]] = {}
     dependencies: dict[str, set[str]] = {}
     for path in sorted(files):
         if path.name.startswith("_") or path.name == "example.py":
             continue
-        source = path.read_text(encoding="utf-8")
-        if len(source.encode("utf-8")) > 65_536:
+        source_bytes = path.read_bytes()
+        if len(source_bytes) > 65_536:
             raise ValueError(f"{path.name} 超过 64 KiB")
+        try:
+            source = source_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"自定义工具 {path.name} 必须是 UTF-8") from error
         try:
             tree = ast.parse(source, filename=path.name)
         except SyntaxError as error:
@@ -243,9 +297,14 @@ def load_file_tools(files: Iterable[Path]) -> tuple[dict[str, dict[str, Any]], d
                 "timeout_seconds": None,
                 "result_limit": None,
                 "dependencies": [],
+                "capabilities": None,
             }
             for name, node in functions.items()
         ]
+        prepared: list[
+            tuple[dict[str, Any], ToolEffect, ToolPolicy, list[str]]
+        ] = []
+        handler_policies: dict[str, ToolPolicy] = {}
         for entry in entries:
             name = entry["name"]
             node = functions.get(name)
@@ -266,20 +325,86 @@ def load_file_tools(files: Iterable[Path]) -> tuple[dict[str, dict[str, Any]], d
                 effect = ToolEffect(entry["effect"])
             except (TypeError, ValueError) as error:
                 raise ValueError(f"{path.name}:{name} effect 非法") from error
+            try:
+                requested_capabilities = ToolCapability.from_mapping(
+                    entry.get("capabilities")
+                )
+            except ValueError as error:
+                raise ValueError(
+                    f"{path.name}:{name} capabilities 非法: {error}"
+                ) from error
+            # custom_tools/*.py is an administrator-maintained trust domain. Its
+            # literal registry entry is both the explicit request and local policy;
+            # tools without a registry remain deny-by-default for network/process.
+            policy = ToolPolicy(
+                requested=requested_capabilities,
+                admin=requested_capabilities,
+            )
+            handler_policies[name] = policy
+            prepared.append((entry, effect, policy, dependencies_value))
+
+        ast_report = analyze_ast_policy(
+            tree,
+            source_type="custom_file",
+            policy=ToolPolicy(),
+            handler_names=handler_policies,
+            handler_policies=handler_policies,
+        )
+        for entry, declared_effect, policy, dependencies_value in prepared:
+            name = entry["name"]
+            handler_report = ast_report.for_handler(name)
+            if not handler_report.allowed:
+                raise ValueError(
+                    f"{path.name}:{name} AST policy 拒绝: "
+                    f"{_blocking_policy_message(handler_report)}"
+                )
+            effective_effect = handler_report.effective_effect(declared_effect)
+            artifact_holder: dict[str, ToolArtifact] = {}
             spec = ToolSpec(
                 name=name,
                 description=entry["description"],
                 parameters=entry["parameters"],
-                handler=_make_handler(path.resolve(), name),
-                effect=effect,
+                handler=_make_handler(
+                    artifact_holder,
+                    generation=generation,
+                ),
+                effect=effective_effect,
                 permission=entry["permission"],
                 timeout_seconds=entry["timeout_seconds"],
                 result_limit=entry["result_limit"],
                 dependencies=tuple(dependencies_value),
+                policy=policy,
             )
-            entry = spec.as_legacy_schema()
-            entry["source"] = "custom_file"
-            tools[name] = entry
+            contract = ToolContractSnapshot.from_spec(
+                spec,
+                requested_permission=entry["permission"],
+                declared_effect=declared_effect,
+            )
+            artifact = ToolArtifact(
+                tool_name=name,
+                handler_name=entry["handler"],
+                source=source_bytes,
+                source_hash=source_sha256(source_bytes),
+                schema={
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters,
+                },
+                spec=spec,
+                contract=contract,
+                source_type="custom_file",
+                generation=generation,
+                filename=path.name,
+            )
+            artifact_holder["artifact"] = artifact
+            schema = spec.as_legacy_schema()
+            schema["source"] = "custom_file"
+            schema["declared_effect"] = declared_effect.value
+            schema["effective_effect"] = spec.effect.value
+            schema["tool_artifact"] = artifact
+            schema["artifact_digest"] = artifact.artifact_digest
+            schema["generation"] = generation
+            tools[name] = schema
             if spec.dependencies:
                 dependencies.setdefault(name, set()).update(spec.dependencies)
         for trigger, items in _parse_dependencies(tree).items():

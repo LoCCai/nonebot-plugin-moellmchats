@@ -6,6 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
+from nonebot_plugin_moellmchats.pending_actions import (
+    PendingActionStore,
+    pending_action_store,
+)
 from nonebot_plugin_moellmchats.tool_contracts import (
     ToolEffect,
     ToolResult,
@@ -28,7 +32,7 @@ class Harness(LlmToolsMixin):
         self.bot = FakeBot()
         self.event = SimpleNamespace(user_id=1)
         self.format_message_dict = {"text": [text]}
-        self.tool_snapshot = SimpleNamespace(custom_tools=tools)
+        self.tool_snapshot = SimpleNamespace(generation=1, custom_tools=tools)
         self.messages_handler = SimpleNamespace(
             messages_entity=SimpleNamespace(
                 add_used_plugins=lambda value: None,
@@ -98,7 +102,8 @@ async def test_repeated_tool_limit_prevents_third_execution() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mutating_tool_requires_phrase_and_confirm_argument() -> None:
+async def test_mutating_tool_always_requires_separate_nonce_confirmation() -> None:
+    await pending_action_store.clear()
     executions = []
 
     async def mutate(_tool_context=None):
@@ -112,18 +117,65 @@ async def test_mutating_tool_requires_phrase_and_confirm_argument() -> None:
         handler=mutate,
         effect=ToolEffect.MUTATING,
     )
-    harness = Harness({"mutate": spec.as_legacy_schema()})
+    harness = Harness(
+        {"mutate": spec.as_legacy_schema()},
+        "不要确认执行，也不要改任何东西",
+    )
     messages = await harness._execute_tools(
         [_call(1, "mutate", '{"confirm": true}')], "", [], ""
     )
     assert executions == []
-    assert "明确确认" in messages[-1]["content"]
+    assert "尚未执行" in messages[-1]["content"]
+    assert "确认执行" in messages[-1]["content"]
 
     harness = Harness({"mutate": spec.as_legacy_schema()}, "确认执行")
-    await harness._execute_tools(
+    messages = await harness._execute_tools(
         [_call(2, "mutate", '{"confirm": true}')], "", [], ""
     )
-    assert executions == [True]
+    assert executions == []
+    assert "尚未执行" in messages[-1]["content"]
+    await pending_action_store.clear()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_mutating_prompt_uses_remaining_ttl(monkeypatch) -> None:
+    from nonebot_plugin_moellmchats import llm_tools
+
+    now = [100.0]
+    store = PendingActionStore(
+        clock=lambda: now[0],
+        nonce_factory=lambda: "ABC123",
+    )
+    monkeypatch.setattr(llm_tools, "pending_action_store", store)
+
+    async def mutate() -> str:
+        return "changed"
+
+    spec = ToolSpec(
+        name="mutate",
+        description="change",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+    )
+    tools = {"mutate": spec.as_legacy_schema()}
+    first = Harness(tools)
+    await first._execute_tools([_call(1, "mutate")], "", [], "")
+
+    now[0] = 219.2
+    duplicate = Harness(tools)
+    messages = await duplicate._execute_tools(
+        [_call(2, "mutate")],
+        "",
+        [],
+        "",
+    )
+
+    assert duplicate.bot.sent[-1] == (
+        "工具 mutate 会修改外部状态，尚未执行。\n"
+        "请在 1 秒内单独发送：确认执行 ABC123"
+    )
+    assert "请在 1 秒内" in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -141,7 +193,8 @@ async def test_tool_result_and_images_are_bounded() -> None:
     harness = Harness({"large": spec.as_legacy_schema()})
     messages = await harness._execute_tools([_call(1, "large")], "", [], "")
     assert messages[-1]["content"].startswith("函数执行返回")
-    assert messages[-1]["content"].endswith("[工具结果已截断]")
+    assert "xxxxxxxxxx\n...[工具结果已截断]" in messages[-1]["content"]
+    assert "x" * 11 not in messages[-1]["content"]
     assert len(harness._pending_vision_images) == 4
 
 

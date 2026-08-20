@@ -84,11 +84,23 @@ async def test_authoring_uses_selected_then_summary_and_persists_review(
     assert calls == ["selected_model", "summary_model"]
     assert review["approved"] is approved
     assert metadata["status"] == ("reviewed" if approved else "review_failed")
+    evidence_states = [
+        item["state"] for item in metadata["lifecycle_evidence"]
+    ]
+    assert evidence_states[:2] == ["static_validated", "sandbox_tested"]
+    assert evidence_states[-1] == (
+        "model_reviewed" if approved else "review_failed"
+    )
     assert validation.digest == metadata["digest"]
     assert summary == "1 passed"
     if not approved:
+        review_snapshot = store.get_draft_review_snapshot(draft_id)
         with pytest.raises(ValueError, match="不可批准"):
-            store.approve(draft_id, validation.digest[:12])
+            store.prepare_approval(
+                draft_id,
+                validation.digest[:12],
+                review_snapshot.review_stamp,
+            )
 
 
 @pytest.mark.asyncio

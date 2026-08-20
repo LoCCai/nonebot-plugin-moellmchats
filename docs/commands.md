@@ -58,7 +58,7 @@
 
 | 指令                                 | 范围      | 参数     | 说明                                                                                      |
 | ------------------------------------ | --------- | -------- | ----------------------------------------------------------------------------------------- |
-| `刷新工具` / `重载工具` / `刷新插件` | 私聊/群聊 | 无       | 原子重载 NoneBot 插件描述、文件/已激活生成工具及启用的 MCP 工具                              |
+| `刷新工具` / `重载工具` / `刷新插件` | 私聊/群聊 | 无       | 原子重载 NoneBot 插件描述、文件/已激活生成工具及启用的 MCP 工具；成功显示新 generation 与 Custom/MCP 数量，失败保留旧 generation |
 | `插件黑名单` / `查看插件黑名单`      | 私聊/群聊 | 无       | 查看禁止 LLM 调用的插件/函数/MCP 工具列表                                                 |
 | `添加插件黑名单 <工具标识>`          | 私聊/群聊 | 工具标识 | 禁止 LLM 调用指定 NoneBot 插件、自定义函数或 MCP 工具                                     |
 | `移除插件黑名单 <工具标识>`          | 私聊/群聊 | 工具标识 | 从黑名单移除指定工具                                                                      |
@@ -66,6 +66,8 @@
 | `添加常驻函数 <标识>`                | 私聊/群聊 | 函数名   | 将 custom_tools 中的函数设为常驻                                                          |
 | `移除常驻插件 <标识>` / `移除常驻函数 <标识>` | 私聊/群聊 | 工具标识 | 从常驻列表移除                                                               |
 | `常驻插件` / `查看常驻插件` / `查看常驻函数` / `查看常驻工具` | 私聊/群聊 | 无 | 查看常驻工具列表                                                          |
+
+添加黑名单前会先刷新工具目录以校验标识；这一步失败时不会写入黑名单。黑名单配置已经写入、但后续运行快照同步失败时，Bot 会明确提示配置已写入且旧 generation 仍在服务；修复资源错误后再次执行 `刷新工具` 即可收敛。
 
 ### 工具标识说明
 
@@ -89,6 +91,17 @@
 
 ---
 
+## 变更型工具确认
+
+| 指令 | 权限 | 范围 | 参数 | 说明 |
+| ---- | ---- | ---- | ---- | ---- |
+| `确认执行 <确认码>` | 原操作用户 | 原群聊或原私聊 | 6 位确认码 | 原子消费 PendingAction，并在重新校验 generation、工具版本、权限和固化参数后执行 |
+| `取消执行 <确认码>` | 原操作用户 | 原群聊或原私聊 | 6 位确认码 | 取消尚未使用的 PendingAction |
+
+模型选择 `mutating` 工具时不会立刻执行，也不能通过工具参数或同一条用户消息代替确认。Bot 会发送确认码，用户必须在默认 120 秒内另发一条独立确认/取消指令。确认码同时绑定 Bot/Adapter、用户、群组或私聊会话、工具、runtime generation 和 Generated bundle digest，并在执行前一次性消费；错误用户、错误群组、过期、重载或重放都会 fail closed。格式错误、不存在或会话不匹配等失败会按 Bot/Adapter/用户/会话独立限流，默认 60 秒内最多 8 次；他人的错误尝试不会阻断正确用户确认。
+
+---
+
 ## 上下文管理
 
 | 指令                                                                  | 权限       | 范围      | 参数 | 说明                                                  |
@@ -105,21 +118,34 @@
 | `查看请求` / `查看当前请求` / `当前请求` / `查看正在请求`   | 私聊/群聊 | 无            | 查看当前正在处理的 LLM 请求、来源、用户、运行时长与消息预览 |
 | `停止请求` / `终止请求` / `取消请求` / `stop请求` `[参数]` | 私聊/群聊 | 编号或 `all`  | 停止指定或全部正在处理的 LLM 请求；不带参数且仅有一个请求时会直接停止 |
 | `重载LLM` / `刷新LLM` / `重载llm` / `刷新llm`            | 私聊/群聊 | 无            | 原子重载全部运行资源；失败继续使用旧 generation              |
-| `查看LLM状态` / `LLM状态` / `查看llm状态` / `llm状态`    | 私聊/群聊 | 无            | 查看队列、拒绝、缓存、分类、工具、投递模式和最近重载错误      |
+| `查看LLM状态` / `LLM状态` / `查看llm状态` / `llm状态`    | 私聊/群聊 | 无            | 查看队列、工具、投递、desired/applied 生命周期、legacy 投影和最近重载错误 |
 
 ### AI 工具包热插拔（超级管理员）
 
 | 指令 | 参数 | 说明 |
 | ---- | ---- | ---- |
 | `添加LLM功能 <需求>` / `创建LLM功能 <需求>` | 功能需求 | 当前聊天模型生成草稿，隔离测试后由总结模型复核；不会自动启用 |
-| `查看LLM功能草稿 [ID]` | 草稿 ID（选填） | 无 ID 时列出草稿；有 ID 时展示权限、风险、diff、源码预览和哈希 |
-| `批准LLM功能 <ID> <短哈希>` | 草稿 ID + 至少 8 位哈希 | 仅允许批准复核通过且内容哈希未变化的草稿 |
-| `拒绝LLM功能 <ID>` | 草稿 ID | 标记拒绝并保留源码供审计 |
+| `查看LLM功能草稿 [ID [section [page]]]` | 草稿 ID、区段、页码（选填） | 无 ID 时列出草稿；仅给 ID 时查看 `summary` 第 1 页；可分页查看完整审阅内容 |
+| `批准LLM功能 <ID> <短哈希> <review stamp>` | 草稿 ID + 至少 8 位哈希 + 完整 64 位 stamp | 必须复制审阅页头的三参数命令；stamp 过期时重新查看完整草稿 |
+| `拒绝LLM功能 <ID> [原因]` | 草稿 ID + 可选原因 | 以 canonical evidence 标记拒绝并保留源码供审计 |
 | `LLM功能列表` | 无 | 查看活跃版本和草稿状态 |
+| `设置LLM功能权限 <工具包> <版本> <工具名> user\|superuser` | 工具包 ID + 当前版本哈希前缀 + 工具名 + 权限 | 对当前精确版本写入或撤销人工 user grant，并原子发布新 generation |
 | `停用LLM功能 <工具包>` | 工具包 ID | 发布不含该工具包的新 generation |
-| `回滚LLM功能 <工具包> <版本>` | 工具包 ID + 版本哈希前缀 | 原子切回唯一匹配的历史只读版本 |
+| `回滚LLM功能 <工具包> <版本>` | 工具包 ID + 至少 8 位版本哈希前缀 | 仅切回唯一匹配、未 Archived 且 immutable tree 校验完整的版本；提交后由当前进程发布、其他进程由 watcher 收敛 |
 
-“热插拔”只涵盖工具包，不卸载 NoneBot Matcher/Hook。普通用户不能查看或执行 `superuser` 工具，也不存在临时执行 Python 的普通用户入口。runner 的系统要求与网络/文件系统边界见[自定义工具开发](./custom-tools.md#runner-隔离边界与运行要求)。
+Generated manifest 中的 `permission` 是申请值；新批准版本的 effective permission 一律从 `superuser` 开始。只有 manifest 原本请求 `user`，且上述权限命令对当前 bundle digest 和工具名显式设置 `user`，才允许普通用户使用；设置 `superuser` 会撤销 grant，升级或回滚到其他 digest 不继承授权。
+
+草稿审阅的 `section` 可取 `summary`、`manifest`、`source`、`tests`、`risks`、`capabilities`、`diff`。页码从 1 开始，例如 `查看LLM功能草稿 012345abcdef source 2`。每条回复（含页头）不超过 1800 字；页头给出完整草稿哈希、lifecycle revision/state digest、同 bundle 当前 active digest、64 位 review stamp、可复制的批准命令、区段、页码和该区段完整内容的 SHA-256。stamp 绑定草稿 ID/digest、revision/state digest 与 active digest；任何审阅后的 lifecycle 变化都会使旧 stamp 失效。逐页拼接页头后的正文可无损还原整个区段，`manifest`、`summary`、`risks` 与 `capabilities` 使用稳定键序的规范 JSON；`diff` 同时覆盖 `manifest.json`、`tool.py` 与 `tests.py`。
+
+schema v3 的 canonical `DraftEvidence` 绑定草稿 digest，严格校验 producer、outcome、summary、risks、时间和顺序，并纳入 lifecycle state digest。metadata 的 `lifecycle_evidence` 只是它的兼容投影；原始 `metadata.review` 仍是 best-effort 摘要。schema v2 状态会被兼容读取并转换为带 `schema-v2-migration` / `legacy_unverified` 标记的 v3 内存状态，下一次 canonical 写入持久化 v3。
+
+批准、拒绝、权限、停用和回滚统一由 `RuntimeReloader` 采用三阶段流程：基于同一 canonical snapshot 预构建 `after_state` 对应的 RuntimeSnapshot 候选，以 `.lifecycle.lock` 和 revision/state digest CAS 持久化 `lifecycle_state.json`，再发布到当前进程；Store 的内部 commit 方法不能由生产命令直接调用。候选或 CAS 失败不会改变运行快照；磁盘提交成功而本进程发布失败时保留新 canonical revision，让 watcher 重试，不会盲目回写旧状态。目录 fsync 有界重试 3 次，重试耗尽后即使 after-state 可见也保持 uncertain；只有 durability 已确认后的回读不确定才允许精确对照完整 before/after identity。命令回显中的 `converged` 只表示当次观察到的 desired/applied 标识一致，不代表跨进程内存事务。
+
+回滚验证在持有 canonical snapshot 时完成：版本前缀必须唯一、记录不得为 Archived，版本树必须通过 owner/no-follow 检查，目录权限精确为 `0500`，内容必须且只能是 `manifest.json`、`tool.py`、`tests.py` 三个 `0400` 普通文件，并与目录名指向的完整 bundle digest 一致。
+
+“热插拔”只涵盖工具包，不卸载 NoneBot Matcher/Hook。普通用户不能查看或执行 effective `superuser` 工具，也不存在临时执行 Python 的普通用户入口。Capability 只接受 `network`、`process`、`workspace`、`host_filesystem`、`secrets` 五个布尔字段；Generated Tool 的 effective 上限仅开放私有 workspace，Custom File 只有 `TOOLS_REGISTRY.capabilities` 的显式字面量声明能放宽。`secrets=true` 当前也不会注入宿主密钥。
+
+正式 Custom File / Generated loader 会发布 generation 固定的 `ToolArtifact`：执行前复核 artifact digest，Generated Tool 还复核 bundle digest；结果使用独立 FD3，workspace 有总字节、单文件、条目数和深度四类限制并异步扫描、结束后复扫。结构化 AST Policy 会在加载期给出 `ALLOW`、`DENY`、`CAPABILITY_REQUIRED` 或 `RISK`。runner 使用独立 PID/mount/IPC/UTS namespace、固定 hostname、递归只读根挂载和条件可写 workspace，并以 Landlock/seccomp 收紧 host file、socket、keyring 与 xattr；FD3 仍只防止意外 stdout 污染，不认证恶意代码。它没有 cgroup，也不是容器或完整 syscall allowlist，`stat`/`readlink` 等路径元数据仍可能可见；显式取得 `host_filesystem=true` 的 Custom File 仍可读 DAC 允许的宿主文件。详细边界见[自定义工具开发](./custom-tools.md#runner-隔离边界与运行要求)。
 
 **停止请求参数：**
 
