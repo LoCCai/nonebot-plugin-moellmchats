@@ -10,7 +10,7 @@ lastmod: 2026-08-19T14:55:10+08:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a 已完成远端 gate，D-02 Registered shadow pilot 已推进到本地实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed`、仍待远端 gate。AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成，D-02 也未改变 Snapshot schema 或持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02 Registered shadow pilot 均已完成精确 HEAD 远端 gate，下一依赖为 D-01b ProviderRegistry / ToolSnapshot v2 dual view。AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成，D-02 也未改变 Snapshot schema 或持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 
