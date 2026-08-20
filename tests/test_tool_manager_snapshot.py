@@ -6,14 +6,20 @@ from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.generated_tool_lifecycle import (
+    LifecycleState,
+    VersionRecord,
+    VersionState,
+)
 from nonebot_plugin_moellmchats.runtime_metrics import runtime_metrics
 from nonebot_plugin_moellmchats.runtime_snapshot import runtime_snapshots
 from nonebot_plugin_moellmchats.tool_artifacts import (
     ToolArtifact,
     ToolContractSnapshot,
+    canonical_bundle_digest,
     source_sha256,
 )
-from nonebot_plugin_moellmchats.tool_contracts import ToolSpec
+from nonebot_plugin_moellmchats.tool_contracts import ToolPolicy, ToolSpec
 from nonebot_plugin_moellmchats.tool_manager import (
     ToolSnapshot,
     model_selector,
@@ -22,6 +28,7 @@ from nonebot_plugin_moellmchats.tool_manager import (
 from nonebot_plugin_moellmchats.tool_providers import (
     DiscoveredTool,
     FileToolResources,
+    GeneratedToolResources,
     ProviderCatalogSnapshot,
     ProviderDiscoveryBatch,
     ProviderDiscoveryContext,
@@ -30,6 +37,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     ToolSource,
     ToolTrustLevel,
     file_tool_provider,
+    generated_tool_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -46,6 +54,9 @@ def _registered_catalog(
 ) -> ProviderCatalogSnapshot:
     registration = ProviderRegistration.from_provider(registered_tool_provider)
     file_registration = ProviderRegistration.from_provider(file_tool_provider)
+    generated_registration = ProviderRegistration.from_provider(
+        generated_tool_provider
+    )
     records = tuple(
         DiscoveredTool(
             provider_id=registration.provider_id,
@@ -66,6 +77,11 @@ def _registered_catalog(
             ),
             ProviderDiscoveryBatch(
                 registration=file_registration,
+                generation=generation,
+                tools=(),
+            ),
+            ProviderDiscoveryBatch(
+                registration=generated_registration,
                 generation=generation,
                 tools=(),
             ),
@@ -100,6 +116,7 @@ def _file_catalog(
 ) -> ProviderCatalogSnapshot:
     registered = ProviderRegistration.from_provider(registered_tool_provider)
     custom_file = ProviderRegistration.from_provider(file_tool_provider)
+    generated = ProviderRegistration.from_provider(generated_tool_provider)
     record = DiscoveredTool(
         provider_id=custom_file.provider_id,
         source=custom_file.source,
@@ -113,6 +130,7 @@ def _file_catalog(
         (
             ProviderDiscoveryBatch(registered, generation, ()),
             ProviderDiscoveryBatch(custom_file, generation, (record,)),
+            ProviderDiscoveryBatch(generated, generation, ()),
         ),
     )
 
@@ -128,6 +146,122 @@ def _file_legacy_schema(artifact: ToolArtifact) -> dict:
         "artifact_digest": artifact.artifact_digest,
         "generation": artifact.generation,
     }
+
+
+def _generated_artifact(spec: ToolSpec, *, generation: int) -> ToolArtifact:
+    source = f"async def {spec.name}(value='ok'):\n    return value\n".encode()
+    tests_source = b"async def run_tests(tool_module):\n    return 'ok'\n"
+    manifest = {
+        "bundle_id": "snapshot_bundle",
+        "description": "snapshot bundle",
+        "capabilities": {
+            "network": False,
+            "process": False,
+            "workspace": True,
+        },
+        "tools": [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters,
+                "handler": spec.name,
+                "permission": spec.permission,
+                "effect": spec.effect.value,
+                "timeout_seconds": spec.timeout_seconds,
+                "result_limit": spec.result_limit,
+                "dependencies": list(spec.dependencies),
+            }
+        ],
+    }
+    digest = canonical_bundle_digest(manifest, source, tests_source)
+    return ToolArtifact(
+        tool_name=spec.name,
+        handler_name=spec.name,
+        source=source,
+        source_hash=source_sha256(source),
+        schema={
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters,
+        },
+        spec=spec,
+        contract=ToolContractSnapshot.from_spec(spec),
+        source_type="generated",
+        generation=generation,
+        filename="tool.py",
+        tests_source=tests_source,
+        bundle_manifest=manifest,
+        bundle_id="snapshot_bundle",
+        bundle_digest=digest,
+    )
+
+
+def _generated_catalog(
+    artifact: ToolArtifact,
+    *,
+    generation: int,
+) -> ProviderCatalogSnapshot:
+    registered = ProviderRegistration.from_provider(registered_tool_provider)
+    custom_file = ProviderRegistration.from_provider(file_tool_provider)
+    generated = ProviderRegistration.from_provider(generated_tool_provider)
+    record = DiscoveredTool(
+        provider_id=generated.provider_id,
+        source=generated.source,
+        trust=generated.trust,
+        generation=generation,
+        spec=artifact.spec,
+        artifact=artifact,
+    )
+    return provider_registry.build_snapshot(
+        generation,
+        (
+            ProviderDiscoveryBatch(registered, generation, ()),
+            ProviderDiscoveryBatch(custom_file, generation, ()),
+            ProviderDiscoveryBatch(generated, generation, (record,)),
+        ),
+    )
+
+
+def _generated_legacy_schema(artifact: ToolArtifact) -> dict:
+    spec = artifact.spec
+    contract = artifact.contract
+    return {
+        **spec.as_legacy_schema(),
+        "source": "generated",
+        "bundle_id": artifact.bundle_id,
+        "bundle_digest": artifact.bundle_digest,
+        "requested_permission": contract.requested_permission,
+        "effective_permission": contract.effective_permission,
+        "declared_effect": contract.declared_effect.value,
+        "effective_effect": contract.effective_effect.value,
+        "user_policy_approved": spec.permission == "user",
+        "requested_capabilities": contract.requested_capabilities,
+        "effective_capabilities": contract.effective_capabilities,
+        "tool_artifact": artifact,
+        "artifact_digest": artifact.artifact_digest,
+        "generation": artifact.generation,
+    }
+
+
+def _generated_state(artifact: ToolArtifact) -> LifecycleState:
+    assert artifact.bundle_id is not None
+    assert artifact.bundle_digest is not None
+    version = VersionRecord(
+        bundle_id=artifact.bundle_id,
+        digest=artifact.bundle_digest,
+        state=VersionState.ACTIVATED,
+        source_draft_id="draft000001",
+        created_at=1,
+        approved_at=2,
+        activated_at=3,
+    )
+    return LifecycleState(
+        revision=1,
+        drafts={},
+        versions={artifact.bundle_id: {artifact.bundle_digest: version}},
+        active={artifact.bundle_id: artifact.bundle_digest},
+        permission_grants={},
+    )
 
 
 def test_tool_snapshot_generated_stamp_is_detached_and_immutable() -> None:
@@ -313,6 +447,53 @@ def test_tool_snapshot_dual_view_keeps_exact_file_artifact_identity() -> None:
     with pytest.raises(ValueError, match="artifact_digest"):
         ToolSnapshot(
             generation=15,
+            plugin_info={},
+            custom_tools={spec.name: mutated},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+            provider_catalog=catalog,
+        )
+
+
+def test_tool_snapshot_dual_view_keeps_exact_generated_artifact_identity() -> None:
+    spec = ToolSpec(
+        name="snapshot_generated",
+        description="snapshot generated",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    artifact = _generated_artifact(spec, generation=16)
+    catalog = _generated_catalog(artifact, generation=16)
+    legacy = _generated_legacy_schema(artifact)
+
+    snapshot = ToolSnapshot(
+        generation=16,
+        plugin_info={"optional_plugin": {}},
+        custom_tools={spec.name: legacy},
+        tool_dependencies={spec.name: {"optional_plugin"}},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+
+    discovered = snapshot.provider_catalog.tools[spec.name]
+    assert discovered.artifact is artifact
+    assert discovered.spec is artifact.spec
+    assert snapshot.custom_tools[spec.name]["tool_artifact"] is artifact
+    assert snapshot.custom_tools[spec.name]["bundle_digest"] == (
+        artifact.bundle_digest
+    )
+
+    mutated = dict(legacy)
+    mutated["effective_capabilities"] = {}
+    with pytest.raises(ValueError, match="effective_capabilities"):
+        ToolSnapshot(
+            generation=16,
             plugin_info={},
             custom_tools={spec.name: mutated},
             tool_dependencies={},
@@ -510,6 +691,69 @@ async def test_load_custom_tools_reuses_explicit_file_candidate(
         registered_discovery=(),
         file_tool_candidate=(file_tools, file_dependencies),
         file_discovery=discovery,
+    )
+
+    assert tools[spec.name]["tool_artifact"] is artifact
+    assert tools[spec.name]["tool_spec"] is artifact.spec
+    assert dependencies == {spec.name: {"legacy_optional"}}
+
+
+@pytest.mark.asyncio
+async def test_load_custom_tools_reuses_explicit_generated_candidate(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+    spec = ToolSpec(
+        name="generated_shadow",
+        description="generated shadow",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    artifact = _generated_artifact(spec, generation=33)
+    generated_tools = {spec.name: _generated_legacy_schema(artifact)}
+    generated_dependencies = {spec.name: {"legacy_optional"}}
+    discovery = await generated_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=33,
+            resources=GeneratedToolResources.from_legacy_tools(
+                lifecycle_state=_generated_state(artifact),
+                source_overrides=None,
+                legacy_tools=generated_tools,
+            ),
+        )
+    )
+
+    def forbidden_load(*_args, **_kwargs):
+        raise AssertionError(
+            "legacy merge must reuse the transaction generated candidate"
+        )
+
+    monkeypatch.setattr(
+        manager_module.generated_tool_store,
+        "load_active_tools",
+        forbidden_load,
+    )
+    monkeypatch.setattr(
+        tool_manager,
+        "_merge_dependencies_from_custom_plugin_info",
+        lambda _dependencies: None,
+    )
+
+    tools, dependencies = tool_manager.load_custom_tools(
+        commit=False,
+        generation=33,
+        registered_tools={},
+        registered_discovery=(),
+        file_tool_candidate=({}, {}),
+        file_discovery=(),
+        generated_tool_candidate=(
+            generated_tools,
+            generated_dependencies,
+        ),
+        generated_discovery=discovery,
     )
 
     assert tools[spec.name]["tool_artifact"] is artifact

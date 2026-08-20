@@ -24,10 +24,12 @@ from .tool_contracts import tool_registry
 from .tool_manager import ToolSnapshot, tool_manager
 from .tool_providers import (
     FileToolResources,
+    GeneratedToolResources,
     ProviderDiscoveryContext,
     ProviderDiscoveryPlan,
     RegisteredToolResources,
     file_tool_provider,
+    generated_tool_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -139,6 +141,7 @@ class RuntimeReloader:
             replies_candidate,
             plugin_info,
             file_tool_candidate,
+            generated_tool_candidate,
             mcp_servers,
         ) = await asyncio.gather(
             asyncio.to_thread(config_parser.load_candidate),
@@ -149,6 +152,12 @@ class RuntimeReloader:
             asyncio.to_thread(
                 tool_manager.load_file_tools_candidate,
                 generation=generation,
+            ),
+            asyncio.to_thread(
+                tool_manager.load_generated_tools_candidate,
+                generation=generation,
+                generated_state=generated_state,
+                generated_source_overrides=generated_source_overrides,
             ),
             asyncio.to_thread(mcp_manager.load_config_candidate),
         )
@@ -173,10 +182,22 @@ class RuntimeReloader:
                         ),
                     ),
                 ),
+                ProviderDiscoveryPlan(
+                    provider=generated_tool_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=generation,
+                        resources=GeneratedToolResources.from_legacy_tools(
+                            lifecycle_state=generated_state,
+                            source_overrides=generated_source_overrides,
+                            legacy_tools=generated_tool_candidate[0],
+                        ),
+                    ),
+                ),
             ),
         )
         registered_discovery = provider_catalog.tools_for_provider("registered")
         file_discovery = provider_catalog.tools_for_provider("custom-file")
+        generated_discovery = provider_catalog.tools_for_provider("generated")
         custom_tool_pair = await asyncio.to_thread(
             tool_manager.load_custom_tools,
             commit=False,
@@ -187,6 +208,8 @@ class RuntimeReloader:
             registered_discovery=registered_discovery,
             file_tool_candidate=file_tool_candidate,
             file_discovery=file_discovery,
+            generated_tool_candidate=generated_tool_candidate,
+            generated_discovery=generated_discovery,
         )
         emotions = await asyncio.to_thread(
             load_emotions_candidate, config_candidate

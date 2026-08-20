@@ -570,6 +570,24 @@ def _configure_real_generated_loader(
         lambda: {},
     )
 
+    def build_generated_candidate(
+        *,
+        generation: int,
+        generated_state,
+        generated_source_overrides=None,
+    ):
+        return store.load_active_tools(
+            generation=generation,
+            generated_state=generated_state,
+            generated_source_overrides=generated_source_overrides,
+        )
+
+    monkeypatch.setattr(
+        reload_module.tool_manager,
+        "load_generated_tools_candidate",
+        build_generated_candidate,
+    )
+
     def load_generated(
         *,
         commit: bool,
@@ -580,17 +598,17 @@ def _configure_real_generated_loader(
         registered_discovery=None,
         file_tool_candidate=None,
         file_discovery=None,
+        generated_tool_candidate=None,
+        generated_discovery=None,
     ):
         assert commit is False
         assert registered_tools is not None
         assert registered_discovery is not None
         assert file_tool_candidate is not None
         assert file_discovery is not None
-        return store.load_active_tools(
-            generation=generation,
-            generated_state=generated_state,
-            generated_source_overrides=generated_source_overrides,
-        )
+        assert generated_tool_candidate is not None
+        assert generated_discovery is not None
+        return generated_tool_candidate
 
     monkeypatch.setattr(
         reload_module.tool_manager,
@@ -670,6 +688,13 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     ]
     assert approved_schema["bundle_digest"] == validation.digest
     assert approved_schema["tool_spec"].permission == "superuser"
+    approved_catalog = approved_snapshot.tool_snapshot.provider_catalog
+    assert approved_catalog is not None
+    generated_record = approved_catalog.tools["date_difference"]
+    assert generated_record.provider_id == "generated"
+    assert generated_record.artifact is approved_schema["tool_artifact"]
+    assert generated_record.spec is approved_schema["tool_spec"]
+    assert generated_record.artifact.bundle_digest == validation.digest
     assert approved_snapshot.generated_active == {
         "date_math": validation.digest
     }

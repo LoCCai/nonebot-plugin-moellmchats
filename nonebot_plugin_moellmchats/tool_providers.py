@@ -195,6 +195,7 @@ class GeneratedSourceOverride:
 class GeneratedToolResources:
     lifecycle_state: LifecycleState
     source_overrides: tuple[GeneratedSourceOverride, ...] = ()
+    artifacts: tuple[ToolArtifact, ...] = ()
     source: ClassVar[ToolSource] = ToolSource.GENERATED
 
     def __post_init__(self) -> None:
@@ -212,9 +213,103 @@ class GeneratedToolResources:
             if self.lifecycle_state.active.get(override.bundle_id) != override.bundle_digest:
                 raise ValueError("Generated source override 必须精确指向 after-state active 版本")
         object.__setattr__(self, "source_overrides", overrides)
+        artifacts = _freeze_artifacts(
+            self.artifacts,
+            source_type="generated",
+            label="GeneratedToolResources",
+        )
+        for artifact in artifacts:
+            if (
+                not isinstance(artifact.bundle_id, str)
+                or not isinstance(artifact.bundle_digest, str)
+                or self.lifecycle_state.active.get(artifact.bundle_id)
+                != artifact.bundle_digest
+            ):
+                raise ValueError(
+                    "Generated ToolArtifact 必须精确指向 after-state active 版本"
+                )
+        object.__setattr__(self, "artifacts", artifacts)
 
     def __deepcopy__(self, _memo: dict[int, object]) -> GeneratedToolResources:
         return self
+
+    @classmethod
+    def from_legacy_tools(
+        cls,
+        *,
+        lifecycle_state: LifecycleState,
+        source_overrides: Mapping[tuple[str, str], Path] | None,
+        legacy_tools: Mapping[str, object],
+    ) -> GeneratedToolResources:
+        """Bind one after-state and the exact artifacts built from it."""
+
+        if source_overrides is None:
+            typed_overrides: tuple[GeneratedSourceOverride, ...] = ()
+        else:
+            if not isinstance(source_overrides, Mapping):
+                raise TypeError("Generated source overrides 必须是映射或 None")
+            overrides: list[GeneratedSourceOverride] = []
+            for key, directory in source_overrides.items():
+                if (
+                    not isinstance(key, tuple)
+                    or len(key) != 2
+                    or not all(isinstance(item, str) for item in key)
+                ):
+                    raise TypeError(
+                        "Generated source override key 必须是 (bundle_id, digest)"
+                    )
+                overrides.append(
+                    GeneratedSourceOverride(
+                        bundle_id=key[0],
+                        bundle_digest=key[1],
+                        source_directory=directory,
+                    )
+                )
+            typed_overrides = tuple(
+                sorted(
+                    overrides,
+                    key=lambda item: (item.bundle_id, item.bundle_digest),
+                )
+            )
+
+        if not isinstance(legacy_tools, Mapping):
+            raise TypeError("GeneratedToolResources legacy tools 必须是映射")
+        if not all(isinstance(name, str) for name in legacy_tools):
+            raise TypeError("GeneratedToolResources legacy tool name 必须是字符串")
+        artifacts: list[ToolArtifact] = []
+        for name in sorted(legacy_tools):
+            schema = legacy_tools[name]
+            if not isinstance(schema, Mapping):
+                raise TypeError(
+                    f"GeneratedToolResources legacy 工具 {name} Schema 非法"
+                )
+            if schema.get("source") != cls.source.value:
+                raise ValueError(
+                    f"GeneratedToolResources legacy 工具 {name} source 不一致"
+                )
+            artifact = schema.get("tool_artifact")
+            if not isinstance(artifact, ToolArtifact):
+                raise ValueError(
+                    f"GeneratedToolResources legacy 工具 {name} 缺少 ToolArtifact"
+                )
+            if artifact.tool_name != name:
+                raise ValueError(
+                    f"GeneratedToolResources legacy 工具 {name} artifact identity 不一致"
+                )
+            artifacts.append(artifact)
+        resources = cls(
+            lifecycle_state=lifecycle_state,
+            source_overrides=typed_overrides,
+            artifacts=tuple(artifacts),
+        )
+        artifact_bundles = {
+            artifact.bundle_id for artifact in resources.artifacts
+        }
+        if artifact_bundles != set(lifecycle_state.active):
+            raise ValueError(
+                "GeneratedToolResources artifact bundle 集合与 after-state active 不一致"
+            )
+        return resources
 
 
 @dataclass(frozen=True)
@@ -300,6 +395,17 @@ class ProviderDiscoveryContext(Generic[ProviderResourcesT]):
             mismatched = [artifact.tool_name for artifact in self.resources.artifacts if artifact.generation != self.generation]
             if mismatched:
                 raise ValueError(f"File ToolArtifact generation 与 discovery context 不一致: {sorted(mismatched)}")
+        if isinstance(self.resources, GeneratedToolResources):
+            mismatched = [
+                artifact.tool_name
+                for artifact in self.resources.artifacts
+                if artifact.generation != self.generation
+            ]
+            if mismatched:
+                raise ValueError(
+                    "Generated ToolArtifact generation 与 discovery context 不一致: "
+                    f"{sorted(mismatched)}"
+                )
 
     def __deepcopy__(
         self,
@@ -931,13 +1037,196 @@ class FileToolProvider:
                 raise ValueError(f"custom-file legacy 工具 {name} dependencies 不一致")
 
 
+@dataclass(frozen=True)
+class GeneratedToolProvider:
+    """Discover artifacts pinned to the transaction's exact after-state."""
+
+    provider_id: str = field(default="generated", init=False)
+    source: ToolSource = field(default=ToolSource.GENERATED, init=False)
+    trust: ToolTrustLevel = field(default=ToolTrustLevel.UNTRUSTED, init=False)
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[GeneratedToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if (
+            not isinstance(context, ProviderDiscoveryContext)
+            or type(context.resources) is not GeneratedToolResources
+        ):
+            raise TypeError("GeneratedToolProvider 只接受 GeneratedToolResources")
+        artifact_bundles = {
+            artifact.bundle_id for artifact in context.resources.artifacts
+        }
+        if artifact_bundles != set(context.resources.lifecycle_state.active):
+            raise ValueError(
+                "Generated discovery artifact bundle 集合与 after-state active 不一致"
+            )
+        discovered: list[DiscoveredTool] = []
+        for artifact in sorted(
+            context.resources.artifacts,
+            key=lambda item: item.tool_name,
+        ):
+            assert artifact.bundle_digest is not None
+            artifact.verify(
+                expected_artifact_digest=artifact.artifact_digest,
+                expected_bundle_digest=artifact.bundle_digest,
+                generation=context.generation,
+            )
+            discovered.append(
+                DiscoveredTool(
+                    provider_id=self.provider_id,
+                    source=self.source,
+                    trust=self.trust,
+                    generation=context.generation,
+                    spec=artifact.spec,
+                    artifact=artifact,
+                )
+            )
+        return tuple(discovered)
+
+    def validate_legacy_parity(
+        self,
+        discovered: tuple[DiscoveredTool, ...],
+        legacy_tools: Mapping[str, object],
+        legacy_dependencies: Mapping[str, object],
+        *,
+        generation: int,
+        allow_additional_dependencies: bool = False,
+    ) -> None:
+        """Fail closed unless Generated discovery and legacy views are exact."""
+
+        _require_generation(generation)
+        if type(allow_additional_dependencies) is not bool:
+            raise TypeError("allow_additional_dependencies 必须是 bool")
+        if not isinstance(discovered, tuple) or not all(
+            isinstance(item, DiscoveredTool) for item in discovered
+        ):
+            raise TypeError("generated discovery 必须是 DiscoveredTool 元组")
+        if not isinstance(legacy_tools, Mapping) or not isinstance(
+            legacy_dependencies,
+            Mapping,
+        ):
+            raise TypeError("generated legacy parity 输入必须是映射")
+
+        expected: dict[str, ToolArtifact] = {}
+        for item in discovered:
+            if (
+                item.provider_id != self.provider_id
+                or item.source is not self.source
+                or item.trust is not self.trust
+                or not isinstance(item.artifact, ToolArtifact)
+            ):
+                raise ValueError("generated discovery 来源身份不一致")
+            if item.generation != generation:
+                raise ValueError("generated discovery generation 不一致")
+            if item.spec is not item.artifact.spec:
+                raise ValueError("generated discovery ToolSpec identity 不一致")
+            if item.spec.name in expected:
+                raise ValueError("generated discovery 不得包含重名工具")
+            expected[item.spec.name] = item.artifact
+
+        actual_names = {
+            name
+            for name, schema in legacy_tools.items()
+            if isinstance(name, str)
+            and isinstance(schema, Mapping)
+            and schema.get("source") == self.source.value
+        }
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                "generated legacy 工具集合不一致: "
+                f"missing={sorted(expected_names - actual_names)}, "
+                f"extra={sorted(actual_names - expected_names)}"
+            )
+
+        for name, artifact in expected.items():
+            schema = legacy_tools.get(name)
+            if not isinstance(schema, Mapping):
+                raise ValueError(f"generated legacy 工具 {name} Schema 缺失")
+            if artifact.bundle_id is None or artifact.bundle_digest is None:
+                raise ValueError(f"generated legacy 工具 {name} bundle identity 缺失")
+            spec = artifact.spec
+            contract = artifact.contract
+            expected_schema = {
+                **spec.as_legacy_schema(),
+                "source": self.source.value,
+                "bundle_id": artifact.bundle_id,
+                "bundle_digest": artifact.bundle_digest,
+                "requested_permission": contract.requested_permission,
+                "effective_permission": contract.effective_permission,
+                "declared_effect": contract.declared_effect.value,
+                "effective_effect": contract.effective_effect.value,
+                "user_policy_approved": spec.permission == "user",
+                "requested_capabilities": contract.requested_capabilities,
+                "effective_capabilities": contract.effective_capabilities,
+                "tool_artifact": artifact,
+                "artifact_digest": artifact.artifact_digest,
+                "generation": generation,
+            }
+            if set(schema) != set(expected_schema):
+                raise ValueError(f"generated legacy 工具 {name} 字段不一致")
+            if schema.get("tool_artifact") is not artifact:
+                raise ValueError(f"generated legacy 工具 {name} ToolArtifact 不一致")
+            if schema.get("tool_spec") is not spec:
+                raise ValueError(f"generated legacy 工具 {name} ToolSpec 不一致")
+            if schema.get("func") is not spec.handler:
+                raise ValueError(f"generated legacy 工具 {name} handler 不一致")
+            for field_name in (
+                "name",
+                "description",
+                "parameters",
+                "source",
+                "bundle_id",
+                "bundle_digest",
+                "requested_permission",
+                "effective_permission",
+                "declared_effect",
+                "effective_effect",
+                "user_policy_approved",
+                "requested_capabilities",
+                "effective_capabilities",
+                "artifact_digest",
+                "generation",
+            ):
+                if not _legacy_value_equal(
+                    schema.get(field_name),
+                    expected_schema[field_name],
+                ):
+                    raise ValueError(
+                        f"generated legacy 工具 {name} {field_name} 不一致"
+                    )
+            artifact.verify(
+                expected_artifact_digest=artifact.artifact_digest,
+                expected_bundle_digest=artifact.bundle_digest,
+                generation=generation,
+            )
+
+            dependencies = legacy_dependencies.get(name, set())
+            if not isinstance(dependencies, AbstractSet) or not all(
+                isinstance(item, str) for item in dependencies
+            ):
+                raise ValueError(f"generated legacy 工具 {name} dependencies 非法")
+            expected_dependencies = set(spec.dependencies)
+            dependencies_match = (
+                expected_dependencies <= dependencies
+                if allow_additional_dependencies
+                else expected_dependencies == dependencies
+            )
+            if not dependencies_match:
+                raise ValueError(f"generated legacy 工具 {name} dependencies 不一致")
+
+
 registered_tool_provider = RegisteredToolProvider()
 _registered_tool_provider_contract: ToolProvider[RegisteredToolResources] = registered_tool_provider
 file_tool_provider = FileToolProvider()
 _file_tool_provider_contract: ToolProvider[FileToolResources] = file_tool_provider
+generated_tool_provider = GeneratedToolProvider()
+_generated_tool_provider_contract: ToolProvider[GeneratedToolResources] = generated_tool_provider
 provider_registry = ProviderRegistry(
     (
         ProviderRegistration.from_provider(registered_tool_provider),
         ProviderRegistration.from_provider(file_tool_provider),
+        ProviderRegistration.from_provider(generated_tool_provider),
     )
 )

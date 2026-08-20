@@ -24,6 +24,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     FileToolProvider,
     FileToolResources,
     GeneratedSourceOverride,
+    GeneratedToolProvider,
     GeneratedToolResources,
     MCPToolResources,
     NoneBotPluginToolResources,
@@ -38,6 +39,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     ToolSource,
     ToolTrustLevel,
     file_tool_provider,
+    generated_tool_provider,
     provider_registry,
     registered_tool_provider,
     trust_for_source,
@@ -143,7 +145,7 @@ def _generated_artifact(spec: ToolSpec, *, generation: int = 4) -> ToolArtifact:
                 "effect": spec.effect.value,
                 "timeout_seconds": spec.timeout_seconds,
                 "result_limit": spec.result_limit,
-                "dependencies": [],
+                "dependencies": list(spec.dependencies),
             }
         ],
     }
@@ -451,6 +453,59 @@ def _file_plan(
     )
 
 
+def _generated_plan(
+    generation: int,
+    artifacts: tuple[ToolArtifact, ...] = (),
+    *,
+    state: LifecycleState | None = None,
+) -> ProviderDiscoveryPlan[GeneratedToolResources]:
+    if state is None:
+        state = (
+            _active_state(artifacts[0].bundle_digest)
+            if artifacts
+            else LifecycleState.empty()
+        )
+    return ProviderDiscoveryPlan(
+        provider=generated_tool_provider,
+        context=ProviderDiscoveryContext(
+            generation=generation,
+            resources=GeneratedToolResources(
+                lifecycle_state=state,
+                artifacts=artifacts,
+            ),
+        ),
+    )
+
+
+def _generated_legacy_projection(
+    artifacts: tuple[ToolArtifact, ...],
+) -> tuple[dict[str, dict], dict[str, set[str]]]:
+    tools: dict[str, dict] = {}
+    dependencies: dict[str, set[str]] = {}
+    for artifact in artifacts:
+        spec = artifact.spec
+        contract = artifact.contract
+        tools[spec.name] = {
+            **spec.as_legacy_schema(),
+            "source": "generated",
+            "bundle_id": artifact.bundle_id,
+            "bundle_digest": artifact.bundle_digest,
+            "requested_permission": contract.requested_permission,
+            "effective_permission": contract.effective_permission,
+            "declared_effect": contract.declared_effect.value,
+            "effective_effect": contract.effective_effect.value,
+            "user_policy_approved": spec.permission == "user",
+            "requested_capabilities": contract.requested_capabilities,
+            "effective_capabilities": contract.effective_capabilities,
+            "tool_artifact": artifact,
+            "artifact_digest": artifact.artifact_digest,
+            "generation": artifact.generation,
+        }
+        if spec.dependencies:
+            dependencies[spec.name] = set(spec.dependencies)
+    return tools, dependencies
+
+
 @pytest.mark.asyncio
 async def test_registered_provider_accepts_complete_legacy_parity() -> None:
     helper = _spec("helper")
@@ -730,6 +785,206 @@ async def test_file_provider_fails_closed_for_every_legacy_mismatch() -> None:
     )
 
 
+def test_generated_resources_bind_after_state_overrides_and_legacy_artifacts(
+    tmp_path: Path,
+) -> None:
+    artifact = _generated_artifact(_spec(), generation=8)
+    assert artifact.bundle_digest is not None
+    state = _active_state(artifact.bundle_digest)
+    tools, _dependencies = _generated_legacy_projection((artifact,))
+
+    resources = GeneratedToolResources.from_legacy_tools(
+        lifecycle_state=state,
+        source_overrides={
+            ("echo_bundle", artifact.bundle_digest): tmp_path,
+        },
+        legacy_tools=tools,
+    )
+    tools.clear()
+
+    assert resources.lifecycle_state is state
+    assert resources.artifacts == (artifact,)
+    assert resources.source_overrides == (
+        GeneratedSourceOverride(
+            bundle_id="echo_bundle",
+            bundle_digest=artifact.bundle_digest,
+            source_directory=tmp_path,
+        ),
+    )
+    ProviderDiscoveryContext(generation=8, resources=resources)
+    with pytest.raises(ValueError, match="generation"):
+        ProviderDiscoveryContext(generation=9, resources=resources)
+    with pytest.raises(ValueError, match="bundle 集合"):
+        GeneratedToolResources.from_legacy_tools(
+            lifecycle_state=state,
+            source_overrides=None,
+            legacy_tools={},
+        )
+    with pytest.raises(ValueError, match="source"):
+        GeneratedToolResources.from_legacy_tools(
+            lifecycle_state=state,
+            source_overrides=None,
+            legacy_tools={
+                "echo": {
+                    "source": "custom_file",
+                    "tool_artifact": artifact,
+                }
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_generated_provider_is_deterministic_immutable_and_no_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _generated_artifact(_spec(), generation=19)
+    assert artifact.bundle_digest is not None
+    state = _active_state(artifact.bundle_digest)
+    context = ProviderDiscoveryContext(
+        generation=19,
+        resources=GeneratedToolResources(
+            lifecycle_state=state,
+            artifacts=(artifact,),
+        ),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError(
+            "generated discovery must not read canonical state or source"
+        )
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.generated_tools.generated_tool_store.read_lifecycle_state",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.generated_tools.generated_tool_store.validate_bundle",
+        forbidden,
+    )
+
+    first = await generated_tool_provider.discover(context)
+    second = await generated_tool_provider.discover(context)
+
+    assert first == second
+    assert first[0].provider_id == "generated"
+    assert first[0].source is ToolSource.GENERATED
+    assert first[0].trust is ToolTrustLevel.UNTRUSTED
+    assert first[0].generation == 19
+    assert first[0].artifact is artifact
+    assert first[0].spec is artifact.spec
+    assert deepcopy(first) is first
+    assert not hasattr(generated_tool_provider, "execute")
+    assert not hasattr(generated_tool_provider, "reload")
+    with pytest.raises(FrozenInstanceError):
+        generated_tool_provider.source = ToolSource.CUSTOM_FILE
+
+
+@pytest.mark.asyncio
+async def test_generated_provider_rejects_other_resource_records() -> None:
+    provider = GeneratedToolProvider()
+    context = ProviderDiscoveryContext(
+        generation=1,
+        resources=RegisteredToolResources((_spec(),)),
+    )
+
+    with pytest.raises(TypeError, match="GeneratedToolResources"):
+        await provider.discover(context)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_generated_provider_accepts_complete_legacy_parity() -> None:
+    spec = replace(_spec("echo"), dependencies=("helper",))
+    artifact = _generated_artifact(spec, generation=7)
+    assert artifact.bundle_digest is not None
+    state = _active_state(artifact.bundle_digest)
+    records = await generated_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=7,
+            resources=GeneratedToolResources(
+                lifecycle_state=state,
+                artifacts=(artifact,),
+            ),
+        )
+    )
+    tools, dependencies = _generated_legacy_projection((artifact,))
+    dependencies["echo"].add("legacy_plugin_dependency")
+
+    generated_tool_provider.validate_legacy_parity(
+        records,
+        tools,
+        dependencies,
+        generation=7,
+        allow_additional_dependencies=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generated_provider_fails_closed_for_legacy_drift() -> None:
+    artifact = _generated_artifact(_spec("echo"), generation=7)
+    assert artifact.bundle_digest is not None
+    state = _active_state(artifact.bundle_digest)
+    records = await generated_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=7,
+            resources=GeneratedToolResources(
+                lifecycle_state=state,
+                artifacts=(artifact,),
+            ),
+        )
+    )
+
+    def reject(
+        tools: dict[str, dict],
+        dependencies: dict[str, set[str]],
+        *,
+        discovery: tuple[DiscoveredTool, ...] = records,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="generated"):
+            generated_tool_provider.validate_legacy_parity(
+                discovery,
+                tools,
+                dependencies,
+                generation=7,
+            )
+
+    tools, dependencies = _generated_legacy_projection((artifact,))
+    tools["echo"]["tool_artifact"] = _generated_artifact(
+        artifact.spec,
+        generation=7,
+    )
+    reject(tools, dependencies)
+
+    for field_name, value in (
+        ("bundle_id", "other_bundle"),
+        ("bundle_digest", "0" * 64),
+        ("requested_permission", "superuser"),
+        ("effective_permission", "superuser"),
+        ("declared_effect", "mutating"),
+        ("effective_effect", "mutating"),
+        ("user_policy_approved", False),
+        ("requested_capabilities", {}),
+        ("effective_capabilities", {}),
+        ("artifact_digest", "0" * 64),
+        ("generation", 8),
+    ):
+        tools, dependencies = _generated_legacy_projection((artifact,))
+        tools["echo"][field_name] = value
+        reject(tools, dependencies)
+
+    tools, dependencies = _generated_legacy_projection((artifact,))
+    tools["echo"].pop("bundle_id")
+    reject(tools, dependencies)
+
+    tools, dependencies = _generated_legacy_projection((artifact,))
+    reject(
+        tools,
+        dependencies,
+        discovery=(replace(records[0], provider_id="other"),),
+    )
+
+
 @pytest.mark.asyncio
 async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
     specs = (_spec("zeta"), _spec("alpha"))
@@ -741,11 +996,18 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
         ),
     )
 
-    catalog = await provider_registry.discover(23, (plan, _file_plan(23)))
+    catalog = await provider_registry.discover(
+        23,
+        (plan, _file_plan(23), _generated_plan(23)),
+    )
 
     assert ProviderCatalogSnapshot.schema_version == 2
     assert catalog.generation == 23
-    assert tuple(catalog.registrations) == ("custom-file", "registered")
+    assert tuple(catalog.registrations) == (
+        "custom-file",
+        "generated",
+        "registered",
+    )
     assert tuple(catalog.tools) == ("alpha", "zeta")
     assert [
         item.spec.name for item in catalog.tools_for_provider("registered")
@@ -791,7 +1053,24 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
     with pytest.raises(ValueError, match="工具名冲突"):
         await provider_registry.discover(
             9,
-            (registered_plan, _file_plan(9, (file_artifact,))),
+            (
+                registered_plan,
+                _file_plan(9, (file_artifact,)),
+                _generated_plan(9),
+            ),
+        )
+    generated_artifact = _generated_artifact(
+        _spec("same_name"),
+        generation=9,
+    )
+    with pytest.raises(ValueError, match="工具名冲突"):
+        await provider_registry.discover(
+            9,
+            (
+                registered_plan,
+                _file_plan(9),
+                _generated_plan(9, (generated_artifact,)),
+            ),
         )
     with pytest.raises(ValueError, match="不完整"):
         await provider_registry.discover(9, ())
@@ -800,7 +1079,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
     with pytest.raises(ValueError, match="generation"):
         await provider_registry.discover(
             10,
-            (registered_plan, _file_plan(9)),
+            (registered_plan, _file_plan(9), _generated_plan(9)),
         )
     with pytest.raises(ValueError, match="未注册"):
         await provider_registry.discover(9, (builtin_plan,))
@@ -823,7 +1102,11 @@ async def test_provider_batch_and_catalog_reject_identity_or_generation_drift() 
     )
     batch = await plan.discover_batch()
     file_batch = await _file_plan(5).discover_batch()
-    catalog = provider_registry.build_snapshot(5, (batch, file_batch))
+    generated_batch = await _generated_plan(5).discover_batch()
+    catalog = provider_registry.build_snapshot(
+        5,
+        (batch, file_batch, generated_batch),
+    )
 
     assert isinstance(batch, ProviderDiscoveryBatch)
     assert catalog.tools["echo"].spec is batch.tools[0].spec

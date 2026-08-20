@@ -25,10 +25,15 @@ from .tool_providers import (
     ProviderCatalogSnapshot,
     ProviderRegistration,
     file_tool_provider,
+    generated_tool_provider,
     registered_tool_provider,
 )
 
 _FileToolCandidate = tuple[
+    Mapping[str, Mapping[str, Any]],
+    Mapping[str, AbstractSet[str]],
+]
+_GeneratedToolCandidate = tuple[
     Mapping[str, Mapping[str, Any]],
     Mapping[str, AbstractSet[str]],
 ]
@@ -86,6 +91,20 @@ class ToolSnapshot:
                 raise ValueError("ToolSnapshot custom-file provider identity 不一致")
             file_tool_provider.validate_legacy_parity(
                 provider_catalog.tools_for_provider("custom-file"),
+                self.custom_tools,
+                self.tool_dependencies,
+                generation=self.generation,
+                allow_additional_dependencies=True,
+            )
+        generated = provider_catalog.registrations.get("generated")
+        if generated is not None:
+            expected = ProviderRegistration.from_provider(
+                generated_tool_provider
+            )
+            if generated != expected:
+                raise ValueError("ToolSnapshot generated provider identity 不一致")
+            generated_tool_provider.validate_legacy_parity(
+                provider_catalog.tools_for_provider("generated"),
                 self.custom_tools,
                 self.tool_dependencies,
                 generation=self.generation,
@@ -284,6 +303,21 @@ async def extract_webpage(
         )
 
     @staticmethod
+    def load_generated_tools_candidate(
+        *,
+        generation: int = 0,
+        generated_state=None,
+        generated_source_overrides=None,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+        generated_load_kwargs = {"generation": generation}
+        if generated_state is not None or generated_source_overrides is not None:
+            generated_load_kwargs.update(
+                generated_state=generated_state,
+                generated_source_overrides=generated_source_overrides,
+            )
+        return generated_tool_store.load_active_tools(**generated_load_kwargs)
+
+    @staticmethod
     def _copy_file_tool_candidate(
         candidate: object,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
@@ -312,6 +346,39 @@ async def extract_webpage(
             dependencies[name] = set(items)
         return tools, dependencies
 
+    @staticmethod
+    def _copy_generated_tool_candidate(
+        candidate: object,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
+        if not isinstance(candidate, tuple) or len(candidate) != 2:
+            raise TypeError(
+                "generated_tool_candidate 必须是 tools/dependencies 元组"
+            )
+        raw_tools, raw_dependencies = candidate
+        if not isinstance(raw_tools, Mapping) or not isinstance(
+            raw_dependencies,
+            Mapping,
+        ):
+            raise TypeError("generated_tool_candidate 必须包含两个映射")
+
+        tools: dict[str, dict[str, Any]] = {}
+        for name, schema in raw_tools.items():
+            if not isinstance(name, str) or not isinstance(schema, Mapping):
+                raise TypeError("generated_tool_candidate tools 结构非法")
+            tools[name] = dict(schema)
+        dependencies: dict[str, set[str]] = {}
+        for name, items in raw_dependencies.items():
+            if (
+                not isinstance(name, str)
+                or not isinstance(items, AbstractSet)
+                or not all(isinstance(item, str) for item in items)
+            ):
+                raise TypeError(
+                    "generated_tool_candidate dependencies 结构非法"
+                )
+            dependencies[name] = set(items)
+        return tools, dependencies
+
     def load_custom_tools(
         self,
         *,
@@ -323,6 +390,8 @@ async def extract_webpage(
         registered_discovery: tuple[DiscoveredTool, ...] | None = None,
         file_tool_candidate: _FileToolCandidate | None = None,
         file_discovery: tuple[DiscoveredTool, ...] | None = None,
+        generated_tool_candidate: _GeneratedToolCandidate | None = None,
+        generated_discovery: tuple[DiscoveredTool, ...] | None = None,
     ):
         """Parse file tools without importing them into the NoneBot process."""
         if (
@@ -383,15 +452,28 @@ async def extract_webpage(
         self._merge_unique_tools(new_tools, file_tools)
         for trigger, dependencies in file_dependencies.items():
             new_dependencies.setdefault(trigger, set()).update(dependencies)
-        generated_load_kwargs = {"generation": generation}
-        if generated_state is not None or generated_source_overrides is not None:
-            generated_load_kwargs.update(
+        generated_candidate_was_provided = generated_tool_candidate is not None
+        if generated_tool_candidate is None:
+            generated_tool_candidate = self.load_generated_tools_candidate(
+                generation=generation,
                 generated_state=generated_state,
                 generated_source_overrides=generated_source_overrides,
             )
         generated_tools, generated_dependencies = (
-            generated_tool_store.load_active_tools(**generated_load_kwargs)
+            self._copy_generated_tool_candidate(generated_tool_candidate)
         )
+        if generated_discovery is not None:
+            if not generated_candidate_was_provided:
+                raise ValueError(
+                    "generated discovery 必须复用显式 transaction candidate"
+                )
+            generated_tool_provider.validate_legacy_parity(
+                generated_discovery,
+                generated_tools,
+                generated_dependencies,
+                generation=generation,
+                allow_additional_dependencies=True,
+            )
         self._merge_unique_tools(new_tools, generated_tools)
         for trigger, dependencies in generated_dependencies.items():
             new_dependencies.setdefault(trigger, set()).update(dependencies)
