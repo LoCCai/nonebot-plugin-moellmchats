@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a 与 D-05b 已完成精确 HEAD 双 run gate；D-06 Tool Trust Enforcement 实现提交 `5d7b7a6734ba14650ef892dfffee369c88e8a4f4` 已完成本地总门禁，远端 gate 待完成，D-07 未启动。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b 与 D-06 已完成精确 HEAD 双 run gate；D-06 Tool Trust Enforcement 实现提交 `5d7b7a6734ba14650ef892dfffee369c88e8a4f4` 已由精确 HEAD `c4ecaf9b7519b6c56fd5d20a6e5640993eb65f69` 完成远端门禁，D-07 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -546,7 +546,7 @@ timeout
 
 ## D-06 Tool Trust Enforcement
 
-**状态：🟡 实现提交 `5d7b7a6734ba14650ef892dfffee369c88e8a4f4` 与本地总门禁完成；精确 HEAD 远端 gate 待完成；未部署**
+**状态：✅ 精确 HEAD `c4ecaf9b7519b6c56fd5d20a6e5640993eb65f69` 双 run 远端 gate green；未部署**
 
 `ToolTrustLevel` 枚举与来源身份已在 D-01a 定义；本任务只实施执行、选择、审计与管理策略。
 
@@ -565,13 +565,13 @@ external
 
 本地门禁：D-06 + Provider/Snapshot/Reload 定向 `98 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4）与 3.13.13 普通全量各 `418 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，JUnit 为 0 failure / 0 error / 0 skip；Ruff 0.16.2 通过，Pyright 对 `tool_providers.py` 为 `0 errors, 0 warnings`。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `ee916eac21ed6e744b29adc0816c8e3886238a170c4e7aa39c8f2306317a79a9`、sdist SHA256 `b9f448b8977699616685eefefd753fe7b12068d7b6c29dc05c8ad07001f79817`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")` 与 packaged trust policy 检查全部通过。
 
-远端证据：待精确 HEAD push/PR 双 run gate 回填。未部署。
+远端证据：包含 D-06 的精确 HEAD `c4ecaf9b7519b6c56fd5d20a6e5640993eb65f69` 对应 push run `32420501280` 与 PR run `32420504608`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 CLEAN。未部署。
 
 ---
 
 ## D-07 Capability Policy Merge
 
-状态：⏸️ 等待 D-06 精确 HEAD 远端 gate；未启动。
+状态：🟢 D-06 依赖已解除；下一实施项。
 
 ```text
 requested
