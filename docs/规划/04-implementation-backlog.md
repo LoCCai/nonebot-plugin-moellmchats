@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02 已分别由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` / `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 完成双 run gate；随后按依赖完成 D-01b 本地实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`，其远端 gate green 前不进入 D-03。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02 已分别由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` / `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 完成双 run gate；随后按依赖完成 D-01b 实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`，包含它的精确 HEAD `c8a4211560f2f7214b971109c54d817628f843d5` 也已完成双 run gate，D-03 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -450,7 +450,7 @@ timeout
 
 ## D-01b ProviderRegistry / ToolSnapshot v2 Dual View
 
-**状态：🟡 本地实现已提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`；待精确 HEAD 远端 gate**
+**状态：✅ 精确 HEAD `c8a4211560f2f7214b971109c54d817628f843d5` 双 run 远端 gate green；未部署**
 
 在 Registered pilot 证明发现契约后，集中冲突规则并 dual-publish / dual-read。新旧视图必须等价，不允许一次替换 `plugin_info/custom_tools/tool_dependencies/mcp_tool_names`。
 
@@ -460,11 +460,13 @@ timeout
 
 本地门禁：Pyright `0 errors, 0 warnings`；D-01b 定向 `64 passed`；Python 3.10～3.13 普通全量各 `368 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
 
+远端证据：精确 HEAD `c8a4211560f2f7214b971109c54d817628f843d5` 对应 push run `32402611310` 与 PR run `32402617145`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 CLEAN。未部署。
+
 ---
 
 ## D-03 FileToolProvider
 
-**状态：⏸️ 等待 D-01b 精确远端 green**
+**状态：🟢 D-01b 依赖已解除；下一实施项**
 
 保留 ToolArtifact 源码快照、AST Policy 和 generation 绑定。
 
