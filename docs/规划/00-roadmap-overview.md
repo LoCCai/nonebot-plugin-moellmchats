@@ -8,7 +8,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已在本地工作树实现并按依赖顺序完成最新总门禁。Ruff 与 Actionlint 通过；Python 3.10～3.13 普通全量均为 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外 smoke 全部通过。全部增量仍未提交、推送或部署；聚合 `release-gate` 的首次远端 green 与 required-check 配置尚未取得。远端发布门禁完成前不进入 Plan 2。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已在本地工作树实现并按依赖顺序完成最新总门禁。Ruff 与 Actionlint 通过；Python 3.10～3.13 普通全量均为 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外 smoke 全部通过。计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，但尚未推送或部署；聚合 `release-gate` 的首次远端 green 与 required-check 配置尚未取得。远端发布门禁完成前不进入 Plan 2。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

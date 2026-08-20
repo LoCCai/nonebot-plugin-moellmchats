@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 最新本地完整门禁已通过，包括 mandatory root Sandbox `40 passed, 0 skipped`；但工作树尚未形成受审提交，也未取得精确提交的首次远端 `release-gate` green 与 required-check 配置。在远端 green SHA 确认前，本文仅作设计与任务依赖校准，不实施 Plan 2 代码。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+> 实施门禁（2026-08-20）：Plan 1 最新本地完整门禁已通过，包括 mandatory root Sandbox `40 passed, 0 skipped`；计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，但尚未推送，也未取得精确提交的首次远端 `release-gate` green 与 required-check 配置。在远端 green SHA 确认前，本文仅作设计与任务依赖校准，不实施 Plan 2 代码。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 

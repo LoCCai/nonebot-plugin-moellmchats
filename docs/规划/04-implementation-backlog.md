@@ -16,9 +16,9 @@ lastmod: 2026-08-20T00:00:00+00:00
 - 最新本地总门禁已通过：Ruff 与 Actionlint 通过；Python 3.10～3.13 普通全量各 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`。
 - fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过；本地来源元数据明确标记为未提交工作树，不冒充可发布提交。
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
-- 所有增量仍待提交、首次 GitHub `release-gate` green 与 required-check 配置，不能据本地结果声称远端发布完成。
+- 计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`；尚待推送、首次 GitHub `release-gate` green 与 required-check 配置，不能据本地结果声称远端发布完成。
 - 每项状态只表示当前源码与测试已满足本节验收，不代表 GitHub 分支或 Qiqi 运行实例已经更新。
-- Plan 1 当前下一步是提交范围审阅、形成精确提交、推送并核对唯一 green SHA 和 required check 配置；远端门禁完成前不进入 Plan 2。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 当前下一步是推送本地提交并核对唯一 green SHA 和 required check 配置；远端门禁完成前不进入 Plan 2。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -32,7 +32,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 ## A-01 Generated Tool 默认网络隔离
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P0**
 
@@ -64,7 +64,7 @@ tests/
 
 ## A-02 PendingAction 二阶段确认
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P0**
 
@@ -97,7 +97,7 @@ PendingActionStore
 
 ## A-03 Generated Tool 默认 superuser
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P0**
 
@@ -113,7 +113,7 @@ PendingActionStore
 
 ## A-04 Capability 基础结构
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P0**
 
@@ -140,7 +140,7 @@ secrets
 
 ## A-05 Draft 文件权限修复
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P1**
 
@@ -162,7 +162,7 @@ config dir = 0700
 
 ## B-01 ToolArtifact
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P0**
 
@@ -188,7 +188,7 @@ generation
 
 ## B-02 Custom Tool Source Snapshot
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P1**
 
@@ -203,7 +203,7 @@ generation
 
 ## B-03 Generated Bundle Runtime Digest
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P1**
 
@@ -219,7 +219,7 @@ expected digest == actual digest
 
 ## B-04 Runner Protocol FD 分离
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P1**
 
@@ -237,7 +237,7 @@ stdout/stderr 只保留日志。
 
 ## B-05 Workspace File Count 限制
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 **优先级：P1**
 
@@ -256,7 +256,7 @@ max single-file bytes
 
 ## B-06 Workspace Scanner Async 化
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 避免 Event Loop 同步 `rglob()`。
 
@@ -266,7 +266,7 @@ max single-file bytes
 
 ## B-07 AST Policy Engine
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 结果类型：
 
@@ -283,7 +283,7 @@ RISK
 
 ## B-08 禁止 Generated Tool subprocess
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 第一阶段直接 deny。
 
@@ -297,7 +297,7 @@ RISK
 
 ## C-01 Tool Lifecycle State Machine
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 草稿状态：
 
@@ -334,7 +334,7 @@ Archived
 
 ## C-02 Full Draft Review
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 管理员能分页查看：
 
@@ -353,7 +353,7 @@ diff
 
 ## C-03 Watcher 外层恢复
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 任何文件损坏不能永久终止 watcher。
 
@@ -363,7 +363,7 @@ diff
 
 ## C-04 Lifecycle File Lock
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 支持 OS File Lock。
 
@@ -373,7 +373,7 @@ diff
 
 ## C-05 Approve 原子事务
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 实现顺序：
 
@@ -389,7 +389,7 @@ canonical durable CAS
 
 ## C-06 Rollback 原子事务
 
-**状态：✅ 本地门禁完成（待提交/远端 CI）**
+**状态：✅ 本地实现已提交（待推送/远端 CI）**
 
 权限、拒绝、停用与回滚复用 C-05 的 typed prepare/commit transaction；回滚只允许唯一匹配、未 Archived 的版本，并在同一 canonical snapshot 下验证 owner/no-follow、版本目录精确 `0500`、只含 `manifest.json`/`tool.py`/`tests.py` 三个 `0400` 普通文件、校验期间 inode 稳定及完整内容 digest。RuntimeSnapshot 和 ToolSnapshot 同时携带 lifecycle revision/state digest/active stamp，generation 从当前发布快照严格递增。
 
@@ -399,7 +399,7 @@ canonical durable CAS
 
 ## C-07 Sandbox Integration CI
 
-**状态：🟡 workflow 与最新本地总门禁已通过（mandatory root：`40 passed, 0 skipped`）；待提交及首次 GitHub CI green**
+**状态：🟡 workflow 与最新本地总门禁已通过（mandatory root：`40 passed, 0 skipped`）；待推送及首次 GitHub CI green**
 
 必须真实执行：
 
