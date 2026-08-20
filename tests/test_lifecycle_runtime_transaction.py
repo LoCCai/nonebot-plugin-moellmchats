@@ -576,8 +576,12 @@ def _configure_real_generated_loader(
         generation: int,
         generated_state,
         generated_source_overrides=None,
+        registered_tools=None,
+        registered_discovery=None,
     ):
         assert commit is False
+        assert registered_tools is not None
+        assert registered_discovery is not None
         return store.load_active_tools(
             generation=generation,
             generated_state=generated_state,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import importlib
 from pathlib import Path
 import time
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.generated_tool_lifecycle import LifecycleState
 from nonebot_plugin_moellmchats.generated_tool_runner import generated_tool_runner
 from nonebot_plugin_moellmchats.runtime_reload import (
     _WATCH_FAILURE_BACKOFF_INITIAL_SECONDS,
@@ -17,8 +19,9 @@ from nonebot_plugin_moellmchats.runtime_reload import (
     runtime_reloader,
 )
 from nonebot_plugin_moellmchats.runtime_snapshot import mutable_value, runtime_snapshots
-from nonebot_plugin_moellmchats.tool_contracts import ToolResult
-from nonebot_plugin_moellmchats.tool_manager import tool_manager
+from nonebot_plugin_moellmchats.tool_contracts import ToolResult, ToolSpec
+from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot, tool_manager
+from nonebot_plugin_moellmchats.tool_providers import registered_tool_provider
 
 
 @pytest.mark.asyncio
@@ -148,6 +151,127 @@ def test_tool_manager_forwards_generation_to_both_artifact_loaders(
     tool_manager.load_custom_tools(commit=False, generation=23)
 
     assert calls == [("custom_file", 23), ("generated", 23)]
+
+
+@pytest.mark.asyncio
+async def test_runtime_candidate_shadows_one_registered_snapshot_without_cutover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reload_module = importlib.import_module("nonebot_plugin_moellmchats.runtime_reload")
+    manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+    registered = ToolSpec(
+        name="runtime_registered_shadow",
+        description="runtime registered shadow",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: None,
+    )
+    registry_calls = 0
+
+    def snapshot_registered():
+        nonlocal registry_calls
+        registry_calls += 1
+        return {registered.name: registered}
+
+    monkeypatch.setattr(reload_module.tool_registry, "snapshot", snapshot_registered)
+    monkeypatch.setattr(reload_module.config_parser, "load_candidate", lambda: {})
+    monkeypatch.setattr(reload_module.model_selector, "build_candidate", lambda: None)
+    monkeypatch.setattr(
+        reload_module.temperament_manager,
+        "load_candidate",
+        lambda: ({}, {}),
+    )
+    monkeypatch.setattr(reload_module, "load_replies_candidate", lambda: {})
+    monkeypatch.setattr(reload_module.tool_manager, "build_plugin_info", lambda: {})
+    monkeypatch.setattr(
+        manager_module,
+        "load_file_tools",
+        lambda *_args, **_kwargs: ({}, {}),
+    )
+    monkeypatch.setattr(
+        manager_module.generated_tool_store,
+        "load_active_tools",
+        lambda **_kwargs: ({}, {}),
+    )
+    monkeypatch.setattr(
+        reload_module.tool_manager,
+        "_merge_dependencies_from_custom_plugin_info",
+        lambda _dependencies: None,
+    )
+    monkeypatch.setattr(
+        reload_module.mcp_manager,
+        "load_config_candidate",
+        lambda: {},
+    )
+
+    async def discover_mcp(*, commit: bool, servers, strict: bool):
+        assert commit is False
+        assert servers == {}
+        assert strict is True
+        return {}, {}
+
+    monkeypatch.setattr(
+        reload_module.mcp_manager,
+        "discover_tools",
+        discover_mcp,
+    )
+    monkeypatch.setattr(reload_module, "load_emotions_candidate", lambda _config: ())
+
+    state = LifecycleState(
+        revision=0,
+        drafts={},
+        versions={},
+        active={},
+        permission_grants={},
+    )
+    previous = runtime_snapshots.current()
+    reloader = reload_module.RuntimeReloader()
+    candidate = await reloader._build_candidate(41, generated_state=state)
+    snapshot = candidate.snapshot.tool_snapshot
+    entry = snapshot.custom_tools[registered.name]
+
+    assert registry_calls == 1
+    assert entry["tool_spec"] is registered
+    assert entry["func"] is registered.handler
+    assert entry["name"] == registered.name
+    assert entry["description"] == registered.description
+    assert mutable_value(entry["parameters"]) == registered.as_legacy_schema()["parameters"]
+    assert entry["source"] == "registered"
+    assert set(ToolSnapshot.__dataclass_fields__) == {
+        "generation",
+        "plugin_info",
+        "custom_tools",
+        "tool_dependencies",
+        "mcp_tool_names",
+        "generated_state_revision",
+        "generated_state_digest",
+        "generated_active",
+    }
+    assert not hasattr(snapshot, "providers")
+    assert not hasattr(snapshot, "discovered_tools")
+    assert not hasattr(candidate.snapshot, "providers")
+    assert not hasattr(candidate.snapshot, "discovered_tools")
+    assert not hasattr(registered_tool_provider, "execute")
+    assert runtime_snapshots.current() is previous
+
+    original_discover = registered_tool_provider.discover
+
+    async def discover_mutated(context):
+        records = await original_discover(context)
+        mutated = replace(
+            records[0],
+            spec=replace(records[0].spec, description="mutated shadow"),
+        )
+        return (mutated,)
+
+    monkeypatch.setattr(
+        reload_module,
+        "registered_tool_provider",
+        SimpleNamespace(discover=discover_mutated),
+    )
+    with pytest.raises(ValueError, match="ToolSpec"):
+        await reloader._build_candidate(42, generated_state=state)
+    assert registry_calls == 2
+    assert runtime_snapshots.current() is previous
 
 
 @pytest.mark.asyncio

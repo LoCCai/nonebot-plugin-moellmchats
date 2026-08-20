@@ -20,7 +20,13 @@ from .runtime_snapshot import (
     runtime_snapshots,
 )
 from .temperament_manager import temperament_manager
+from .tool_contracts import tool_registry
 from .tool_manager import ToolSnapshot, tool_manager
+from .tool_providers import (
+    ProviderDiscoveryContext,
+    RegisteredToolResources,
+    registered_tool_provider,
+)
 from .utils import (
     invalidate_resource_caches,
     load_emotions_candidate,
@@ -121,6 +127,15 @@ class RuntimeReloader:
             generated_state = await asyncio.to_thread(
                 generated_tool_store.read_lifecycle_state
             )
+        registered_tools = tool_registry.snapshot()
+        registered_discovery = await registered_tool_provider.discover(
+            ProviderDiscoveryContext(
+                generation=generation,
+                resources=RegisteredToolResources(
+                    tuple(registered_tools.values())
+                ),
+            )
+        )
         (
             config_candidate,
             model_candidate,
@@ -141,6 +156,8 @@ class RuntimeReloader:
                 generation=generation,
                 generated_state=generated_state,
                 generated_source_overrides=generated_source_overrides,
+                registered_tools=registered_tools,
+                registered_discovery=registered_discovery,
             ),
             asyncio.to_thread(mcp_manager.load_config_candidate),
         )

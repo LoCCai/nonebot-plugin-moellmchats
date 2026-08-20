@@ -20,6 +20,7 @@ from .runtime_snapshot import (
 )
 from .tool_artifacts import ToolArtifact
 from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
+from .tool_providers import DiscoveredTool, registered_tool_provider
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,8 @@ async def extract_webpage(
         generation: int = 0,
         generated_state=None,
         generated_source_overrides=None,
+        registered_tools: Mapping[str, ToolSpec] | None = None,
+        registered_discovery: tuple[DiscoveredTool, ...] | None = None,
     ):
         """Parse file tools without importing them into the NoneBot process."""
         if (
@@ -239,7 +242,18 @@ async def extract_webpage(
             or generation < 0
         ):
             raise ValueError("generation 必须是非负整数")
-        registered_tools = tool_registry.snapshot()
+        if registered_tools is None:
+            registered_tools = tool_registry.snapshot()
+        elif not isinstance(registered_tools, Mapping):
+            raise TypeError("registered_tools 必须是 ToolSpec 映射")
+        registered_tools = dict(registered_tools)
+        if any(
+            not isinstance(name, str)
+            or not isinstance(spec, ToolSpec)
+            or name != spec.name
+            for name, spec in registered_tools.items()
+        ):
+            raise ValueError("registered_tools 必须按精确工具名映射 ToolSpec")
         new_tools = {
             name: {**spec.as_legacy_schema(), "source": "registered"}
             for name, spec in registered_tools.items()
@@ -250,6 +264,13 @@ async def extract_webpage(
             for name, spec in registered_tools.items()
             if spec.dependencies
         }
+        if registered_discovery is not None:
+            registered_tool_provider.validate_legacy_parity(
+                registered_discovery,
+                new_tools,
+                new_dependencies,
+                generation=generation,
+            )
         file_tools, file_dependencies = load_file_tools(
             self.custom_tools_dir.glob("*.py"),
             generation=generation,

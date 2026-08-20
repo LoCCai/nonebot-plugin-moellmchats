@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 import re
@@ -300,11 +302,119 @@ class DiscoveredTool:
 
 
 class ToolProvider(Protocol[ProviderResourcesT]):
-    provider_id: str
-    source: ToolSource
-    trust: ToolTrustLevel
+    @property
+    def provider_id(self) -> str: ...
+
+    @property
+    def source(self) -> ToolSource: ...
+
+    @property
+    def trust(self) -> ToolTrustLevel: ...
 
     async def discover(
         self,
         context: ProviderDiscoveryContext[ProviderResourcesT],
     ) -> tuple[DiscoveredTool, ...]: ...
+
+
+@dataclass(frozen=True)
+class RegisteredToolProvider:
+    """Discover the transaction-pinned, trusted in-process tool registry.
+
+    Discovery deliberately consumes only ``RegisteredToolResources``.  The
+    provider does not read the global registry and does not own an execution
+    path; its first use is a shadow comparison with the existing legacy view.
+    """
+
+    provider_id: str = field(default="registered", init=False)
+    source: ToolSource = field(default=ToolSource.REGISTERED, init=False)
+    trust: ToolTrustLevel = field(default=ToolTrustLevel.TRUSTED, init=False)
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[RegisteredToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if not isinstance(context, ProviderDiscoveryContext) or type(context.resources) is not RegisteredToolResources:
+            raise TypeError("RegisteredToolProvider 只接受 RegisteredToolResources")
+        return tuple(
+            DiscoveredTool(
+                provider_id=self.provider_id,
+                source=self.source,
+                trust=self.trust,
+                generation=context.generation,
+                spec=spec,
+            )
+            for spec in sorted(context.resources.specs, key=lambda item: item.name)
+        )
+
+    def validate_legacy_parity(
+        self,
+        discovered: tuple[DiscoveredTool, ...],
+        legacy_tools: Mapping[str, object],
+        legacy_dependencies: Mapping[str, object],
+        *,
+        generation: int,
+    ) -> None:
+        """Fail closed unless the registered legacy projection is exact."""
+
+        _require_generation(generation)
+        if not isinstance(discovered, tuple) or not all(isinstance(item, DiscoveredTool) for item in discovered):
+            raise TypeError("registered discovery 必须是 DiscoveredTool 元组")
+        if not isinstance(legacy_tools, Mapping) or not isinstance(legacy_dependencies, Mapping):
+            raise TypeError("registered legacy parity 输入必须是映射")
+
+        expected: dict[str, ToolSpec] = {}
+        for item in discovered:
+            if (
+                item.provider_id != self.provider_id
+                or item.source is not self.source
+                or item.trust is not self.trust
+                or item.artifact is not None
+            ):
+                raise ValueError("registered discovery 来源身份不一致")
+            if item.spec.name in expected:
+                raise ValueError("registered discovery 不得包含重名工具")
+            if item.generation != generation:
+                raise ValueError("registered discovery generation 不一致")
+            expected[item.spec.name] = item.spec
+
+        actual_names = {
+            name
+            for name, schema in legacy_tools.items()
+            if isinstance(name, str) and isinstance(schema, Mapping) and schema.get("source") == self.source.value
+        }
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                "registered legacy 工具集合不一致: "
+                f"missing={sorted(expected_names - actual_names)}, "
+                f"extra={sorted(actual_names - expected_names)}"
+            )
+
+        for name, spec in expected.items():
+            schema = legacy_tools.get(name)
+            if not isinstance(schema, Mapping):
+                raise ValueError(f"registered legacy 工具 {name} Schema 缺失")
+            expected_schema = {
+                **spec.as_legacy_schema(),
+                "source": self.source.value,
+            }
+            if set(schema) != set(expected_schema):
+                raise ValueError(f"registered legacy 工具 {name} 字段不一致")
+            if schema.get("tool_spec") is not spec:
+                raise ValueError(f"registered legacy 工具 {name} ToolSpec 不一致")
+            if schema.get("func") is not spec.handler:
+                raise ValueError(f"registered legacy 工具 {name} handler 不一致")
+            for field_name in ("name", "description", "parameters", "source"):
+                if schema.get(field_name) != expected_schema[field_name]:
+                    raise ValueError(f"registered legacy 工具 {name} {field_name} 不一致")
+
+            dependencies = legacy_dependencies.get(name, set())
+            if not isinstance(dependencies, AbstractSet) or not all(isinstance(item, str) for item in dependencies):
+                raise ValueError(f"registered legacy 工具 {name} dependencies 非法")
+            if dependencies != set(spec.dependencies):
+                raise ValueError(f"registered legacy 工具 {name} dependencies 不一致")
+
+
+registered_tool_provider = RegisteredToolProvider()
+_registered_tool_provider_contract: ToolProvider[RegisteredToolResources] = registered_tool_provider

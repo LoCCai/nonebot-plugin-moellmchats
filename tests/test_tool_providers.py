@@ -27,9 +27,11 @@ from nonebot_plugin_moellmchats.tool_providers import (
     MCPToolResources,
     NoneBotPluginToolResources,
     ProviderDiscoveryContext,
+    RegisteredToolProvider,
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    registered_tool_provider,
     trust_for_source,
 )
 
@@ -316,3 +318,155 @@ def test_artifact_requirement_depends_only_on_source_identity() -> None:
             spec=spec,
             artifact=_custom_artifact(spec),
         )
+
+
+@pytest.mark.asyncio
+async def test_registered_provider_is_deterministic_immutable_and_no_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats.tool_contracts import tool_registry
+
+    specs = (_spec("zeta"), _spec("alpha"))
+    context = ProviderDiscoveryContext(
+        generation=19,
+        resources=RegisteredToolResources(specs),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("registered discovery must not perform I/O/global reads")
+
+    monkeypatch.setattr(tool_registry, "snapshot", forbidden)
+    monkeypatch.setattr("builtins.open", forbidden)
+
+    first = await registered_tool_provider.discover(context)
+    second = await registered_tool_provider.discover(context)
+
+    assert first == second
+    assert [item.spec.name for item in first] == ["alpha", "zeta"]
+    assert all(item.provider_id == "registered" for item in first)
+    assert all(item.source is ToolSource.REGISTERED for item in first)
+    assert all(item.trust is ToolTrustLevel.TRUSTED for item in first)
+    assert all(item.generation == 19 and item.artifact is None for item in first)
+    assert deepcopy(first) is first
+    with pytest.raises(FrozenInstanceError):
+        first[0].generation = 20
+    assert not hasattr(registered_tool_provider, "execute")
+    assert not hasattr(registered_tool_provider, "reload")
+    with pytest.raises(FrozenInstanceError):
+        registered_tool_provider.source = ToolSource.MCP
+
+
+@pytest.mark.asyncio
+async def test_registered_provider_rejects_other_resource_records() -> None:
+    provider = RegisteredToolProvider()
+    context = ProviderDiscoveryContext(
+        generation=1,
+        resources=MCPToolResources((_spec(),)),
+    )
+
+    with pytest.raises(TypeError, match="RegisteredToolResources"):
+        await provider.discover(context)  # type: ignore[arg-type]
+
+
+def _registered_legacy_projection(
+    specs: tuple[ToolSpec, ...],
+) -> tuple[dict[str, dict], dict[str, set[str]]]:
+    tools = {spec.name: {**spec.as_legacy_schema(), "source": "registered"} for spec in specs}
+    dependencies = {spec.name: set(spec.dependencies) for spec in specs if spec.dependencies}
+    return tools, dependencies
+
+
+@pytest.mark.asyncio
+async def test_registered_provider_accepts_complete_legacy_parity() -> None:
+    helper = _spec("helper")
+    echo = replace(_spec("echo"), dependencies=("helper",))
+    records = await registered_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=7,
+            resources=RegisteredToolResources((echo, helper)),
+        )
+    )
+    tools, dependencies = _registered_legacy_projection((echo, helper))
+
+    registered_tool_provider.validate_legacy_parity(
+        records,
+        tools,
+        dependencies,
+        generation=7,
+    )
+
+
+@pytest.mark.asyncio
+async def test_registered_provider_fails_closed_for_every_legacy_mismatch() -> None:
+    helper = _spec("helper")
+    echo = replace(_spec("echo"), dependencies=("helper",))
+    specs = (echo, helper)
+    records = await registered_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=7,
+            resources=RegisteredToolResources(specs),
+        )
+    )
+
+    def reject(
+        tools: dict[str, dict],
+        dependencies: dict[str, set[str]],
+        *,
+        discovery: tuple[DiscoveredTool, ...] = records,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="registered"):
+            registered_tool_provider.validate_legacy_parity(
+                discovery,
+                tools,
+                dependencies,
+                generation=7,
+            )
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    tools.pop("echo")
+    reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    extra = _spec("extra")
+    tools["extra"] = {**extra.as_legacy_schema(), "source": "registered"}
+    reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    tools["echo"]["tool_spec"] = replace(echo)
+    reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    tools["echo"]["func"] = lambda: None
+    reject(tools, dependencies)
+
+    for field_name, value in (
+        ("name", "renamed"),
+        ("description", "mutated description"),
+        ("parameters", {"type": "object", "properties": {}}),
+        ("source", "custom_file"),
+    ):
+        tools, dependencies = _registered_legacy_projection(specs)
+        tools["echo"][field_name] = value
+        reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    tools["echo"]["unexpected"] = True
+    reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    dependencies["echo"] = set()
+    reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    dependencies["echo"].add("extra")
+    reject(tools, dependencies)
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    reject(tools, dependencies, discovery=(records[0], replace(records[1], generation=8)))
+
+    tools, dependencies = _registered_legacy_projection(specs)
+    reject(
+        tools,
+        dependencies,
+        discovery=(replace(records[0], provider_id="other"), records[1]),
+    )

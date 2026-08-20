@@ -14,6 +14,11 @@ from nonebot_plugin_moellmchats.tool_manager import (
     model_selector,
     tool_manager,
 )
+from nonebot_plugin_moellmchats.tool_providers import (
+    ProviderDiscoveryContext,
+    RegisteredToolResources,
+    registered_tool_provider,
+)
 
 
 async def _handler(value: str) -> str:
@@ -136,6 +141,69 @@ def test_load_custom_tools_defaults_remain_compatible_with_legacy_store(
     tool_manager.load_custom_tools(commit=False, generation=11)
 
     assert calls == [11]
+
+
+@pytest.mark.asyncio
+async def test_load_custom_tools_uses_explicit_registered_shadow_snapshot(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+    helper = ToolSpec(
+        name="registered_helper",
+        description="helper",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    registered = ToolSpec(
+        name="registered_shadow",
+        description="registered shadow",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
+        handler=_handler,
+        dependencies=("registered_helper",),
+    )
+    transaction_snapshot = {
+        registered.name: registered,
+        helper.name: helper,
+    }
+    discovery = await registered_tool_provider.discover(
+        ProviderDiscoveryContext(
+            generation=31,
+            resources=RegisteredToolResources(tuple(transaction_snapshot.values())),
+        )
+    )
+
+    def forbidden_snapshot():
+        raise AssertionError("legacy loader must reuse the transaction snapshot")
+
+    monkeypatch.setattr(manager_module.tool_registry, "snapshot", forbidden_snapshot)
+    monkeypatch.setattr(manager_module, "load_file_tools", lambda *_args, **_kwargs: ({}, {}))
+    monkeypatch.setattr(
+        manager_module.generated_tool_store,
+        "load_active_tools",
+        lambda **_kwargs: ({}, {}),
+    )
+    monkeypatch.setattr(
+        tool_manager,
+        "_merge_dependencies_from_custom_plugin_info",
+        lambda _dependencies: None,
+    )
+
+    tools, dependencies = tool_manager.load_custom_tools(
+        commit=False,
+        generation=31,
+        registered_tools=transaction_snapshot,
+        registered_discovery=discovery,
+    )
+
+    assert set(tools) == {"registered_shadow", "registered_helper"}
+    assert tools["registered_shadow"] == {
+        **registered.as_legacy_schema(),
+        "source": "registered",
+    }
+    assert dependencies == {"registered_shadow": {"registered_helper"}}
 
 
 def test_tool_manager_snapshot_returns_active_runtime_snapshot(monkeypatch) -> None:
