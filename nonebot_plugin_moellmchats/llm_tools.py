@@ -14,6 +14,7 @@ from .pending_actions import PendingActionError, pending_action_store
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
     ToolEffect,
+    ToolSpec,
     validate_tool_arguments,
 )
 from .tool_execution import (
@@ -99,10 +100,19 @@ class LlmToolsMixin:
                         "parameters"
                     )
                 elif func_name in self.tool_snapshot.plugin_info:
-                    parameters = {
-                        "properties": {"command": {"type": "string"}},
-                        "required": ["command"],
-                    }
+                    plugin_spec = self.tool_snapshot.plugin_info[func_name].get(
+                        "tool_spec"
+                    )
+                    parameters = (
+                        plugin_spec.parameters
+                        if isinstance(plugin_spec, ToolSpec)
+                        else {
+                            "properties": {
+                                "command": {"type": "string"}
+                            },
+                            "required": ["command"],
+                        }
+                    )
                 argument_error = self._validate_tool_arguments(args, parameters)
             if argument_error:
                 send_message_list.append(

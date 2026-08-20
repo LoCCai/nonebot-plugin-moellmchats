@@ -13,6 +13,7 @@ from .config import config_parser, config_path
 from .generated_tools import PreparedLifecycleChange, generated_tool_store
 from .mcp_manager import mcp_manager
 from .model_selector import model_selector
+from .nonebot_plugin_tools import build_nonebot_plugin_candidate
 from .runtime_metrics import runtime_metrics
 from .runtime_snapshot import (
     RuntimeSnapshot,
@@ -28,6 +29,7 @@ from .tool_providers import (
     FileToolResources,
     GeneratedToolResources,
     MCPToolResources,
+    NoneBotPluginToolResources,
     ProviderDiscoveryContext,
     ProviderDiscoveryPlan,
     RegisteredToolResources,
@@ -35,6 +37,7 @@ from .tool_providers import (
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
+    nonebot_plugin_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -167,6 +170,9 @@ class RuntimeReloader:
             ),
             asyncio.to_thread(mcp_manager.load_config_candidate),
         )
+        plugin_info, nonebot_plugin_specs = build_nonebot_plugin_candidate(
+            plugin_info
+        )
         mcp_tools, mcp_mapping = await mcp_manager.discover_tools(
             commit=False,
             servers=mcp_servers,
@@ -240,6 +246,15 @@ class RuntimeReloader:
                         resources=BuiltinToolResources(builtin_specs),
                     ),
                 ),
+                ProviderDiscoveryPlan(
+                    provider=nonebot_plugin_provider,
+                    context=ProviderDiscoveryContext(
+                        generation=generation,
+                        resources=NoneBotPluginToolResources(
+                            nonebot_plugin_specs
+                        ),
+                    ),
+                ),
             ),
         )
         registered_discovery = provider_catalog.tools_for_provider("registered")
@@ -247,6 +262,9 @@ class RuntimeReloader:
         generated_discovery = provider_catalog.tools_for_provider("generated")
         mcp_discovery = provider_catalog.tools_for_provider("mcp")
         builtin_discovery = provider_catalog.tools_for_provider("builtin")
+        nonebot_plugin_discovery = provider_catalog.tools_for_provider(
+            "nonebot-plugin"
+        )
         custom_tool_pair = await asyncio.to_thread(
             tool_manager.load_custom_tools,
             commit=False,
@@ -267,6 +285,13 @@ class RuntimeReloader:
         builtin_tool_provider.validate_legacy_parity(
             builtin_discovery,
             builtin_specs,
+            dependencies,
+            generation=generation,
+            allow_additional_dependencies=True,
+        )
+        nonebot_plugin_provider.validate_legacy_parity(
+            nonebot_plugin_discovery,
+            plugin_info,
             dependencies,
             generation=generation,
             allow_additional_dependencies=True,

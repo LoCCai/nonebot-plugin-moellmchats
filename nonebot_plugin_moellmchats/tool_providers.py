@@ -19,7 +19,7 @@ from typing import (
 
 from .generated_tool_lifecycle import LifecycleState
 from .tool_artifacts import ToolArtifact
-from .tool_contracts import ToolSpec
+from .tool_contracts import ToolEffect, ToolSpec
 
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _BUNDLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -1492,6 +1492,131 @@ class BuiltinToolProvider:
                 )
 
 
+@dataclass(frozen=True)
+class NoneBotPluginProvider:
+    """Shadow reviewed legacy plugin adapters without cutting consumers over."""
+
+    provider_id: str = field(default="nonebot-plugin", init=False)
+    source: ToolSource = field(default=ToolSource.NONEBOT_PLUGIN, init=False)
+    trust: ToolTrustLevel = field(default=ToolTrustLevel.REVIEWED, init=False)
+
+    async def discover(
+        self,
+        context: ProviderDiscoveryContext[NoneBotPluginToolResources],
+    ) -> tuple[DiscoveredTool, ...]:
+        if (
+            not isinstance(context, ProviderDiscoveryContext)
+            or type(context.resources) is not NoneBotPluginToolResources
+        ):
+            raise TypeError(
+                "NoneBotPluginProvider 只接受 NoneBotPluginToolResources"
+            )
+        return tuple(
+            DiscoveredTool(
+                provider_id=self.provider_id,
+                source=self.source,
+                trust=self.trust,
+                generation=context.generation,
+                spec=spec,
+            )
+            for spec in sorted(
+                context.resources.specs,
+                key=lambda item: item.name,
+            )
+        )
+
+    def validate_legacy_parity(
+        self,
+        discovered: tuple[DiscoveredTool, ...],
+        legacy_info: Mapping[str, object],
+        legacy_dependencies: Mapping[str, object],
+        *,
+        generation: int,
+        allow_additional_dependencies: bool = False,
+    ) -> None:
+        """Fail closed unless plugin metadata and adapters match the catalog."""
+
+        _require_generation(generation)
+        if type(allow_additional_dependencies) is not bool:
+            raise TypeError("allow_additional_dependencies 必须是 bool")
+        if not isinstance(discovered, tuple) or not all(
+            isinstance(item, DiscoveredTool) for item in discovered
+        ):
+            raise TypeError("nonebot-plugin discovery 必须是 DiscoveredTool 元组")
+        if not isinstance(legacy_info, Mapping) or not isinstance(
+            legacy_dependencies,
+            Mapping,
+        ):
+            raise TypeError("nonebot-plugin legacy parity 输入必须是映射")
+
+        expected: dict[str, ToolSpec] = {}
+        for item in discovered:
+            if (
+                item.provider_id != self.provider_id
+                or item.source is not self.source
+                or item.trust is not self.trust
+                or item.artifact is not None
+            ):
+                raise ValueError("nonebot-plugin discovery 来源身份不一致")
+            if item.generation != generation:
+                raise ValueError("nonebot-plugin discovery generation 不一致")
+            if item.spec.name in expected:
+                raise ValueError("nonebot-plugin discovery 不得包含重名工具")
+            expected[item.spec.name] = item.spec
+
+        actual_names = set(legacy_info)
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                "nonebot-plugin legacy 工具集合不一致: "
+                f"missing={sorted(expected_names - actual_names)}, "
+                f"extra={sorted(actual_names - expected_names)}"
+            )
+
+        for name, spec in expected.items():
+            entry = legacy_info[name]
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} 描述非法")
+            if entry.get("source") != self.source.value:
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} source 不一致")
+            if entry.get("tool_spec") is not spec:
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} ToolSpec 不一致")
+            description = (
+                f"插件名称：{(entry.get('name') or name)!s}。"
+                f"功能描述：{(entry.get('description') or '无描述')!s}。"
+                f"原始用法说明：{(entry.get('usage') or '无用法说明')!s}"
+            )
+            if spec.description != description:
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} description 不一致"
+                )
+            if (
+                spec.permission != "user"
+                or spec.effect is not ToolEffect.MUTATING
+                or not callable(spec.handler)
+            ):
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} 兼容契约不一致"
+                )
+            dependencies = legacy_dependencies.get(name, set())
+            if not isinstance(dependencies, AbstractSet) or not all(
+                isinstance(item, str) for item in dependencies
+            ):
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} dependencies 非法"
+                )
+            expected_dependencies = set(spec.dependencies)
+            dependencies_match = (
+                expected_dependencies <= dependencies
+                if allow_additional_dependencies
+                else expected_dependencies == dependencies
+            )
+            if not dependencies_match:
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} dependencies 不一致"
+                )
+
+
 registered_tool_provider = RegisteredToolProvider()
 _registered_tool_provider_contract: ToolProvider[RegisteredToolResources] = registered_tool_provider
 file_tool_provider = FileToolProvider()
@@ -1502,6 +1627,8 @@ mcp_tool_provider = MCPToolProvider()
 _mcp_tool_provider_contract: ToolProvider[MCPToolResources] = mcp_tool_provider
 builtin_tool_provider = BuiltinToolProvider()
 _builtin_tool_provider_contract: ToolProvider[BuiltinToolResources] = builtin_tool_provider
+nonebot_plugin_provider = NoneBotPluginProvider()
+_nonebot_plugin_provider_contract: ToolProvider[NoneBotPluginToolResources] = nonebot_plugin_provider
 provider_registry = ProviderRegistry(
     (
         ProviderRegistration.from_provider(registered_tool_provider),
@@ -1509,5 +1636,6 @@ provider_registry = ProviderRegistry(
         ProviderRegistration.from_provider(generated_tool_provider),
         ProviderRegistration.from_provider(mcp_tool_provider),
         ProviderRegistration.from_provider(builtin_tool_provider),
+        ProviderRegistration.from_provider(nonebot_plugin_provider),
     )
 )

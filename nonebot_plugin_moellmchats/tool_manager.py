@@ -14,6 +14,7 @@ from .custom_tool_loader import load_file_tools
 from .generated_tools import generated_tool_store
 from .mcp_manager import mcp_manager
 from .model_selector import config_path, model_selector
+from .nonebot_plugin_tools import build_nonebot_plugin_candidate
 from .runtime_snapshot import (
     immutable_mapping,
     mutable_value,
@@ -29,6 +30,7 @@ from .tool_providers import (
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
+    nonebot_plugin_provider,
     registered_tool_provider,
 )
 
@@ -134,6 +136,22 @@ class ToolSnapshot:
             builtin_tool_provider.validate_legacy_parity(
                 provider_catalog.tools_for_provider("builtin"),
                 builtin_tool_specs(),
+                self.tool_dependencies,
+                generation=self.generation,
+                allow_additional_dependencies=True,
+            )
+        nonebot_plugin = provider_catalog.registrations.get("nonebot-plugin")
+        if nonebot_plugin is not None:
+            expected = ProviderRegistration.from_provider(
+                nonebot_plugin_provider
+            )
+            if nonebot_plugin != expected:
+                raise ValueError(
+                    "ToolSnapshot nonebot-plugin provider identity 不一致"
+                )
+            nonebot_plugin_provider.validate_legacy_parity(
+                provider_catalog.tools_for_provider("nonebot-plugin"),
+                self.plugin_info,
                 self.tool_dependencies,
                 generation=self.generation,
                 allow_additional_dependencies=True,
@@ -632,7 +650,9 @@ async def extract_webpage(
         return plugin_info
 
     def refresh_plugins(self):
-        self.plugin_info = self.build_plugin_info()
+        self.plugin_info = build_nonebot_plugin_candidate(
+            self.build_plugin_info()
+        )[0]
 
     def snapshot(self) -> ToolSnapshot:
         from .runtime_snapshot import runtime_snapshots
@@ -930,17 +950,24 @@ async def extract_webpage(
 
             if name in plugin_info:
                 info = plugin_info[name]
+                spec = info.get("tool_spec")
+                if spec is not None and not isinstance(spec, ToolSpec):
+                    continue
                 tools.append(
                     {
                         "type": "function",
                         "function": {
                             "name": name,
-                            "description": (
+                            "description": spec.description
+                            if spec is not None
+                            else (
                                 f"插件名称：{info.get('name') or name}。"
                                 f"功能描述：{info.get('description') or '无描述'}。"
                                 f"原始用法说明：{info.get('usage') or '无用法说明'}"
                             ),
-                            "parameters": {
+                            "parameters": mutable_value(spec.parameters)
+                            if spec is not None
+                            else {
                                 "type": "object",
                                 "properties": {
                                     "command": {

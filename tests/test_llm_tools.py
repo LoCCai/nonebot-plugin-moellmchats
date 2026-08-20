@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
+from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
+    build_nonebot_plugin_candidate,
+)
 from nonebot_plugin_moellmchats.pending_actions import (
     PendingActionStore,
     pending_action_store,
@@ -28,11 +32,21 @@ class FakeBot:
 
 
 class Harness(LlmToolsMixin):
-    def __init__(self, tools: dict, text: str = "hello") -> None:
+    def __init__(
+        self,
+        tools: dict,
+        text: str = "hello",
+        *,
+        plugins: dict | None = None,
+    ) -> None:
         self.bot = FakeBot()
         self.event = SimpleNamespace(user_id=1)
         self.format_message_dict = {"text": [text]}
-        self.tool_snapshot = SimpleNamespace(generation=1, custom_tools=tools)
+        self.tool_snapshot = SimpleNamespace(
+            generation=1,
+            custom_tools=tools,
+            plugin_info=plugins or {},
+        )
         self.messages_handler = SimpleNamespace(
             messages_entity=SimpleNamespace(
                 add_used_plugins=lambda value: None,
@@ -244,6 +258,56 @@ async def test_web_search_legacy_branch_uses_canonical_builtin_handler(
     assert calls == [("latest", harness.tool_snapshot)]
     assert harness.bot.sent == ["正在搜索: latest..."]
     assert "external observation" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_demo": {
+                "description": "demo plugin",
+                "usage": "/demo",
+            }
+        }
+    )
+
+    async def forbidden_handler(**_kwargs):
+        raise AssertionError("D-05b must not cut the legacy consumer over")
+
+    legacy["plugin_demo"]["tool_spec"] = replace(
+        specs[0],
+        handler=forbidden_handler,
+    )
+    calls = []
+
+    async def dispatch(bot, event, command, source, *, plugin_name):
+        calls.append((bot, event, command, source, plugin_name))
+        return "visible output", []
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+
+    messages = await harness._execute_tools(
+        [_call(1, "plugin_demo", '{"command":"/demo"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert calls == [
+        (
+            harness.bot,
+            harness.event,
+            "/demo",
+            harness.format_message_dict,
+            "plugin_demo",
+        )
+    ]
+    assert "visible output" in messages[-1]["content"]
 
 
 @pytest.mark.asyncio

@@ -20,11 +20,16 @@ from nonebot_plugin_moellmchats.runtime_reload import (
     runtime_reloader,
 )
 from nonebot_plugin_moellmchats.runtime_snapshot import mutable_value, runtime_snapshots
-from nonebot_plugin_moellmchats.tool_contracts import ToolResult, ToolSpec
+from nonebot_plugin_moellmchats.tool_contracts import (
+    ToolEffect,
+    ToolResult,
+    ToolSpec,
+)
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot, tool_manager
 from nonebot_plugin_moellmchats.tool_providers import (
     builtin_tool_provider,
     mcp_tool_provider,
+    nonebot_plugin_provider,
     registered_tool_provider,
 )
 
@@ -185,6 +190,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         parameters={"type": "object", "properties": {}},
         handler=mcp_handler,
     )
+    plugin_name = "runtime_plugin_shadow"
     registry_calls = 0
     file_load_calls = 0
     generated_load_calls = 0
@@ -214,7 +220,17 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         lambda: ({}, {}),
     )
     monkeypatch.setattr(reload_module, "load_replies_candidate", lambda: {})
-    monkeypatch.setattr(reload_module.tool_manager, "build_plugin_info", lambda: {})
+    monkeypatch.setattr(
+        reload_module.tool_manager,
+        "build_plugin_info",
+        lambda: {
+            plugin_name: {
+                "name": "Runtime Plugin",
+                "description": "runtime plugin shadow",
+                "usage": "/runtime",
+            }
+        },
+    )
     monkeypatch.setattr(
         manager_module,
         "load_file_tools",
@@ -307,6 +323,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         "custom-file",
         "generated",
         "mcp",
+        "nonebot-plugin",
         "registered",
     )
     assert provider_catalog.tools[registered.name].spec is registered
@@ -318,6 +335,16 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert builtin_record.spec is WEB_SEARCH_TOOL_SPEC
     assert builtin_record.trust.value == "trusted"
     assert WEB_SEARCH_TOOL_SPEC.name not in snapshot.custom_tools
+    plugin_entry = snapshot.plugin_info[plugin_name]
+    plugin_record = provider_catalog.tools[plugin_name]
+    assert plugin_record.provider_id == "nonebot-plugin"
+    assert plugin_record.source.value == "nonebot_plugin"
+    assert plugin_record.trust.value == "reviewed"
+    assert plugin_record.spec is plugin_entry["tool_spec"]
+    assert plugin_record.spec.effect is ToolEffect.MUTATING
+    assert plugin_record.spec.permission == "user"
+    assert plugin_entry["source"] == "nonebot_plugin"
+    assert plugin_name not in snapshot.custom_tools
     mcp_entry = snapshot.custom_tools[mcp_spec.name]
     mcp_record = provider_catalog.tools[mcp_spec.name]
     assert mcp_record.provider_id == "mcp"
@@ -331,6 +358,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert not hasattr(registered_tool_provider, "execute")
     assert not hasattr(mcp_tool_provider, "execute")
     assert not hasattr(builtin_tool_provider, "execute")
+    assert not hasattr(nonebot_plugin_provider, "execute")
     assert runtime_snapshots.current() is previous
 
     original_discover = registered_tool_provider.discover
@@ -460,7 +488,7 @@ async def test_plugin_tool_collision_retains_previous_generation() -> None:
             "    return 'bad'\n",
             encoding="utf-8",
         )
-        with pytest.raises(ValueError, match="插件冲突"):
+        with pytest.raises(ValueError, match="provider 工具名冲突"):
             await runtime_reloader.reload("test-plugin-collision")
         assert runtime_snapshots.current() is previous
     finally:
@@ -491,7 +519,7 @@ async def test_mcp_tool_collision_retains_previous_generation(monkeypatch) -> No
         }
 
     monkeypatch.setattr(mcp_manager, "discover_tools", collide)
-    with pytest.raises(ValueError, match="MCP 工具名"):
+    with pytest.raises(ValueError, match="provider 工具名冲突"):
         await runtime_reloader.reload("test-mcp-collision")
     assert runtime_snapshots.current() is previous
 
@@ -539,8 +567,78 @@ async def test_builtin_plugin_collision_retains_previous_generation(
         },
     )
 
-    with pytest.raises(ValueError, match="内置工具名与 NoneBot 插件冲突"):
+    with pytest.raises(ValueError, match="provider 工具名冲突"):
         await runtime_reloader.reload("test-builtin-plugin-collision")
+    assert runtime_snapshots.current() is previous
+
+
+@pytest.mark.asyncio
+async def test_malformed_nonebot_plugin_candidate_retains_previous_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import runtime_reload as reload_module
+
+    await runtime_reloader.reload("test-nonebot-plugin-malformed-baseline")
+    previous = runtime_snapshots.current()
+    monkeypatch.setattr(
+        reload_module.tool_manager,
+        "build_plugin_info",
+        lambda: {"plugin_malformed": []},
+    )
+
+    with pytest.raises(TypeError, match="NoneBot 插件"):
+        await runtime_reloader.reload("test-nonebot-plugin-malformed")
+    assert runtime_snapshots.current() is previous
+
+
+@pytest.mark.asyncio
+async def test_nonebot_plugin_parity_drift_retains_previous_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import runtime_reload as reload_module
+
+    await runtime_reloader.reload("test-nonebot-plugin-parity-baseline")
+    previous = runtime_snapshots.current()
+    monkeypatch.setattr(
+        reload_module.tool_manager,
+        "build_plugin_info",
+        lambda: {
+            "plugin_parity": {
+                "description": "plugin parity",
+                "usage": "/parity",
+            }
+        },
+    )
+    original_discover = nonebot_plugin_provider.discover
+    original_validate = nonebot_plugin_provider.validate_legacy_parity
+
+    async def discover_mutated(context):
+        records = await original_discover(context)
+        assert len(records) == 1
+        return (
+            replace(
+                records[0],
+                spec=replace(
+                    records[0].spec,
+                    description="drifted plugin shadow",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        reload_module,
+        "nonebot_plugin_provider",
+        SimpleNamespace(
+            provider_id=nonebot_plugin_provider.provider_id,
+            source=nonebot_plugin_provider.source,
+            trust=nonebot_plugin_provider.trust,
+            discover=discover_mutated,
+            validate_legacy_parity=original_validate,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ToolSpec"):
+        await runtime_reloader.reload("test-nonebot-plugin-parity-drift")
     assert runtime_snapshots.current() is previous
 
 

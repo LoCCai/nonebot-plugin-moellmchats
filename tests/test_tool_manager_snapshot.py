@@ -13,6 +13,9 @@ from nonebot_plugin_moellmchats.generated_tool_lifecycle import (
     VersionRecord,
     VersionState,
 )
+from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
+    build_nonebot_plugin_candidate,
+)
 from nonebot_plugin_moellmchats.runtime_metrics import runtime_metrics
 from nonebot_plugin_moellmchats.runtime_snapshot import runtime_snapshots
 from nonebot_plugin_moellmchats.tool_artifacts import (
@@ -21,7 +24,11 @@ from nonebot_plugin_moellmchats.tool_artifacts import (
     canonical_bundle_digest,
     source_sha256,
 )
-from nonebot_plugin_moellmchats.tool_contracts import ToolPolicy, ToolSpec
+from nonebot_plugin_moellmchats.tool_contracts import (
+    ToolEffect,
+    ToolPolicy,
+    ToolSpec,
+)
 from nonebot_plugin_moellmchats.tool_manager import (
     ToolSnapshot,
     model_selector,
@@ -42,6 +49,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
+    nonebot_plugin_provider,
     provider_registry,
     registered_tool_provider,
 )
@@ -62,6 +70,26 @@ def _builtin_batch(generation: int) -> ProviderDiscoveryBatch:
             spec=spec,
         )
         for spec in builtin_tool_specs()
+    )
+    return ProviderDiscoveryBatch(registration, generation, records)
+
+
+def _nonebot_batch(
+    generation: int,
+    specs: tuple[ToolSpec, ...] = (),
+) -> ProviderDiscoveryBatch:
+    registration = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    records = tuple(
+        DiscoveredTool(
+            provider_id=registration.provider_id,
+            source=registration.source,
+            trust=registration.trust,
+            generation=generation,
+            spec=spec,
+        )
+        for spec in specs
     )
     return ProviderDiscoveryBatch(registration, generation, records)
 
@@ -111,6 +139,7 @@ def _registered_catalog(
                 tools=(),
             ),
             _builtin_batch(generation),
+            _nonebot_batch(generation),
         ),
     )
 
@@ -160,6 +189,7 @@ def _file_catalog(
             ProviderDiscoveryBatch(generated, generation, ()),
             ProviderDiscoveryBatch(mcp, generation, ()),
             _builtin_batch(generation),
+            _nonebot_batch(generation),
         ),
     )
 
@@ -250,6 +280,7 @@ def _generated_catalog(
             ProviderDiscoveryBatch(generated, generation, (record,)),
             ProviderDiscoveryBatch(mcp, generation, ()),
             _builtin_batch(generation),
+            _nonebot_batch(generation),
         ),
     )
 
@@ -320,6 +351,7 @@ def _mcp_catalog(
             ProviderDiscoveryBatch(generated, generation, ()),
             ProviderDiscoveryBatch(mcp, generation, (record,)),
             _builtin_batch(generation),
+            _nonebot_batch(generation),
         ),
     )
 
@@ -398,7 +430,7 @@ def test_tool_snapshot_dual_view_keeps_exact_registered_identity() -> None:
 
     snapshot = ToolSnapshot(
         generation=12,
-        plugin_info={"optional_plugin": {}},
+        plugin_info={},
         custom_tools=legacy_tools,
         tool_dependencies={
             "snapshot_registered": {"snapshot_helper", "optional_plugin"}
@@ -420,7 +452,7 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
 
     snapshot = ToolSnapshot(
         generation=14,
-        plugin_info={"optional_plugin": {}},
+        plugin_info={},
         custom_tools={},
         tool_dependencies={builtin_spec.name: {"optional_plugin"}},
         mcp_tool_names=set(),
@@ -448,6 +480,67 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
             tool_dependencies={},
             mcp_tool_names=set(),
             provider_catalog=drifted_catalog,
+        )
+
+
+def test_tool_snapshot_nonebot_plugin_shadow_keeps_adapter_identity() -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_weather": {
+                "name": "Weather",
+                "description": "legacy weather plugin",
+                "usage": "/weather",
+                "dependencies": ["optional_plugin"],
+            }
+        }
+    )
+    base = _registered_catalog((), generation=15)
+    registration = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    record = DiscoveredTool(
+        provider_id=registration.provider_id,
+        source=registration.source,
+        trust=registration.trust,
+        generation=15,
+        spec=specs[0],
+    )
+    catalog = ProviderCatalogSnapshot(
+        generation=15,
+        registrations=base.registrations,
+        tools={**base.tools, specs[0].name: record},
+    )
+
+    snapshot = ToolSnapshot(
+        generation=15,
+        plugin_info=legacy,
+        custom_tools={},
+        tool_dependencies={"plugin_weather": {"optional_plugin"}},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+
+    entry = snapshot.plugin_info["plugin_weather"]
+    assert entry["tool_spec"] is specs[0]
+    assert entry["source"] == "nonebot_plugin"
+    assert record.spec is specs[0]
+    assert record.spec.effect is ToolEffect.MUTATING
+    assert record.spec.permission == "user"
+    assert "plugin_weather" not in snapshot.custom_tools
+
+    drifted = {
+        name: dict(info)
+        for name, info in legacy.items()
+    }
+    drifted["plugin_weather"]["description"] = "drifted"
+    with pytest.raises(ValueError, match="description"):
+        ToolSnapshot(
+            generation=15,
+            plugin_info=drifted,
+            custom_tools={},
+            tool_dependencies={"plugin_weather": {"optional_plugin"}},
+            mcp_tool_names=set(),
+            provider_catalog=catalog,
         )
 
 
@@ -537,7 +630,7 @@ def test_tool_snapshot_dual_view_keeps_exact_file_artifact_identity() -> None:
 
     snapshot = ToolSnapshot(
         generation=15,
-        plugin_info={"optional_plugin": {}},
+        plugin_info={},
         custom_tools={spec.name: legacy},
         tool_dependencies={spec.name: {"optional_plugin"}},
         mcp_tool_names=set(),
@@ -582,7 +675,7 @@ def test_tool_snapshot_dual_view_keeps_exact_generated_artifact_identity() -> No
 
     snapshot = ToolSnapshot(
         generation=16,
-        plugin_info={"optional_plugin": {}},
+        plugin_info={},
         custom_tools={spec.name: legacy},
         tool_dependencies={spec.name: {"optional_plugin"}},
         mcp_tool_names=set(),

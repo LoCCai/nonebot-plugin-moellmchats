@@ -11,6 +11,9 @@ from nonebot_plugin_moellmchats.generated_tool_lifecycle import (
     VersionRecord,
     VersionState,
 )
+from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
+    build_nonebot_plugin_candidate,
+)
 from nonebot_plugin_moellmchats.tool_artifacts import (
     ToolArtifact,
     ToolContractSnapshot,
@@ -29,6 +32,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     GeneratedToolResources,
     MCPToolProvider,
     MCPToolResources,
+    NoneBotPluginProvider,
     NoneBotPluginToolResources,
     ProviderCatalogSnapshot,
     ProviderDiscoveryBatch,
@@ -44,6 +48,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     file_tool_provider,
     generated_tool_provider,
     mcp_tool_provider,
+    nonebot_plugin_provider,
     provider_registry,
     registered_tool_provider,
     trust_for_source,
@@ -503,6 +508,19 @@ def _builtin_plan(
         context=ProviderDiscoveryContext(
             generation=generation,
             resources=BuiltinToolResources(specs),
+        ),
+    )
+
+
+def _nonebot_plan(
+    generation: int,
+    specs: tuple[ToolSpec, ...] = (),
+) -> ProviderDiscoveryPlan[NoneBotPluginToolResources]:
+    return ProviderDiscoveryPlan(
+        provider=nonebot_plugin_provider,
+        context=ProviderDiscoveryContext(
+            generation=generation,
+            resources=NoneBotPluginToolResources(specs),
         ),
     )
 
@@ -1285,6 +1303,132 @@ async def test_builtin_provider_fails_closed_for_branch_or_dependency_drift() ->
 
 
 @pytest.mark.asyncio
+async def test_nonebot_plugin_provider_is_reviewed_deterministic_and_no_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_zeta": {"description": "zeta"},
+            "plugin_alpha": {"description": "alpha"},
+        }
+    )
+    context = ProviderDiscoveryContext(
+        generation=49,
+        resources=NoneBotPluginToolResources(specs),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError(
+            "nonebot-plugin shadow discovery must not perform I/O or dispatch"
+        )
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.event_simulator.EventSimulator.dispatch_event",
+        forbidden,
+    )
+
+    first = await nonebot_plugin_provider.discover(context)
+    second = await nonebot_plugin_provider.discover(context)
+
+    assert first == second
+    assert [item.spec.name for item in first] == [
+        "plugin_alpha",
+        "plugin_zeta",
+    ]
+    assert all(item.provider_id == "nonebot-plugin" for item in first)
+    assert all(item.source is ToolSource.NONEBOT_PLUGIN for item in first)
+    assert all(item.trust is ToolTrustLevel.REVIEWED for item in first)
+    assert all(item.generation == 49 and item.artifact is None for item in first)
+    assert deepcopy(first) is first
+    assert set(legacy) == {"plugin_alpha", "plugin_zeta"}
+    assert not hasattr(nonebot_plugin_provider, "execute")
+    assert not hasattr(nonebot_plugin_provider, "reload")
+    with pytest.raises(FrozenInstanceError):
+        nonebot_plugin_provider.trust = ToolTrustLevel.TRUSTED
+
+
+@pytest.mark.asyncio
+async def test_nonebot_plugin_provider_accepts_exact_legacy_adapter_parity() -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_primary": {
+                "name": "Primary",
+                "description": "primary plugin",
+                "usage": "/primary",
+                "dependencies": ["plugin_helper"],
+            }
+        }
+    )
+    records = await nonebot_plugin_provider.discover(
+        ProviderDiscoveryContext(
+            generation=51,
+            resources=NoneBotPluginToolResources(specs),
+        )
+    )
+
+    nonebot_plugin_provider.validate_legacy_parity(
+        records,
+        legacy,
+        {"plugin_primary": {"plugin_helper", "legacy_optional"}},
+        generation=51,
+        allow_additional_dependencies=True,
+    )
+    assert records[0].spec is legacy["plugin_primary"]["tool_spec"]
+
+
+@pytest.mark.asyncio
+async def test_nonebot_plugin_provider_fails_closed_for_legacy_drift() -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_primary": {
+                "description": "primary plugin",
+                "dependencies": ["plugin_helper"],
+            }
+        }
+    )
+    records = await nonebot_plugin_provider.discover(
+        ProviderDiscoveryContext(
+            generation=53,
+            resources=NoneBotPluginToolResources(specs),
+        )
+    )
+
+    def reject(
+        info: object = legacy,
+        deps: object = {"plugin_primary": {"plugin_helper"}},
+        *,
+        discovery: tuple[DiscoveredTool, ...] = records,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="nonebot-plugin"):
+            nonebot_plugin_provider.validate_legacy_parity(
+                discovery,
+                info,  # type: ignore[arg-type]
+                deps,  # type: ignore[arg-type]
+                generation=53,
+            )
+
+    reject({})
+    drifted = {name: dict(entry) for name, entry in legacy.items()}
+    drifted["plugin_primary"]["description"] = "drifted"
+    reject(drifted)
+    drifted = {name: dict(entry) for name, entry in legacy.items()}
+    drifted["plugin_primary"]["tool_spec"] = replace(specs[0])
+    reject(drifted)
+    reject(deps={})
+    reject(deps={"plugin_primary": ["plugin_helper"]})
+    reject(discovery=(replace(records[0], provider_id="other"),))
+
+    provider = NoneBotPluginProvider()
+    wrong_context = ProviderDiscoveryContext(
+        generation=53,
+        resources=RegisteredToolResources((_spec(),)),
+    )
+    with pytest.raises(TypeError, match="NoneBotPluginToolResources"):
+        await provider.discover(wrong_context)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
 async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> None:
     specs = (_spec("zeta"), _spec("alpha"))
     plan = ProviderDiscoveryPlan(
@@ -1303,6 +1447,7 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
             _generated_plan(23),
             _mcp_plan(23),
             _builtin_plan(23),
+            _nonebot_plan(23),
         ),
     )
 
@@ -1313,6 +1458,7 @@ async def test_provider_registry_builds_deterministic_immutable_v2_catalog() -> 
         "custom-file",
         "generated",
         "mcp",
+        "nonebot-plugin",
         "registered",
     )
     assert tuple(catalog.tools) == ("alpha", "zeta")
@@ -1359,6 +1505,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _generated_plan(9),
                 _mcp_plan(9),
                 _builtin_plan(9),
+                _nonebot_plan(9),
             ),
         )
     generated_artifact = _generated_artifact(
@@ -1374,6 +1521,22 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _generated_plan(9, (generated_artifact,)),
                 _mcp_plan(9),
                 _builtin_plan(9),
+                _nonebot_plan(9),
+            ),
+        )
+    _plugin_legacy, plugin_specs = build_nonebot_plugin_candidate(
+        {"same_name": {"description": "plugin collision"}}
+    )
+    with pytest.raises(ValueError, match="工具名冲突"):
+        await provider_registry.discover(
+            9,
+            (
+                registered_plan,
+                _file_plan(9),
+                _generated_plan(9),
+                _mcp_plan(9),
+                _builtin_plan(9),
+                _nonebot_plan(9, plugin_specs),
             ),
         )
     with pytest.raises(ValueError, match="工具名冲突"):
@@ -1385,6 +1548,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _generated_plan(9),
                 _mcp_plan(9, (_spec("same_name"),)),
                 _builtin_plan(9),
+                _nonebot_plan(9),
             ),
         )
     with pytest.raises(ValueError, match="工具名冲突"):
@@ -1404,6 +1568,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _generated_plan(9),
                 _mcp_plan(9),
                 _builtin_plan(9, (_spec("web_search"),)),
+                _nonebot_plan(9),
             ),
         )
     with pytest.raises(ValueError, match="不完整"):
@@ -1419,6 +1584,7 @@ async def test_provider_registry_fails_closed_for_operation_set_and_conflicts() 
                 _generated_plan(9),
                 _mcp_plan(9),
                 _builtin_plan(9),
+                _nonebot_plan(9),
             ),
         )
     unregistered_provider = _UnregisteredProvider()
@@ -1453,9 +1619,17 @@ async def test_provider_batch_and_catalog_reject_identity_or_generation_drift() 
     generated_batch = await _generated_plan(5).discover_batch()
     mcp_batch = await _mcp_plan(5).discover_batch()
     builtin_batch = await _builtin_plan(5).discover_batch()
+    nonebot_batch = await _nonebot_plan(5).discover_batch()
     catalog = provider_registry.build_snapshot(
         5,
-        (batch, file_batch, generated_batch, mcp_batch, builtin_batch),
+        (
+            batch,
+            file_batch,
+            generated_batch,
+            mcp_batch,
+            builtin_batch,
+            nonebot_batch,
+        ),
     )
 
     assert isinstance(batch, ProviderDiscoveryBatch)
