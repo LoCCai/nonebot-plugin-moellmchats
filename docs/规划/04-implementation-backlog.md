@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a 与 D-05b 已完成精确 HEAD 双 run gate；D-05b NoneBotPluginProvider 实现提交 `51686d0bd28f64f7cae7469db330033dc39b9109` 已由精确 HEAD `531ff204b0746cc34fdda13a5b4fd4e60e2c3c58` 完成远端门禁，D-06 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a 与 D-05b 已完成精确 HEAD 双 run gate；D-06 Tool Trust Enforcement 实现提交 `5d7b7a6734ba14650ef892dfffee369c88e8a4f4` 已完成本地总门禁，远端 gate 待完成，D-07 未启动。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -546,7 +546,7 @@ timeout
 
 ## D-06 Tool Trust Enforcement
 
-状态：🟢 D-05b 依赖已解除；下一实施项。
+**状态：🟡 实现提交 `5d7b7a6734ba14650ef892dfffee369c88e8a4f4` 与本地总门禁完成；精确 HEAD 远端 gate 待完成；未部署**
 
 `ToolTrustLevel` 枚举与来源身份已在 D-01a 定义；本任务只实施执行、选择、审计与管理策略。
 
@@ -557,9 +557,21 @@ untrusted
 external
 ```
 
+实现落点：新增 frozen `ToolTrustPolicy` / `ToolTrustDecision` 与 selection / execution / management 三类 operation。`ProviderCatalogSnapshot` 构造时为每个发现工具生成完整、不可变的 policy，固定精确 `provider_id/source/trust/generation/ToolSpec` identity；Registered/Builtin 在主进程，Custom File 走 isolated artifact，Generated 走 generated sandbox，MCP 走 external proxy，NoneBot 遗留适配器走 bounded event。MCP 与 `web_search` 的结果 provenance 为 external，Generated 为 untrusted，其余为 unverified；代码来源 trust 不会提升返回数据可信度。
+
+策略门禁：selection 同时检查 effective permission，management 只允许超级用户，mutating execution 必须携带已验证的二阶段确认状态。未显式注册的 NoneBot 遗留适配器继续保留有界 compatibility 例外，不在 D-06 改变现有权限/确认语义，但其执行必须审计。所有拒绝、execution / management、非 trusted selection 与外部结果 selection 都返回 audit-required decision；`audit_metadata()` 只公开固定身份、策略、边界和结果 provenance，不包含调用参数或结果。catalog 缺失工具、来源/trust/provider/boundary/provenance 漂移与非 canonical Provider identity 均 fail closed。
+
+兼容边界：本任务只提供 catalog policy API，未切换 categorize、LLM payload、`llm_tools`、pending action、search、管理命令或 MCP sidecar consumer；legacy 四字段、真实执行路径、`ProviderCatalogSnapshot.schema_version == 2` 以及 `ToolSnapshot` / `RuntimeSnapshot` dataclass schema 均保持不变。D-07 versioned capability digest/merge 未提前混入。
+
+本地门禁：D-06 + Provider/Snapshot/Reload 定向 `98 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4）与 3.13.13 普通全量各 `418 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，JUnit 为 0 failure / 0 error / 0 skip；Ruff 0.16.2 通过，Pyright 对 `tool_providers.py` 为 `0 errors, 0 warnings`。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `ee916eac21ed6e744b29adc0816c8e3886238a170c4e7aa39c8f2306317a79a9`、sdist SHA256 `b9f448b8977699616685eefefd753fe7b12068d7b6c29dc05c8ad07001f79817`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")` 与 packaged trust policy 检查全部通过。
+
+远端证据：待精确 HEAD push/PR 双 run gate 回填。未部署。
+
 ---
 
 ## D-07 Capability Policy Merge
+
+状态：⏸️ 等待 D-06 精确 HEAD 远端 gate；未启动。
 
 ```text
 requested
