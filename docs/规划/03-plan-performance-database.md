@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b 与 D-06 已完成精确 HEAD 远端 gate，D-07 Capability Policy Merge 成为下一实施项。AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成；当前 v2 view 只描述六类 Provider discovery 及其派生 trust policy，不是持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b 与 D-06 已完成精确 HEAD 远端 gate，D-07 Capability Policy Merge 已由实现提交 `c2ca76332b9bfa97fadc7fc8f994b50b7e44dfdd` 完成本地门禁，仍待 push/PR 双 run 远端 gate，D-08 尚未开始。AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成；当前 catalog schema v3 只描述六类 Provider discovery、派生 trust policy 与版本化 capability policy，不是持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 

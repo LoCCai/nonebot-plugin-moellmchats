@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b 与 D-06 已完成精确 HEAD 双 run gate；D-06 Tool Trust Enforcement 实现提交 `5d7b7a6734ba14650ef892dfffee369c88e8a4f4` 已由精确 HEAD `c4ecaf9b7519b6c56fd5d20a6e5640993eb65f69` 完成远端门禁，D-07 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b 与 D-06 已完成精确 HEAD 双 run gate；D-07 Capability Policy Merge 实现提交 `c2ca76332b9bfa97fadc7fc8f994b50b7e44dfdd` 已完成本地发布门禁，待 push/PR 双 run 远端 gate，D-08 尚未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -571,7 +571,7 @@ external
 
 ## D-07 Capability Policy Merge
 
-状态：🟢 D-06 依赖已解除；下一实施项。
+**状态：🟡 实现提交 `c2ca76332b9bfa97fadc7fc8f994b50b7e44dfdd` 与本地发布门禁完成；待双 run 远端 gate；未部署**
 
 ```text
 requested
@@ -581,7 +581,15 @@ admin policy
 
 合并成 effective policy。
 
-能力字段扩展必须版本化 ToolContract/Artifact digest 语义，在 live consumer cutover 前完成，不与 D-01a 混合。
+实现落点：新增 frozen `ToolCapabilityV2`，严格解析 network / secrets allowlist、process、workspace/host filesystem read/write、database read/write 与 bot read/send/manage。effective policy 只能由 `requested ∩ admin` 派生；AST report 按 handler 固化 coarse detected evidence，Generated Tool 还将 `tests.py` 检测证据并入每个 handler，并强制 `detected ⊆ effective`。detected 只作为约束和审计证据，绝不自动授予权限；未知字段、非布尔值、不安全 allowlist、write-without-read 和 bot 层级倒置均拒绝。
+
+版本与兼容边界：`ToolContractSnapshot` / `ToolArtifact` 默认升为 v2，`moellm-tool-artifact-v2` 摘要绑定 capability schema/detector version 以及 requested/detected/admin/effective 四份策略。v1 原摘要算法保持可验证；File/Generated Provider、legacy sidecar 与 `ToolSnapshot` dual-read v1/v2，并拒绝 bool 版本伪装、版本错配、sidecar 漂移及 v1 无法表达的 v2 scope。Custom/Generated sidecar 同时发布四份粗粒度能力与结构化 `capability_policy`；`ProviderCatalogSnapshot.schema_version == 3` 并提供递归不可变 capability policy 索引。
+
+执行边界：当前 runner 只接受能精确投影为旧五布尔能力的 v2 policy；scoped network、filesystem 读写拆分、database/bot 等新权限在 D-08 consumer 迁移前明确 fail closed。categorize、LLM payload、`llm_tools`、pending action、search、管理命令和 MCP sidecar consumer 均未切换，真实执行与选择语义没有被静默改变。
+
+本地门禁：D-07 + Provider/Snapshot/Reload 定向 `238 passed, 1 skipped`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 普通全量各 `442 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，五份 JUnit 均为 0 failure / 0 error，Sandbox 为 0 skip；Ruff 0.16.2 通过，D-07 核心模块定向 Pyright 为 `0 errors, 0 warnings`。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `51b394c59dcc1624444ff4bde2915bf4191f7cfacf8d31361f9605a151e8d844`、sdist SHA256 `c325c0267e9aeb68eef97867f008c827fef8016ed48cb83049c45f219f7c0d1d`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")` 以及 packaged contract v2 / artifact v2 / catalog schema v3 检查全部通过。
+
+远端证据：尚未执行；D-08 在 D-07 精确 HEAD 双 run gate 关闭前保持阻塞。未合并、未发布、未部署。
 
 ---
 
