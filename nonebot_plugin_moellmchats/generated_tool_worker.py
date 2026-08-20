@@ -77,6 +77,25 @@ class _FrozenBuiltins(dict[str, Any]):
     update = _deny_mutation
 
 
+def _mapping_proxy_supports_frame_import() -> bool:
+    """Probe CPython's historical IMPORT_NAME requirement for dict builtins."""
+
+    namespace = {
+        "__builtins__": types.MappingProxyType(
+            {"__import__": builtins.__import__}
+        ),
+        "__name__": "moellm_mapping_proxy_probe",
+    }
+    try:
+        exec("import sys", namespace, namespace)
+    except (SystemError, TypeError):
+        return False
+    return True
+
+
+_MAPPING_PROXY_SUPPORTS_FRAME_IMPORT = _mapping_proxy_supports_frame_import()
+
+
 class _GeneratedRuntimeGuard:
     """Defense in depth for code already accepted by the generated AST policy."""
 
@@ -103,15 +122,16 @@ class _GeneratedRuntimeGuard:
         for name in _GENERATED_DENIED_BUILTINS:
             controlled.pop(name, None)
         controlled["__import__"] = self.guarded_import
-        # CPython 3.10's IMPORT_NAME assumes frame builtins are a real dict and
-        # raises an internal SystemError for MappingProxyType. Generated AST
-        # policy denies every route to __builtins__/function globals, while this
-        # fallback also rejects all normal dict mutation APIs. Keep the stronger
-        # mapping proxy on runtimes where imports support arbitrary mappings.
-        if sys.version_info < (3, 11):
-            self.builtins = _FrozenBuiltins(controlled)
-        else:
+        # Some supported CPython patch releases assume frame builtins are a real
+        # dict in IMPORT_NAME and raise an internal SystemError for a mapping
+        # proxy. Probe that interpreter behavior before any untrusted source is
+        # run; never retry partially executed tool code. Generated AST policy
+        # denies every route to __builtins__/function globals, and the fallback
+        # rejects all normal dict mutation APIs.
+        if _MAPPING_PROXY_SUPPORTS_FRAME_IMPORT:
             self.builtins = types.MappingProxyType(controlled)
+        else:
+            self.builtins = _FrozenBuiltins(controlled)
 
     @staticmethod
     def _root(name: str) -> str:

@@ -14,7 +14,7 @@
 - workspace 增加总字节、单文件、文件和目录条目数、目录深度四类预算，以及符号链接/特殊文件拒绝；扫描移到 event loop 外，并在进程组结束后强制最终扫描。
 - 新增结构化 AST Policy，按模块、handler 及可达 helper 输出 `ALLOW` / `DENY` / `CAPABILITY_REQUIRED` / `RISK`，并将文件/数据库/HTTP 写入和系统命令提升为 `mutating`；即使 Custom File 获准 process capability，也不能绕过二阶段确认。
 - 修复 Python 3.10 在 runner 输出洪泛或失败清理后延迟析构 subprocess transport 的问题，确定性关闭三路 pipe 并等待 connection-lost callback 收敛。
-- 修复 CPython 3.10 把只读代理作为 frame builtins 执行 import 时触发内部 `SystemError` 的兼容问题；3.10 使用拒绝公开变更入口的冻结映射，3.11+ 保持 `MappingProxyType`，Generated AST 与 OS 隔离边界不变。
+- 修复部分 CPython 3.10/早期 3.11 把只读代理作为 frame builtins 执行 import 时触发内部 `SystemError` 的兼容问题；worker 在执行不可信源码前探测解释器能力，受影响版本使用拒绝公开变更入口的冻结映射，其余版本保持 `MappingProxyType`，Generated AST 与 OS 隔离边界不变。
 - runner 增加独立 PID/mount/IPC/UTS namespace、固定 hostname、递归只读根挂载和条件可写 workspace bind；`host_filesystem=false` 时使用 Landlock 读 allowlist，并拒绝 xattr 读取/枚举。禁网时拒绝全部 socket，只开放 IP 网络但无宿主文件权时仍拒绝 AF_UNIX/AF_VSOCK，受限 socketpair 仅保留 AF_UNIX/STREAM；keyring syscall 无条件拒绝。它不使用 cgroup，也不是容器或完整 syscall allowlist，`stat`/`readlink` 路径元数据仍可能可见，显式 `host_filesystem=true` 仍允许 DAC 范围内的宿主读取。
 - 文档安装地址改为当前 0.25 维护分支，避免误装尚未合并维护实现的远端 `master`。
 - 文档同步当前冷却、重试、分类、命令别名、总结模型与生成工具开关语义。

@@ -1013,19 +1013,22 @@ async def test_runner_cancellation_kills_process_and_releases_slot(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_runner_fails_closed_when_nobody_transition_is_unavailable(
+async def test_runner_fails_closed_when_non_root_isolation_is_unavailable(
     tmp_path: Path,
 ) -> None:
     if os.geteuid() == 0:
         pytest.skip("root environment exercises the successful privilege drop tests")
     source = tmp_path / "closed.py"
     source.write_text("async def closed():\n    return 'no'\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="nobody identity"):
-        # Exercise the identity boundary directly.  The ordinary non-root CI
-        # job is not expected to hold CAP_SYS_ADMIN for ``unshare --net``;
-        # mixing that prerequisite into this assertion would fail at the
-        # network boundary before reaching the UID/GID fail-closed check.
-        await GeneratedToolRunner().execute_custom(
+    runner = GeneratedToolRunner()
+    with pytest.raises(
+        RuntimeError,
+        match=r"(?:强隔离.*已拒绝执行|nobody identity)",
+    ):
+        # An ordinary non-root CI user can fail at namespace creation before
+        # reaching the UID transition.  Either missing prerequisite must reject
+        # execution; the mandatory root suite separately proves the 65534 drop.
+        await runner.execute_custom(
             source,
             "closed",
             {},
@@ -1033,3 +1036,4 @@ async def test_runner_fails_closed_when_nobody_transition_is_unavailable(
             allow_network=True,
             allow_process=False,
         )
+    assert runner.isolation_status.startswith("unavailable:")
