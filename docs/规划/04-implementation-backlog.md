@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03 与 D-04 已完成精确 HEAD 双 run gate；D-04 GeneratedToolProvider 实现提交 `95a57cfc7abeab59b310ae19a6e7872da0e01136` 已由精确 HEAD `f03a8ab86bddc392b72beeaaa643c7642ed2687d` 完成远端门禁，D-05 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03 与 D-04 已完成精确 HEAD 双 run gate；D-05 MCPToolProvider 已完成本地实现提交 `76c746c134807b99e23b67489db9a7d1185e3b26` 与完整本地门禁，等待包含该提交的精确 HEAD 完成 push/PR 双 run gate 后再解锁 D-05a。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -498,9 +498,17 @@ timeout
 
 ## D-05 MCPToolProvider
 
-**状态：🟢 D-04 依赖已解除；下一实施项**
+**状态：🟡 本地实现与门禁完成；等待精确 HEAD 双 run 远端 gate；未部署**
 
 发现失败保留上一代可用快照；在 shadow parity 前不删除现有 MCP sidecar。
+
+实现落点：新增 frozen `MCPToolProvider`，稳定身份为 `mcp / MCP / EXTERNAL`。runtime transaction 仍只调用一次既有 MCP 网络发现且保持 `strict=True`，随后用 `MCPToolResources.from_legacy_tools()` 从该次候选派生不可变 `ToolSpec`；Provider 只做纯内存 discovery，不读取网络、文件或全局 sidecar。Registry 扩为 Registered + File + Generated + MCP，并在 legacy merge 前集中拒绝跨来源重名。
+
+等价门禁：route sidecar 名称必须与 MCP 工具集合完全一致，每条 route 只能包含非空 `server/tool`；candidate merge 与最终 `ToolSnapshot` 均验证 MCP slice 的工具集合、精确 `ToolSpec`/handler identity、Schema、source、generation、Provider 声明依赖与 `mcp_tool_names`。发现、route、冲突或 parity 失败均拒绝整代 candidate，上一代快照保持可用。现有 `mcp_manager.servers`、`tool_to_server`、`tool_manager.mcp_tool_names`、consumer 与执行路径继续保留；未修改 `RuntimeSnapshot` schema，也未删除 legacy sidecar。
+
+本地门禁：实现提交 `76c746c134807b99e23b67489db9a7d1185e3b26`；D-05 定向 `85 passed`；Python 3.10～3.13 普通全量各 `389 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 与 Pyright `tool_providers.py` 均通过；fresh wheel/sdist 与 Twine 通过，wheel SHA256 `9277b948bff2c3b923f9c3f7c73236b85eee7a4275c21d9cd9d788c1cae8992d`、sdist SHA256 `a0fb20221ffe013de3ec010a234560caffd375ffa24c8c276d935bafe152005a`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
+
+远端证据：待包含该实现与本状态回填的精确 HEAD 完成 push/PR 双 run gate 后填写。未部署。
 
 ---
 
