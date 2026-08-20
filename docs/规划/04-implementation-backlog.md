@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05 与 D-05a 已完成精确 HEAD 双 run gate；D-05b NoneBotPluginProvider 实现提交 `51686d0bd28f64f7cae7469db330033dc39b9109` 已完成本地门禁，远端 gate 待完成，D-06 未启动。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a 与 D-05b 已完成精确 HEAD 双 run gate；D-05b NoneBotPluginProvider 实现提交 `51686d0bd28f64f7cae7469db330033dc39b9109` 已由精确 HEAD `531ff204b0746cc34fdda13a5b4fd4e60e2c3c58` 完成远端门禁，D-06 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -530,7 +530,7 @@ timeout
 
 ## D-05b NoneBotPluginProvider
 
-**状态：🟡 实现提交 `51686d0bd28f64f7cae7469db330033dc39b9109` 与本地门禁完成；精确 HEAD 远端 gate 待完成；未部署**
+**状态：✅ 精确 HEAD `531ff204b0746cc34fdda13a5b4fd4e60e2c3c58` 双 run 远端 gate green；未部署**
 
 将受控伪事件适配器纳入统一目录；显式工具接口未覆盖的遗留插件仍保持当前权限语义与有界兼容通道。
 
@@ -540,9 +540,13 @@ timeout
 
 本地门禁：D-05b 定向 `102 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4）与 3.13.13 普通全量各 `411 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，JUnit 为 0 failure / 0 error / 0 skip；Ruff 0.16.2 通过，Pyright 对 `nonebot_plugin_tools.py` / `tool_providers.py` 为 `0 errors, 0 warnings`。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `6a11e634ce272701d8d84441386c97dbd3729230397b055e00cccf91cea9470d`、sdist SHA256 `98200816ed260b6eb774894f4f34929c1d69a3edf747f51d5defcfde32fa1cee`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
 
+远端证据：包含 D-05b 的精确 HEAD `531ff204b0746cc34fdda13a5b4fd4e60e2c3c58` 对应 push run `32417941584` 与 PR run `32417947550`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 CLEAN。未部署。
+
 ---
 
 ## D-06 Tool Trust Enforcement
+
+状态：🟢 D-05b 依赖已解除；下一实施项。
 
 `ToolTrustLevel` 枚举与来源身份已在 D-01a 定义；本任务只实施执行、选择、审计与管理策略。
 
