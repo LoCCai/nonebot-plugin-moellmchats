@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06 与 D-07 已完成精确 HEAD 双 run gate。D-08a categorize consumer 实现提交 `ec273fe5d12589943fb603e5875f69fe79434f73` 已完成本地发布门禁，待精确 HEAD 双 run gate；D-08b～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a 已完成精确 HEAD 双 run gate。D-08a categorize consumer 实现提交 `ec273fe5d12589943fb603e5875f69fe79434f73` 已由精确 HEAD `3fb95c2d102f3cdc9b8d9aad241c862a554f4ecd` 完成远端门禁；D-08b `llm_payload` 依赖已解除，D-08c～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -595,7 +595,7 @@ admin policy
 
 ## D-08 Consumer Cutover
 
-**状态：🟡 D-08a 实现提交 `ec273fe5d12589943fb603e5875f69fe79434f73` 与本地发布门禁完成；待双 run 远端 gate；D-08b～D-08f 未开始；未部署**
+**状态：🟢 D-08a 精确 HEAD 双 run 远端 gate green；D-08b `llm_payload` 为下一实施项；D-08c～D-08f 未开始；未部署**
 
 按 `categorize → llm_payload → llm_tools → pending action → search → 管理命令` 逐个切换，每个消费端单独保留新旧视图等价回归与可回滚开关。
 
@@ -607,13 +607,13 @@ admin policy
 
 本地门禁：D-08a 定向 `16 passed`，Provider/Snapshot/Reload 联合 `105 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 普通全量各 `458 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，五份 JUnit 均为 0 failure / 0 error，Sandbox 为 0 skip；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对 `config.py` / `tool_manager.py` 的干净 HEAD 与当前树均报告同一组 8 个既有诊断，按文件、规则和消息完全一致，D-08a 新增行没有诊断；未为本任务修改无关旧问题。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `337ba9b0b24fef8cf6635fdd4758db0a27a509b8e7452b0726e13699bf0a9e48`、sdist SHA256 `924529d139465338a7bb213884d8ffd41cbdc6945422c40c38bb1e4da449eb39`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")`、完整六 Provider registration、默认开关与 catalog parity 检查全部通过。
 
-远端证据：尚未执行。D-08b 在 D-08a 精确 HEAD 双 run gate 关闭前保持阻塞。未合并、未发布、未部署。
+远端证据：包含 D-08a 的精确 HEAD `3fb95c2d102f3cdc9b8d9aad241c862a554f4ecd` 对应 push run `32427635804` 与 PR run `32427639701`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 `CLEAN`。D-08b 依赖已解除。未合并、未发布、未部署。
 
 ### D-08b～D-08f 后续依赖
 
 ```text
-D-08a categorize（当前待远端 gate）
-  → D-08b llm_payload
+D-08a categorize（远端 gate green）
+  → D-08b llm_payload（下一实施项）
   → D-08c llm_tools
   → D-08d pending action
   → D-08e search

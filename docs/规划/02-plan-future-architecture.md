@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06 与 D-07 已完成精确 HEAD 远端 gate。D-08a categorize consumer 实现提交 `ec273fe5d12589943fb603e5875f69fe79434f73` 已完成本地发布门禁，正等待精确 HEAD 双 run gate；D-08b `llm_payload` 及后续 consumer 不提前开始，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a 已完成精确 HEAD 远端 gate。D-08a categorize consumer 实现提交 `ec273fe5d12589943fb603e5875f69fe79434f73` 已由精确 HEAD `3fb95c2d102f3cdc9b8d9aad241c862a554f4ecd` 的 push run `32427635804` / PR run `32427639701` 完成双 run gate；D-08b `llm_payload` 依赖解除，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -177,7 +177,7 @@ D-07 定向 `238 passed, 1 skipped`；Python 3.10.20、3.11.15、3.12.13（NoneB
 
 D-08a 实现提交 `ec273fe5d12589943fb603e5875f69fe79434f73` 只切换 categorize consumer。`ToolSnapshot.get_brief_catalog()` 先构建 legacy rollback view，再从完整 schema v3 Provider catalog 按 canonical source、selection trust decision 与 effective permission 构建新目录；legacy 映射只承担稳定展示顺序与 NoneBot 历史展示字段。两份字符串不完全相等即抛出 `ProviderConsumerParityError`，不会把漂移目录交给分类模型。`provider_catalog_categorize_enabled=true` 默认启用切换，设为 `false` 可独立回滚；缺少六类 registration 的启动期或旧式快照继续走有界 legacy。测试覆盖普通用户/超级用户、六类来源、MCP 标签、黑名单与通配符、工具/搜索开关、空目录、旧快照、默认开关、配置回滚、非布尔配置及 parity 漂移。`ToolManager` 旧入口也委托当前 generation 快照；`llm_payload`、`llm_tools`、pending action、search、管理命令与真实执行语义均未切换，legacy sidecar 未删除。
 
-D-08a 定向为 `16 passed`，Provider/Snapshot/Reload 联合为 `105 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 普通全量各 `458 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，五份 JUnit 均为 0 failure / 0 error，Sandbox 为 0 skip；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对 `config.py` / `tool_manager.py` 的干净 HEAD 与当前树均为同一组 8 个既有诊断，按文件、规则和消息完全一致，本实现新增行没有诊断；未改动这些无关旧问题。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `337ba9b0b24fef8cf6635fdd4758db0a27a509b8e7452b0726e13699bf0a9e48`、sdist SHA256 `924529d139465338a7bb213884d8ffd41cbdc6945422c40c38bb1e4da449eb39`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")`、完整六 Provider registration、默认开关与 catalog parity 检查全部通过。远端 gate 尚未执行，D-08b 在此 gate 关闭前保持阻塞；未合并、未发布、未部署。
+D-08a 定向为 `16 passed`，Provider/Snapshot/Reload 联合为 `105 passed`；Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 普通全量各 `458 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，五份 JUnit 均为 0 failure / 0 error，Sandbox 为 0 skip；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对 `config.py` / `tool_manager.py` 的干净 HEAD 与当前树均为同一组 8 个既有诊断，按文件、规则和消息完全一致，本实现新增行没有诊断；未改动这些无关旧问题。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `337ba9b0b24fef8cf6635fdd4758db0a27a509b8e7452b0726e13699bf0a9e48`、sdist SHA256 `924529d139465338a7bb213884d8ffd41cbdc6945422c40c38bb1e4da449eb39`；Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载、`reload("package-smoke")`、完整六 Provider registration、默认开关与 catalog parity 检查全部通过。包含该实现的精确 HEAD `3fb95c2d102f3cdc9b8d9aad241c862a554f4ecd` 已完成 push run `32427635804` / PR run `32427639701` 双 run gate；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 为 `CLEAN`。D-08b 依赖已解除；未合并、未发布、未部署。
 
 ---
 
