@@ -45,7 +45,7 @@ _GeneratedToolCandidate = tuple[
     Mapping[str, AbstractSet[str]],
 ]
 
-_CATEGORIZE_PROVIDER_IDS = frozenset(
+_PROVIDER_CONSUMER_IDS = frozenset(
     {
         "registered",
         "custom-file",
@@ -213,6 +213,83 @@ class ToolSnapshot:
             is_superuser=is_superuser,
         )
 
+    def get_llm_payload_tools(
+        self,
+        plugin_names: AbstractSet[str],
+        *,
+        tools_enabled: bool,
+        search_enabled: bool,
+        is_superuser: bool = False,
+        provider_cutover: bool | None = None,
+    ) -> tuple[set[str], list[dict[str, Any]]]:
+        """Resolve one LLM payload tool view with Provider/legacy parity."""
+
+        if not isinstance(plugin_names, AbstractSet) or not all(
+            isinstance(name, str) for name in plugin_names
+        ):
+            raise TypeError("llm_payload plugin_names 必须是字符串集合")
+        for field_name, value in (
+            ("tools_enabled", tools_enabled),
+            ("search_enabled", search_enabled),
+            ("is_superuser", is_superuser),
+        ):
+            if type(value) is not bool:
+                raise TypeError(f"llm_payload {field_name} 必须是布尔值")
+
+        initial_plugins = set(plugin_names)
+        legacy_plugins = self.expand_dependencies(initial_plugins)
+        legacy_schema = ToolManager.build_llm_payload_schema(
+            plugin_names=list(legacy_plugins),
+            tools_enabled=tools_enabled,
+            search_enabled=search_enabled,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=is_superuser,
+        )
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_llm_payload_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("llm_payload Provider cutover 开关必须是布尔值")
+
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not provider_cutover
+            or not tools_enabled
+            or provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return legacy_plugins, legacy_schema
+
+        provider_plugins = ToolManager.expand_provider_dependencies(
+            provider_catalog=provider_catalog,
+            plugin_names=initial_plugins,
+        )
+        if provider_plugins != legacy_plugins:
+            raise ProviderConsumerParityError(
+                "llm_payload Provider 依赖视图与 legacy rollback view 不一致"
+            )
+        provider_schema = ToolManager.build_provider_llm_payload_schema(
+            provider_catalog=provider_catalog,
+            plugin_names=list(legacy_plugins),
+            search_enabled=search_enabled,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=is_superuser,
+        )
+        if provider_schema != legacy_schema:
+            raise ProviderConsumerParityError(
+                "llm_payload Provider schema 与 legacy rollback view 不一致"
+            )
+        return provider_plugins, provider_schema
+
     def get_brief_catalog(
         self,
         *,
@@ -239,7 +316,7 @@ class ToolSnapshot:
         if (
             not provider_cutover
             or provider_catalog.schema_version < 3
-            or not _CATEGORIZE_PROVIDER_IDS.issubset(
+            or not _PROVIDER_CONSUMER_IDS.issubset(
                 provider_catalog.registrations
             )
         ):
@@ -735,6 +812,48 @@ async def extract_webpage(
         logger.debug(f"收到初始插件集合: {plugins}，依赖展开后: {expanded}")
         return expanded
 
+    @staticmethod
+    def expand_provider_dependencies(
+        *,
+        provider_catalog: ProviderCatalogSnapshot,
+        plugin_names: AbstractSet[str],
+    ) -> set[str]:
+        """Expand canonical ToolSpec dependencies for the payload consumer."""
+
+        if not isinstance(provider_catalog, ProviderCatalogSnapshot):
+            raise TypeError("llm_payload provider_catalog 非法")
+        if not isinstance(plugin_names, AbstractSet) or not all(
+            isinstance(name, str) for name in plugin_names
+        ):
+            raise TypeError("llm_payload plugin_names 必须是字符串集合")
+
+        expanded = {
+            name
+            for name in plugin_names
+            if not tool_manager.is_tool_blacklisted(name)
+        }
+        queue = deque(expanded)
+        while queue:
+            current = queue.popleft()
+            item = provider_catalog.tools.get(current)
+            # A stale resident entry or a classifier hallucination was ignored by
+            # the legacy payload. Keep that bounded behavior, while refusing any
+            # legacy-only dependency edge through the final parity comparison.
+            if item is None:
+                continue
+            for dependency in item.spec.dependencies:
+                if dependency not in provider_catalog.tools:
+                    raise ProviderConsumerParityError(
+                        "llm_payload Provider 依赖缺少 catalog 工具: "
+                        f"{current} -> {dependency}"
+                    )
+                if tool_manager.is_tool_blacklisted(dependency):
+                    continue
+                if dependency not in expanded:
+                    expanded.add(dependency)
+                    queue.append(dependency)
+        return expanded
+
     def build_plugin_info(self) -> dict:
         plugin_info = {}
         # 读取自定义插件描述
@@ -1135,6 +1254,147 @@ async def extract_webpage(
             logger.debug(
                 f"custom_plugin_info.json 注入依赖: {plugin_name} -> {list(clean_deps)}"
             )
+
+    @staticmethod
+    def build_llm_payload_schema(
+        plugin_names: list[str],
+        *,
+        tools_enabled: bool,
+        search_enabled: bool,
+        plugin_info: Mapping[str, Mapping[str, Any]],
+        custom_tools: Mapping[str, Mapping[str, Any]],
+        is_superuser: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Build the exact legacy rollback view consumed by llm_payload."""
+
+        if not tools_enabled or not plugin_names:
+            return []
+        normal_plugins = [
+            name for name in plugin_names if name != WEB_SEARCH_TOOL_SPEC.name
+        ]
+        tools = ToolManager.build_tool_schema(
+            normal_plugins,
+            include_search=False,
+            plugin_info=plugin_info,
+            custom_tools=custom_tools,
+            is_superuser=is_superuser,
+        )
+        if search_enabled and WEB_SEARCH_TOOL_SPEC.name in plugin_names:
+            tools.extend(
+                ToolManager.build_tool_schema(
+                    [],
+                    include_search=True,
+                    plugin_info=plugin_info,
+                    custom_tools=custom_tools,
+                    is_superuser=is_superuser,
+                )
+            )
+        return tools
+
+    @staticmethod
+    def build_provider_llm_payload_schema(
+        *,
+        provider_catalog: ProviderCatalogSnapshot,
+        plugin_names: list[str],
+        search_enabled: bool,
+        plugin_info: Mapping[str, Mapping[str, Any]],
+        custom_tools: Mapping[str, Mapping[str, Any]],
+        is_superuser: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Build one payload schema from generation-bound Provider records."""
+
+        if not isinstance(provider_catalog, ProviderCatalogSnapshot):
+            raise TypeError("llm_payload provider_catalog 非法")
+        if not isinstance(plugin_names, list) or not all(
+            isinstance(name, str) for name in plugin_names
+        ):
+            raise TypeError("llm_payload plugin_names 必须是字符串列表")
+        if type(search_enabled) is not bool or type(is_superuser) is not bool:
+            raise TypeError("llm_payload feature/actor 标志必须是布尔值")
+
+        tools: list[dict[str, Any]] = []
+        for name in plugin_names:
+            if name == WEB_SEARCH_TOOL_SPEC.name:
+                continue
+            if tool_manager.is_tool_blacklisted(name):
+                continue
+            item = provider_catalog.tools.get(name)
+            if item is None:
+                if name in plugin_info or name in custom_tools:
+                    raise ProviderConsumerParityError(
+                        f"llm_payload Provider identity 缺失: {name}"
+                    )
+                continue
+            if item.source is ToolSource.NONEBOT_PLUGIN:
+                if name not in plugin_info:
+                    raise ProviderConsumerParityError(
+                        f"llm_payload NoneBot rollback identity 缺失: {name}"
+                    )
+            elif item.source is ToolSource.BUILTIN:
+                raise ProviderConsumerParityError(
+                    f"llm_payload 未知 builtin payload 工具: {name}"
+                )
+            elif name not in custom_tools:
+                raise ProviderConsumerParityError(
+                    f"llm_payload Tool rollback identity 缺失: {name}"
+                )
+            decision = provider_catalog.decide_trust(
+                name,
+                ToolTrustOperation.SELECTION,
+                is_superuser=is_superuser,
+            )
+            if not decision.allowed:
+                continue
+            if item.source in {
+                ToolSource.REGISTERED,
+                ToolSource.CUSTOM_FILE,
+                ToolSource.GENERATED,
+            }:
+                # These three legacy projections are emitted through
+                # ToolSpec.as_legacy_schema(), which normalizes an omitted
+                # JSON-Schema `required` field to an empty list. Reproduce the
+                # wire contract from the canonical spec, not from the sidecar.
+                parameters = item.spec.as_legacy_schema()["parameters"]
+            else:
+                parameters = mutable_value(item.spec.parameters)
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": item.spec.name,
+                        "description": item.spec.description,
+                        "parameters": parameters,
+                    },
+                }
+            )
+
+        if (
+            search_enabled
+            and WEB_SEARCH_TOOL_SPEC.name in plugin_names
+            and not tool_manager.is_tool_blacklisted(WEB_SEARCH_TOOL_SPEC.name)
+        ):
+            item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)
+            if item is None or item.source is not ToolSource.BUILTIN:
+                raise ProviderConsumerParityError(
+                    "llm_payload builtin web_search Provider identity 缺失"
+                )
+            decision = provider_catalog.decide_trust(
+                WEB_SEARCH_TOOL_SPEC.name,
+                ToolTrustOperation.SELECTION,
+                is_superuser=is_superuser,
+            )
+            if decision.allowed:
+                tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": item.spec.name,
+                            "description": item.spec.description,
+                            "parameters": mutable_value(item.spec.parameters),
+                        },
+                    }
+                )
+        return tools
 
     @staticmethod
     def build_tool_schema(

@@ -123,41 +123,24 @@ class LlmPayloadMixin:
         if extra_payload := self.model_info.get("extra_payload"):
             if isinstance(extra_payload, dict):
                 data.update(extra_payload)
-        tools_schema = []
         # 获取常驻插件并转为集合
         resident_plugins = set(model_selector.get_resident_plugins())
         # Only the current plan and explicit resident tools receive schemas.
-        all_plugins_set = set(getattr(self, "required_plugins", [])) | resident_plugins
-        all_plugins_set = self.tool_snapshot.expand_dependencies(all_plugins_set)
-        logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
-        all_plugins = list(all_plugins_set)
-
+        selected_plugins = set(getattr(self, "required_plugins", [])) | resident_plugins
         model_supports_tools = (
             model_selector.get_use_tools()
             and not self.model_info.get("no_tools", False)
         )
-        if all_plugins:
-            normal_plugins = [p for p in all_plugins if p != "web_search"]
-            if model_supports_tools and normal_plugins:
-                tools_schema.extend(
-                    self.tool_snapshot.get_tool_schema(
-                        normal_plugins,
-                        include_search=False,
-                        is_superuser=self.is_superuser,
-                    )
-                )
-            if (
-                model_supports_tools
-                and model_selector.get_web_search()
-                and "web_search" in all_plugins
-            ):
-                tools_schema.extend(
-                    self.tool_snapshot.get_tool_schema(
-                        [],
-                        include_search=True,
-                        is_superuser=self.is_superuser,
-                    )
-                )
+        search_enabled = (
+            model_selector.get_web_search() if model_supports_tools else False
+        )
+        all_plugins_set, tools_schema = self.tool_snapshot.get_llm_payload_tools(
+            selected_plugins,
+            tools_enabled=model_supports_tools,
+            search_enabled=search_enabled,
+            is_superuser=self.is_superuser,
+        )
+        logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
 
         if tools_schema:
             data["tools"] = tools_schema

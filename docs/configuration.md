@@ -72,6 +72,8 @@
   "member_lookup_timeout_seconds": 2,
   "runtime_watch_enabled": true,
   "runtime_watch_interval_seconds": 2,
+  "provider_catalog_categorize_enabled": true, // 分类目录使用 Provider catalog；false 只回滚该 consumer
+  "provider_catalog_llm_payload_enabled": true, // LLM schema 注入使用 Provider catalog；false 只回滚该 consumer
   "user_history_expire_seconds": 600, // 群聊/用户上下文及 CD 临时状态的空闲 TTL（秒）
   "cd_seconds": 120,              // 每个用户的对话冷却时间（秒，排队前检查）
   "search_api": "Bearer your_tavily_key", // 联网搜索 Tavily API Key（开启搜索必填）

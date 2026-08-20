@@ -1645,6 +1645,401 @@ def test_categorize_provider_cutover_config_requires_boolean(flag) -> None:
         ConfigParser._validate(candidate)
 
 
+def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
+    monkeypatch,
+) -> None:
+    generation = 47
+    file_spec = ToolSpec(
+        name="payload_file",
+        description="file payload",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        dependencies=("mcp__payload__echo",),
+        policy=ToolPolicy.configured(),
+    )
+    registered_spec = ToolSpec(
+        name="payload_registered",
+        description="registered payload",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        dependencies=(file_spec.name,),
+        policy=ToolPolicy.configured(),
+    )
+    generated_spec = ToolSpec(
+        name="payload_generated_admin",
+        description="generated payload",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        permission="superuser",
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    mcp_spec = ToolSpec(
+        name="mcp__payload__echo",
+        description="mcp payload",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    plugin_info, plugin_specs = build_nonebot_plugin_candidate(
+        {
+            "payload_plugin": {
+                "name": "Payload Plugin",
+                "description": "plugin payload",
+                "usage": "/payload",
+            }
+        }
+    )
+    file_artifact = _file_artifact(file_spec, generation=generation)
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=generation,
+    )
+    base = _registered_catalog((registered_spec,), generation=generation)
+    plugin_registration = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    plugin_record = DiscoveredTool(
+        provider_id=plugin_registration.provider_id,
+        source=plugin_registration.source,
+        trust=plugin_registration.trust,
+        generation=generation,
+        spec=plugin_specs[0],
+    )
+    catalog = ProviderCatalogSnapshot(
+        generation=generation,
+        registrations=base.registrations,
+        tools={
+            **base.tools,
+            file_spec.name: _file_catalog(
+                file_artifact,
+                generation=generation,
+            ).tools[file_spec.name],
+            generated_spec.name: _generated_catalog(
+                generated_artifact,
+                generation=generation,
+            ).tools[generated_spec.name],
+            mcp_spec.name: _mcp_catalog(
+                mcp_spec,
+                generation=generation,
+            ).tools[mcp_spec.name],
+            plugin_specs[0].name: plugin_record,
+        },
+    )
+    snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info=plugin_info,
+        custom_tools={
+            registered_spec.name: {
+                **registered_spec.as_legacy_schema(),
+                "source": "registered",
+            },
+            file_spec.name: _file_legacy_schema(file_artifact),
+            generated_spec.name: _generated_legacy_schema(generated_artifact),
+            mcp_spec.name: _mcp_legacy_schema(mcp_spec),
+        },
+        tool_dependencies={
+            registered_spec.name: {file_spec.name},
+            file_spec.name: {mcp_spec.name},
+        },
+        mcp_tool_names={mcp_spec.name},
+        provider_catalog=catalog,
+    )
+    blacklist: list[str] = []
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: blacklist)
+    selected = {
+        registered_spec.name,
+        generated_spec.name,
+        plugin_specs[0].name,
+        "web_search",
+        "stale_resident",
+    }
+
+    legacy_names, legacy_schema = snapshot.get_llm_payload_tools(
+        selected,
+        tools_enabled=True,
+        search_enabled=True,
+        is_superuser=False,
+        provider_cutover=False,
+    )
+    provider_names, provider_schema = snapshot.get_llm_payload_tools(
+        selected,
+        tools_enabled=True,
+        search_enabled=True,
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert provider_names == legacy_names == {
+        *selected,
+        file_spec.name,
+        mcp_spec.name,
+    }
+    assert provider_schema == legacy_schema
+    assert {item["function"]["name"] for item in provider_schema} == {
+        registered_spec.name,
+        file_spec.name,
+        mcp_spec.name,
+        plugin_specs[0].name,
+        "web_search",
+    }
+
+    _admin_names, admin_schema = snapshot.get_llm_payload_tools(
+        selected,
+        tools_enabled=True,
+        search_enabled=True,
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert generated_spec.name in {
+        item["function"]["name"] for item in admin_schema
+    }
+
+    blacklist.extend((file_spec.name, "web_search"))
+    filtered_names, filtered_schema = snapshot.get_llm_payload_tools(
+        selected,
+        tools_enabled=True,
+        search_enabled=True,
+        provider_cutover=True,
+    )
+    assert file_spec.name not in filtered_names
+    assert mcp_spec.name not in filtered_names
+    assert "web_search" not in filtered_names
+    assert {item["function"]["name"] for item in filtered_schema} == {
+        registered_spec.name,
+        plugin_specs[0].name,
+    }
+
+
+def test_llm_payload_provider_cutover_fails_closed_on_dependency_drift(
+    monkeypatch,
+) -> None:
+    root = ToolSpec(
+        name="payload_dependency_root",
+        description="dependency root",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    legacy_only = ToolSpec(
+        name="payload_legacy_only_dependency",
+        description="legacy only dependency",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=48,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+            for spec in (root, legacy_only)
+        },
+        # Provider parity deliberately permits additional legacy edges while
+        # dual-publishing. The payload cutover must surface them instead of
+        # silently treating the sidecar as canonical.
+        tool_dependencies={root.name: {legacy_only.name}},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog(
+            (root, legacy_only),
+            generation=48,
+        ),
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    with pytest.raises(ProviderConsumerParityError, match="依赖视图"):
+        snapshot.get_llm_payload_tools(
+            {root.name},
+            tools_enabled=True,
+            search_enabled=False,
+            provider_cutover=True,
+        )
+
+    names, schema = snapshot.get_llm_payload_tools(
+        {root.name},
+        tools_enabled=True,
+        search_enabled=False,
+        provider_cutover=False,
+    )
+    assert names == {root.name, legacy_only.name}
+    assert {item["function"]["name"] for item in schema} == names
+
+
+def test_llm_payload_provider_cutover_fails_closed_on_schema_drift(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="payload_schema_parity",
+        description="payload schema parity",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=49,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=49),
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_llm_payload_schema",
+        lambda **_kwargs: [],
+    )
+
+    with pytest.raises(ProviderConsumerParityError, match="schema"):
+        snapshot.get_llm_payload_tools(
+            {spec.name},
+            tools_enabled=True,
+            search_enabled=False,
+            provider_cutover=True,
+        )
+    _names, rollback_schema = snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+        provider_cutover=False,
+    )
+    assert rollback_schema[0]["function"]["name"] == spec.name
+
+
+def test_llm_payload_provider_cutover_handles_disabled_and_legacy_snapshots(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="payload_legacy_snapshot",
+        description="payload legacy snapshot",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={spec.name: spec.as_legacy_schema()},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_llm_payload_schema",
+        lambda **_kwargs: pytest.fail("旧快照不应进入 Provider payload"),
+    )
+
+    names, schema = snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+        provider_cutover=True,
+    )
+    assert names == {spec.name}
+    assert schema[0]["function"]["name"] == spec.name
+
+    disabled_names, disabled_schema = snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=False,
+        search_enabled=True,
+        provider_cutover=True,
+    )
+    assert disabled_names == {spec.name}
+    assert disabled_schema == []
+
+
+def test_llm_payload_provider_cutover_default_and_config_rollback(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="payload_default_cutover",
+        description="payload default cutover",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    catalog = _registered_catalog((spec,), generation=50)
+    snapshot = ToolSnapshot(
+        generation=50,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=catalog,
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+    provider_calls: list[ProviderCatalogSnapshot] = []
+    original_builder = ToolManager.build_provider_llm_payload_schema
+
+    def track_provider_call(**kwargs):
+        provider_calls.append(kwargs["provider_catalog"])
+        return original_builder(**kwargs)
+
+    def get_default(key: str, default=None):
+        assert key == "provider_catalog_llm_payload_enabled"
+        assert default is True
+        return DEFAULT_CONFIG[key]
+
+    monkeypatch.setattr(config_parser, "get_config", get_default)
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_llm_payload_schema",
+        track_provider_call,
+    )
+    snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+    )
+    assert provider_calls == [catalog]
+
+    monkeypatch.setattr(config_parser, "get_config", lambda *_args: False)
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_llm_payload_schema",
+        lambda **_kwargs: pytest.fail("rollback 不应读取 Provider payload"),
+    )
+    _names, schema = snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+    )
+    assert schema[0]["function"]["name"] == spec.name
+
+
+@pytest.mark.parametrize("flag", [1, "true", [], {}])
+def test_llm_payload_provider_cutover_rejects_non_boolean_override(flag) -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    with pytest.raises(ValueError, match="cutover"):
+        snapshot.get_llm_payload_tools(
+            set(),
+            tools_enabled=True,
+            search_enabled=False,
+            provider_cutover=flag,
+        )
+
+
+@pytest.mark.parametrize("flag", [None, 1, "true", [], {}])
+def test_llm_payload_provider_cutover_config_requires_boolean(flag) -> None:
+    candidate = dict(DEFAULT_CONFIG)
+    candidate["provider_catalog_llm_payload_enabled"] = flag
+
+    with pytest.raises(
+        ValueError,
+        match="provider_catalog_llm_payload_enabled",
+    ):
+        ConfigParser._validate(candidate)
+
+
 def test_permission_filter_fails_closed_for_malformed_entries() -> None:
     assert not tool_manager.is_tool_allowed(
         object(), is_superuser=False  # type: ignore[arg-type]
