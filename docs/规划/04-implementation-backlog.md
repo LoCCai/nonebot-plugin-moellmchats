@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02 已分别由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` / `8d42152e54a59b6f3d0d2b39c20b12c5f0dd4a5e` 完成双 run gate；随后按依赖完成 D-01b 实现提交 `3db538b8515a4359c73aa0e7fc341b67504d3ea2`，包含它的精确 HEAD `c8a4211560f2f7214b971109c54d817628f843d5` 也已完成双 run gate，D-03 依赖解除。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02 与 D-01b 已完成精确 HEAD 双 run gate；随后按依赖完成 D-03 FileToolProvider 本地实现提交 `72d82f7e3a4ab6fe7b40b538f45ebec817aef889`，其远端 gate green 前不进入 D-04。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -466,13 +466,21 @@ timeout
 
 ## D-03 FileToolProvider
 
-**状态：🟢 D-01b 依赖已解除；下一实施项**
+**状态：🟡 本地实现已提交 `72d82f7e3a4ab6fe7b40b538f45ebec817aef889`；待精确 HEAD 远端 gate**
 
 保留 ToolArtifact 源码快照、AST Policy 和 generation 绑定。
+
+实现落点：新增 frozen `FileToolProvider`，稳定身份为 `custom-file / CUSTOM_FILE / REVIEWED`。runtime transaction 只调用一次既有 `load_file_tools()`，从该次 legacy 结果提取精确 `ToolArtifact` 构造 typed `FileToolResources`；Provider 只验证固化 digest/generation 并生成不可变记录，不重读文件、不重跑 AST Policy、不执行工具。Registry 扩为 Registered + File，并在 legacy 合并前集中拒绝两来源重名；同一 file candidate 再交给 legacy merge，避免二次读取和 TOCTOU。
+
+等价门禁：candidate merge 与最终 `ToolSnapshot` 均验证 File slice 的工具集合、精确 artifact/`ToolSpec`/handler identity、源码 snapshot/digest、Schema、source、declared/effective effect、generation 与 Provider 声明依赖。文件级 `TOOL_DEPENDENCIES` 或 plugin 追加依赖允许共存，但 artifact contract 声明依赖不得丢失。现有 categorize、LLM payload、执行、pending action、search、管理命令与 MCP 镜像继续读取 legacy 字段；没有新增 Provider 执行/reload 接口，也未修改 `RuntimeSnapshot` schema。
+
+本地门禁：Pyright `tool_providers.py` 为 `0 errors, 0 warnings`；D-03 定向 `60 passed`；Python 3.10～3.13 普通全量各 `375 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。
 
 ---
 
 ## D-04 GeneratedToolProvider
+
+**状态：⏸️ 等待 D-03 精确远端 green**
 
 必须使用事务已准备的精确 lifecycle after-state 与 source override，不得重新读取 live canonical。
 
