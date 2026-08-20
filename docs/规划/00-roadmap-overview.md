@@ -8,7 +8,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 已在门禁解除后完成 D-01a type-only/shadow 本地实现提交 `67638980b8abe3d515ca8146ab68381692f6ac74`：Pyright 0 error/0 warning，四版本定向各 `10 passed`，Python 3.12 普通全量 `357 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；D-01a 远端门禁完成前不进入 D-02。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 的 D-01a 已由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 完成 push/PR 远端门禁；随后按依赖完成 D-02 Registered shadow pilot 本地实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed`：四版本定向各 `59 passed`、普通全量各 `363 passed, 1 skipped`，mandatory root Sandbox `40 passed`，fresh build/Twine/checksum 与四组 package smoke 均通过。D-02 仍待精确 HEAD 远端 gate，未切换执行、Snapshot schema 或任何 consumer；D-01b 在其 green 前不开始。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

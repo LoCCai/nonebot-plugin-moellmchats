@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 已按依赖进入 D-01a，本地实现提交为 `67638980b8abe3d515ca8146ab68381692f6ac74`；其远端 gate green 前不进入 D-02。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a 已由精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 完成 push/PR 远端 gate；随后按依赖完成 D-02 本地实现提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed`，其远端 gate green 前不进入 D-01b。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -422,7 +422,7 @@ timeout
 
 ## D-01a Provider Discovery Contract（type-only / shadow）
 
-**状态：🟡 本地实现已提交 `67638980b8abe3d515ca8146ab68381692f6ac74`；待精确 HEAD 远端 gate**
+**状态：✅ 精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 双 run 远端 gate green；未部署**
 
 定义稳定 `provider_id/source`、`ToolTrustLevel` 类型和不可变 `DiscoveredTool`。`DiscoveredTool` 必须携带 `ToolSpec`，`ToolArtifact` 可选；只有 Custom File / Generated 必须携带 artifact。
 
@@ -430,17 +430,25 @@ timeout
 
 实现落点：新增 `tool_providers.py`，定义 source/trust 固定映射、六类 frozen typed resource record、`ProviderDiscoveryContext[TResources]`、不可变 `DiscoveredTool` 和只含 `discover()` 的 `ToolProvider` Protocol。运行时拒绝裸资源映射、负数/布尔 generation、source/trust 错配、缺失或伪造 artifact、artifact generation/spec 错配；Generated resource 只接受精确指向 after-state active 版本的 typed source override。Pyright 为 0 error/0 warning；Python 3.10～3.13 定向各 `10 passed`；Python 3.12 普通全量 `357 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`。
 
+远端证据：包含 D-01a 的精确 HEAD `c8afc807138a02237d96b65c81bf7f38c1ec7f43` 对应 push run `32397753076` 与 PR run `32397766968`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR merge state 保持 CLEAN。
+
 ---
 
 ## D-02 RegisteredToolProvider
 
-**状态：⏸️ 等待 D-01a 精确远端 green**
+**状态：🟡 本地实现已提交 `0ebadc05c4cd1dde143312f2d6ddf38fb34c19ed`；待精确 HEAD 远端 gate**
 
 作为无 I/O、trusted 来源的首个 shadow pilot，对 legacy 目录做完整 parity，仍不切换执行。
+
+实现落点：新增 frozen `RegisteredToolProvider`，身份固定为 `registered / REGISTERED / TRUSTED`，`discover()` 只消费事务显式传入的 `RegisteredToolResources`，按候选 generation 返回无 artifact 的不可变记录，不读取全局 registry 或 I/O。`RuntimeReloader` 每个 candidate transaction 只截取一次 registry snapshot，同一份 `ToolSpec` identity 显式传给 provider 与 legacy loader；legacy 注册工具集合、精确 `ToolSpec`、handler、name、description、parameters、source、dependencies、generation 或字段集合任一不一致均 fail closed。校验结果不发布，`ToolSnapshot` / `RuntimeSnapshot` schema、执行/选择/catalog consumer 与 MCP 镜像保持 legacy 不变。
+
+本地门禁：Pyright `0 errors, 0 warnings`；Python 3.10～3.13 D-02 定向各 `59 passed`，四版本普通全量各 `363 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过。未部署，不在远端 green 前开始 D-01b。
 
 ---
 
 ## D-01b ProviderRegistry / ToolSnapshot v2 Dual View
+
+**状态：⏸️ 等待 D-02 精确远端 green**
 
 在 Registered pilot 证明发现契约后，集中冲突规则并 dual-publish / dual-read。新旧视图必须等价，不允许一次替换 `plugin_info/custom_tools/tool_dependencies/mcp_tool_names`。
 
