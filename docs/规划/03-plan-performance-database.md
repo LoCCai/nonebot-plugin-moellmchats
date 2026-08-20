@@ -10,7 +10,7 @@ lastmod: 2026-08-19T14:55:10+08:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 3 依赖 Plan 1 远端发布门禁以及 Plan 2 的 ToolProvider、AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约。当前 Plan 1 本地总门禁已通过并形成实现提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，但尚无该提交的远端 `release-gate` green；Plan 2 也尚未开始，因此本计划保持设计/Backlog 状态，不提前引入数据库或 Redis 代码。
+> 实施门禁（2026-08-20）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 仅推进到 D-01a 本地实现提交 `67638980b8abe3d515ca8146ab68381692f6ac74`，AgentRun、AgentStep、ToolCall 与 DeadlineContext 契约仍未完成。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 

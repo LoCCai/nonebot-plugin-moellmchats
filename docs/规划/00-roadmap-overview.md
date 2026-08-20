@@ -8,7 +8,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成修复后总门禁。Ruff 与 Actionlint 通过；真实非 root 隔离副本为 `335 passed, 13 skipped`；root 下 Python 3.10～3.13 普通全量均为 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`；fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外 smoke 全部通过。首次 push/PR run `32394394398` / `32394400211` 因非 root 测试只接受 UID 切换失败、未接受更早的 namespace fail-closed 而失败；build、Sandbox、package jobs 均成功。修复提交 `29ccc11c0560c0ae02c10591b684af724f046197` 正等待精确 HEAD 远端复验与 required-check 配置；本轮未部署。发布门禁完成前不进入 Plan 2。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 已在门禁解除后完成 D-01a type-only/shadow 本地实现提交 `67638980b8abe3d515ca8146ab68381692f6ac74`：Pyright 0 error/0 warning，四版本定向各 `10 passed`，Python 3.12 普通全量 `357 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；D-01a 远端门禁完成前不进入 D-02。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

@@ -8,7 +8,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 # Plan 1：安全修复 + 核心架构重构
 
-> 实施注记（2026-08-20）：`0.25.0-rc1`、`0.25.0-rc2` 与 stable 的 C-01～C-07 已在本地工作树完成实现及最新总门禁。Ruff、Actionlint、Python 3.10～3.13 普通全量（各 `347 passed, 1 skipped`）、Python 3.12 + NoneBot 2.4.4 / OneBot 2.4.6、mandatory root Sandbox（`40 passed, 0 skipped`）、fresh package/Twine/checksum 和四组 checkout 外 smoke 均通过。计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，但尚未推送或部署；首次远端聚合 `release-gate` green 与 required-check 配置尚未取得，远端发布门禁完成前不进入 Plan 2。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+> 实施注记（2026-08-20）：`0.25.0-rc1`、`0.25.0-rc2` 与 stable 的 C-01～C-07 已完成实现、本地总门禁和远端发布门禁。精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR run `32396257506` / `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。本轮未合并、未 promotion、未部署；Plan 2 只在上述门禁关闭后开始。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 > 推荐目标版本：`0.25.0-rc1 → 0.25.x stable`
 
@@ -306,7 +306,7 @@ Runner 只执行 Snapshot 里的固定源码。
 
 # 6. Generated Tool 生命周期正式化
 
-**状态：✅ 已形成本地实现提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 `generated_tools/lifecycle_state.json` schema v3 是唯一 canonical 状态；兼容读取 schema v2，并在内存中转换为 v3，下一次 canonical 写入会持久化 v3。legacy `active.json`、`permission_policy.json` 和草稿 metadata 状态只作单向兼容/审计投影。
 
@@ -380,7 +380,7 @@ ToolBundleVersion:
 
 # 7. 完整 Review
 
-**状态：✅ 已形成本地实现提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 管理员审批时必须能够看到：
 
@@ -581,7 +581,7 @@ AST
 
 # 12. Watcher 稳定性
 
-**状态：✅ 已形成本地实现提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 Runtime Watcher 最外层不会因为：
 
@@ -611,7 +611,7 @@ while True:
 
 # 13. 多进程安全
 
-**状态：✅ canonical 多进程并发管理与最新本地总门禁已形成实现提交（待推送/远端 CI）**
+**状态：✅ canonical 多进程并发管理与发布门禁完成（未部署）**
 
 schema v3（兼容读取 v2）使用固定、受所有权和 no-follow 检查保护的：
 
@@ -663,7 +663,7 @@ filesystem commit、当前进程内存指针和其他 worker 的内存状态不�
 
 # 14. CI 重构
 
-**状态：🟡 workflow 与最新本地总门禁已通过；待受审提交、首次远端 `release-gate` green 与 required-check 配置**
+**状态：✅ 本地与远端发布门禁完成；精确 HEAD 双 run green，required `release-gate` 已配置；未部署**
 
 普通 Python 3.10～3.13 job 排除 root-only Sandbox 文件；独立 `sandbox` job 在 Linux/root/namespace/UID drop/libseccomp 任一前提缺失时 fail closed，并从 JUnit 强制执行数大于 0、`skipped=0`。`build` 只构建一次 sdist/wheel 并生成 checksum/来源元数据；`package` 用同一 artifact 完成 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载与 reload smoke；`release-gate` fail closed 聚合 test/sandbox/build/package。手动 promotion 必须先确认 job 列表完整，且名称精确为 `release-gate` 的 job 恰好一个、状态为 `completed`、结论为 `success`，随后下载该 CI run 的原 artifact；不重构也不发布 PyPI。
 
@@ -778,4 +778,4 @@ metadata.json = 0600
 - multi-process file lock（本地完成）
 - watcher hardening（本地完成）
 - approve / deactivate / rollback 分阶段崩溃一致性（本地完成）
-- 首次默认分支远端聚合 `release-gate` green、精确 green SHA 核验，以及将 `release-gate` 设为 required check 仍是发布门禁
+- 精确 HEAD 双 run 的聚合 `release-gate` 已 green，PR 基分支 required check 已配置；生产发布仍需另行授权

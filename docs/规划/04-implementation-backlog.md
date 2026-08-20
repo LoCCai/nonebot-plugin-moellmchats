@@ -16,9 +16,9 @@ lastmod: 2026-08-20T00:00:00+00:00
 - 修复后的最新本地总门禁已通过：Ruff 与 Actionlint 通过；真实非 root 隔离副本为 `335 passed, 13 skipped`；root 下 Python 3.10～3.13 普通全量各 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`。
 - fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过；本地来源元数据明确标记为未提交工作树，不冒充可发布提交。
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
-- 计划内实现 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5` 已推送。首次 push/PR run `32394394398` / `32394400211` 的 build、Sandbox、package jobs 成功，但普通矩阵因测试未接受 GitHub 非 root 环境更早的 namespace fail-closed 而失败；聚合 gate 正确失败关闭。修复提交为 `29ccc11c0560c0ae02c10591b684af724f046197`，尚待精确 HEAD 远端 green 与 required-check 配置。
-- 每项状态只表示当前源码与测试已满足本节验收，不代表 GitHub 分支或 Qiqi 运行实例已经更新。
-- Plan 1 当前下一步是推送修复与本状态记录，并核对精确 HEAD 的唯一 green `release-gate` 和 required-check 配置；远端门禁完成前不进入 Plan 2。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
+- 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 已按依赖进入 D-01a，本地实现提交为 `67638980b8abe3d515ca8146ab68381692f6ac74`；其远端 gate green 前不进入 D-02。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -32,7 +32,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 ## A-01 Generated Tool 默认网络隔离
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P0**
 
@@ -64,7 +64,7 @@ tests/
 
 ## A-02 PendingAction 二阶段确认
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P0**
 
@@ -97,7 +97,7 @@ PendingActionStore
 
 ## A-03 Generated Tool 默认 superuser
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P0**
 
@@ -113,7 +113,7 @@ PendingActionStore
 
 ## A-04 Capability 基础结构
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P0**
 
@@ -140,7 +140,7 @@ secrets
 
 ## A-05 Draft 文件权限修复
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P1**
 
@@ -162,7 +162,7 @@ config dir = 0700
 
 ## B-01 ToolArtifact
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P0**
 
@@ -188,7 +188,7 @@ generation
 
 ## B-02 Custom Tool Source Snapshot
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P1**
 
@@ -203,7 +203,7 @@ generation
 
 ## B-03 Generated Bundle Runtime Digest
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P1**
 
@@ -219,7 +219,7 @@ expected digest == actual digest
 
 ## B-04 Runner Protocol FD 分离
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P1**
 
@@ -237,7 +237,7 @@ stdout/stderr 只保留日志。
 
 ## B-05 Workspace File Count 限制
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 **优先级：P1**
 
@@ -256,7 +256,7 @@ max single-file bytes
 
 ## B-06 Workspace Scanner Async 化
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 避免 Event Loop 同步 `rglob()`。
 
@@ -266,7 +266,7 @@ max single-file bytes
 
 ## B-07 AST Policy Engine
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 结果类型：
 
@@ -283,7 +283,7 @@ RISK
 
 ## B-08 禁止 Generated Tool subprocess
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 第一阶段直接 deny。
 
@@ -297,7 +297,7 @@ RISK
 
 ## C-01 Tool Lifecycle State Machine
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 草稿状态：
 
@@ -334,7 +334,7 @@ Archived
 
 ## C-02 Full Draft Review
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 管理员能分页查看：
 
@@ -353,7 +353,7 @@ diff
 
 ## C-03 Watcher 外层恢复
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 任何文件损坏不能永久终止 watcher。
 
@@ -363,7 +363,7 @@ diff
 
 ## C-04 Lifecycle File Lock
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 支持 OS File Lock。
 
@@ -373,7 +373,7 @@ diff
 
 ## C-05 Approve 原子事务
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 实现顺序：
 
@@ -389,7 +389,7 @@ canonical durable CAS
 
 ## C-06 Rollback 原子事务
 
-**状态：✅ 本地实现已提交（待推送/远端 CI）**
+**状态：✅ 发布门禁完成（未部署）**
 
 权限、拒绝、停用与回滚复用 C-05 的 typed prepare/commit transaction；回滚只允许唯一匹配、未 Archived 的版本，并在同一 canonical snapshot 下验证 owner/no-follow、版本目录精确 `0500`、只含 `manifest.json`/`tool.py`/`tests.py` 三个 `0400` 普通文件、校验期间 inode 稳定及完整内容 digest。RuntimeSnapshot 和 ToolSnapshot 同时携带 lifecycle revision/state digest/active stamp，generation 从当前发布快照严格递增。
 
@@ -399,7 +399,7 @@ canonical durable CAS
 
 ## C-07 Sandbox Integration CI
 
-**状态：🟡 workflow 与修复后本地总门禁已通过（mandatory root：`40 passed, 0 skipped`）；首次远端反馈已修复，待精确 HEAD GitHub CI green**
+**状态：✅ 精确 HEAD 双 run 全绿，required `release-gate` 已配置；未部署**
 
 必须真实执行：
 
@@ -422,15 +422,19 @@ timeout
 
 ## D-01a Provider Discovery Contract（type-only / shadow）
 
-**状态：⏸️ 等待 Plan 1 精确 green SHA 与远端发布门禁**
+**状态：🟡 本地实现已提交 `67638980b8abe3d515ca8146ab68381692f6ac74`；待精确 HEAD 远端 gate**
 
 定义稳定 `provider_id/source`、`ToolTrustLevel` 类型和不可变 `DiscoveredTool`。`DiscoveredTool` 必须携带 `ToolSpec`，`ToolArtifact` 可选；只有 Custom File / Generated 必须携带 artifact。
 
 `discover(ProviderDiscoveryContext[TResources])` 必须是 side-effect-free async 候选发现。context 同时携带非负 generation 和来源专属的 `TResources`；每个 Provider 都必须定义深冻结、与输入脱离的 typed resource record，禁止用 `Any` 或裸 `dict` 传递候选资源。资源由同一 runtime transaction 构建并显式传入；Generated Provider 的记录必须固定精确 after-state/source override，发现时不得重读 live canonical。本任务不接管执行、不改 `ToolManager` / MCP 镜像 / `RuntimeSnapshot`、不引入尚未定义的 `ToolCall`。
 
+实现落点：新增 `tool_providers.py`，定义 source/trust 固定映射、六类 frozen typed resource record、`ProviderDiscoveryContext[TResources]`、不可变 `DiscoveredTool` 和只含 `discover()` 的 `ToolProvider` Protocol。运行时拒绝裸资源映射、负数/布尔 generation、source/trust 错配、缺失或伪造 artifact、artifact generation/spec 错配；Generated resource 只接受精确指向 after-state active 版本的 typed source override。Pyright 为 0 error/0 warning；Python 3.10～3.13 定向各 `10 passed`；Python 3.12 普通全量 `357 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`。
+
 ---
 
 ## D-02 RegisteredToolProvider
+
+**状态：⏸️ 等待 D-01a 精确远端 green**
 
 作为无 I/O、trusted 来源的首个 shadow pilot，对 legacy 目录做完整 parity，仍不切换执行。
 

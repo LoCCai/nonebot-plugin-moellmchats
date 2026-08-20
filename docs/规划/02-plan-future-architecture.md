@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 最新本地完整门禁已通过，包括 mandatory root Sandbox `40 passed, 0 skipped`；计划内实现已形成本地提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，但尚未推送，也未取得精确提交的首次远端 `release-gate` green 与 required-check 配置。在远端 green SHA 确认前，本文仅作设计与任务依赖校准，不实施 Plan 2 代码。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a type-only/shadow 已形成本地实现提交 `67638980b8abe3d515ca8146ab68381692f6ac74`，但尚待远端复验；在该提交精确 green 前不开始 D-02。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -152,6 +152,8 @@ class ToolProvider(Protocol[CandidateResourcesT]):
 - 发现记录必须深冻结、与输入脱离，并校验 artifact generation 与候选 generation 一致。
 - 首个 PR 不定义 `execute(Any | dict)`；执行契约等明确的 `ToolExecutionRequest` 或 E-03 `ToolCall` 后再引入。
 - Provider `reload()` 不得自行 commit；任何可变操作都必须保持 build candidate → validate → single publish 事务边界。
+
+实施状态（2026-08-20）：D-01a 已在 `nonebot_plugin_moellmchats/tool_providers.py` 定义上述发现契约与六类来源专属 resource record，并由 `tests/test_tool_providers.py` 覆盖深冻结、generation、source/trust、artifact 和 Generated after-state/source override 边界。提交 `67638980b8abe3d515ca8146ab68381692f6ac74` 仍是 shadow-only，不导入 `ToolManager`、MCP 镜像或 `RuntimeSnapshot`，也没有执行接口；当前等待远端门禁。
 
 ---
 

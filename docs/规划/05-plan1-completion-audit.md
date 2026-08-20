@@ -14,7 +14,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - 本轮已先完成 Milestone A 定向复核：Python 3.12.13 + NoneBot 2.4.4 下 31 个非沙箱验收 node 与 mandatory root 下 11 个 A 相关真实 Sandbox case 全部通过；Ruff 全量通过。
 - Milestone B 定向复核为 24 个非沙箱 node 与 12 个真实 Sandbox case；C-01～C-06 定向复核为 38 个 case，均通过。
 - 修复后的最新本地总门禁已完成：真实非 root 隔离副本 `335 passed, 13 skipped`；root 下四个 Python 版本普通全量各 `347 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；fresh build/Twine/checksum 与四组 checkout 外 package smoke 全部通过。
-- 计划内实现 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5` 与本地门禁记录 `63f01e9fbaccf6f3c438b02340270ccb537f3831` 已推送但未部署。它们触发的首次 push/PR 门禁因非 root 测试前提过窄而失败；修复提交为 `29ccc11c0560c0ae02c10591b684af724f046197`，正在等待精确 HEAD 的远端复验与 required check 配置。
+- 计划内实现、CI 前提修复与审计记录已汇总到精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b`；对应 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`。PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`；未合并、未 promotion、未部署。
 - 本轮发现并修复了部分 CPython 3.10/早期 3.11 对 `MappingProxyType` frame builtins 执行 import 时的内部错误；worker 在不可信源码执行前探测解释器能力，受影响版本使用拒绝公开变更入口的冻结 builtins dict，其余版本保持 mapping proxy，四版本 worker 定向测试各 `14 passed`。
 
 状态定义：
@@ -22,6 +22,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - `实现完成`：源码和定向测试均已落盘。
 - `本地门禁完成`：本地精确实现提交已经通过本文矩阵，但还不是远端提交证据。
 - `远端待验证`：必须由 GitHub Actions 对精确提交产生证据。
+- `发布门禁完成`：精确 HEAD 的完整远端 gate 已 green 且 required check 已配置；仍不代表部署。
 
 ## 总门禁台账
 
@@ -33,7 +34,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 | Mandatory Sandbox | root 下执行完整 `tests/test_sandbox_integration.py`，JUnit `tests > 0` 且 `skipped=0` | `40 passed, 0 skipped`，JUnit 复核 `failures=0, errors=0` |
 | Build | fresh sdist + wheel、Twine、checksum、来源 metadata | 通过；来源元数据标记 `local-uncommitted-worktree` |
 | Package smoke | Python 3.10/3.12 × wheel/sdist，checkout 外安装、加载与 `reload("package-smoke")` | 四组全部 `PACKAGE_SMOKE_OK`，generation=1 |
-| GitHub 聚合 | `release-gate` fail closed 聚合 test/sandbox/build/package | 首次 push/PR run 已按设计 fail closed；修复提交 `29ccc11c0560c0ae02c10591b684af724f046197` 待远端复验 |
+| GitHub 聚合 | `release-gate` fail closed 聚合 test/sandbox/build/package | `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR run `32396257506` / `32396261932` 各 11 个 job 全绿且恰好一个成功 `release-gate` |
 | Promotion | job 列表完整；恰好一个精确名 `release-gate` 且 `completed/success`；下载原 run artifact | 未执行；本轮不合并、不下载、不发布 PyPI |
 
 本轮分阶段证据（均对应本地实现提交 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5` 的内容，不代表远端或生产状态）：
@@ -53,6 +54,8 @@ lastmod: 2026-08-20T00:00:00+00:00
 - 修复后的测试接受 namespace 或 UID/GID 任一强隔离前提不可用，并额外断言 runner 发布 `isolation_status=unavailable:*`；mandatory root suite 继续单独证明 UID/GID 65534 降权成功。
 - 同一修复把 CPython frame builtins 兼容从硬编码版本判断改为不可信源码执行前的一次能力探测，避免对早期 3.11 patch release 作错误假设，也不在工具源码部分执行后重试。
 - 修复内容对应 `29ccc11c0560c0ae02c10591b684af724f046197`。Ruff 通过；CPython 3.10.20、3.11.2、3.11.15、3.12.13、3.13.13 worker 定向测试各 `14 passed`；真实非 root 隔离副本为 `335 passed, 13 skipped`；四版本 root 普通矩阵各 `347 passed, 1 skipped`；mandatory root Sandbox 为 `40 passed, 0 skipped`；fresh build/Twine/checksum 与四组外部安装 smoke 全部通过。
+- 修复后远端 push run `32396257506` 与 PR run `32396261932` 精确对应 `f6c7628025cb5d34519499d86b979de448406d5b`。API 复核两者均 `completed/success`、job_count=11、non_success 为空、`release-gate` 数量为 1 且 `completed/success`。
+- GitHub 分支保护 API 回查确认 `feat/llm-runtime-backpressure` 的 required status checks 为 `strict=true`、唯一 context `release-gate`（GitHub Actions app id 15368）；未启用强推、删除、审阅或分支限制。
 
 ## Milestone A：0.25.0-rc1
 
@@ -71,7 +74,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_sandbox_integration.py::test_sandbox_blocks_non_unix_socketpair`
   - `tests/test_sandbox_integration.py::test_sandbox_blocks_unix_datagram_socketpair_reconnect_bypass`
 - 验收语义：所有文件/生成工具进入 PID/mount/IPC/UTS namespace 并使用固定 hostname，`network=false` 时再进入 network namespace 并拒绝全部 `socket(2)`；仅联网但无 host-filesystem 时拒绝 AF_UNIX/AF_VSOCK，受限 `socketpair` 只保留 AF_UNIX/STREAM。缺少隔离前提即 fail closed。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### A-02 PendingAction 二阶段确认
 
@@ -84,7 +87,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_pending_actions.py::test_concurrent_confirmation_executes_at_most_once`
   - `tests/test_pending_actions.py::test_confirmation_executes_fixed_snapshot_arguments_and_rechecks_permission`
 - 验收语义：首次 mutating 调用只生成 nonce；另消息确认受 Bot/adapter/user/session、参数 hash、generation、bundle digest、TTL 与一次性消费约束。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### A-03 Generated Tool 默认 superuser
 
@@ -95,7 +98,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tools.py::test_hash_change_and_failed_review_cannot_be_approved`
   - `tests/test_generated_tools.py::test_superuser_tools_are_filtered_from_catalog_and_schema`
 - 验收语义：manifest permission 只是申请；人工 grant 绑定精确 bundle digest 和工具，损坏或版本变化均 fail closed 到 superuser。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### A-04 Capability 基础结构
 
@@ -110,7 +113,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_sandbox_integration.py::test_sandbox_host_filesystem_false_blocks_host_xattrs`
   - `tests/test_sandbox_integration.py::test_secrets_capability_does_not_inject_host_environment`
 - 验收语义：严格五个布尔字段 `network/process/workspace/host_filesystem/secrets`；effective 为 requested 与 admin ceiling 交集；Generated 上限仅 workspace，secrets 不注入宿主密钥。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### A-05 Draft 文件权限修复
 
@@ -122,7 +125,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_private_files.py::test_config_parser_rejects_symlink_instead_of_replacing_target`
   - `tests/test_generated_tools.py::test_generated_storage_permissions_are_private_and_versions_stay_immutable`
 - 验收语义：配置目录 `0700`、敏感/草稿文件 `0600`，owner/no-follow 检查 fail closed，immutable version 为 `0500` / `0400`。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ## Milestone B：0.25.0-rc2
 
@@ -135,7 +138,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_tool_artifacts.py::test_artifact_digest_binds_effect_permission_and_limits`
   - `tests/test_tool_artifacts.py::test_artifact_survives_runtime_snapshot_freeze_without_mappingproxy_copy`
 - 验收语义：源码、Schema、ToolSpec、安全契约、generation 与 digest 形成不可变制品，loader 不发布半制品。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-02 Custom Tool Source Snapshot
 
@@ -145,7 +148,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tool_runner_policy.py::test_artifact_execution_uses_snapshot_and_fd3_not_live_path`
   - `tests/test_tool_artifacts.py::test_custom_artifact_detaches_contract_and_verifies_pinned_generation`
 - 验收语义：候选 generation 只读一次源码 bytes；活动请求只执行其固定 artifact，不回读后来修改的路径。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-03 Generated Bundle Runtime Digest
 
@@ -157,7 +160,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tool_runner_policy.py::test_generated_artifact_rejects_wrong_bundle_digest_before_dispatch`
   - `tests/test_ast_policy_loaders.py::test_store_digest_matches_tool_artifact_canonical_crlf_and_unicode`
 - 验收语义：Store、Artifact、Snapshot 与 runner 共享 canonical bundle digest，错误 generation/digest 在 dispatch 前 fail closed。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-04 Runner Protocol FD 分离
 
@@ -169,7 +172,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tools.py::test_runner_rejects_output_flood`
   - `tests/test_generated_tools.py::test_runner_rejects_fd3_protocol_result_flood`
 - 验收语义：stdin 只传请求，FD3 传版本化结果，stdout/stderr 只作有界日志；三路读取、超时和取消都清理 FD 与进程组。FD3 不认证恶意代码。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-05 Workspace File Count 限制
 
@@ -182,7 +185,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_sandbox_integration.py::test_sandbox_workspace_depth`
   - `tests/test_sandbox_integration.py::test_sandbox_workspace_file_count_uses_final_scan`
 - 验收语义：总字节、单文件、条目数、深度、符号链接和特殊文件均有 fail-closed 限制，结束后强制复扫。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-06 Workspace Scanner Async 化
 
@@ -191,7 +194,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tool_runner_policy.py::test_workspace_scan_does_not_block_event_loop`
   - `tests/test_sandbox_integration.py::test_sandbox_pid_namespace_cleans_detached_descendant_before_final_scan`
 - 验收语义：workspace 遍历移到 `asyncio.to_thread()`，运行期 watch 与最终 scan 不同步阻塞事件循环。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-07 AST Policy Engine
 
@@ -204,7 +207,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_ast_policy_loaders.py::test_generated_helper_mutation_promotes_declared_read_only_spec`
   - `tests/test_ast_policy_loaders.py::test_custom_capability_is_checked_for_each_handler_call_graph`
 - 验收语义：模块、handler、可达 helper 和 tests 分开分析，输出 ALLOW/DENY/CAPABILITY_REQUIRED/RISK；保守提升 mutating，不替代 OS 隔离或人工审阅。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### B-08 禁止 Generated Tool subprocess
 
@@ -217,7 +220,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_sandbox_integration.py::test_sandbox_process_true_executes_fixed_system_binary_only`
   - `tests/test_sandbox_integration.py::test_sandbox_blocks_inherited_session_keyring_for_all_capabilities`
 - 验收语义：Generated AST 与 runner 都不能放宽 process；`process=false` 使用 NPROC + seccomp；Custom `process=true` 仍只得到固定 executable roots，并受其他 capability 与 PendingAction 约束。`add_key`/`request_key`/`keyctl` 在所有 capability 组合下无条件拒绝。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ## Milestone C：0.25 Stable
 
@@ -232,7 +235,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tools_lifecycle_integration.py::test_create_draft_only_records_draft_and_rejects_legacy_status`
   - `tests/test_generated_tools_lifecycle_integration.py::test_failure_entrypoints_persist_structured_canonical_evidence`
 - 验收语义：schema v3 canonical，读取 v2 后显式生成迁移 evidence；DraftEvidence digest-bound；`create_draft()` 只创建 Draft，专用入口逐步推进。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### C-02 Full Draft Review
 
@@ -245,7 +248,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tools_lifecycle_integration.py::test_review_stamp_explicitly_binds_active_digest`
   - `tests/test_tool_authoring.py::test_authoring_uses_selected_then_summary_and_persists_review`
 - 验收语义：七区段无损分页；完整 64 位 stamp 绑定 draft/digest、revision/state digest、active digest；批准必须复制三参数命令。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### C-03 Watcher 外层恢复
 
@@ -258,7 +261,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_runtime_reload.py::test_unexpected_watcher_task_completion_is_logged`
   - `tests/test_runtime_reload.py::test_broken_resource_retains_snapshot_and_watcher_keeps_retrying`
 - 验收语义：永久循环、取消单独传播、0.5～30 秒有界退避、异常可见，指纹 I/O 在线程中执行，失败保留旧 snapshot。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### C-04 Lifecycle File Lock
 
@@ -271,7 +274,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_generated_tool_lifecycle.py::test_post_replace_directory_fsync_exhaustion_remains_uncertain`
   - `tests/test_generated_tools_lifecycle_integration.py::test_visible_after_never_resolves_unconfirmed_directory_durability`
 - 验收语义：固定 flock + owner/no-follow + CAS；directory fsync 三次重试耗尽后保持 uncertain，只有 durability 已确认的回读不确定才精确调和 before/after。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### C-05 Approve 原子事务
 
@@ -284,7 +287,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_lifecycle_runtime_transaction.py::test_runtime_publish_failure_keeps_committed_canonical_state_for_retry`
   - `tests/test_lifecycle_runtime_transaction.py::test_repeated_cancellation_still_waits_for_durable_thread_completion`
 - 验收语义：所有 active 管理命令只走 RuntimeReloader 的候选、durable CAS、runtime publish 三阶段；Store commit/publish 方法均为 internal。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### C-06 Rollback 原子事务
 
@@ -296,7 +299,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `tests/test_lifecycle_runtime_transaction.py::test_real_generated_management_chain_and_second_watcher_converge`
   - `tests/test_generated_tools_lifecycle_integration.py::test_runtime_mutators_are_not_public_store_entrypoints`
 - 验收语义：唯一、非 Archived、owner/no-follow、`0500` 目录、恰好三个 `0400` 普通文件、inode 稳定、完整 digest；权限/拒绝/停用/回滚复用同一私有三阶段事务。
-- 状态：**本地实现已提交；远端 `release-gate` 待验证。**
+- 状态：**发布门禁完成；未部署。**
 
 ### C-07 Sandbox Integration CI
 
@@ -317,7 +320,7 @@ lastmod: 2026-08-20T00:00:00+00:00
   - `test_sandbox_pid_namespace_cleans_detached_descendant_before_final_scan`
 - CI 语义：普通矩阵排除 root-only 文件；mandatory root job 对必要 OS 隔离 fail closed、禁止 skip；build 只产一次 artifact；package job 在 checkout 外验证四种组合；`release-gate` 聚合所有前置 job。隔离不使用 cgroup，也不是完整 syscall allowlist；`stat`/`lstat`/`readlink` 等宿主路径元数据残余可见是明确剩余边界。
 - Promotion 语义：API 返回的 job 列表必须完整；必须恰好一个名称精确为 `release-gate` 的 job，且 `status=completed`、`conclusion=success`，之后只下载该 run 的原 artifact。
-- 状态：**workflow、测试 node 与最新本地总门禁已完成；mandatory root 精确结果为 `40 passed, 0 skipped`。首次远端 green 与 required check 仍待验证。**
+- 状态：**发布门禁完成；mandatory root 为 `40 passed, 0 skipped`，精确 HEAD 双 run 全绿且 required `release-gate` 已配置；未部署。**
 
 ## 最终关闭条件
 
@@ -327,6 +330,6 @@ Plan 1 只有同时满足以下条件才可从“实现完成”改为“发布�
 2. [x] mandatory root Sandbox 在最新 UTS/socket/keyring/xattr 增量下 `40 passed, 0 skipped`。
 3. [x] fresh sdist/wheel、Twine、checksum 与四组 checkout 外 package smoke 全部通过。
 4. [x] 计划内实现提交为 `77c6872fa1df9f399952ab419c1d1f2ac6cdbeb5`，兼容与 CI 前提修复提交为 `29ccc11c0560c0ae02c10591b684af724f046197`；`git diff --cached --check` 通过，未跟踪 `uv.lock` 未被纳入。
-5. [ ] GitHub 对精确提交产生唯一成功的 `release-gate`，并配置为 required check。
+5. [x] GitHub 对精确提交 `f6c7628025cb5d34519499d86b979de448406d5b` 产生唯一成功的 `release-gate`，并已在 PR 基分支配置为 required check。
 6. [x] 本轮不执行 promotion；后续如另行执行，只能下载并验证 green CI run 的原 artifact，不得重新构建或自动发布 PyPI。
 7. [x] 生产切换、Qiqi 依赖更新和进程重启仍需另行授权，不属于本文的代码/文档完成状态；本轮未操作生产。
