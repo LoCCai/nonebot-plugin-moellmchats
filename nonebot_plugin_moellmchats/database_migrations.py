@@ -21,6 +21,7 @@ _REQUIRED_MIGRATION_FILES = (
     "versions/0001_users_conversations.py",
     "versions/0002_agent_runtime.py",
     "versions/0003_agent_steps.py",
+    "versions/0004_tool_calls.py",
     "versions/README.md",
 )
 

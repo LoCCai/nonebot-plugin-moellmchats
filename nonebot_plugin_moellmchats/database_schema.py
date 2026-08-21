@@ -3,8 +3,14 @@ from __future__ import annotations
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-from .agent_runtime import AgentRunState, AgentStepStatus, AgentStepType
+from .agent_runtime import (
+    AgentRunState,
+    AgentStepStatus,
+    AgentStepType,
+    ToolCallStatus,
+)
 from .database_metadata import database_metadata
+from .tool_providers import ToolSource
 
 ENTITY_ID_MAX_CHARS = 128
 PLATFORM_MAX_CHARS = 32
@@ -21,6 +27,11 @@ AGENT_STEP_STATUS_MAX_CHARS = 32
 TOOL_NAME_MAX_CHARS = 64
 AGENT_STEP_PREVIEW_MAX_CHARS = 6_000
 AGENT_STEP_ERROR_MAX_CHARS = 6_000
+TOOL_SOURCE_MAX_CHARS = 32
+TOOL_CALL_STATUS_MAX_CHARS = 32
+BUNDLE_ID_MAX_CHARS = 64
+BUNDLE_DIGEST_MAX_CHARS = 64
+TOOL_CALL_RESULT_PREVIEW_MAX_CHARS = 6_000
 
 AGENT_RUN_STATUS_VALUES = tuple(state.value for state in AgentRunState)
 AGENT_RUN_TERMINAL_STATUS_VALUES = (
@@ -44,6 +55,15 @@ AGENT_STEP_ERROR_STATUS_VALUES = (
     AgentStepStatus.CANCELLED.value,
     AgentStepStatus.TIMED_OUT.value,
     AgentStepStatus.SKIPPED.value,
+)
+TOOL_SOURCE_VALUES = tuple(source.value for source in ToolSource)
+TOOL_CALL_STATUS_VALUES = tuple(status.value for status in ToolCallStatus)
+TOOL_CALL_TERMINAL_STATUS_VALUES = (
+    ToolCallStatus.COMPLETED.value,
+    ToolCallStatus.FAILED.value,
+    ToolCallStatus.CANCELLED.value,
+    ToolCallStatus.TIMED_OUT.value,
+    ToolCallStatus.REJECTED.value,
 )
 
 
@@ -360,6 +380,11 @@ agent_steps_table = sa.Table(
         "step_index",
         name="uq_agent_steps_run_id_step_index",
     ),
+    sa.UniqueConstraint(
+        "run_id",
+        "id",
+        name="uq_agent_steps_run_id_id",
+    ),
     sa.CheckConstraint("char_length(id) > 0", name="ck_agent_steps_id_present"),
     sa.CheckConstraint("char_length(run_id) > 0", name="ck_agent_steps_run_id_present"),
     sa.CheckConstraint("step_index >= 0", name="ck_agent_steps_index_nonnegative"),
@@ -422,10 +447,157 @@ agent_steps_table = sa.Table(
     ),
 )
 
+_tool_source_sql = _sql_string_list(TOOL_SOURCE_VALUES)
+_tool_call_status_sql = _sql_string_list(TOOL_CALL_STATUS_VALUES)
+_tool_call_terminal_status_sql = _sql_string_list(TOOL_CALL_TERMINAL_STATUS_VALUES)
+
+tool_calls_table = sa.Table(
+    "tool_calls",
+    database_metadata,
+    sa.Column("id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("run_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("step_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("tool_name", sa.String(TOOL_NAME_MAX_CHARS), nullable=False),
+    sa.Column("tool_source", sa.String(TOOL_SOURCE_MAX_CHARS), nullable=False),
+    sa.Column("bundle_id", sa.String(BUNDLE_ID_MAX_CHARS), nullable=True),
+    sa.Column(
+        "bundle_digest",
+        sa.String(BUNDLE_DIGEST_MAX_CHARS),
+        nullable=True,
+    ),
+    sa.Column("arguments_json", postgresql.JSONB(), nullable=False),
+    sa.Column("result_preview", sa.Text(), nullable=True),
+    sa.Column("confirmed", sa.Boolean(), nullable=False),
+    sa.Column(
+        "confirmation_id",
+        sa.String(ENTITY_ID_MAX_CHARS),
+        nullable=True,
+    ),
+    sa.Column("status", sa.String(TOOL_CALL_STATUS_MAX_CHARS), nullable=False),
+    sa.Column("duration_ms", sa.BigInteger(), nullable=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+    sa.PrimaryKeyConstraint("id", name="pk_tool_calls"),
+    sa.ForeignKeyConstraint(
+        ("run_id",),
+        ("agent_runs.id",),
+        name="fk_tool_calls_run_id_agent_runs",
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ("run_id", "step_id"),
+        ("agent_steps.run_id", "agent_steps.id"),
+        name="fk_tool_calls_run_id_step_id_agent_steps",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint("char_length(id) > 0", name="ck_tool_calls_id_present"),
+    sa.CheckConstraint(
+        "char_length(run_id) > 0",
+        name="ck_tool_calls_run_id_present",
+    ),
+    sa.CheckConstraint(
+        "char_length(step_id) > 0",
+        name="ck_tool_calls_step_id_present",
+    ),
+    sa.CheckConstraint(
+        "char_length(tool_name) > 0",
+        name="ck_tool_calls_tool_name_present",
+    ),
+    sa.CheckConstraint(
+        f"tool_source IN ({_tool_source_sql})",
+        name="ck_tool_calls_source_valid",
+    ),
+    sa.CheckConstraint(
+        "bundle_id IS NULL OR bundle_id ~ '^[A-Za-z][A-Za-z0-9_-]{0,63}$'",
+        name="ck_tool_calls_bundle_id_valid",
+    ),
+    sa.CheckConstraint(
+        "bundle_digest IS NULL OR bundle_digest ~ '^[a-f0-9]{64}$'",
+        name="ck_tool_calls_bundle_digest_valid",
+    ),
+    sa.CheckConstraint(
+        "(tool_source = 'generated' AND bundle_id IS NOT NULL AND bundle_digest IS NOT NULL) OR "
+        "(tool_source <> 'generated' AND bundle_id IS NULL AND bundle_digest IS NULL)",
+        name="ck_tool_calls_bundle_matches_source",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(arguments_json) = 'object'",
+        name="ck_tool_calls_arguments_object",
+    ),
+    sa.CheckConstraint(
+        f"result_preview IS NULL OR (char_length(result_preview) > 0 AND "
+        f"char_length(result_preview) <= {TOOL_CALL_RESULT_PREVIEW_MAX_CHARS})",
+        name="ck_tool_calls_result_preview_bounded",
+    ),
+    sa.CheckConstraint(
+        "confirmation_id IS NULL OR char_length(confirmation_id) > 0",
+        name="ck_tool_calls_confirmation_id_present",
+    ),
+    sa.CheckConstraint(
+        "NOT confirmed OR confirmation_id IS NOT NULL",
+        name="ck_tool_calls_confirmed_has_confirmation",
+    ),
+    sa.CheckConstraint(
+        "status <> 'waiting_confirmation' OR (NOT confirmed AND confirmation_id IS NOT NULL)",
+        name="ck_tool_calls_waiting_confirmation_fields",
+    ),
+    sa.CheckConstraint(
+        f"status IN ({_tool_call_status_sql})",
+        name="ck_tool_calls_status_valid",
+    ),
+    sa.CheckConstraint(
+        f"(status IN ({_tool_call_terminal_status_sql}) AND finished_at IS NOT NULL "
+        "AND duration_ms IS NOT NULL) OR "
+        f"(status NOT IN ({_tool_call_terminal_status_sql}) AND finished_at IS NULL "
+        "AND duration_ms IS NULL)",
+        name="ck_tool_calls_lifecycle_fields",
+    ),
+    sa.CheckConstraint(
+        "finished_at IS NULL OR finished_at >= created_at",
+        name="ck_tool_calls_timestamp_order",
+    ),
+    sa.CheckConstraint(
+        "duration_ms IS NULL OR duration_ms >= 0",
+        name="ck_tool_calls_duration_nonnegative",
+    ),
+    sa.CheckConstraint(
+        f"status IN ({_tool_call_terminal_status_sql}) OR result_preview IS NULL",
+        name="ck_tool_calls_result_matches_status",
+    ),
+    sa.CheckConstraint(
+        "status <> 'completed' OR result_preview IS NOT NULL",
+        name="ck_tool_calls_completed_has_result",
+    ),
+)
+
+sa.Index(
+    "ix_tool_calls_run_id_created_at_id_desc",
+    tool_calls_table.c.run_id,
+    tool_calls_table.c.created_at.desc(),
+    tool_calls_table.c.id.desc(),
+)
+sa.Index(
+    "ix_tool_calls_step_id_created_at",
+    tool_calls_table.c.step_id,
+    tool_calls_table.c.created_at,
+)
+sa.Index(
+    "ix_tool_calls_status_created_at",
+    tool_calls_table.c.status,
+    tool_calls_table.c.created_at,
+)
+sa.Index(
+    "uq_tool_calls_confirmation_id",
+    tool_calls_table.c.confirmation_id,
+    unique=True,
+    postgresql_where=tool_calls_table.c.confirmation_id.is_not(None),
+)
+
 DATABASE_TABLES = (
     users_table,
     conversations_table,
     messages_table,
     agent_runs_table,
     agent_steps_table,
+    tool_calls_table,
 )

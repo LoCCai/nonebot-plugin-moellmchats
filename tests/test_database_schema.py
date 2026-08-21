@@ -14,6 +14,7 @@ from nonebot_plugin_moellmchats.agent_runtime import (
     AgentRunState,
     AgentStepStatus,
     AgentStepType,
+    ToolCallStatus,
 )
 from nonebot_plugin_moellmchats.database_migrations import (
     build_offline_alembic_config,
@@ -27,13 +28,18 @@ from nonebot_plugin_moellmchats.database_schema import (
     AGENT_STEP_TERMINAL_STATUS_VALUES,
     AGENT_STEP_TYPE_VALUES,
     DATABASE_TABLES,
+    TOOL_CALL_STATUS_VALUES,
+    TOOL_CALL_TERMINAL_STATUS_VALUES,
+    TOOL_SOURCE_VALUES,
     agent_runs_table,
     agent_steps_table,
     conversations_table,
     database_metadata,
     messages_table,
+    tool_calls_table,
     users_table,
 )
+from nonebot_plugin_moellmchats.tool_providers import ToolSource
 
 if TYPE_CHECKING:
     import pytest
@@ -127,6 +133,20 @@ class _MigrationRecorder:
         expressions: tuple[Any, ...] = tuple(table.c[column] if isinstance(column, str) else column for column in columns)
         return sa.Index(name, *expressions, unique=unique, **kwargs)
 
+    def create_unique_constraint(
+        self,
+        name: str,
+        table_name: str,
+        columns: tuple[str, ...],
+        **kwargs: Any,
+    ) -> sa.UniqueConstraint:
+        assert not kwargs
+        table = self.metadata.tables[table_name]
+        return sa.UniqueConstraint(
+            *(table.c[column] for column in columns),
+            name=name,
+        )
+
 
 def test_first_schema_has_exact_tables_and_columns() -> None:
     assert DATABASE_TABLES == (
@@ -135,6 +155,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         messages_table,
         agent_runs_table,
         agent_steps_table,
+        tool_calls_table,
     )
     assert tuple(database_metadata.tables) == (
         "users",
@@ -142,6 +163,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         "messages",
         "agent_runs",
         "agent_steps",
+        "tool_calls",
     )
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
@@ -281,6 +303,60 @@ def test_agent_step_schema_has_exact_columns_and_domain_states() -> None:
         ("output_preview", "TEXT", True, False, None),
         ("error", "TEXT", True, False, None),
     )
+
+
+def test_tool_call_schema_has_exact_columns_and_domain_identities() -> None:
+    assert (
+        TOOL_CALL_STATUS_VALUES
+        == tuple(value.value for value in ToolCallStatus)
+        == (
+            "pending",
+            "waiting_confirmation",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+            "rejected",
+        )
+    )
+    assert TOOL_CALL_TERMINAL_STATUS_VALUES == (
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "rejected",
+    )
+    assert (
+        TOOL_SOURCE_VALUES
+        == tuple(value.value for value in ToolSource)
+        == (
+            "registered",
+            "custom_file",
+            "generated",
+            "mcp",
+            "builtin",
+            "nonebot_plugin",
+        )
+    )
+    assert tuple(_column_signature(column) for column in tool_calls_table.columns) == (
+        ("id", "VARCHAR(128)", False, False, None),
+        ("run_id", "VARCHAR(128)", False, False, None),
+        ("step_id", "VARCHAR(128)", False, False, None),
+        ("tool_name", "VARCHAR(64)", False, False, None),
+        ("tool_source", "VARCHAR(32)", False, False, None),
+        ("bundle_id", "VARCHAR(64)", True, False, None),
+        ("bundle_digest", "VARCHAR(64)", True, False, None),
+        ("arguments_json", "JSONB", False, False, None),
+        ("result_preview", "TEXT", True, False, None),
+        ("confirmed", "BOOLEAN", False, False, None),
+        ("confirmation_id", "VARCHAR(128)", True, False, None),
+        ("status", "VARCHAR(32)", False, False, None),
+        ("duration_ms", "BIGINT", True, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, None),
+        ("finished_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+    )
+    assert isinstance(tool_calls_table.c.arguments_json.type, postgresql.JSONB)
 
 
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
@@ -522,6 +598,7 @@ def test_agent_step_schema_has_exact_constraints_and_index() -> None:
                 "RESTRICT",
             ),
             ("unique", "uq_agent_steps_run_id_step_index", ("run_id", "step_index")),
+            ("unique", "uq_agent_steps_run_id_id", ("run_id", "id")),
             ("check", "ck_agent_steps_id_present", "char_length(id) > 0"),
             ("check", "ck_agent_steps_run_id_present", "char_length(run_id) > 0"),
             ("check", "ck_agent_steps_index_nonnegative", "step_index >= 0"),
@@ -583,6 +660,134 @@ def test_agent_step_schema_has_exact_constraints_and_index() -> None:
     assert not agent_steps_table.indexes
 
 
+def test_tool_call_schema_has_exact_constraints_and_indexes() -> None:
+    source_sql = ", ".join(f"'{value}'" for value in TOOL_SOURCE_VALUES)
+    status_sql = ", ".join(f"'{value}'" for value in TOOL_CALL_STATUS_VALUES)
+    terminal_status_sql = ", ".join(f"'{value}'" for value in TOOL_CALL_TERMINAL_STATUS_VALUES)
+    lifecycle_check = (
+        f"(status IN ({terminal_status_sql}) AND finished_at IS NOT NULL "
+        "AND duration_ms IS NOT NULL) OR "
+        f"(status NOT IN ({terminal_status_sql}) AND finished_at IS NULL "
+        "AND duration_ms IS NULL)"
+    )
+
+    assert frozenset(_constraint_signature(value) for value in tool_calls_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_tool_calls", ("id",)),
+            (
+                "foreign_key",
+                "fk_tool_calls_run_id_agent_runs",
+                ("run_id",),
+                ("agent_runs.id",),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_tool_calls_run_id_step_id_agent_steps",
+                ("run_id", "step_id"),
+                ("agent_steps.run_id", "agent_steps.id"),
+                "RESTRICT",
+            ),
+            ("check", "ck_tool_calls_id_present", "char_length(id) > 0"),
+            ("check", "ck_tool_calls_run_id_present", "char_length(run_id) > 0"),
+            ("check", "ck_tool_calls_step_id_present", "char_length(step_id) > 0"),
+            ("check", "ck_tool_calls_tool_name_present", "char_length(tool_name) > 0"),
+            ("check", "ck_tool_calls_source_valid", f"tool_source IN ({source_sql})"),
+            (
+                "check",
+                "ck_tool_calls_bundle_id_valid",
+                "bundle_id IS NULL OR bundle_id ~ '^[A-Za-z][A-Za-z0-9_-]{0,63}$'",
+            ),
+            (
+                "check",
+                "ck_tool_calls_bundle_digest_valid",
+                "bundle_digest IS NULL OR bundle_digest ~ '^[a-f0-9]{64}$'",
+            ),
+            (
+                "check",
+                "ck_tool_calls_bundle_matches_source",
+                "(tool_source = 'generated' AND bundle_id IS NOT NULL AND bundle_digest IS NOT NULL) OR "
+                "(tool_source <> 'generated' AND bundle_id IS NULL AND bundle_digest IS NULL)",
+            ),
+            (
+                "check",
+                "ck_tool_calls_arguments_object",
+                "jsonb_typeof(arguments_json) = 'object'",
+            ),
+            (
+                "check",
+                "ck_tool_calls_result_preview_bounded",
+                "result_preview IS NULL OR (char_length(result_preview) > 0 AND char_length(result_preview) <= 6000)",
+            ),
+            (
+                "check",
+                "ck_tool_calls_confirmation_id_present",
+                "confirmation_id IS NULL OR char_length(confirmation_id) > 0",
+            ),
+            (
+                "check",
+                "ck_tool_calls_confirmed_has_confirmation",
+                "NOT confirmed OR confirmation_id IS NOT NULL",
+            ),
+            (
+                "check",
+                "ck_tool_calls_waiting_confirmation_fields",
+                "status <> 'waiting_confirmation' OR (NOT confirmed AND confirmation_id IS NOT NULL)",
+            ),
+            ("check", "ck_tool_calls_status_valid", f"status IN ({status_sql})"),
+            ("check", "ck_tool_calls_lifecycle_fields", lifecycle_check),
+            (
+                "check",
+                "ck_tool_calls_timestamp_order",
+                "finished_at IS NULL OR finished_at >= created_at",
+            ),
+            (
+                "check",
+                "ck_tool_calls_duration_nonnegative",
+                "duration_ms IS NULL OR duration_ms >= 0",
+            ),
+            (
+                "check",
+                "ck_tool_calls_result_matches_status",
+                f"status IN ({terminal_status_sql}) OR result_preview IS NULL",
+            ),
+            (
+                "check",
+                "ck_tool_calls_completed_has_result",
+                "status <> 'completed' OR result_preview IS NOT NULL",
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in tool_calls_table.indexes) == frozenset(
+        {
+            (
+                "ix_tool_calls_run_id_created_at_id_desc",
+                ("run_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_tool_calls_step_id_created_at",
+                ("step_id", "created_at"),
+                False,
+                None,
+            ),
+            (
+                "ix_tool_calls_status_created_at",
+                ("status", "created_at"),
+                False,
+                None,
+            ),
+            (
+                "uq_tool_calls_confirmation_id",
+                ("confirmation_id",),
+                True,
+                "confirmation_id IS NOT NULL",
+            ),
+        }
+    )
+
+
 def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -590,11 +795,17 @@ def test_linear_revision_operations_are_identical_to_declared_metadata(
     scripts = ScriptDirectory.from_config(build_offline_alembic_config())
     monkeypatch.setattr(alembic_op, "create_table", recorder.create_table)
     monkeypatch.setattr(alembic_op, "create_index", recorder.create_index)
+    monkeypatch.setattr(
+        alembic_op,
+        "create_unique_constraint",
+        recorder.create_unique_constraint,
+    )
 
     for revision_id, down_revision in (
         ("0001_users_conversations", None),
         ("0002_agent_runtime", "0001_users_conversations"),
         ("0003_agent_steps", "0002_agent_runtime"),
+        ("0004_tool_calls", "0003_agent_steps"),
     ):
         revision = scripts.get_revision(revision_id)
         assert revision is not None
