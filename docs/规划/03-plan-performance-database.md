@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T02:53:07+00:00
+lastmod: 2026-08-21T03:37:32+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T02:53:07+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08e 已完成各自精确 HEAD 远端 gate。D-08e 最终闭环 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 的 push run `32438803052` / PR run `32438809768` 均为 11/11 green 且各恰好一个成功 `release-gate`。D-08f 管理 consumer 实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 已完成本地门禁，精确 HEAD 远端 gate 待完成；D-09 仍需至少一个发布周期 parity 观察，在不操作生产的约束下未解锁。当前 catalog schema v3 及 categorize/payload/工具执行/确认执行/Search/管理 consumer cutover 仍只描述运行期 Provider discovery、派生 trust/capability policy、selection 和受控执行，不是 AgentRun、AgentStep、ToolCall 或 DeadlineContext 持久化领域模型；当前内存 PendingAction store 也不是 F-12 Redis 持久化实现。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate。D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 的 push run `32443308534` / PR run `32443313095` 均为 11/11 green 且各恰好一个成功 `release-gate`。D-09 仍需至少一个发布周期 parity 观察，在不操作生产的约束下保持锁定。Milestone E 的 E-01 实现提交 `56dae036b4a2eaac8dd9060487e1bf1e18bb9e16` 已定义不可变、generation-bound 的 `AgentRun` / `AgentRunState` 领域对象并完成本地门禁，但尚未接管请求流、状态转换或持久化。当前 catalog schema v3 与各 consumer cutover 仍只描述运行期 Provider discovery、派生 trust/capability policy、selection 和受控执行；新增 E-01 也不是 `agent_runs` 表、Repository、AgentStep、ToolCall 或 DeadlineContext 实现，当前内存 PendingAction store 仍不是 F-12 Redis 持久化。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 

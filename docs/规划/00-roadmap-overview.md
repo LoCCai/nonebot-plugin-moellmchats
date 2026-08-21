@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T02:53:07+00:00
+lastmod: 2026-08-21T03:37:32+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08e 已完成各自精确 HEAD 双 run 远端门禁；D-08e 最终闭环 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 的 push run `32438803052` / PR run `32438809768` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-08f 管理命令实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 已完成本地门禁：generation-bound `ToolManagementView` 以 canonical Provider identity 与 management trust decision 校验黑名单添加，逐调用执行 legacy parity；MCP 精确工具、服务级标识、通配符及尚无已发现工具的已配置服务均绑定同一 generation，普通用户在 Provider 视图中 fail closed。独立开关只回滚管理 consumer；移除已失效黑名单项与 permissive stale resident 配置语义保持不变。管理/Snapshot/Reload 定向 `148 passed`，Provider/全部已切换 consumer 联合 `277 passed`，Python 3.10～3.13 串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、fresh build/Twine 与四组包外加载均通过；Pyright parent/current 为 103→101 errors、2→2 warnings，归一化 multiset 零新增并消除 2 条旧诊断。D-08f 精确 HEAD 远端双 run gate 待完成；D-09 sidecar 删除仍需 D-08f gate 关闭并至少经历一个发布周期观察，在“不操作生产”约束下保持锁定。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-08f 最终文档闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 的 push run `32443308534` / PR run `32443313095` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定；该清理门禁不阻断与 sidecar、数据库解耦的增量 Agent 领域对象。Milestone E 的 E-01 实现提交 `56dae036b4a2eaac8dd9060487e1bf1e18bb9e16` 新增 frozen、generation-bound `AgentRun` 与完整 `AgentRunState`，严格绑定 run/request/user/group identity、runtime generation、状态及起止时间，终态与 `finished_at` 必须一致；对象不持有 Bot/Event、不执行状态转换、不接数据库、Redis 或现有请求流。E-01 定向 `40 passed`，Python 3.10～3.13 串行普通全量各 `594 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 零诊断，fresh build/Twine/checksum 与四组包外加载均通过。E-01 精确 HEAD 远端双 run gate 待完成；E-02 尚未开始。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

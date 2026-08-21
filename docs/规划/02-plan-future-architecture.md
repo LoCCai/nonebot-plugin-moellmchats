@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T02:53:07+00:00
+lastmod: 2026-08-21T03:37:32+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T02:53:07+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08e 已完成各自精确 HEAD 远端 gate；D-08e 最终闭环 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 的 push run `32438803052` / PR run `32438809768` 均为 11/11 green 且各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-08f 管理 consumer 实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 已完成本地门禁：当前 generation 的 canonical Provider identity、management trust decision、legacy rollback parity 与独立开关均已接入黑名单添加校验；MCP 服务级/通配符、stale blacklist 移除和 stale resident 兼容语义保留。四版本串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包及四组包外 smoke 均通过，Pyright 归一化零新增并消除 2 条旧诊断。D-08f 精确 HEAD 远端双 run gate 待完成；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 的 push run `32443308534` / PR run `32443313095` 均为 11/11 green 且各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定；该独立清理门禁不阻断与 sidecar 解耦的增量 Agent 领域对象。E-01 实现提交 `56dae036b4a2eaac8dd9060487e1bf1e18bb9e16` 已新增 frozen、generation-bound `AgentRun` / `AgentRunState` 并完成本地门禁：四版本串行普通全量各 `594 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 零诊断；精确 HEAD 远端双 run gate 待完成，E-02 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -207,7 +207,9 @@ D-08f 实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 只切换黑名单
 
 兼容与事务边界：正式 runtime candidate 将历史 loaded-plugin namespace 与 MCP configured-server selector 冻结进同一 `ToolSnapshot` generation；`mcp__server`、`mcp__server__*` 绑定该代全部 canonical MCP member，尚未发现工具的已配置服务仍可提前加入黑名单，但同样执行超级用户 selector policy 与审计。命令在预校验原子 reload 成功后捕获当前 `RuntimeSnapshot`，并从该快照读取独立严格布尔开关 `provider_catalog_management_enabled=true`；设为 `false` 只回滚管理 consumer，旧式或不完整 catalog 继续有界 legacy。添加发生前的 reload/parity/trust 任一失败都不写配置；移除路径仍可清理已失效 blacklist 项并保留写后 reload 语义。常驻列表继续允许 stale 配置，由 D-08b payload 视图忽略未知项，未借本次迁移新增存在性限制。刷新/重载事务、其他 consumer 与 legacy sidecar 均未改变。
 
-D-08f 管理/Snapshot/Reload 定向 `148 passed`，Provider/Snapshot/Reload 与全部已切换 consumer 联合 `277 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对父提交/当前树同一 8 文件分别为 103/101 errors、2/2 warnings，归一化 multiset 零新增并消除 2 条旧诊断。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `297c079c82139e7de7fe6200b25bfa34ac258571bb7a2e0494d410af2ea6e170`、sdist SHA256 `a2768b84bdd16872097396aa6fae639c7a3e91b72ae922c37e243cd361cb0db8`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认管理开关、canonical management decision 与空 MCP 服务 selector 均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；D-09 未解锁，未合并、未发布、未部署。
+D-08f 管理/Snapshot/Reload 定向 `148 passed`，Provider/Snapshot/Reload 与全部已切换 consumer 联合 `277 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对父提交/当前树同一 8 文件分别为 103/101 errors、2/2 warnings，归一化 multiset 零新增并消除 2 条旧诊断。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `297c079c82139e7de7fe6200b25bfa34ac258571bb7a2e0494d410af2ea6e170`、sdist SHA256 `a2768b84bdd16872097396aa6fae639c7a3e91b72ae922c37e243cd361cb0db8`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认管理开关、canonical management decision 与空 MCP 服务 selector 均通过。
+
+D-08f 最终文档闭环精确 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 已完成 push run `32443308534` / PR run `32443313095` 双 run gate；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均指向该 SHA，PR #2 为 `OPEN / CLEAN`。D-09 仍因发布周期观察不足而锁定，legacy sidecar 未删除；未合并、未发布、未部署。
 
 ---
 
@@ -365,6 +367,10 @@ AgentRun:
     started_at
     finished_at
 ```
+
+E-01 实现提交 `56dae036b4a2eaac8dd9060487e1bf1e18bb9e16` 新增 `agent_runtime.py`，定义 frozen、generation-bound `AgentRun` 与 `AgentRunState`。状态集合精确覆盖 `CREATED / ADMITTED / CLASSIFYING / PLANNING / EXECUTING / WAITING_CONFIRMATION / SUMMARIZING / COMPLETED / FAILED / CANCELLED / TIMED_OUT / REJECTED`；run/request/user/group identity、非负 runtime generation 与有限非负时间戳均严格校验，五种终态必须携带不早于 `started_at` 的 `finished_at`，非终态不得伪造结束时间。稳定 primitive `as_dict()` 可供后续 audit/API/Repository 共用，但不泄露或保存 live Bot/Event。
+
+本阶段只定义共享领域对象和终态一致性，不生成 run、不接管 `request_manager` / `chat_runtime`、不执行 E-04 状态转换，也不接数据库、Redis、Repository 或 legacy sidecar；D-09 保持原门禁。E-01 定向 `40 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `594 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `31e19c2d2dc83a7d0e12331664939e92e37958939e4fbf2cb8349248dadab237`、sdist SHA256 `f3acf3811ffdf59fbf3ade885bc47d44bc1736dfa08ba228c46ca09e6756fd4b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration 与 packaged `AgentRun` 构造均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；E-02 在此前不实施，未合并、未发布、未部署。
 
 ---
 
