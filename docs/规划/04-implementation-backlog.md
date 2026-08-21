@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-20T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 本文件可直接用于拆 GitHub Issue。
 
-## 当前实施状态（2026-08-20）
+## 当前实施状态（2026-08-21）
 
 - Milestone A、Milestone B 与 C-01～C-07 已在本地工作树完成实现，并按 A → B → C 顺序完成本轮定向复核：A 为 31 个非沙箱 node + 11 个真实 Sandbox case，B 为 24 个非沙箱 node + 12 个真实 Sandbox case，C-01～C-06 为 38 个定向 case。
 - 修复后的最新本地总门禁已通过：Ruff 与 Actionlint 通过；真实非 root 隔离副本为 `335 passed, 13 skipped`；root 下 Python 3.10～3.13 普通全量各 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`。
@@ -18,7 +18,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a 已完成精确 HEAD 双 run gate；D-08a 最终闭环精确 HEAD `760c95c7b1565bdd955c9b990b692c9fe097bdd5` 已完成远端门禁。D-08b `llm_payload` 实现提交 `761dbe2df47fc553090a7f36e0a71285b61b03c2` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08c～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a 与 D-08b 已完成精确 HEAD 双 run gate；D-08b 最终闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 对应 push run `32430209088` / PR run `32430214661`，两者均 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08c `llm_tools` 实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08d～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -595,7 +595,7 @@ admin policy
 
 ## D-08 Consumer Cutover
 
-**状态：🟢 D-08a 精确 HEAD 双 run 远端 gate green；🟡 D-08b `llm_payload` 本地门禁完成、远端 gate 待完成；D-08c～D-08f 未开始；未部署**
+**状态：🟢 D-08a、D-08b 精确 HEAD 双 run 远端 gate green；🟡 D-08c `llm_tools` 本地门禁完成、远端 gate 待完成；D-08d～D-08f 未开始；未部署**
 
 按 `categorize → llm_payload → llm_tools → pending action → search → 管理命令` 逐个切换，每个消费端单独保留新旧视图等价回归与可回滚开关。
 
@@ -617,15 +617,25 @@ admin policy
 
 本地门禁：D-08b payload/snapshot 定向 `51 passed`，Provider/Snapshot/Reload 联合 `129 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 普通全量各 `474 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 分别为 22/19 个诊断，归一化后均为同一组 11 条既有消息，没有新增诊断类别。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `60773c8c026c1ec45a0fee70239e75e93a67169db55439c54ed5ea86a8251a56`、sdist SHA256 `fed859e711b6dd9fe7be04cb884ab6d3368f0c6ad7339508f1a78619e32ece68`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、完整六 Provider registration、默认开关与 `web_search` Provider/legacy schema parity 均通过。
 
-远端状态：本地实现提交尚未推送，精确 HEAD push/PR 双 run gate 待完成。D-08c 在此前不实施。未合并、未发布、未部署。
+远端证据：D-08b 最终文档闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 对应 push run `32430209088` 与 PR run `32430214661`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。D-08c 依赖已解除。未合并、未发布、未部署。
 
-### D-08c～D-08f 后续依赖
+### D-08c llm_tools
+
+实现落点：实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 新增 frozen、generation-bound `LlmToolExecutionView` 以及 Builtin Search / Custom Tool / NoneBot Plugin 三类 route。完整 schema v3 六 Provider catalog 下，工具 identity、canonical source、精确 `ToolSpec` 与 execution trust decision 成为执行视图权威；legacy rollback view 仍逐调用构建并校验 route、source 与 `ToolSpec` identity。MCP 历史 sidecar 没有 `tool_spec`，因此严格比较 handler、description、parameters 与 name 的结构等价；任何漂移均抛出 `ProviderConsumerParityError`，未知工具也在进入 adapter 或副作用前拒绝。
+
+安全与兼容边界：Provider execution decision 在实际执行前生效；权限拒绝 fail closed，只有 canonical `MUTATING` custom tool 的 confirmation-required denial 可以进入原有 PendingAction 二阶段确认过渡。NoneBot 改用 canonical Provider handler，仍进入既有 admission、队列、超时、结果与图片上限约束的 bounded event bus；`web_search` 改用 canonical builtin handler，但 Search 内部 extractor sidecar 留待 D-08e。新增严格布尔配置 `provider_catalog_llm_tools_enabled`，默认 `true`；设为 `false` 只回滚 `llm_tools` consumer。启动期或旧式不完整六 Provider catalog 继续有界 legacy 兼容；PendingAction 确认执行、Search extractor、管理命令及 legacy sidecar 均未切换。
+
+本地门禁：D-08c 定向 `81 passed`，Provider/Snapshot/Reload 联合 `143 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `493 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 55 个诊断，归一化后均为同一组 23 条既有消息，零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `3032eef9888425f293441ccef96cedbf4de871cd85057a540e93a691e587db0a`、sdist SHA256 `609ae32d1bb0d213577637e5a4fbe7d6a6ad25f258de0764cb4d414aa22b6865`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认开关与 `web_search` Provider authoritative execution view 均通过。四版本普通全量共享 `tests/.data`，因此最终证据来自串行运行，不采用此前并行产生的跨进程配置/临时工具竞争结果。
+
+远端状态：D-08c 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-08d 在此前不实施。未合并、未发布、未部署。
+
+### D-08d～D-08f 后续依赖
 
 ```text
 D-08a categorize（远端 gate green）
-  → D-08b llm_payload（本地 gate green，远端 gate 待完成）
-  → D-08c llm_tools（下一实施项，等待 D-08b 关闭）
-  → D-08d pending action
+  → D-08b llm_payload（远端 gate green）
+  → D-08c llm_tools（本地 gate green，远端 gate 待完成）
+  → D-08d pending action（下一实施项，等待 D-08c 关闭）
   → D-08e search
   → D-08f 管理命令
 ```

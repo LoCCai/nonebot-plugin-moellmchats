@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-20T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-20）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a 已完成精确 HEAD 远端 gate；D-08a 最终闭环精确 HEAD `760c95c7b1565bdd955c9b990b692c9fe097bdd5` 的 push run `32427890454` / PR run `32427895162` 均为 11/11 green 且各恰好一个成功 `release-gate`。D-08b `llm_payload` 实现提交 `761dbe2df47fc553090a7f36e0a71285b61b03c2` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08c～D-08f 未开始，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a 与 D-08b 已完成精确 HEAD 远端 gate；D-08b 最终闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 的 push run `32430209088` / PR run `32430214661` 均为 11/11 green 且各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08c `llm_tools` 实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 已完成本地门禁：完整六 Provider catalog 下执行工具身份、canonical handler、`ToolSpec` 与 execution trust decision 由 generation-bound Provider view 提供，legacy adapter 逐调用校验，Provider 权限在副作用前生效；独立开关只回滚该 consumer。四版本串行普通全量各 `493 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包及四组包外 smoke 均通过，Pyright 没有新增归一化诊断。D-08c 精确 HEAD 远端双 run gate 待完成；D-08d～D-08f 未开始，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -181,7 +181,11 @@ D-08a 定向为 `16 passed`，Provider/Snapshot/Reload 联合为 `105 passed`；
 
 D-08b 实现提交 `761dbe2df47fc553090a7f36e0a71285b61b03c2` 只切换 `llm_payload` consumer。`LlmPayloadMixin._build_payload()` 仍按模型配置合并 required/resident 名称，但把最终工具集合和 schema 构建委托给请求绑定的 `ToolSnapshot`。完整 schema v3 六 Provider catalog 下，工具身份、Provider 声明 dependencies、selection trust/effective permission 与 canonical schema 成为新视图权威；legacy rollback view 始终先构建，并要求工具集合、依赖闭包和完整线协议 schema 逐次等价，任一额外或缺失的 legacy-only 依赖边、字段或权限漂移均抛出 `ProviderConsumerParityError`。Registered/File/Generated 从 canonical spec 重现历史 `required: []`，MCP/NoneBot/Builtin 保持原参数形态，避免借迁移改变模型线协议。
 
-独立严格布尔开关 `provider_catalog_llm_payload_enabled=true` 默认启用；设为 `false` 只回滚 payload consumer，不影响 categorize、真实执行、pending action、search、管理命令、生命周期或 sidecar。启动期或旧式不完整六 Provider 快照继续有界 legacy 兼容。D-08b payload/snapshot 定向 `51 passed`，Provider/Snapshot/Reload 联合 `129 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 普通全量各 `474 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 分别为 22/19 个诊断、归一化后均为同一组 11 条既有消息，没有新增诊断类别。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `60773c8c026c1ec45a0fee70239e75e93a67169db55439c54ed5ea86a8251a56`、sdist SHA256 `fed859e711b6dd9fe7be04cb884ab6d3368f0c6ad7339508f1a78619e32ece68`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、reload、完整六 Provider registration、默认开关与 `web_search` schema parity 均通过。当前仅完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08c 未开始，未合并、未发布、未部署。
+独立严格布尔开关 `provider_catalog_llm_payload_enabled=true` 默认启用；设为 `false` 只回滚 payload consumer，不影响 categorize、真实执行、pending action、search、管理命令、生命周期或 sidecar。启动期或旧式不完整六 Provider 快照继续有界 legacy 兼容。D-08b payload/snapshot 定向 `51 passed`，Provider/Snapshot/Reload 联合 `129 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 普通全量各 `474 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 分别为 22/19 个诊断、归一化后均为同一组 11 条既有消息，没有新增诊断类别。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `60773c8c026c1ec45a0fee70239e75e93a67169db55439c54ed5ea86a8251a56`、sdist SHA256 `fed859e711b6dd9fe7be04cb884ab6d3368f0c6ad7339508f1a78619e32ece68`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、reload、完整六 Provider registration、默认开关与 `web_search` schema parity 均通过。最终文档闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 已完成 push run `32430209088` / PR run `32430214661` 双 run gate；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08c 依赖已解除；未合并、未发布、未部署。
+
+D-08c 实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 只切换 `llm_tools` consumer。新增 generation-bound `LlmToolExecutionView` 与 Builtin Search / Custom Tool / NoneBot Plugin 三类 route；完整 schema v3 六 Provider catalog 下，工具 identity、canonical source、精确 `ToolSpec` 与 execution trust decision 成为新视图权威。legacy rollback adapter 逐调用校验 route、source 与 spec identity，MCP 因历史 sidecar 没有 `tool_spec` 而严格比较 handler、description、parameters 与 name；漂移或未知工具均在 adapter/副作用前 fail closed。Provider execution decision 在执行前生效，只有 canonical mutating custom tool 的 confirmation-required denial 可进入既有 PendingAction 二阶段确认过渡。NoneBot 使用 canonical handler 但仍进入原有 bounded event bus；`web_search` 使用 canonical builtin handler，内部 extractor 留待 D-08e。
+
+独立严格布尔开关 `provider_catalog_llm_tools_enabled=true` 默认启用；设为 `false` 只回滚执行 consumer。D-08c 定向 `81 passed`，Provider/Snapshot/Reload 联合 `143 passed`；四版本严格串行普通全量各 `493 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check、fresh build/Twine 与四组包外 smoke 均通过。Pyright 1.1.407 的 parent/current 均为 55 个诊断、归一化后同为 23 条既有消息，零新增、零删除。wheel SHA256 `3032eef9888425f293441ccef96cedbf4de871cd85057a540e93a691e587db0a`，sdist SHA256 `609ae32d1bb0d213577637e5a4fbe7d6a6ad25f258de0764cb4d414aa22b6865`。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；D-08d PendingAction 尚未开始，未合并、未发布、未部署。
 
 ---
 

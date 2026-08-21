@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-20T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-20）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06 与 D-07 已完成精确 HEAD 远端门禁。D-08a categorize consumer 的最终文档闭环精确 HEAD `760c95c7b1565bdd955c9b990b692c9fe097bdd5` 已由 push run `32427890454` / PR run `32427895162` 完成双 run gate；两者各 11/11 全绿、各恰好一个成功 `release-gate`，PR 为 `CLEAN`。D-08b `llm_payload` 实现提交 `761dbe2df47fc553090a7f36e0a71285b61b03c2` 已完成本地门禁：payload 的 required/resident 工具集合委托 generation-bound Provider catalog，Provider 工具身份、依赖、selection trust/effective permission 与 schema 成为新视图权威；legacy rollback view 仍逐次构建并要求依赖集合与完整 schema 等价，漂移 fail closed，独立默认开启开关可只回滚该 consumer，启动期或不完整六 Provider catalog 继续有界兼容。Python 3.10～3.13 普通全量各 `474 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、fresh build/Twine、四组包外加载均通过；Pyright 没有新增诊断类别。D-08b 精确 HEAD 远端双 run gate 尚待完成；D-08c `llm_tools`、pending action、search、管理命令均未开始，D-09 sidecar 删除仍需全部 consumer 完成并经历至少一个发布周期观察。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁。修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。未合并、未 promotion、未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a 已完成精确 HEAD 远端门禁。D-08b `llm_payload` 最终文档闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 已由 push run `32430209088` / PR run `32430214661` 完成双 run gate；两者各 11/11 全绿、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08c `llm_tools` 实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 已完成本地门禁：generation-bound `LlmToolExecutionView` 在完整六 Provider catalog 下以 canonical source、`ToolSpec` 与 execution trust decision 为权威，并对 legacy adapter 做逐调用结构等价校验；Provider 权限先于执行生效，mutating denial 仅允许进入既有 PendingAction 二阶段确认过渡，NoneBot 仍落入原有有界 event bus，`web_search` 使用 canonical builtin handler。独立默认开启开关可只回滚该 consumer，PendingAction 确认执行、Search extractor、管理命令和 legacy sidecar 尚未切换。定向 `81 passed`，Provider/Snapshot/Reload 联合 `143 passed`，Python 3.10～3.13 串行普通全量各 `493 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、fresh build/Twine 与四组包外加载均通过；Pyright parent/current 均为 55 个诊断、归一化后同为 23 条既有消息。D-08c 精确 HEAD 远端双 run gate 待完成，D-08d 尚未开始；D-09 sidecar 删除仍需全部 consumer 完成并经历至少一个发布周期观察。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
