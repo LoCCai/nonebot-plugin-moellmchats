@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import math
 import re
+import time
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
@@ -392,6 +393,52 @@ class AgentStateMachine:
         elif finished_at is not None:
             raise ValueError("AgentRun 进入非终态不得提供 finished_at")
         return replace(run, state=target, finished_at=finished_at)
+
+
+@dataclass(frozen=True)
+class DeadlineContext:
+    """One shared, monotonic deadline for an entire Agent request."""
+
+    deadline_at: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "deadline_at",
+            _normalize_timestamp(
+                self.deadline_at,
+                owner="DeadlineContext",
+                label="deadline_at",
+            ),
+        )
+
+    @staticmethod
+    def _now(value: float | None) -> float:
+        current = time.monotonic() if value is None else value
+        return _normalize_timestamp(
+            current,
+            owner="DeadlineContext",
+            label="now",
+        )
+
+    @classmethod
+    def from_timeout(
+        cls,
+        timeout: float,
+        *,
+        now: float | None = None,
+    ) -> DeadlineContext:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError("DeadlineContext.timeout 必须是秒数")
+        duration = float(timeout)
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError("DeadlineContext.timeout 必须是有限非负秒数")
+        return cls(cls._now(now) + duration)
+
+    def remaining(self, *, now: float | None = None) -> float:
+        """Return the shared remaining budget, clamped at zero."""
+
+        return max(0.0, self.deadline_at - self._now(now))
 
 
 @dataclass(frozen=True)

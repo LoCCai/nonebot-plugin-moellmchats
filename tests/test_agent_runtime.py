@@ -13,6 +13,7 @@ from nonebot_plugin_moellmchats.agent_runtime import (
     AgentStep,
     AgentStepStatus,
     AgentStepType,
+    DeadlineContext,
     ToolCall,
     ToolCallStatus,
 )
@@ -418,6 +419,79 @@ def test_agent_state_machine_rejects_untyped_api_inputs() -> None:
             _run(),
             "admitted",  # type: ignore[arg-type]
         )
+
+
+def test_deadline_context_is_frozen_and_normalizes_the_deadline() -> None:
+    context = DeadlineContext(deadline_at=280)
+
+    assert context.deadline_at == 280.0
+    assert isinstance(context.deadline_at, float)
+    with pytest.raises(FrozenInstanceError):
+        context.deadline_at = 300.0  # type: ignore[misc]
+
+
+def test_deadline_context_builds_and_consumes_one_shared_budget() -> None:
+    context = DeadlineContext.from_timeout(180, now=100)
+    expired = DeadlineContext.from_timeout(0, now=100)
+
+    assert context.deadline_at == 280.0
+    assert context.remaining(now=100) == 180.0
+    assert context.remaining(now=279.25) == 0.75
+    assert context.remaining(now=280) == 0.0
+    assert context.remaining(now=500) == 0.0
+    assert expired.deadline_at == 100.0
+    assert expired.remaining(now=100) == 0.0
+
+
+def test_deadline_context_uses_monotonic_clock_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.agent_runtime.time.monotonic",
+        lambda: 100.0,
+    )
+    context = DeadlineContext.from_timeout(180.0)
+
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.agent_runtime.time.monotonic",
+        lambda: 101.5,
+    )
+    assert context.deadline_at == 280.0
+    assert context.remaining() == 178.5
+
+
+@pytest.mark.parametrize(
+    "deadline_at",
+    [-1.0, math.inf, math.nan, True, "100.0"],
+)
+def test_deadline_context_rejects_invalid_deadlines(deadline_at: object) -> None:
+    with pytest.raises(ValueError, match="deadline_at"):
+        DeadlineContext(deadline_at=deadline_at)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    [-1.0, math.inf, math.nan, True, "180.0"],
+)
+def test_deadline_context_rejects_invalid_timeout_budgets(timeout: object) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        DeadlineContext.from_timeout(timeout, now=100.0)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "now",
+    [-1.0, math.inf, math.nan, True, "100.0"],
+)
+def test_deadline_context_rejects_invalid_clock_values(now: object) -> None:
+    with pytest.raises(ValueError, match="now"):
+        DeadlineContext.from_timeout(180.0, now=now)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="now"):
+        DeadlineContext(280.0).remaining(now=now)  # type: ignore[arg-type]
+
+
+def test_deadline_context_rejects_deadline_overflow() -> None:
+    with pytest.raises(ValueError, match="deadline_at"):
+        DeadlineContext.from_timeout(1e308, now=1e308)
 
 
 def test_agent_step_is_frozen_and_serializes_detached_structured_data() -> None:
