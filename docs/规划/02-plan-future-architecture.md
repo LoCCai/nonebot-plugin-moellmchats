@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T05:02:39+00:00
+lastmod: 2026-08-21T05:25:58+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T05:02:39+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-03 已闭环；E-04 最终 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 的 push run `32448482843` / PR run `32448485118` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 已新增进程内 monotonic `DeadlineContext`；四版本串行普通全量各 `739 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，E-06 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-04 已闭环；E-05 最终 HEAD `3ac210b28ecda3019b822bf961196f63cfd795ce` 的 push run `32449378433` / PR run `32449381716` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-06 实现提交 `8af287e1a99e4f837dcbfb9a35071b17d5097c96` 已定义不可变 Tool Graph；定向 `42 passed`，四版本串行普通全量各 `781 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 ToolGraph smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，E-07～E-08 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -308,6 +308,12 @@ price_search ─┐
 fx_search ────┘
 ```
 
+E-06 实现提交 `8af287e1a99e4f837dcbfb9a35071b17d5097c96` 新增独立 `tool_graph.py`。`ToolGraphRelation` 固定 `depends_on / parallel_with / conflicts_with` 词汇；frozen `ToolGraphEdge` 保留有向依赖语义，并把 parallel/conflict 的无向端点规范为稳定顺序。frozen `ToolGraph` 深冻结并排序工具、边、确认集合与 capability 映射；拒绝重复工具/边、未知节点、自引用、同一工具对多重矛盾关系、非法 capability 以及二节点或多节点依赖环。
+
+查询 API 确定性返回拓扑序、直接/传递依赖、直接 dependent、parallel/conflict 邻居、确认与 capability 要求；`as_dict()` 每次返回新的 JSON primitive 副本。E-06 只定义图模型及固有不变量，不选择或执行工具，不判断 read-only，不调度并发，也不执行 E-08 冲突裁决；不接管 request manager/chat runtime，不引入 Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。E-07 只能在 E-06 精确 HEAD 远端 gate 关闭后开始。
+
+本地门禁：Tool Graph 定向 `42 passed`，与 Agent Runtime 联合定向 `227 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `781 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `73bd52305aaf277481fe2c13ceafff0294744259f314d922e4ce289db3b9da3d`、sdist SHA256 `d8983ae6cbe30cc8d3f47516d6ea4968b627f9096ac1df6825ea99d7aff73351`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged ToolGraph 深冻结/确定性依赖/环路拒绝均通过。当前本地门禁完成，包含规划的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
+
 ---
 
 # 6. 并行工具
@@ -512,7 +518,7 @@ E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 在 `agent_runtime.
 
 该对象用于显式向后续组件传递同一总预算，不保存 clock callable、不创建分层子预算、不自动延长截止点，也不序列化或跨进程重启持久化 monotonic 值。本阶段只定义预算契约，尚未改写 `llm_api`、MCP、网络解析、工具执行等既有 timeout 调用链，不接管 request manager/chat runtime，不引入 Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。
 
-本地门禁：Agent runtime 定向 `185 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `739 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `12453d2f5cee45ebb6e1437bce761232f9812c4d8caf607a287ee430fec6a355`、sdist SHA256 `9b679b8f28c2a6a9a0c0ad96d20d771d9cffcaffdcde346c89e384d067cbe1c7`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 确定性/默认 monotonic 预算与过期钳零均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；E-06 在此前不实施，未合并、未发布、未部署。
+本地门禁：Agent runtime 定向 `185 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `739 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `12453d2f5cee45ebb6e1437bce761232f9812c4d8caf607a287ee430fec6a355`、sdist SHA256 `9b679b8f28c2a6a9a0c0ad96d20d771d9cffcaffdcde346c89e384d067cbe1c7`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 确定性/默认 monotonic 预算与过期钳零均通过。最终文档闭环 HEAD `3ac210b28ecda3019b822bf961196f63cfd795ce` 对应 push run `32449378433` / PR run `32449381716`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-06 依赖已解除；未合并、未发布、未部署。
 
 ---
 

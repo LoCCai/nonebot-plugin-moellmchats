@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T05:02:39+00:00
+lastmod: 2026-08-21T05:25:58+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-03 已闭环；E-04 最终 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 对应 push run `32448482843` / PR run `32448485118`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 新增 frozen `DeadlineContext`：以 monotonic `deadline_at` 表示一次请求共享总预算，`from_timeout()` 在入口创建绝对截止点，`remaining()` 过期后钳零；严格拒绝非法数值和溢出，不序列化、不跨重启持久化，也暂未改写既有调用链 timeout、数据库、Redis、Repository 或 D-09 sidecar。Agent runtime 定向 `185 passed`，Python 3.10～3.13 串行普通全量各 `739 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外加载均通过。E-05 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；E-06～E-08 未开始。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-04 已闭环；E-05 最终 HEAD `3ac210b28ecda3019b822bf961196f63cfd795ce` 对应 push run `32449378433` / PR run `32449381716`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-06 实现提交 `8af287e1a99e4f837dcbfb9a35071b17d5097c96` 新增 frozen `ToolGraphRelation / ToolGraphEdge / ToolGraph`，表达 `depends_on / parallel_with / conflicts_with / requires_confirmation / requires_capability`，确定性提供拓扑、直接/传递依赖与邻接查询，拒绝重复、未知节点、自引用、矛盾关系和依赖环，并返回稳定 primitive 序列化副本。Tool Graph 定向 `42 passed`，Python 3.10～3.13 严格串行普通全量各 `781 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外 ToolGraph smoke 均通过。E-06 当前仅本地门禁完成，包含规划的精确 HEAD 远端双 run gate 待完成；E-07～E-08 尚未开始。E-06 不调度、不执行冲突裁决，也不引入数据库、Redis、Repository、迁移、生产配置或 D-09 sidecar。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

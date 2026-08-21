@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T05:02:39+00:00
+lastmod: 2026-08-21T05:25:58+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T05:02:39+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-03 已闭环；E-04 最终 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 的 push run `32448482843` / PR run `32448485118` 均为 11/11 green 且各恰好一个成功 `release-gate`。E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 已定义进程内 monotonic `DeadlineContext` 并完成本地门禁，但尚未改写既有 timeout 调用链，也不序列化或跨重启持久化 deadline。当前 AgentRun/Step/ToolCall/StateMachine/DeadlineContext 仍是共享领域与策略对象，不是 `agent_runs` / `agent_steps` / `tool_calls` 表、Repository 或持久化预算实现，当前内存 PendingAction store 仍不是 F-12 Redis 持久化。E-05 精确 HEAD 远端 gate 尚待完成，Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-04 已闭环；E-05 最终 HEAD `3ac210b28ecda3019b822bf961196f63cfd795ce` 的 push run `32449378433` / PR run `32449381716` 均为 11/11 green 且各恰好一个成功 `release-gate`。E-06 实现提交 `8af287e1a99e4f837dcbfb9a35071b17d5097c96` 已定义不可变 Tool Graph 并完成本地门禁，但不调度、不执行冲突裁决，也不接持久化。当前 AgentRun/Step/ToolCall/StateMachine/DeadlineContext/ToolGraph 仍是共享领域与策略对象，不是 `agent_runs` / `agent_steps` / `tool_calls` 表、Repository、持久化预算或数据库图实现，当前内存 PendingAction store 仍不是 F-12 Redis 持久化。E-06 精确 HEAD 远端 gate 尚待完成，Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 
