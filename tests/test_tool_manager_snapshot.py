@@ -35,6 +35,7 @@ from nonebot_plugin_moellmchats.tool_contracts import (
     ToolSpec,
 )
 from nonebot_plugin_moellmchats.tool_manager import (
+    LlmToolExecutionRoute,
     ProviderConsumerParityError,
     ToolManager,
     ToolSnapshot,
@@ -52,6 +53,7 @@ from nonebot_plugin_moellmchats.tool_providers import (
     RegisteredToolResources,
     ToolSource,
     ToolTrustLevel,
+    ToolTrustOperation,
     builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
@@ -2036,6 +2038,408 @@ def test_llm_payload_provider_cutover_config_requires_boolean(flag) -> None:
     with pytest.raises(
         ValueError,
         match="provider_catalog_llm_payload_enabled",
+    ):
+        ConfigParser._validate(candidate)
+
+
+def test_llm_tools_provider_cutover_resolves_all_six_sources() -> None:
+    generation = 51
+    registered_spec = ToolSpec(
+        name="execution_registered",
+        description="registered execution",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    registered_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            registered_spec.name: {
+                **registered_spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog(
+            (registered_spec,),
+            generation=generation,
+        ),
+    )
+
+    file_spec = ToolSpec(
+        name="execution_file",
+        description="file execution",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    file_artifact = _file_artifact(file_spec, generation=generation)
+    file_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={file_spec.name: _file_legacy_schema(file_artifact)},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_file_catalog(
+            file_artifact,
+            generation=generation,
+        ),
+    )
+
+    generated_spec = ToolSpec(
+        name="execution_generated",
+        description="generated execution",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=generation,
+    )
+    generated_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            generated_spec.name: _generated_legacy_schema(
+                generated_artifact
+            )
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_generated_catalog(
+            generated_artifact,
+            generation=generation,
+        ),
+    )
+
+    mcp_spec = ToolSpec(
+        name="mcp__execution__lookup",
+        description="mcp execution",
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        },
+        handler=_handler,
+    )
+    mcp_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={mcp_spec.name: _mcp_legacy_schema(mcp_spec)},
+        tool_dependencies={},
+        mcp_tool_names={mcp_spec.name},
+        provider_catalog=_mcp_catalog(mcp_spec, generation=generation),
+    )
+
+    plugin_info, plugin_specs = build_nonebot_plugin_candidate(
+        {
+            "execution_plugin": {
+                "description": "plugin execution",
+                "usage": "/execution",
+            }
+        }
+    )
+    base = _registered_catalog((), generation=generation)
+    plugin_registration = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    plugin_record = DiscoveredTool(
+        provider_id=plugin_registration.provider_id,
+        source=plugin_registration.source,
+        trust=plugin_registration.trust,
+        generation=generation,
+        spec=plugin_specs[0],
+    )
+    plugin_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info=plugin_info,
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=ProviderCatalogSnapshot(
+            generation=generation,
+            registrations=base.registrations,
+            tools={**base.tools, plugin_specs[0].name: plugin_record},
+        ),
+    )
+    builtin_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=base,
+    )
+
+    cases = (
+        (
+            registered_snapshot,
+            registered_spec,
+            ToolSource.REGISTERED,
+            LlmToolExecutionRoute.CUSTOM_TOOL,
+        ),
+        (
+            file_snapshot,
+            file_spec,
+            ToolSource.CUSTOM_FILE,
+            LlmToolExecutionRoute.CUSTOM_TOOL,
+        ),
+        (
+            generated_snapshot,
+            generated_spec,
+            ToolSource.GENERATED,
+            LlmToolExecutionRoute.CUSTOM_TOOL,
+        ),
+        (
+            mcp_snapshot,
+            mcp_spec,
+            ToolSource.MCP,
+            LlmToolExecutionRoute.CUSTOM_TOOL,
+        ),
+        (
+            builtin_snapshot,
+            builtin_tool_specs()[0],
+            ToolSource.BUILTIN,
+            LlmToolExecutionRoute.BUILTIN_SEARCH,
+        ),
+        (
+            plugin_snapshot,
+            plugin_specs[0],
+            ToolSource.NONEBOT_PLUGIN,
+            LlmToolExecutionRoute.NONEBOT_PLUGIN,
+        ),
+    )
+    for snapshot, spec, source, route in cases:
+        legacy = snapshot.resolve_llm_tool_execution(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=False,
+        )
+        provider = snapshot.resolve_llm_tool_execution(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        assert legacy is not None
+        assert provider is not None
+        assert not legacy.provider_authoritative
+        assert provider.provider_authoritative
+        assert provider.route is legacy.route is route
+        assert provider.source is legacy.source is source
+        assert provider.spec is spec
+        assert provider.legacy_entry is legacy.legacy_entry
+        assert provider.trust_decision is not None
+        assert provider.trust_decision.operation is ToolTrustOperation.EXECUTION
+        assert provider.trust_decision.allowed
+
+
+def test_llm_tools_provider_trust_preserves_pending_transition() -> None:
+    async def mutate() -> str:
+        return "changed"
+
+    spec = ToolSpec(
+        name="execution_mutating_admin",
+        description="mutating admin execution",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        permission="superuser",
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=52,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=52),
+    )
+
+    user_view = snapshot.resolve_llm_tool_execution(
+        spec.name,
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert user_view is not None
+    assert user_view.trust_decision is not None
+    assert not user_view.trust_decision.allowed
+    assert "超级用户" in user_view.trust_decision.reason
+
+    admin_view = snapshot.resolve_llm_tool_execution(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert admin_view is not None
+    assert admin_view.trust_decision is not None
+    assert not admin_view.trust_decision.allowed
+    assert admin_view.trust_decision.confirmation_required
+    assert "二阶段确认" in admin_view.trust_decision.reason
+
+
+def test_llm_tools_provider_cutover_fails_closed_on_identity_drift(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="execution_parity",
+        description="execution parity",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=53,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=53),
+    )
+    original = ToolSnapshot._legacy_llm_tool_execution_view
+
+    def drifted_legacy(self, tool_name):
+        view = original(self, tool_name)
+        assert view is not None
+        return replace(view, source=ToolSource.MCP)
+
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "_legacy_llm_tool_execution_view",
+        drifted_legacy,
+    )
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.resolve_llm_tool_execution(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+    rollback = snapshot.resolve_llm_tool_execution(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=False,
+    )
+    assert rollback is not None
+    assert rollback.source is ToolSource.MCP
+
+
+def test_llm_tools_provider_cutover_handles_unknown_and_legacy_snapshot() -> None:
+    complete = ToolSnapshot(
+        generation=54,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((), generation=54),
+    )
+    assert (
+        complete.resolve_llm_tool_execution(
+            "hallucinated_tool",
+            is_superuser=False,
+            provider_cutover=True,
+        )
+        is None
+    )
+
+    spec = ToolSpec(
+        name="execution_legacy_snapshot",
+        description="legacy execution",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    legacy = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={spec.name: spec.as_legacy_schema()},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    view = legacy.resolve_llm_tool_execution(
+        spec.name,
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert view is not None
+    assert not view.provider_authoritative
+    assert view.source is None
+    assert view.spec is spec
+
+
+def test_llm_tools_provider_cutover_default_and_config_rollback(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="execution_default_cutover",
+        description="execution default",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=55,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=55),
+    )
+
+    def get_default(key: str, default=None):
+        assert key == "provider_catalog_llm_tools_enabled"
+        assert default is True
+        return DEFAULT_CONFIG[key]
+
+    monkeypatch.setattr(config_parser, "get_config", get_default)
+    provider = snapshot.resolve_llm_tool_execution(
+        spec.name,
+        is_superuser=True,
+    )
+    assert provider is not None
+    assert provider.provider_authoritative
+
+    monkeypatch.setattr(config_parser, "get_config", lambda *_args: False)
+    rollback = snapshot.resolve_llm_tool_execution(
+        spec.name,
+        is_superuser=True,
+    )
+    assert rollback is not None
+    assert not rollback.provider_authoritative
+
+
+@pytest.mark.parametrize("flag", [1, "true", [], {}])
+def test_llm_tools_provider_cutover_rejects_non_boolean_override(flag) -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    with pytest.raises(ValueError, match="cutover"):
+        snapshot.resolve_llm_tool_execution(
+            "unknown",
+            is_superuser=False,
+            provider_cutover=flag,
+        )
+
+
+@pytest.mark.parametrize("flag", [None, 1, "true", [], {}])
+def test_llm_tools_provider_cutover_config_requires_boolean(flag) -> None:
+    candidate = dict(DEFAULT_CONFIG)
+    candidate["provider_catalog_llm_tools_enabled"] = flag
+
+    with pytest.raises(
+        ValueError,
+        match="provider_catalog_llm_tools_enabled",
     ):
         ConfigParser._validate(candidate)
 

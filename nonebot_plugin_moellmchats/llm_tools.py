@@ -6,7 +6,6 @@ from typing import Any
 from nonebot.log import logger
 import ujson as json
 
-from .builtin_tools import WEB_SEARCH_TOOL_SPEC
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .event_simulator import event_simulator
@@ -14,7 +13,7 @@ from .pending_actions import PendingActionError, pending_action_store
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
     ToolEffect,
-    ToolSpec,
+    ToolResult,
     validate_tool_arguments,
 )
 from .tool_execution import (
@@ -22,6 +21,7 @@ from .tool_execution import (
     execute_custom_tool,
     validate_pending_custom_tool,
 )
+from .tool_manager import LlmToolExecutionRoute
 from .utils import parse_emotion
 
 
@@ -77,9 +77,14 @@ class LlmToolsMixin:
             assistant_msg["reasoning_content"] = reasoning_content
         send_message_list.append(assistant_msg)
         text_to_send = result_text  # 暂存大模型回复文本，防止多个插件时被重复发送
+        is_superuser = bool(getattr(self, "is_superuser", False))
         for call in executable_tool_calls:
             result_limit = config_parser.get_config("max_tool_result_chars", 6000)
             func_name = call["function"]["name"]
+            tool_view = self.tool_snapshot.resolve_llm_tool_execution(
+                func_name,
+                is_superuser=is_superuser,
+            )
             if not hasattr(self, "_current_tool_usage"):
                 self._current_tool_usage = Counter()
             self._current_tool_usage[func_name] += 1
@@ -93,23 +98,22 @@ class LlmToolsMixin:
                 argument_error = f"工具参数不是有效 JSON: {error}"
             else:
                 parameters = None
-                if func_name == WEB_SEARCH_TOOL_SPEC.name:
-                    parameters = WEB_SEARCH_TOOL_SPEC.parameters
-                elif func_name in self.tool_snapshot.custom_tools:
-                    parameters = self.tool_snapshot.custom_tools[func_name].get(
-                        "parameters"
-                    )
-                elif func_name in self.tool_snapshot.plugin_info:
-                    plugin_spec = self.tool_snapshot.plugin_info[func_name].get(
-                        "tool_spec"
-                    )
+                if tool_view is not None and tool_view.spec is not None:
+                    parameters = tool_view.spec.parameters
+                elif (
+                    tool_view is not None
+                    and tool_view.route is LlmToolExecutionRoute.CUSTOM_TOOL
+                    and tool_view.legacy_entry is not None
+                ):
+                    parameters = tool_view.legacy_entry.get("parameters")
+                elif (
+                    tool_view is not None
+                    and tool_view.route
+                    is LlmToolExecutionRoute.NONEBOT_PLUGIN
+                ):
                     parameters = (
-                        plugin_spec.parameters
-                        if isinstance(plugin_spec, ToolSpec)
-                        else {
-                            "properties": {
-                                "command": {"type": "string"}
-                            },
+                        {
+                            "properties": {"command": {"type": "string"}},
                             "required": ["command"],
                         }
                     )
@@ -140,8 +144,54 @@ class LlmToolsMixin:
                 )
                 continue
 
+            if tool_view is None:
+                if text_to_send:
+                    await self.send_emotion_message(text_to_send)
+                    text_to_send = ""
+                send_message_list.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": (
+                            f"工具 {func_name} 不在当前 generation 的工具目录中，"
+                            "已拒绝执行。"
+                        ),
+                    }
+                )
+                continue
+
+            decision = tool_view.trust_decision
+            if decision is not None and decision.audit_required:
+                logger.info(f"工具 trust decision: {decision.audit_metadata()}")
+            pending_transition = (
+                decision is not None
+                and not decision.allowed
+                and decision.confirmation_required
+                and tool_view.route is LlmToolExecutionRoute.CUSTOM_TOOL
+                and tool_view.spec is not None
+                and tool_view.spec.effect is ToolEffect.MUTATING
+                and (
+                    tool_view.spec.permission != "superuser"
+                    or is_superuser
+                )
+            )
+            if decision is not None and not decision.allowed and not pending_transition:
+                if text_to_send:
+                    await self.send_emotion_message(text_to_send)
+                    text_to_send = ""
+                send_message_list.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": (
+                            f"工具 {func_name} 未执行：{decision.reason}。"
+                        ),
+                    }
+                )
+                continue
+
             tool_result = "执行成功"
-            if func_name == WEB_SEARCH_TOOL_SPEC.name:
+            if tool_view.route is LlmToolExecutionRoute.BUILTIN_SEARCH:
                 query = args.get("query", "")
                 if text_to_send:
                     await self.send_emotion_message(text_to_send)
@@ -152,7 +202,9 @@ class LlmToolsMixin:
                     async with timeout_scope(
                         config_parser.get_config("tool_timeout_seconds", 30)
                     ):
-                        search_res = await WEB_SEARCH_TOOL_SPEC.handler(
+                        search_spec = tool_view.spec
+                        assert search_spec is not None
+                        search_res = await search_spec.handler(
                             query=query,
                             tool_snapshot=self.tool_snapshot,
                         )
@@ -161,15 +213,16 @@ class LlmToolsMixin:
                     search_res = "联网搜索超时"
                 tool_result = search_res if search_res else "未找到相关结果"
 
-            elif func_name in self.tool_snapshot.custom_tools:
+            elif tool_view.route is LlmToolExecutionRoute.CUSTOM_TOOL:
                 if text_to_send:
                     await self.send_emotion_message(text_to_send)
                     text_to_send = ""
                 else:
                     await self.bot.send(self.event, f"正在调用函数: {func_name}...")
                 try:
-                    tool_entry = self.tool_snapshot.custom_tools[func_name]
-                    spec = tool_entry.get("tool_spec")
+                    tool_entry = tool_view.legacy_entry
+                    assert tool_entry is not None
+                    spec = tool_view.spec
                     if spec is not None and spec.effect == ToolEffect.MUTATING:
                         # A model-provided flag or confirmation phrase in the original
                         # request is never authorization. Freeze the exact call and wait
@@ -255,19 +308,38 @@ class LlmToolsMixin:
                     logger.error(traceback.format_exc())
                     tool_result = f"函数执行出错: {e!s}"
             else:
+                assert tool_view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN
                 if text_to_send:
                     await self.send_emotion_message(text_to_send)
                     text_to_send = ""
                 else:
                     await self.bot.send(self.event, f"正在执行指令: {func_name}...")
                 command = args.get("command", "")
-                plugin_text, plugin_images = await event_simulator.dispatch_event(
-                    self.bot,
-                    self.event,
-                    command,
-                    self.format_message_dict,
-                    plugin_name=func_name,
-                )
+                if tool_view.provider_authoritative:
+                    plugin_spec = tool_view.spec
+                    assert plugin_spec is not None
+                    plugin_result = await plugin_spec.handler(
+                        command=command,
+                        _bot=self.bot,
+                        _event=self.event,
+                        _format_message_dict=self.format_message_dict,
+                    )
+                    if not isinstance(plugin_result, ToolResult):
+                        raise TypeError(
+                            "NoneBot Provider handler 必须返回 ToolResult"
+                        )
+                    plugin_text = plugin_result.text
+                    plugin_images = list(plugin_result.images)
+                else:
+                    plugin_text, plugin_images = (
+                        await event_simulator.dispatch_event(
+                            self.bot,
+                            self.event,
+                            command,
+                            self.format_message_dict,
+                            plugin_name=func_name,
+                        )
+                    )
                 _PLUGIN_SYSTEM_HINT = (
                     "\n\n[系统提示]：上述结果已对用户可见。注意：若执行不正确或者用户的原始请求需要多个步骤，"
                     "请务重试或者继续调用下一个工具！如果所有任务均已完成，请直接做一两句话的简短总结，"

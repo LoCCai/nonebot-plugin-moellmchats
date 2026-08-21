@@ -2,6 +2,7 @@ from collections import deque
 from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from .tool_providers import (
     ProviderCatalogSnapshot,
     ProviderRegistration,
     ToolSource,
+    ToolTrustDecision,
     ToolTrustOperation,
     builtin_tool_provider,
     file_tool_provider,
@@ -59,6 +61,88 @@ _PROVIDER_CONSUMER_IDS = frozenset(
 
 class ProviderConsumerParityError(RuntimeError):
     """A cut-over Provider view no longer matches its legacy rollback view."""
+
+
+class LlmToolExecutionRoute(str, Enum):
+    BUILTIN_SEARCH = "builtin_search"
+    CUSTOM_TOOL = "custom_tool"
+    NONEBOT_PLUGIN = "nonebot_plugin"
+
+
+@dataclass(frozen=True)
+class LlmToolExecutionView:
+    """One request-bound tool identity consumed by ``llm_tools``.
+
+    ``legacy_entry`` remains the rollback execution adapter until the later
+    PendingAction/Search consumers are migrated.  On the Provider path,
+    ``source``, ``spec`` and ``trust_decision`` are canonical and are checked
+    against that adapter before this view can be returned.
+    """
+
+    tool_name: str
+    generation: int
+    route: LlmToolExecutionRoute
+    source: ToolSource | None
+    spec: ToolSpec | None
+    legacy_entry: Mapping[str, Any] | None
+    provider_authoritative: bool
+    trust_decision: ToolTrustDecision | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_name, str) or not self.tool_name:
+            raise ValueError("llm_tools 执行视图工具名不能为空")
+        if (
+            not isinstance(self.generation, int)
+            or isinstance(self.generation, bool)
+            or self.generation < 0
+        ):
+            raise ValueError("llm_tools 执行视图 generation 非法")
+        if not isinstance(self.route, LlmToolExecutionRoute):
+            raise TypeError("llm_tools 执行视图 route 非法")
+        if self.source is not None and not isinstance(self.source, ToolSource):
+            raise TypeError("llm_tools 执行视图 source 非法")
+        if self.source is not None:
+            expected_route = (
+                LlmToolExecutionRoute.BUILTIN_SEARCH
+                if self.source is ToolSource.BUILTIN
+                else LlmToolExecutionRoute.NONEBOT_PLUGIN
+                if self.source is ToolSource.NONEBOT_PLUGIN
+                else LlmToolExecutionRoute.CUSTOM_TOOL
+            )
+            if self.route is not expected_route:
+                raise ValueError("llm_tools 执行视图 source/route 不一致")
+        if self.spec is not None:
+            if not isinstance(self.spec, ToolSpec) or self.spec.name != self.tool_name:
+                raise ValueError("llm_tools 执行视图 ToolSpec identity 不一致")
+        if self.legacy_entry is not None and not isinstance(
+            self.legacy_entry,
+            Mapping,
+        ):
+            raise TypeError("llm_tools 执行视图 legacy entry 必须是映射")
+        if self.route is LlmToolExecutionRoute.BUILTIN_SEARCH:
+            if self.legacy_entry is not None:
+                raise ValueError("builtin llm_tools 执行视图不得携带 sidecar entry")
+        elif self.legacy_entry is None:
+            raise ValueError("legacy adapter llm_tools 执行视图缺少 sidecar entry")
+        if type(self.provider_authoritative) is not bool:
+            raise TypeError("llm_tools 执行视图 authority 标志必须是布尔值")
+        if self.provider_authoritative:
+            if self.source is None or self.spec is None:
+                raise ValueError("Provider llm_tools 执行视图缺少 canonical identity")
+            if not isinstance(self.trust_decision, ToolTrustDecision):
+                raise ValueError("Provider llm_tools 执行视图缺少 trust decision")
+            if (
+                self.trust_decision.tool_name != self.tool_name
+                or self.trust_decision.generation != self.generation
+                or self.trust_decision.operation
+                is not ToolTrustOperation.EXECUTION
+                or self.trust_decision.source is not self.source
+                or self.trust_decision.effect is not self.spec.effect
+                or self.trust_decision.permission != self.spec.permission
+            ):
+                raise ValueError("Provider llm_tools trust decision identity 不一致")
+        elif self.trust_decision is not None:
+            raise ValueError("legacy llm_tools 执行视图不得伪造 trust decision")
 
 
 @dataclass(frozen=True)
@@ -289,6 +373,164 @@ class ToolSnapshot:
                 "llm_payload Provider schema 与 legacy rollback view 不一致"
             )
         return provider_plugins, provider_schema
+
+    def _legacy_llm_tool_execution_view(
+        self,
+        tool_name: str,
+    ) -> LlmToolExecutionView | None:
+        if tool_name == WEB_SEARCH_TOOL_SPEC.name:
+            return LlmToolExecutionView(
+                tool_name=tool_name,
+                generation=self.generation,
+                route=LlmToolExecutionRoute.BUILTIN_SEARCH,
+                source=ToolSource.BUILTIN,
+                spec=WEB_SEARCH_TOOL_SPEC,
+                legacy_entry=None,
+                provider_authoritative=False,
+            )
+
+        custom_entry = self.custom_tools.get(tool_name)
+        if custom_entry is not None:
+            raw_source = custom_entry.get("source")
+            source = (
+                {
+                    "registered": ToolSource.REGISTERED,
+                    "custom_file": ToolSource.CUSTOM_FILE,
+                    "generated": ToolSource.GENERATED,
+                    "mcp": ToolSource.MCP,
+                }.get(raw_source)
+                if isinstance(raw_source, str)
+                else None
+            )
+            if tool_name in self.mcp_tool_names:
+                source = ToolSource.MCP
+            spec = custom_entry.get("tool_spec")
+            return LlmToolExecutionView(
+                tool_name=tool_name,
+                generation=self.generation,
+                route=LlmToolExecutionRoute.CUSTOM_TOOL,
+                source=source,
+                spec=spec if isinstance(spec, ToolSpec) else None,
+                legacy_entry=custom_entry,
+                provider_authoritative=False,
+            )
+
+        plugin_entry = self.plugin_info.get(tool_name)
+        if plugin_entry is not None:
+            spec = plugin_entry.get("tool_spec")
+            return LlmToolExecutionView(
+                tool_name=tool_name,
+                generation=self.generation,
+                route=LlmToolExecutionRoute.NONEBOT_PLUGIN,
+                source=ToolSource.NONEBOT_PLUGIN,
+                spec=spec if isinstance(spec, ToolSpec) else None,
+                legacy_entry=plugin_entry,
+                provider_authoritative=False,
+            )
+        return None
+
+    def resolve_llm_tool_execution(
+        self,
+        tool_name: str,
+        *,
+        is_superuser: bool,
+        provider_cutover: bool | None = None,
+    ) -> LlmToolExecutionView | None:
+        """Resolve one model tool call with Provider/legacy parity.
+
+        Unknown names return ``None`` and are rejected by ``llm_tools`` before
+        any adapter runs.  A known name that drifts between the two published
+        views raises instead of silently choosing either identity.
+        """
+
+        if not isinstance(tool_name, str) or not tool_name:
+            raise TypeError("llm_tools tool_name 必须是非空字符串")
+        if type(is_superuser) is not bool:
+            raise TypeError("llm_tools is_superuser 必须是布尔值")
+        legacy_view = self._legacy_llm_tool_execution_view(tool_name)
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_llm_tools_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("llm_tools Provider cutover 开关必须是布尔值")
+
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not provider_cutover
+            or provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return legacy_view
+
+        item = provider_catalog.tools.get(tool_name)
+        if item is None:
+            if legacy_view is not None:
+                raise ProviderConsumerParityError(
+                    f"llm_tools Provider identity 缺失: {tool_name}"
+                )
+            return None
+        if legacy_view is None:
+            raise ProviderConsumerParityError(
+                f"llm_tools legacy rollback identity 缺失: {tool_name}"
+            )
+
+        route = (
+            LlmToolExecutionRoute.BUILTIN_SEARCH
+            if item.source is ToolSource.BUILTIN
+            else LlmToolExecutionRoute.NONEBOT_PLUGIN
+            if item.source is ToolSource.NONEBOT_PLUGIN
+            else LlmToolExecutionRoute.CUSTOM_TOOL
+        )
+        if item.source is ToolSource.BUILTIN and tool_name != WEB_SEARCH_TOOL_SPEC.name:
+            raise ProviderConsumerParityError(
+                f"llm_tools 未知 builtin 执行工具: {tool_name}"
+            )
+        spec_matches = legacy_view.spec is item.spec
+        if (
+            item.source is ToolSource.MCP
+            and legacy_view.spec is None
+            and legacy_view.legacy_entry is not None
+        ):
+            entry = legacy_view.legacy_entry
+            spec_matches = (
+                entry.get("name", tool_name) == tool_name
+                and entry.get("func") is item.spec.handler
+                and entry.get("description") == item.spec.description
+                and mutable_value(entry.get("parameters"))
+                == mutable_value(item.spec.parameters)
+            )
+        if (
+            legacy_view.route is not route
+            or legacy_view.source is not item.source
+            or not spec_matches
+        ):
+            raise ProviderConsumerParityError(
+                f"llm_tools Provider 执行视图与 legacy rollback view 不一致: {tool_name}"
+            )
+
+        decision = provider_catalog.decide_trust(
+            tool_name,
+            ToolTrustOperation.EXECUTION,
+            is_superuser=is_superuser,
+            confirmed=False,
+        )
+        return LlmToolExecutionView(
+            tool_name=tool_name,
+            generation=self.generation,
+            route=route,
+            source=item.source,
+            spec=item.spec,
+            legacy_entry=legacy_view.legacy_entry,
+            provider_authoritative=True,
+            trust_decision=decision,
+        )
 
     def get_brief_catalog(
         self,

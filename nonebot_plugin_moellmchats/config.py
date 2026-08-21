@@ -53,6 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "runtime_watch_interval_seconds": 2,
     "provider_catalog_categorize_enabled": True,
     "provider_catalog_llm_payload_enabled": True,
+    "provider_catalog_llm_tools_enabled": True,
     "user_history_expire_seconds": 600,
     "cd_seconds": 120,
     "search_api": "your api",
@@ -188,6 +189,7 @@ class ConfigParser:
         for field in (
             "provider_catalog_categorize_enabled",
             "provider_catalog_llm_payload_enabled",
+            "provider_catalog_llm_tools_enabled",
         ):
             if type(candidate.get(field)) is not bool:
                 raise ValueError(f"config.json: {field} 必须是布尔值")

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
+from nonebot_plugin_moellmchats.config import config_parser
 from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
 from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
     build_nonebot_plugin_candidate,
@@ -16,8 +18,21 @@ from nonebot_plugin_moellmchats.pending_actions import (
 )
 from nonebot_plugin_moellmchats.tool_contracts import (
     ToolEffect,
+    ToolPolicy,
     ToolResult,
     ToolSpec,
+)
+from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
+from nonebot_plugin_moellmchats.tool_providers import (
+    DiscoveredTool,
+    ProviderCatalogSnapshot,
+    ProviderRegistration,
+    builtin_tool_provider,
+    file_tool_provider,
+    generated_tool_provider,
+    mcp_tool_provider,
+    nonebot_plugin_provider,
+    registered_tool_provider,
 )
 
 
@@ -38,14 +53,17 @@ class Harness(LlmToolsMixin):
         text: str = "hello",
         *,
         plugins: dict | None = None,
+        snapshot: ToolSnapshot | None = None,
     ) -> None:
         self.bot = FakeBot()
         self.event = SimpleNamespace(user_id=1)
         self.format_message_dict = {"text": [text]}
-        self.tool_snapshot = SimpleNamespace(
+        self.tool_snapshot = snapshot or ToolSnapshot(
             generation=1,
             custom_tools=tools,
             plugin_info=plugins or {},
+            tool_dependencies={},
+            mcp_tool_names=set(),
         )
         self.messages_handler = SimpleNamespace(
             messages_entity=SimpleNamespace(
@@ -56,6 +74,7 @@ class Harness(LlmToolsMixin):
         self._pending_vision_images = []
         self._current_tool_usage = Counter()
         self.emotion_flag = False
+        self.is_superuser = True
         self.sent = []
 
     async def send_emotion_message(self, text: str) -> str:
@@ -72,6 +91,48 @@ def _call(identifier: int, name: str, arguments: str = "{}") -> dict:
         "type": "function",
         "function": {"name": name, "arguments": arguments},
     }
+
+
+def _complete_catalog(
+    generation: int,
+    *,
+    registered: tuple[ToolSpec, ...] = (),
+    nonebot_plugins: tuple[ToolSpec, ...] = (),
+) -> ProviderCatalogSnapshot:
+    providers = (
+        registered_tool_provider,
+        file_tool_provider,
+        generated_tool_provider,
+        mcp_tool_provider,
+        builtin_tool_provider,
+        nonebot_plugin_provider,
+    )
+    registrations = {
+        registration.provider_id: registration
+        for registration in (
+            ProviderRegistration.from_provider(provider)
+            for provider in providers
+        )
+    }
+    records: dict[str, DiscoveredTool] = {}
+    for provider, specs in (
+        (registered_tool_provider, registered),
+        (builtin_tool_provider, builtin_tool_specs()),
+        (nonebot_plugin_provider, nonebot_plugins),
+    ):
+        for spec in specs:
+            records[spec.name] = DiscoveredTool(
+                provider_id=provider.provider_id,
+                source=provider.source,
+                trust=provider.trust,
+                generation=generation,
+                spec=spec,
+            )
+    return ProviderCatalogSnapshot(
+        generation=generation,
+        registrations=registrations,
+        tools=records,
+    )
 
 
 @pytest.mark.asyncio
@@ -363,3 +424,243 @@ async def test_nested_argument_type_error_becomes_tool_error() -> None:
         [_call(1, "nested", '{"payload":{"count":"bad"}}')], "", [], ""
     )
     assert "类型错误" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_provider_catalog_nonebot_execution_uses_canonical_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+    from nonebot_plugin_moellmchats import nonebot_plugin_tools as plugin_module
+
+    plugin_info, specs = build_nonebot_plugin_candidate(
+        {
+            "provider_plugin": {
+                "description": "provider plugin",
+                "usage": "/provider",
+            }
+        }
+    )
+    snapshot = ToolSnapshot(
+        generation=2,
+        plugin_info=plugin_info,
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(
+            2,
+            nonebot_plugins=specs,
+        ),
+    )
+    calls = []
+
+    class ForbiddenRollbackSimulator:
+        async def dispatch_event(self, *_args, **_kwargs):
+            raise AssertionError("Provider path must not use llm_tools rollback bus")
+
+    async def canonical_dispatch(bot, event, command, source, *, plugin_name):
+        calls.append((bot, event, command, source, plugin_name))
+        return "canonical visible output", []
+
+    monkeypatch.setattr(module, "event_simulator", ForbiddenRollbackSimulator())
+    monkeypatch.setattr(
+        plugin_module.event_simulator,
+        "dispatch_event",
+        canonical_dispatch,
+    )
+    harness = Harness({}, snapshot=snapshot)
+
+    messages = await harness._execute_tools(
+        [_call(1, "provider_plugin", '{"command":"/provider"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert calls == [
+        (
+            harness.bot,
+            harness.event,
+            "/provider",
+            harness.format_message_dict,
+            "provider_plugin",
+        )
+    ]
+    assert "canonical visible output" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_llm_tools_rejects_unknown_name_before_legacy_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    async def forbidden_dispatch(*_args, **_kwargs):
+        raise AssertionError("unknown tool must fail before dispatch")
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", forbidden_dispatch)
+    harness = Harness({})
+    messages = await harness._execute_tools(
+        [_call(1, "hallucinated_tool", '{"command":"/unsafe"}')],
+        "normal answer",
+        [],
+        "",
+    )
+
+    assert "不在当前 generation" in messages[-1]["content"]
+    assert "已拒绝执行" in messages[-1]["content"]
+    assert harness.sent == ["normal answer"]
+
+
+@pytest.mark.asyncio
+async def test_provider_catalog_execution_enforces_trust_permission() -> None:
+    executions = 0
+
+    async def admin_only() -> str:
+        nonlocal executions
+        executions += 1
+        return "secret"
+
+    spec = ToolSpec(
+        name="provider_admin_only",
+        description="provider admin",
+        parameters={"type": "object", "properties": {}},
+        handler=admin_only,
+        permission="superuser",
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=3,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(3, registered=(spec,)),
+    )
+    harness = Harness({}, snapshot=snapshot)
+    harness.event.user_id = 2
+    harness.is_superuser = False
+
+    messages = await harness._execute_tools(
+        [_call(1, spec.name)],
+        "normal answer",
+        [],
+        "",
+    )
+
+    assert executions == 0
+    assert "工具契约只允许超级用户" in messages[-1]["content"]
+    assert harness.sent == ["normal answer"]
+
+
+@pytest.mark.asyncio
+async def test_provider_mutating_execution_still_creates_pending_action() -> None:
+    await pending_action_store.clear()
+    executions = 0
+
+    async def mutate() -> str:
+        nonlocal executions
+        executions += 1
+        return "changed"
+
+    spec = ToolSpec(
+        name="provider_mutate",
+        description="provider mutate",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=4,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(4, registered=(spec,)),
+    )
+    harness = Harness({}, snapshot=snapshot)
+
+    messages = await harness._execute_tools(
+        [_call(1, spec.name, '{"confirm":true}')],
+        "",
+        [],
+        "",
+    )
+
+    assert executions == 0
+    assert "尚未执行" in messages[-1]["content"]
+    assert "确认执行" in messages[-1]["content"]
+    await pending_action_store.clear()
+
+
+@pytest.mark.asyncio
+async def test_llm_tools_config_rollback_keeps_legacy_nonebot_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+    from nonebot_plugin_moellmchats import nonebot_plugin_tools as plugin_module
+
+    plugin_info, specs = build_nonebot_plugin_candidate(
+        {
+            "rollback_plugin": {
+                "description": "rollback plugin",
+                "usage": "/rollback",
+            }
+        }
+    )
+    snapshot = ToolSnapshot(
+        generation=5,
+        plugin_info=plugin_info,
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(5, nonebot_plugins=specs),
+    )
+    rollback_calls = []
+
+    class RollbackSimulator:
+        async def dispatch_event(
+            self,
+            bot,
+            event,
+            command,
+            source,
+            *,
+            plugin_name,
+        ):
+            rollback_calls.append((command, plugin_name))
+            return "rollback output", []
+
+    async def forbidden_provider_dispatch(*_args, **_kwargs):
+        raise AssertionError("rollback switch must not use Provider handler")
+
+    original_get_config = config_parser.get_config
+
+    def rollback_config(key: str, default=None):
+        if key == "provider_catalog_llm_tools_enabled":
+            return False
+        return original_get_config(key, default)
+
+    monkeypatch.setattr(module, "event_simulator", RollbackSimulator())
+    monkeypatch.setattr(
+        plugin_module.event_simulator,
+        "dispatch_event",
+        forbidden_provider_dispatch,
+    )
+    monkeypatch.setattr(config_parser, "get_config", rollback_config)
+    harness = Harness({}, snapshot=snapshot)
+
+    messages = await harness._execute_tools(
+        [_call(1, "rollback_plugin", '{"command":"/rollback"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert rollback_calls == [("/rollback", "rollback_plugin")]
+    assert "rollback output" in messages[-1]["content"]
