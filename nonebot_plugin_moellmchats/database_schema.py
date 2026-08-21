@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-from .agent_runtime import AgentRunState
+from .agent_runtime import AgentRunState, AgentStepStatus, AgentStepType
 from .database_metadata import database_metadata
 
 ENTITY_ID_MAX_CHARS = 128
@@ -16,6 +16,11 @@ AGENT_RUN_STATUS_MAX_CHARS = 32
 AGENT_RUN_ERROR_TYPE_MAX_CHARS = 128
 AGENT_RUN_COST_PRECISION = 24
 AGENT_RUN_COST_SCALE = 12
+AGENT_STEP_TYPE_MAX_CHARS = 32
+AGENT_STEP_STATUS_MAX_CHARS = 32
+TOOL_NAME_MAX_CHARS = 64
+AGENT_STEP_PREVIEW_MAX_CHARS = 6_000
+AGENT_STEP_ERROR_MAX_CHARS = 6_000
 
 AGENT_RUN_STATUS_VALUES = tuple(state.value for state in AgentRunState)
 AGENT_RUN_TERMINAL_STATUS_VALUES = (
@@ -24,6 +29,21 @@ AGENT_RUN_TERMINAL_STATUS_VALUES = (
     AgentRunState.CANCELLED.value,
     AgentRunState.TIMED_OUT.value,
     AgentRunState.REJECTED.value,
+)
+AGENT_STEP_TYPE_VALUES = tuple(step_type.value for step_type in AgentStepType)
+AGENT_STEP_STATUS_VALUES = tuple(status.value for status in AgentStepStatus)
+AGENT_STEP_TERMINAL_STATUS_VALUES = (
+    AgentStepStatus.COMPLETED.value,
+    AgentStepStatus.FAILED.value,
+    AgentStepStatus.CANCELLED.value,
+    AgentStepStatus.TIMED_OUT.value,
+    AgentStepStatus.SKIPPED.value,
+)
+AGENT_STEP_ERROR_STATUS_VALUES = (
+    AgentStepStatus.FAILED.value,
+    AgentStepStatus.CANCELLED.value,
+    AgentStepStatus.TIMED_OUT.value,
+    AgentStepStatus.SKIPPED.value,
 )
 
 
@@ -307,9 +327,105 @@ sa.Index(
     agent_runs_table.c.started_at,
 )
 
+_agent_step_type_sql = _sql_string_list(AGENT_STEP_TYPE_VALUES)
+_agent_step_status_sql = _sql_string_list(AGENT_STEP_STATUS_VALUES)
+_agent_step_terminal_status_sql = _sql_string_list(AGENT_STEP_TERMINAL_STATUS_VALUES)
+_agent_step_error_status_sql = _sql_string_list(AGENT_STEP_ERROR_STATUS_VALUES)
+
+agent_steps_table = sa.Table(
+    "agent_steps",
+    database_metadata,
+    sa.Column("id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("run_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("step_index", sa.BigInteger(), nullable=False),
+    sa.Column("step_type", sa.String(AGENT_STEP_TYPE_MAX_CHARS), nullable=False),
+    sa.Column("model", sa.String(MODEL_NAME_MAX_CHARS), nullable=True),
+    sa.Column("tool_name", sa.String(TOOL_NAME_MAX_CHARS), nullable=True),
+    sa.Column("status", sa.String(AGENT_STEP_STATUS_MAX_CHARS), nullable=False),
+    sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("duration_ms", sa.BigInteger(), nullable=True),
+    sa.Column("input_preview", sa.Text(), nullable=True),
+    sa.Column("output_preview", sa.Text(), nullable=True),
+    sa.Column("error", sa.Text(), nullable=True),
+    sa.PrimaryKeyConstraint("id", name="pk_agent_steps"),
+    sa.ForeignKeyConstraint(
+        ("run_id",),
+        ("agent_runs.id",),
+        name="fk_agent_steps_run_id_agent_runs",
+        ondelete="RESTRICT",
+    ),
+    sa.UniqueConstraint(
+        "run_id",
+        "step_index",
+        name="uq_agent_steps_run_id_step_index",
+    ),
+    sa.CheckConstraint("char_length(id) > 0", name="ck_agent_steps_id_present"),
+    sa.CheckConstraint("char_length(run_id) > 0", name="ck_agent_steps_run_id_present"),
+    sa.CheckConstraint("step_index >= 0", name="ck_agent_steps_index_nonnegative"),
+    sa.CheckConstraint(
+        f"step_type IN ({_agent_step_type_sql})",
+        name="ck_agent_steps_type_valid",
+    ),
+    sa.CheckConstraint(
+        "model IS NULL OR char_length(model) > 0",
+        name="ck_agent_steps_model_present",
+    ),
+    sa.CheckConstraint(
+        "tool_name IS NULL OR char_length(tool_name) > 0",
+        name="ck_agent_steps_tool_name_present",
+    ),
+    sa.CheckConstraint(
+        "(step_type <> 'model' OR model IS NOT NULL) AND (step_type <> 'tool' OR tool_name IS NOT NULL)",
+        name="ck_agent_steps_type_identity",
+    ),
+    sa.CheckConstraint(
+        f"status IN ({_agent_step_status_sql})",
+        name="ck_agent_steps_status_valid",
+    ),
+    sa.CheckConstraint(
+        "(status = 'pending' AND started_at IS NULL AND finished_at IS NULL AND duration_ms IS NULL) OR "
+        "(status = 'running' AND started_at IS NOT NULL AND finished_at IS NULL AND duration_ms IS NULL) OR "
+        f"(status IN ({_agent_step_terminal_status_sql}) AND started_at IS NOT NULL "
+        "AND finished_at IS NOT NULL AND duration_ms IS NOT NULL)",
+        name="ck_agent_steps_lifecycle_fields",
+    ),
+    sa.CheckConstraint(
+        "finished_at IS NULL OR finished_at >= started_at",
+        name="ck_agent_steps_timestamp_order",
+    ),
+    sa.CheckConstraint(
+        "duration_ms IS NULL OR duration_ms >= 0",
+        name="ck_agent_steps_duration_nonnegative",
+    ),
+    sa.CheckConstraint(
+        f"input_preview IS NULL OR (char_length(input_preview) > 0 AND "
+        f"char_length(input_preview) <= {AGENT_STEP_PREVIEW_MAX_CHARS})",
+        name="ck_agent_steps_input_preview_bounded",
+    ),
+    sa.CheckConstraint(
+        f"output_preview IS NULL OR (char_length(output_preview) > 0 AND "
+        f"char_length(output_preview) <= {AGENT_STEP_PREVIEW_MAX_CHARS})",
+        name="ck_agent_steps_output_preview_bounded",
+    ),
+    sa.CheckConstraint(
+        f"status IN ({_agent_step_terminal_status_sql}) OR output_preview IS NULL",
+        name="ck_agent_steps_output_matches_status",
+    ),
+    sa.CheckConstraint(
+        f"error IS NULL OR (char_length(error) > 0 AND char_length(error) <= {AGENT_STEP_ERROR_MAX_CHARS})",
+        name="ck_agent_steps_error_bounded",
+    ),
+    sa.CheckConstraint(
+        f"status IN ({_agent_step_error_status_sql}) OR error IS NULL",
+        name="ck_agent_steps_error_matches_status",
+    ),
+)
+
 DATABASE_TABLES = (
     users_table,
     conversations_table,
     messages_table,
     agent_runs_table,
+    agent_steps_table,
 )

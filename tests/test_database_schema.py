@@ -10,7 +10,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
-from nonebot_plugin_moellmchats.agent_runtime import AgentRunState
+from nonebot_plugin_moellmchats.agent_runtime import (
+    AgentRunState,
+    AgentStepStatus,
+    AgentStepType,
+)
 from nonebot_plugin_moellmchats.database_migrations import (
     build_offline_alembic_config,
 )
@@ -18,8 +22,13 @@ import nonebot_plugin_moellmchats.database_schema as database_schema_module
 from nonebot_plugin_moellmchats.database_schema import (
     AGENT_RUN_STATUS_VALUES,
     AGENT_RUN_TERMINAL_STATUS_VALUES,
+    AGENT_STEP_ERROR_STATUS_VALUES,
+    AGENT_STEP_STATUS_VALUES,
+    AGENT_STEP_TERMINAL_STATUS_VALUES,
+    AGENT_STEP_TYPE_VALUES,
     DATABASE_TABLES,
     agent_runs_table,
+    agent_steps_table,
     conversations_table,
     database_metadata,
     messages_table,
@@ -120,8 +129,20 @@ class _MigrationRecorder:
 
 
 def test_first_schema_has_exact_tables_and_columns() -> None:
-    assert DATABASE_TABLES == (users_table, conversations_table, messages_table, agent_runs_table)
-    assert tuple(database_metadata.tables) == ("users", "conversations", "messages", "agent_runs")
+    assert DATABASE_TABLES == (
+        users_table,
+        conversations_table,
+        messages_table,
+        agent_runs_table,
+        agent_steps_table,
+    )
+    assert tuple(database_metadata.tables) == (
+        "users",
+        "conversations",
+        "messages",
+        "agent_runs",
+        "agent_steps",
+    )
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
     assert tuple(_column_signature(column) for column in users_table.columns) == (
@@ -203,6 +224,63 @@ def test_agent_run_schema_has_exact_columns_and_domain_states() -> None:
     assert isinstance(agent_runs_table.c.cost.type, sa.Numeric)
     assert agent_runs_table.c.cost.type.precision == 24
     assert agent_runs_table.c.cost.type.scale == 12
+
+
+def test_agent_step_schema_has_exact_columns_and_domain_states() -> None:
+    assert (
+        AGENT_STEP_TYPE_VALUES
+        == tuple(value.value for value in AgentStepType)
+        == (
+            "classification",
+            "model",
+            "tool",
+            "summary",
+            "vision",
+            "confirmation",
+            "memory",
+        )
+    )
+    assert (
+        AGENT_STEP_STATUS_VALUES
+        == tuple(value.value for value in AgentStepStatus)
+        == (
+            "pending",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+            "skipped",
+        )
+    )
+    assert AGENT_STEP_TERMINAL_STATUS_VALUES == (
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "skipped",
+    )
+    assert AGENT_STEP_ERROR_STATUS_VALUES == (
+        "failed",
+        "cancelled",
+        "timed_out",
+        "skipped",
+    )
+    assert tuple(_column_signature(column) for column in agent_steps_table.columns) == (
+        ("id", "VARCHAR(128)", False, False, None),
+        ("run_id", "VARCHAR(128)", False, False, None),
+        ("step_index", "BIGINT", False, False, None),
+        ("step_type", "VARCHAR(32)", False, False, None),
+        ("model", "VARCHAR(255)", True, False, None),
+        ("tool_name", "VARCHAR(64)", True, False, None),
+        ("status", "VARCHAR(32)", False, False, None),
+        ("started_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+        ("finished_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+        ("duration_ms", "BIGINT", True, False, None),
+        ("input_preview", "TEXT", True, False, None),
+        ("output_preview", "TEXT", True, False, None),
+        ("error", "TEXT", True, False, None),
+    )
 
 
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
@@ -421,6 +499,90 @@ def test_agent_run_schema_has_exact_constraints_and_indexes() -> None:
     )
 
 
+def test_agent_step_schema_has_exact_constraints_and_index() -> None:
+    step_type_sql = ", ".join(f"'{value}'" for value in AGENT_STEP_TYPE_VALUES)
+    status_sql = ", ".join(f"'{value}'" for value in AGENT_STEP_STATUS_VALUES)
+    terminal_status_sql = ", ".join(f"'{value}'" for value in AGENT_STEP_TERMINAL_STATUS_VALUES)
+    error_status_sql = ", ".join(f"'{value}'" for value in AGENT_STEP_ERROR_STATUS_VALUES)
+    lifecycle_check = (
+        "(status = 'pending' AND started_at IS NULL AND finished_at IS NULL AND duration_ms IS NULL) OR "
+        "(status = 'running' AND started_at IS NOT NULL AND finished_at IS NULL AND duration_ms IS NULL) OR "
+        f"(status IN ({terminal_status_sql}) AND started_at IS NOT NULL "
+        "AND finished_at IS NOT NULL AND duration_ms IS NOT NULL)"
+    )
+
+    assert frozenset(_constraint_signature(value) for value in agent_steps_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_agent_steps", ("id",)),
+            (
+                "foreign_key",
+                "fk_agent_steps_run_id_agent_runs",
+                ("run_id",),
+                ("agent_runs.id",),
+                "RESTRICT",
+            ),
+            ("unique", "uq_agent_steps_run_id_step_index", ("run_id", "step_index")),
+            ("check", "ck_agent_steps_id_present", "char_length(id) > 0"),
+            ("check", "ck_agent_steps_run_id_present", "char_length(run_id) > 0"),
+            ("check", "ck_agent_steps_index_nonnegative", "step_index >= 0"),
+            ("check", "ck_agent_steps_type_valid", f"step_type IN ({step_type_sql})"),
+            (
+                "check",
+                "ck_agent_steps_model_present",
+                "model IS NULL OR char_length(model) > 0",
+            ),
+            (
+                "check",
+                "ck_agent_steps_tool_name_present",
+                "tool_name IS NULL OR char_length(tool_name) > 0",
+            ),
+            (
+                "check",
+                "ck_agent_steps_type_identity",
+                "(step_type <> 'model' OR model IS NOT NULL) AND (step_type <> 'tool' OR tool_name IS NOT NULL)",
+            ),
+            ("check", "ck_agent_steps_status_valid", f"status IN ({status_sql})"),
+            ("check", "ck_agent_steps_lifecycle_fields", lifecycle_check),
+            (
+                "check",
+                "ck_agent_steps_timestamp_order",
+                "finished_at IS NULL OR finished_at >= started_at",
+            ),
+            (
+                "check",
+                "ck_agent_steps_duration_nonnegative",
+                "duration_ms IS NULL OR duration_ms >= 0",
+            ),
+            (
+                "check",
+                "ck_agent_steps_input_preview_bounded",
+                "input_preview IS NULL OR (char_length(input_preview) > 0 AND char_length(input_preview) <= 6000)",
+            ),
+            (
+                "check",
+                "ck_agent_steps_output_preview_bounded",
+                "output_preview IS NULL OR (char_length(output_preview) > 0 AND char_length(output_preview) <= 6000)",
+            ),
+            (
+                "check",
+                "ck_agent_steps_output_matches_status",
+                f"status IN ({terminal_status_sql}) OR output_preview IS NULL",
+            ),
+            (
+                "check",
+                "ck_agent_steps_error_bounded",
+                "error IS NULL OR (char_length(error) > 0 AND char_length(error) <= 6000)",
+            ),
+            (
+                "check",
+                "ck_agent_steps_error_matches_status",
+                f"status IN ({error_status_sql}) OR error IS NULL",
+            ),
+        }
+    )
+    assert not agent_steps_table.indexes
+
+
 def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -432,6 +594,7 @@ def test_linear_revision_operations_are_identical_to_declared_metadata(
     for revision_id, down_revision in (
         ("0001_users_conversations", None),
         ("0002_agent_runtime", "0001_users_conversations"),
+        ("0003_agent_steps", "0002_agent_runtime"),
     ):
         revision = scripts.get_revision(revision_id)
         assert revision is not None

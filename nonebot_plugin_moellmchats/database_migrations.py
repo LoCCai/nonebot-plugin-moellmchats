@@ -20,6 +20,7 @@ _REQUIRED_MIGRATION_FILES = (
     "script.py.mako",
     "versions/0001_users_conversations.py",
     "versions/0002_agent_runtime.py",
+    "versions/0003_agent_steps.py",
     "versions/README.md",
 )
 
