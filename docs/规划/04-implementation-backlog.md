@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-08-21T02:05:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -18,7 +18,7 @@ lastmod: 2026-08-21T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a、D-08b 与 D-08c 已完成精确 HEAD 双 run gate；D-08c 最终闭环精确 HEAD `bef9b56367e4b05cd31110216b84fd61a8158b38` 对应 push run `32432675246` / PR run `32432677694`，两者均 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08d PendingAction 实现提交 `fbdc87235be13e9bd0fb9fe1b09791f8bd528ebf` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08e～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a～D-08d 已完成精确 HEAD 双 run gate；D-08d 最终闭环 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 对应 push run `32434441897` / PR run `32434445098`，两者均 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08e Search 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -595,7 +595,7 @@ admin policy
 
 ## D-08 Consumer Cutover
 
-**状态：🟢 D-08a～D-08c 精确 HEAD 双 run 远端 gate green；🟡 D-08d PendingAction 本地门禁完成、远端 gate 待完成；D-08e～D-08f 未开始；未部署**
+**状态：🟢 D-08a～D-08d 精确 HEAD 双 run 远端 gate green；🟡 D-08e Search 本地门禁完成、远端 gate 待完成；D-08f 未开始；未部署**
 
 按 `categorize → llm_payload → llm_tools → pending action → search → 管理命令` 逐个切换，每个消费端单独保留新旧视图等价回归与可回滚开关。
 
@@ -637,17 +637,27 @@ admin policy
 
 本地门禁：D-08d 定向 `129 passed`，Provider/Snapshot/Reload/Pending 联合 `171 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `509 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 236 个诊断、归一化后均为 151 条既有消息，零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `f063ebbb92b31c797c2c5b28e5aa57c6329415ede0d187f4617f269368d5a325`、sdist SHA256 `f43956bd09eeafcb6c65fcb3936be5c2f6d86fe0bc4d08d913d992611391aa4a`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认开关与 canonical confirmed PendingAction view 均通过。
 
-远端状态：D-08d 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-08e 在此前不实施。未合并、未发布、未部署。
+远端证据：D-08d 最终文档闭环精确 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 对应 push run `32434441897` 与 PR run `32434445098`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。D-08e 依赖已解除。未合并、未发布、未部署。
 
-### D-08e～D-08f 后续依赖
+### D-08e search
+
+实现落点：实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 新增 frozen、generation-bound `SearchExtractorView`，并只切换 Search 内部 `extract_webpage` consumer。完整 schema v3 六 Provider catalog 下，仅 Registered / Custom File / Generated / MCP 四类 custom source 可作为 extractor，以 canonical source、精确 `ToolSpec` 与 selection trust decision 为权威；legacy rollback view 每次搜索都校验 source/spec identity，MCP 无 `tool_spec` 时严格比较 handler、description、parameters 与 name。Provider/legacy 任一缺失或漂移都在 Tavily 请求前 fail closed。
+
+权限与回滚边界：当前 actor 的 `is_superuser` 从 `llm_tools` 经 canonical `web_search` handler 传到 Search；Provider 路径只有 selection 允许且 `extract_webpage` 未被黑名单命中时才披露来源 URL 与调用提示，拒绝时只披露标题。新增严格布尔配置 `provider_catalog_search_enabled`，默认 `true`；设为 `false` 只回滚 Search consumer，并保留历史 membership-only 语义。启动期、无请求快照或旧式不完整六 Provider catalog 继续有界 legacy 兼容；管理命令和 legacy sidecar 均未切换。
+
+本地门禁：D-08e 定向 `121 passed`，Provider/Snapshot/Reload/Search 联合 `226 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `534 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 77 errors、3 warnings、80 条既有诊断，归一化 multiset 零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `039779623e9a8617e2e4578bccf215edfe69d53e2407c088975375bdb7bc0587`、sdist SHA256 `4986c57c514a30934bd4c99c17b5de3caf84f1b1af876b78fab93d684cd4f736`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认 Search 开关与 canonical extractor absence 均通过。
+
+远端状态：D-08e 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-08f 在此前不实施。未合并、未发布、未部署。
+
+### D-08f 后续依赖
 
 ```text
 D-08a categorize（远端 gate green）
   → D-08b llm_payload（远端 gate green）
   → D-08c llm_tools（远端 gate green）
-  → D-08d pending action（本地 gate green，远端 gate 待完成）
-  → D-08e search（下一实施项，等待 D-08d 关闭）
-  → D-08f 管理命令
+  → D-08d pending action（远端 gate green）
+  → D-08e search（本地 gate green，远端 gate 待完成）
+  → D-08f 管理命令（等待 D-08e 关闭）
 ```
 
 每一项都必须有独立开关、legacy rollback view、Provider parity、定向/全量/打包门禁和精确 HEAD 远端 gate；前项未关闭时不提前实现后项。

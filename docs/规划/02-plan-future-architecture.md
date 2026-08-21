@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-08-21T02:05:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T00:00:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a、D-08b 与 D-08c 已完成精确 HEAD 远端 gate；D-08c 最终闭环精确 HEAD `bef9b56367e4b05cd31110216b84fd61a8158b38` 的 push run `32432675246` / PR run `32432677694` 均为 11/11 green 且各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08d PendingAction 实现提交 `fbdc87235be13e9bd0fb9fe1b09791f8bd528ebf` 已完成本地门禁：确认执行使用 generation-bound canonical Provider spec/handler/bundle identity 与 `confirmed=True` trust decision，legacy adapter 逐调用校验，actor 权限在副作用前重检；独立开关只回滚该 consumer。四版本串行普通全量各 `509 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包及四组包外 smoke 均通过，Pyright 没有新增归一化诊断。D-08d 精确 HEAD 远端双 run gate 待完成；D-08e～D-08f 未开始，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a～D-08d 已完成精确 HEAD 远端 gate；D-08d 最终闭环 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 的 push run `32434441897` / PR run `32434445098` 均为 11/11 green 且各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08e Search 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 已完成本地门禁：请求绑定的 canonical extractor identity、selection trust decision、当前 actor 权限与黑名单决定 URL 提示，legacy parity 每次调用校验，独立开关只回滚该 consumer。四版本串行普通全量各 `534 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包及四组包外 smoke 均通过，Pyright parent/current 没有新增或删除诊断。D-08e 精确 HEAD 远端双 run gate 待完成；D-08f 未开始，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -191,7 +191,15 @@ D-08d 实现提交 `fbdc87235be13e9bd0fb9fe1b09791f8bd528ebf` 只切换 PendingA
 
 安全与回滚边界：nonce 在任何 parity、权限、参数校验或副作用前一次性消费；Bot/adapter/user/group、参数哈希、generation 与 bundle digest 绑定保持不变。确认阶段基于命令捕获的 `RuntimeSnapshot` 读取开关，并以当前 actor 和 `confirmed=True` 重做 trust/permission 决策，因此错用户、旧 generation、版本漂移、普通用户确认 superuser 工具或 Provider/legacy 漂移全部 fail closed。独立严格布尔开关 `provider_catalog_pending_actions_enabled=true` 默认启用；设为 `false` 只回滚 PendingAction consumer，启动期或旧式不完整六 Provider 快照继续有界 legacy 兼容。Search extractor、管理命令和 legacy sidecar 尚未切换。
 
-D-08d 定向 `129 passed`，Provider/Snapshot/Reload/Pending 联合 `171 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `509 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 236 个诊断、归一化后均为 151 条既有消息，零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `f063ebbb92b31c797c2c5b28e5aa57c6329415ede0d187f4617f269368d5a325`、sdist SHA256 `f43956bd09eeafcb6c65fcb3936be5c2f6d86fe0bc4d08d913d992611391aa4a`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、默认开关与 canonical confirmed PendingAction view 均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；D-08e Search 尚未开始，未合并、未发布、未部署。
+D-08d 定向 `129 passed`，Provider/Snapshot/Reload/Pending 联合 `171 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `509 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 236 个诊断、归一化后均为 151 条既有消息，零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `f063ebbb92b31c797c2c5b28e5aa57c6329415ede0d187f4617f269368d5a325`、sdist SHA256 `f43956bd09eeafcb6c65fcb3936be5c2f6d86fe0bc4d08d913d992611391aa4a`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、默认开关与 canonical confirmed PendingAction view 均通过。上述为 D-08d 本地门禁证据；远端闭环如下。
+
+D-08d 最终文档闭环精确 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 已完成 push run `32434441897` / PR run `32434445098` 双 run gate；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08e 依赖已解除；未合并、未发布、未部署。
+
+D-08e 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 只切换 Search 内部 `extract_webpage` consumer。新增 frozen、generation-bound `SearchExtractorView`；完整 schema v3 六 Provider catalog 下，仅 Registered / Custom File / Generated / MCP 四类 custom source 可成为 extractor，以 canonical source、精确 `ToolSpec` 和 selection trust decision 为权威。legacy rollback view 每次搜索调用都校验 source/spec identity；MCP 历史 sidecar 无 `tool_spec` 时严格比较 handler、description、parameters 与 name，任一缺失或漂移都在 Tavily 网络请求前 fail closed。
+
+权限与回滚边界：`llm_tools → execute_web_search → Search` 显式传递当前 actor 的 `is_superuser`；Provider 路径只有 selection decision 允许且工具未被黑名单命中时才披露来源 URL 和 `extract_webpage` 调用提示，拒绝时只返回标题。独立严格布尔开关 `provider_catalog_search_enabled=true` 默认启用；设为 `false` 只回滚 Search consumer，并精确保留历史 membership-only 行为。启动期、无请求快照或旧式不完整六 Provider catalog 继续有界 legacy 兼容；管理命令与 legacy sidecar 尚未切换。
+
+D-08e 定向 `121 passed`，Provider/Snapshot/Reload/Search 联合 `226 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `534 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 77 errors、3 warnings、80 条既有诊断，归一化 multiset 零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `039779623e9a8617e2e4578bccf215edfe69d53e2407c088975375bdb7bc0587`、sdist SHA256 `4986c57c514a30934bd4c99c17b5de3caf84f1b1af876b78fab93d684cd4f736`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认 Search 开关与 canonical extractor absence 均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；D-08f 尚未开始，未合并、未发布、未部署。
 
 ---
 
