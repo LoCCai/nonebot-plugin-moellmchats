@@ -207,6 +207,7 @@ class LlmToolsMixin:
                         search_res = await search_spec.handler(
                             query=query,
                             tool_snapshot=self.tool_snapshot,
+                            is_superuser=is_superuser,
                         )
                 except TimeoutError:
                     runtime_metrics.tool_timeouts += 1

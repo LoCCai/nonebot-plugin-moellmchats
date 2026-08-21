@@ -38,6 +38,7 @@ from nonebot_plugin_moellmchats.tool_manager import (
     LlmToolExecutionRoute,
     PendingActionExecutionView,
     ProviderConsumerParityError,
+    SearchExtractorView,
     ToolManager,
     ToolSnapshot,
     model_selector,
@@ -2789,6 +2790,324 @@ def test_pending_action_provider_cutover_config_requires_boolean(flag) -> None:
     with pytest.raises(
         ValueError,
         match="provider_catalog_pending_actions_enabled",
+    ):
+        ConfigParser._validate(candidate)
+
+
+def test_search_extractor_provider_view_is_canonical_for_custom_sources() -> None:
+    generation = 61
+    registered_spec = ToolSpec(
+        name="extract_webpage",
+        description="registered extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    registered_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            registered_spec.name: {
+                **registered_spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog(
+            (registered_spec,),
+            generation=generation,
+        ),
+    )
+
+    file_spec = ToolSpec(
+        name="extract_webpage",
+        description="file extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    file_artifact = _file_artifact(file_spec, generation=generation)
+    file_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={file_spec.name: _file_legacy_schema(file_artifact)},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_file_catalog(file_artifact, generation=generation),
+    )
+
+    generated_spec = ToolSpec(
+        name="extract_webpage",
+        description="generated extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=generation,
+    )
+    generated_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            generated_spec.name: _generated_legacy_schema(
+                generated_artifact
+            )
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_generated_catalog(
+            generated_artifact,
+            generation=generation,
+        ),
+    )
+
+    mcp_spec = ToolSpec(
+        name="extract_webpage",
+        description="mcp extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    mcp_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={mcp_spec.name: _mcp_legacy_schema(mcp_spec)},
+        tool_dependencies={},
+        mcp_tool_names={mcp_spec.name},
+        provider_catalog=_mcp_catalog(mcp_spec, generation=generation),
+    )
+
+    cases = (
+        (registered_snapshot, registered_spec, ToolSource.REGISTERED),
+        (file_snapshot, file_spec, ToolSource.CUSTOM_FILE),
+        (generated_snapshot, generated_spec, ToolSource.GENERATED),
+        (mcp_snapshot, mcp_spec, ToolSource.MCP),
+    )
+    for snapshot, spec, source in cases:
+        rollback = snapshot.resolve_search_extractor(
+            is_superuser=True,
+            provider_cutover=False,
+        )
+        provider = snapshot.resolve_search_extractor(
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        assert isinstance(rollback, SearchExtractorView)
+        assert isinstance(provider, SearchExtractorView)
+        assert not rollback.provider_authoritative
+        assert provider.provider_authoritative
+        assert provider.source is rollback.source is source
+        assert provider.spec is spec
+        assert provider.legacy_entry is rollback.legacy_entry
+        assert provider.trust_decision is not None
+        assert provider.trust_decision.operation is ToolTrustOperation.SELECTION
+        assert provider.trust_decision.allowed
+
+
+def test_search_extractor_provider_selection_rechecks_actor_permission() -> None:
+    spec = ToolSpec(
+        name="extract_webpage",
+        description="admin extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        permission="superuser",
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=62,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=62),
+    )
+
+    denied = snapshot.resolve_search_extractor(
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert denied is not None
+    assert denied.trust_decision is not None
+    assert not denied.trust_decision.allowed
+    assert "超级用户" in denied.trust_decision.reason
+
+    allowed = snapshot.resolve_search_extractor(
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert allowed is not None
+    assert allowed.trust_decision is not None
+    assert allowed.trust_decision.allowed
+
+
+def test_search_extractor_provider_cutover_fails_closed_on_identity_drift(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="extract_webpage",
+        description="parity extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=63,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=63),
+    )
+    original = ToolSnapshot._legacy_search_extractor_view
+
+    def drifted_legacy(self):
+        view = original(self)
+        assert view is not None
+        return replace(view, source=ToolSource.MCP)
+
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "_legacy_search_extractor_view",
+        drifted_legacy,
+    )
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.resolve_search_extractor(
+            is_superuser=True,
+            provider_cutover=True,
+        )
+    rollback = snapshot.resolve_search_extractor(
+        is_superuser=True,
+        provider_cutover=False,
+    )
+    assert rollback is not None
+    assert rollback.source is ToolSource.MCP
+
+
+def test_search_extractor_provider_cutover_handles_missing_and_legacy_snapshot() -> None:
+    complete = ToolSnapshot(
+        generation=64,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((), generation=64),
+    )
+    assert (
+        complete.resolve_search_extractor(
+            is_superuser=False,
+            provider_cutover=True,
+        )
+        is None
+    )
+
+    spec = ToolSpec(
+        name="extract_webpage",
+        description="legacy extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    legacy = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={spec.name: spec.as_legacy_schema()},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    view = legacy.resolve_search_extractor(
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert view is not None
+    assert not view.provider_authoritative
+    assert view.source is None
+    assert view.spec is spec
+
+
+def test_search_extractor_provider_cutover_default_and_config_rollback(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="extract_webpage",
+        description="default extractor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=65,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=65),
+    )
+
+    def get_default(key: str, default=None):
+        assert key == "provider_catalog_search_enabled"
+        assert default is True
+        return DEFAULT_CONFIG[key]
+
+    monkeypatch.setattr(config_parser, "get_config", get_default)
+    provider = snapshot.resolve_search_extractor(is_superuser=True)
+    assert provider is not None
+    assert provider.provider_authoritative
+
+    monkeypatch.setattr(config_parser, "get_config", lambda *_args: False)
+    rollback = snapshot.resolve_search_extractor(is_superuser=True)
+    assert rollback is not None
+    assert not rollback.provider_authoritative
+
+
+@pytest.mark.parametrize("flag", [1, "true", [], {}])
+def test_search_extractor_provider_cutover_rejects_non_boolean_override(
+    flag,
+) -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    with pytest.raises(ValueError, match="cutover"):
+        snapshot.resolve_search_extractor(
+            is_superuser=False,
+            provider_cutover=flag,
+        )
+
+
+def test_search_extractor_provider_cutover_rejects_non_boolean_actor() -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    with pytest.raises(TypeError, match="is_superuser"):
+        snapshot.resolve_search_extractor(
+            is_superuser=1,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("flag", [None, 1, "true", [], {}])
+def test_search_extractor_provider_cutover_config_requires_boolean(flag) -> None:
+    candidate = dict(DEFAULT_CONFIG)
+    candidate["provider_catalog_search_enabled"] = flag
+
+    with pytest.raises(
+        ValueError,
+        match="provider_catalog_search_enabled",
     ):
         ConfigParser._validate(candidate)
 

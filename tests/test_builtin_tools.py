@@ -83,12 +83,18 @@ async def test_web_search_adapter_passes_transaction_snapshot_and_external_resul
 ) -> None:
     from nonebot_plugin_moellmchats import search as search_module
 
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[str, object, bool]] = []
     snapshot = object()
 
     class FakeSearch:
-        def __init__(self, query: str, tool_snapshot: object) -> None:
-            calls.append((query, tool_snapshot))
+        def __init__(
+            self,
+            query: str,
+            tool_snapshot: object,
+            *,
+            is_superuser: bool,
+        ) -> None:
+            calls.append((query, tool_snapshot, is_superuser))
 
         async def get_search(self) -> str:
             return "external observation"
@@ -98,7 +104,17 @@ async def test_web_search_adapter_passes_transaction_snapshot_and_external_resul
     result = await execute_web_search(
         "latest news",
         tool_snapshot=snapshot,
+        is_superuser=True,
     )
 
     assert result == "external observation"
-    assert calls == [("latest news", snapshot)]
+    assert calls == [("latest news", snapshot, True)]
+
+
+@pytest.mark.asyncio
+async def test_web_search_adapter_rejects_non_boolean_actor() -> None:
+    with pytest.raises(TypeError, match="is_superuser"):
+        await execute_web_search(
+            "latest news",
+            is_superuser=1,  # type: ignore[arg-type]
+        )

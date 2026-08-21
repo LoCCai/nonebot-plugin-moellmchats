@@ -76,6 +76,7 @@
   "provider_catalog_llm_payload_enabled": true, // LLM schema 注入使用 Provider catalog；false 只回滚该 consumer
   "provider_catalog_llm_tools_enabled": true, // 工具调用解析使用 Provider catalog；false 只回滚该 consumer
   "provider_catalog_pending_actions_enabled": true, // 二阶段确认执行使用 Provider catalog；false 只回滚该 consumer
+  "provider_catalog_search_enabled": true, // 搜索结果中的网页提取器选择使用 Provider catalog；false 只回滚该 consumer
   "user_history_expire_seconds": 600, // 群聊/用户上下文及 CD 临时状态的空闲 TTL（秒）
   "cd_seconds": 120,              // 每个用户的对话冷却时间（秒，排队前检查）
   "search_api": "Bearer your_tavily_key", // 联网搜索 Tavily API Key（开启搜索必填）

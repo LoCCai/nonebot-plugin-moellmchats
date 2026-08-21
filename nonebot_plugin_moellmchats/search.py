@@ -3,14 +3,53 @@ import traceback
 from nonebot.log import logger
 
 from .config import config_parser
-from .tool_manager import tool_manager
+from .tool_manager import SearchExtractorView, ToolSnapshot, tool_manager
 from .utils import get_session
 
 
 class Search:
-    def __init__(self, plain, tool_snapshot=None):
+    def __init__(
+        self,
+        plain,
+        tool_snapshot=None,
+        *,
+        is_superuser: bool = False,
+    ):
+        if type(is_superuser) is not bool:
+            raise TypeError("Search is_superuser 必须是布尔值")
         self.plain = plain
         self.tool_snapshot = tool_snapshot
+        self.is_superuser = is_superuser
+
+    def _has_selectable_extractor(self) -> bool:
+        snapshot = self.tool_snapshot
+        if isinstance(snapshot, ToolSnapshot):
+            view = snapshot.resolve_search_extractor(
+                is_superuser=self.is_superuser,
+            )
+            if view is None:
+                return False
+            if not isinstance(view, SearchExtractorView):
+                raise TypeError("Search extractor view 非法")
+            if not view.provider_authoritative:
+                # The rollback switch intentionally preserves the historical
+                # membership-only behavior, including its permission and
+                # blacklist semantics.
+                return True
+            decision = view.trust_decision
+            assert decision is not None
+            return decision.allowed and not tool_manager.is_tool_blacklisted(
+                view.tool_name
+            )
+
+        # Bootstrap and old integrations retain the bounded legacy membership
+        # check until a complete transaction snapshot is available.
+        tools = (
+            snapshot.custom_tools
+            if snapshot is not None
+            else tool_manager.custom_tools
+        )
+        return "extract_webpage" in tools
 
     async def get_search(self) -> str:
         url = "https://api.tavily.com/search"
@@ -25,6 +64,7 @@ class Search:
         }
 
         try:
+            has_extractor = self._has_selectable_extractor()
             async with get_session().post(
                 url, headers=headers, json=data, ssl=False
             ) as response:
@@ -35,14 +75,6 @@ class Search:
 
                 if answer or results:
                     final_res = answer
-
-                    # 动态检测：判断提取网页的自定义函数是否被用户加载
-                    tools = (
-                        self.tool_snapshot.custom_tools
-                        if self.tool_snapshot is not None
-                        else tool_manager.custom_tools
-                    )
-                    has_extractor = "extract_webpage" in tools
 
                     # 只有在有搜索结果且用户安装了提取工具的情况下，才暴露 URL 和诱导提示词
                     if results and has_extractor:

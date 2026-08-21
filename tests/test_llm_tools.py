@@ -300,8 +300,14 @@ async def test_web_search_legacy_branch_uses_canonical_builtin_handler(
     calls = []
 
     class FakeSearch:
-        def __init__(self, query, tool_snapshot=None) -> None:
-            calls.append((query, tool_snapshot))
+        def __init__(
+            self,
+            query,
+            tool_snapshot=None,
+            *,
+            is_superuser: bool,
+        ) -> None:
+            calls.append((query, tool_snapshot, is_superuser))
 
         async def get_search(self) -> str:
             return "external observation"
@@ -316,7 +322,7 @@ async def test_web_search_legacy_branch_uses_canonical_builtin_handler(
         "",
     )
 
-    assert calls == [("latest", harness.tool_snapshot)]
+    assert calls == [("latest", harness.tool_snapshot, True)]
     assert harness.bot.sent == ["正在搜索: latest..."]
     assert "external observation" in messages[-1]["content"]
 

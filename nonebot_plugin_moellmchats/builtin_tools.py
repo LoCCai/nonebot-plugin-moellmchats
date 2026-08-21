@@ -7,14 +7,22 @@ async def execute_web_search(
     query: str,
     *,
     tool_snapshot: object | None = None,
+    is_superuser: bool = False,
 ) -> object:
     """Run the existing search adapter without changing its result semantics."""
+
+    if type(is_superuser) is not bool:
+        raise TypeError("web_search is_superuser 必须是布尔值")
 
     # Keep the import lazy: search.py retains a bootstrap fallback to the
     # ToolManager mirror, while runtime execution passes a transaction snapshot.
     from .search import Search
 
-    return await Search(query, tool_snapshot=tool_snapshot).get_search()
+    return await Search(
+        query,
+        tool_snapshot=tool_snapshot,
+        is_superuser=is_superuser,
+    ).get_search()
 
 
 WEB_SEARCH_TOOL_SPEC = ToolSpec(
