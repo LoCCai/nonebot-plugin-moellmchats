@@ -10,7 +10,7 @@ lastmod: 2026-08-21T00:00:00+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a 与 D-08b 已完成精确 HEAD 远端 gate。D-08b 最终闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 的 push run `32430209088` / PR run `32430214661` 均为 11/11 green 且各恰好一个成功 `release-gate`。D-08c `llm_tools` 实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 已完成本地门禁，精确 HEAD 远端 gate 待完成；D-08d～D-08f 尚未开始。当前 catalog schema v3 及 categorize/payload/execution consumer cutover 仍只描述运行期 Provider discovery、派生 trust/capability policy、selection 和受控执行，不是 AgentRun、AgentStep、ToolCall 或 DeadlineContext 持久化领域模型。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a、D-08b 与 D-08c 已完成精确 HEAD 远端 gate。D-08c 最终闭环精确 HEAD `bef9b56367e4b05cd31110216b84fd61a8158b38` 的 push run `32432675246` / PR run `32432677694` 均为 11/11 green 且各恰好一个成功 `release-gate`。D-08d PendingAction 实现提交 `fbdc87235be13e9bd0fb9fe1b09791f8bd528ebf` 已完成本地门禁，精确 HEAD 远端 gate 待完成；D-08e～D-08f 尚未开始。当前 catalog schema v3 及 categorize/payload/工具执行/确认执行 consumer cutover 仍只描述运行期 Provider discovery、派生 trust/capability policy、selection 和受控执行，不是 AgentRun、AgentStep、ToolCall 或 DeadlineContext 持久化领域模型；当前内存 PendingAction store 也不是 F-12 Redis 持久化实现。Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
 
 ---
 

@@ -18,7 +18,7 @@ lastmod: 2026-08-21T00:00:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a 与 D-08b 已完成精确 HEAD 双 run gate；D-08b 最终闭环精确 HEAD `b1158a7debe86e74bba46aa9e652733fe3581bad` 对应 push run `32430209088` / PR run `32430214661`，两者均 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08c `llm_tools` 实现提交 `c1f8580a1c8ebeca629fc8cfce015c63184cb0e6` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08d～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a、D-08b 与 D-08c 已完成精确 HEAD 双 run gate；D-08c 最终闭环精确 HEAD `bef9b56367e4b05cd31110216b84fd61a8158b38` 对应 push run `32432675246` / PR run `32432677694`，两者均 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08d PendingAction 实现提交 `fbdc87235be13e9bd0fb9fe1b09791f8bd528ebf` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08e～D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -595,7 +595,7 @@ admin policy
 
 ## D-08 Consumer Cutover
 
-**状态：🟢 D-08a、D-08b 精确 HEAD 双 run 远端 gate green；🟡 D-08c `llm_tools` 本地门禁完成、远端 gate 待完成；D-08d～D-08f 未开始；未部署**
+**状态：🟢 D-08a～D-08c 精确 HEAD 双 run 远端 gate green；🟡 D-08d PendingAction 本地门禁完成、远端 gate 待完成；D-08e～D-08f 未开始；未部署**
 
 按 `categorize → llm_payload → llm_tools → pending action → search → 管理命令` 逐个切换，每个消费端单独保留新旧视图等价回归与可回滚开关。
 
@@ -627,16 +627,26 @@ admin policy
 
 本地门禁：D-08c 定向 `81 passed`，Provider/Snapshot/Reload 联合 `143 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `493 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 55 个诊断，归一化后均为同一组 23 条既有消息，零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `3032eef9888425f293441ccef96cedbf4de871cd85057a540e93a691e587db0a`、sdist SHA256 `609ae32d1bb0d213577637e5a4fbe7d6a6ad25f258de0764cb4d414aa22b6865`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认开关与 `web_search` Provider authoritative execution view 均通过。四版本普通全量共享 `tests/.data`，因此最终证据来自串行运行，不采用此前并行产生的跨进程配置/临时工具竞争结果。
 
-远端状态：D-08c 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-08d 在此前不实施。未合并、未发布、未部署。
+远端证据：D-08c 最终文档闭环精确 HEAD `bef9b56367e4b05cd31110216b84fd61a8158b38` 对应 push run `32432675246` 与 PR run `32432677694`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。D-08d 依赖已解除。未合并、未发布、未部署。
 
-### D-08d～D-08f 后续依赖
+### D-08d pending action
+
+实现落点：实现提交 `fbdc87235be13e9bd0fb9fe1b09791f8bd528ebf` 新增 frozen、generation-bound `PendingActionExecutionView`。完整 schema v3 六 Provider catalog 下，确认执行只接受 Registered / Custom File / Generated / MCP 四类 custom source，并以 canonical source、精确 `ToolSpec`、handler、bundle identity 与 `confirmed=True` execution trust decision 为权威。legacy rollback view 每次确认都校验 source/spec/bundle；MCP 历史 sidecar 没有 `tool_spec` 时严格比较 handler、description、parameters 与 name。Provider 路径从 canonical spec 构造执行 adapter，不把 legacy sidecar 当成 handler/spec 权威。
+
+安全与回滚边界：nonce 仍在任何 parity、权限、参数校验或副作用前一次性消费；Bot/adapter/user/group、参数哈希、generation 与 bundle digest 绑定保持不变。确认阶段从命令捕获的 `RuntimeSnapshot` 读取开关，并按当前 actor、`confirmed=True` 重做 execution trust/permission 决策；错用户、旧 generation、版本/identity 漂移、普通用户确认 superuser 工具均 fail closed。新增严格布尔配置 `provider_catalog_pending_actions_enabled`，默认 `true`；设为 `false` 只回滚 PendingAction consumer。启动期或旧式不完整六 Provider catalog 继续有界 legacy 兼容；Search extractor、管理命令及 legacy sidecar 均未切换。
+
+本地门禁：D-08d 定向 `129 passed`，Provider/Snapshot/Reload/Pending 联合 `171 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `509 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 236 个诊断、归一化后均为 151 条既有消息，零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `f063ebbb92b31c797c2c5b28e5aa57c6329415ede0d187f4617f269368d5a325`、sdist SHA256 `f43956bd09eeafcb6c65fcb3936be5c2f6d86fe0bc4d08d913d992611391aa4a`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认开关与 canonical confirmed PendingAction view 均通过。
+
+远端状态：D-08d 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-08e 在此前不实施。未合并、未发布、未部署。
+
+### D-08e～D-08f 后续依赖
 
 ```text
 D-08a categorize（远端 gate green）
   → D-08b llm_payload（远端 gate green）
-  → D-08c llm_tools（本地 gate green，远端 gate 待完成）
-  → D-08d pending action（下一实施项，等待 D-08c 关闭）
-  → D-08e search
+  → D-08c llm_tools（远端 gate green）
+  → D-08d pending action（本地 gate green，远端 gate 待完成）
+  → D-08e search（下一实施项，等待 D-08d 关闭）
   → D-08f 管理命令
 ```
 
