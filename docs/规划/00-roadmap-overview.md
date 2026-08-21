@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T06:20:07+00:00
+lastmod: 2026-08-21T06:42:47+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-07 已闭环；E-07 最终 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 对应 push run `32452551080` / PR run `32452556938`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 新增 frozen `ToolConflictRule / ToolConflictDecision / ToolConflictResolution / ToolConflictPolicy`：未显式 prefer 的选中冲突默认拒绝整次选择；规则只能显式拒绝或指定工具对赢家，且必须匹配当前 ToolGraph；同时决议后若移除全部工具或破坏依赖闭包也整体拒绝，拒绝结果不暴露部分执行集。Graph/Scheduler/Conflict 定向 `125 passed`，Agent Runtime 联合定向 `310 passed`，Python 3.10～3.13 严格串行普通全量各 `864 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外 Policy/Scheduler smoke 均通过。E-08 当前仅本地门禁完成，包含规划的精确 HEAD 远端双 run gate 待完成。E-08 只生成不可变决议，不读取生产规则、不调用 handler、不接真实执行链或持久化，也不引入数据库、Redis、Repository、迁移、生产配置或 D-09 sidecar。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-08 已闭环；E-08 最终 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 对应 push run `32454187768` / PR run `32454191418`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。Milestone F 已按依赖启动：F-01 实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 只定义 backend-neutral 异步 Repository Protocol、显式事务端口、冲突/不可用错误类别、有界 opaque cursor 分页，以及 AgentRun state+generation / ToolCall status CAS 契约；不安装 SQLAlchemy、不建表、不迁移、不连接数据库或 Redis。Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；Python 3.10～3.13 严格串行普通全量各 `895 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0，Ruff、format check、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外 Repository smoke 均通过。F-01 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；F-02 在该 gate 关闭前保持锁定。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -357,8 +357,8 @@ mcp/external
 
 原因：
 
-- AgentRun / AgentStep 尚未正式抽象
-- ToolProvider 与 Repository 接口尚未固化
+- AgentRun / AgentStep 领域对象已固化，但持久化 Schema 与 Repository 实现尚未开始
+- ToolProvider 已闭环，Repository 接口已在 F-01 本地固化但尚待精确 HEAD 远端门禁
 - Redis / PostgreSQL 的运行态与持久化边界尚未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

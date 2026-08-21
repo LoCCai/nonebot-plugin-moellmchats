@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T06:20:07+00:00
+lastmod: 2026-08-21T06:42:47+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T06:20:07+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-07 已闭环；E-07 最终 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 的 push run `32452551080` / PR run `32452556938` 均为 11/11 green 且各恰好一个成功 `release-gate`。E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 已定义结构化 Tool Conflict Policy 并完成本地门禁，但不读取生产规则、不执行工具，也不接持久化。当前 AgentRun/Step/ToolCall/StateMachine/DeadlineContext/ToolGraph/ToolSchedule/ToolConflictResolution 仍是共享领域与策略对象，不是 `agent_runs` / `agent_steps` / `tool_calls` 表、Repository、持久化预算、任务队列或数据库规则表，当前内存 PendingAction store 仍不是 F-12 Redis 持久化。E-08 精确 HEAD 远端 gate 尚待完成，Plan 3 因此继续保持设计/Backlog 状态，不提前引入数据库、Redis、迁移或生产配置。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环；E-08 最终 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 的 push run `32454187768` / PR run `32454191418` 均为 11/11 green 且各恰好一个成功 `release-gate`。F-01 实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 已在 backend-neutral 边界定义 Repository Protocol、分页与 CAS 契约，并完成本地全门禁；它不是 PostgreSQL Repository 实现，不安装 SQLAlchemy/asyncpg/Alembic，不建表、不迁移、不连接数据库或 Redis。当前 AgentRun/Step/ToolCall/StateMachine/DeadlineContext/ToolGraph/ToolSchedule/ToolConflictResolution 仍是共享领域与策略对象，内存 PendingAction store 仍不是 F-12 Redis 持久化。F-01 精确 HEAD 远端 gate 尚待完成，F-02 及后续数据库任务继续锁定。
 
 ---
 
@@ -161,6 +161,10 @@ AuditRepository
 ```
 
 Runtime 只面向接口。
+
+F-01 已在实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 固化这一边界：除上述六类接口外，补充 `AgentStepRepository / ToolCallRepository / RepositoryTransaction`，并以有界 opaque cursor 统一列表分页。AgentRun replace 使用 state + generation 双重 CAS，ToolCall replace 使用 status CAS；冲突和后端不可用是不同错误类别，避免实现层把未知写入结果误报为可安全重试。
+
+该提交只有 Protocol、不可变分页值对象和契约测试，没有 engine、session、ORM model、SQL、DSN 或 I/O。Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；四个 Python 版本普通全量各 `895 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright、fresh build/Twine/checksum 与 Python 3.10/3.12 × wheel/sdist 四组包外 Repository smoke 均通过。wheel SHA256 为 `373dcba1bcc9c782d933400dad2ac1215c3c754da455f02b17aae19211a76889`，sdist SHA256 为 `61c773e8780aade1766ac257f8d05f015851495ff307865ef386492ae4d8d9ff`。当前仅本地门禁完成；F-02 必须等待 F-01 精确 HEAD 双 run 远端 gate。
 
 ---
 

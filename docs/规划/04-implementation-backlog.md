@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T06:20:07+00:00
+lastmod: 2026-08-21T06:42:47+00:00
 ---
 
 # 04-implementation-backlog
@@ -19,7 +19,7 @@ lastmod: 2026-08-21T06:20:07+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内启动。E-01～E-07 已闭环；E-07 最终 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 的 push run `32452551080` / PR run `32452556938` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 定义结构化 Tool Conflict Policy；Graph/Scheduler/Conflict 定向 `125 passed`，四版本串行普通全量各 `864 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、Pyright 目标文件、fresh build/Twine/checksum 与四组包外 Policy/Scheduler smoke 均通过。E-08 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环。E-08 最终 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 的 push run `32454187768` / PR run `32454191418` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。Milestone F 已按依赖启动；F-01 实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 只定义 Repository Protocol、分页与 CAS 契约。Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；四版本串行普通全量各 `895 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check、Pyright 目标文件、fresh build/Twine/checksum 与四组包外 Repository smoke 均通过。F-01 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；未安装 SQLAlchemy，未建表、迁移或连接数据库/Redis，F-02 继续锁定。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -687,7 +687,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone E：0.27 Agent Runtime
 
-**状态：🟢 E-01～E-07 精确 HEAD 双 run 远端 gate green；🟡 E-08 本地门禁完成、远端 gate 待完成；D-09 继续锁定；未部署**
+**状态：✅ E-01～E-08 精确 HEAD 双 run 远端 gate green；D-09 继续锁定；未部署**
 
 ---
 
@@ -781,15 +781,25 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 数据与运行边界：未配置 prefer 的选中冲突默认拒绝；Policy 规则必须与当前 ToolGraph 节点和真实 `conflicts_with` 边精确匹配，陈旧规则 fail closed。所有选中冲突对同时决议，任一 missing/explicit reject 就拒绝整次选择；全部 prefer 后统一移除 loser，移除全部工具或破坏 survivor 传递依赖闭包也整体拒绝。Policy 不按输入顺序、effect、权限或 capability 推断赢家，不读取配置/生产状态，不创建 task、不执行工具，也不修改 E-07 Scheduler；允许结果必须由调用方显式交给 Scheduler 并再次验证。本任务不接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、迁移或生产配置，也不读取或删除 D-09 legacy sidecar。
 
-本地门禁：Graph/Scheduler/Conflict 定向 `125 passed`，与 Agent Runtime 联合定向 `310 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `864 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f33107c781b2eefac8e95577e891b4b58795f1979e6a0313d8418c7819cd644c`、sdist SHA256 `7a1ca883584d30d41edc5c7bad58c41b9c88f065886fbddbb0fc1658e3f5790b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 默认拒绝/显式赢家/依赖破坏拒绝/安全交接 Scheduler 均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
+本地门禁：Graph/Scheduler/Conflict 定向 `125 passed`，与 Agent Runtime 联合定向 `310 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `864 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f33107c781b2eefac8e95577e891b4b58795f1979e6a0313d8418c7819cd644c`、sdist SHA256 `7a1ca883584d30d41edc5c7bad58c41b9c88f065886fbddbb0fc1658e3f5790b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 默认拒绝/显式赢家/依赖破坏拒绝/安全交接 Scheduler 均通过。
+
+远端证据：E-08 最终文档闭环精确 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 对应 push run `32454187768` 与 PR run `32454191418`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。F-01 依赖已解除。未合并、未发布、未部署。
 
 ---
 
 # Milestone F：0.28 PostgreSQL + Redis
 
+**状态：🟡 F-01 本地门禁完成、远端 gate 待完成；F-02～F-14 依赖锁定；未连接数据库/Redis；未部署**
+
 ---
 
 ## F-01 Repository Interface
+
+实现落点：实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 新增 `repositories.py`，用 runtime-checkable 异步 `Protocol` 定义 `Conversation / Message / AgentRun / AgentStep / ToolCall / Tool / Usage / Audit` Repository 与显式 `RepositoryTransaction`。Agent 类型只在 `TYPE_CHECKING` 导入，避免接口模块产生运行时耦合。`RepositoryPageRequest` 把 limit 限定为 1～200，并验证最长 512 字符的安全 opaque cursor；frozen `RepositoryPage` 只接受 tuple，空页不得提供 next cursor。错误明确区分乐观并发冲突与后端不可用。
+
+并发边界：`AgentRunRepository.replace()` 强制调用方同时提供 `expected_state + expected_generation`，`ToolCallRepository.replace()` 强制提供 `expected_status`，为后续 PostgreSQL 实现预留单条条件更新语义。本任务只定义 backend-neutral 端口，不提供内存或数据库实现，不安装 SQLAlchemy/asyncpg/Alembic，不建表、不迁移、不创建 engine/session、不读取生产配置，也不连接 PostgreSQL 或 Redis；D-09 legacy sidecar 保持原样。
+
+本地门禁：Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `895 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failure/error/skip 均为 0；Ruff 0.16.2 全量、目标文件 format、staged diff 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `373dcba1bcc9c782d933400dad2ac1215c3c754da455f02b17aae19211a76889`、sdist SHA256 `61c773e8780aade1766ac257f8d05f015851495ff307865ef386492ae4d8d9ff`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged Repository Protocol/分页/CAS 签名均通过。当前仅本地门禁完成，包含规划的 F-01 精确 HEAD push/PR 双 run gate 待完成；F-02 只能在该 gate 关闭后开始。未合并、未发布、未部署。
 
 ---
 

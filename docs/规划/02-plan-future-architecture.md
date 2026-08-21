@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T06:20:07+00:00
+lastmod: 2026-08-21T06:42:47+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T06:20:07+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-07 已闭环；E-07 最终 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 的 push run `32452551080` / PR run `32452556938` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 已定义默认拒绝、显式赢家、结构化审计的 Tool Conflict Policy；定向 `125 passed`，四版本串行普通全量各 `864 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 Policy/Scheduler smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。Milestone E 的 E-01～E-08 已闭环；E-08 最终 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 的 push run `32454187768` / PR run `32454191418` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-01 实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 已定义异步 Repository Protocol、分页与 CAS 边界；四版本串行普通全量各 `895 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 Repository smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，F-02 继续锁定。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -366,7 +366,7 @@ E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 新增独立 `tool_
 
 `ToolConflictPolicy` 默认拒绝所有未配置 prefer 的选中 conflict；规则必须引用图中节点并精确匹配真实 `conflicts_with` 边，陈旧或伪造规则 fail closed。所有选中冲突对按规范顺序同时决议，任一 missing/explicit reject 即拒绝整次选择；全部 prefer 后再统一移除 loser，若循环偏好移除全部工具、或 survivor 的传递依赖被移除/原本缺失，也整体拒绝。Policy 不按输入顺序、effect、权限或 capability 猜 winner，不读取配置或生产状态，不执行工具、不创建 task、不修改 E-07 Scheduler；允许结果可显式交给 Scheduler，仍由 Scheduler 再验证 conflict-free 与 effect/并行约束。本任务不接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。
 
-本地门禁：Graph/Scheduler/Conflict 定向 `125 passed`，与 Agent Runtime 联合定向 `310 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `864 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f33107c781b2eefac8e95577e891b4b58795f1979e6a0313d8418c7819cd644c`、sdist SHA256 `7a1ca883584d30d41edc5c7bad58c41b9c88f065886fbddbb0fc1658e3f5790b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 默认拒绝/显式赢家/依赖破坏拒绝/安全交接 Scheduler 均通过。当前本地门禁完成，包含规划的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
+本地门禁：Graph/Scheduler/Conflict 定向 `125 passed`，与 Agent Runtime 联合定向 `310 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `864 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f33107c781b2eefac8e95577e891b4b58795f1979e6a0313d8418c7819cd644c`、sdist SHA256 `7a1ca883584d30d41edc5c7bad58c41b9c88f065886fbddbb0fc1658e3f5790b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 默认拒绝/显式赢家/依赖破坏拒绝/安全交接 Scheduler 均通过。最终文档闭环 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 对应 push run `32454187768` / PR run `32454191418`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。F-01 依赖已解除；未合并、未发布、未部署。
 
 ---
 
@@ -874,6 +874,10 @@ await run_repository.create(...)
 ```
 
 Plan 3 再实现 PostgreSQL Repository。
+
+F-01 实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 新增独立 `repositories.py`，以 `Protocol` 固化 `Conversation / Message / AgentRun / AgentStep / ToolCall / Tool / Usage / Audit` 的异步 Repository 端口与显式 `RepositoryTransaction`。`RepositoryPageRequest` 把 limit 限定为 1～200，并只接受最长 512 字符的安全 opaque cursor；`RepositoryPage` 使用 tuple 和 frozen dataclass，空页不得伪造 next cursor。AgentRun replace 必须同时提供 `expected_state + expected_generation`，ToolCall replace 必须提供 `expected_status`；实现可用 `RepositoryConflictError` 与 `RepositoryUnavailableError` 区分乐观并发冲突和后端不可用。
+
+F-01 只固化 backend-neutral 接口，不提供实现，不在运行时导入 Agent 类型，不安装 SQLAlchemy/asyncpg/Alembic，不建表、不迁移、不创建 engine/session、不读取生产配置，也不连接 PostgreSQL 或 Redis。Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `895 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、format/diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `373dcba1bcc9c782d933400dad2ac1215c3c754da455f02b17aae19211a76889`、sdist SHA256 `61c773e8780aade1766ac257f8d05f015851495ff307865ef386492ae4d8d9ff`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged Repository Protocol/分页/CAS 签名均通过。当前仅本地门禁完成；F-02 只能在包含规划的 F-01 精确 HEAD 双 run 远端 gate 关闭后开始。
 
 ---
 
