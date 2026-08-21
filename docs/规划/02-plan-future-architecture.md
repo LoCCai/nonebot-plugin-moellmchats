@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T04:49:02+00:00
+lastmod: 2026-08-21T05:02:39+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T04:49:02+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-02 已闭环；E-03 最终 HEAD `69fbf5e76e5c74f6f5b35df23c3d310830c84976` 的 push run `32447053702` / PR run `32447055942` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-04 实现提交 `94a54a7196f7ede832490191f5dc15ae2999c2dc` 已新增纯、fail-closed `AgentStateMachine`；四版本串行普通全量各 `720 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，E-05 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-03 已闭环；E-04 最终 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 的 push run `32448482843` / PR run `32448485118` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 已新增进程内 monotonic `DeadlineContext`；四版本串行普通全量各 `739 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，E-06 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -482,7 +482,7 @@ E-04 实现提交 `94a54a7196f7ede832490191f5dc15ae2999c2dc` 在 `agent_runtime.
 
 `allowed_targets()` 返回不可变目标集合，`can_transition()` 只接受强类型枚举，`transition()` 不原地修改 run，而是保留全部 identity/generation/started_at 并返回新的 frozen `AgentRun`。进入终态必须由调用方显式提供有限且不早于 started_at 的 `finished_at`，进入非终态不得伪造结束时间；策略不读取墙钟，不保存转换历史或 live Bot/Event，不提供跨请求/进程 CAS，不接管 request manager/chat runtime，也不引入 Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。
 
-本地门禁：Agent runtime 定向 `166 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `720 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `0a29b10c7541abe151f625d52df21d9fbf142950317dd08ec5379ce366bf2bf2`、sdist SHA256 `d53f3b303f13438b82c0e19830f950eec3737784fa925c6b483c0a25e428f476`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 正常链/确认回路/终态重入拒绝均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；E-05 在此前不实施，未合并、未发布、未部署。
+本地门禁：Agent runtime 定向 `166 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `720 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `0a29b10c7541abe151f625d52df21d9fbf142950317dd08ec5379ce366bf2bf2`、sdist SHA256 `d53f3b303f13438b82c0e19830f950eec3737784fa925c6b483c0a25e428f476`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 正常链/确认回路/终态重入拒绝均通过。最终文档闭环 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 对应 push run `32448482843` / PR run `32448485118`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-05 依赖已解除；未合并、未发布、未部署。
 
 ---
 
@@ -507,6 +507,12 @@ DeadlineContext:
 ```
 
 所有组件共享剩余预算。
+
+E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 在 `agent_runtime.py` 新增 frozen `DeadlineContext`。唯一持久字段 `deadline_at` 是与 `time.monotonic()` 同源的有限非负绝对截止点；`from_timeout(timeout)` 在请求入口把有限非负总秒数转换为截止点，`remaining()` 每次只读取一次当前 monotonic 值并返回共享剩余秒数，过期后一律钳制为 `0.0`。布尔值、字符串、负数、NaN、无穷和加法溢出均 fail closed；测试可通过显式 `now` 注入确定性时钟值。
+
+该对象用于显式向后续组件传递同一总预算，不保存 clock callable、不创建分层子预算、不自动延长截止点，也不序列化或跨进程重启持久化 monotonic 值。本阶段只定义预算契约，尚未改写 `llm_api`、MCP、网络解析、工具执行等既有 timeout 调用链，不接管 request manager/chat runtime，不引入 Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。
+
+本地门禁：Agent runtime 定向 `185 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `739 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `12453d2f5cee45ebb6e1437bce761232f9812c4d8caf607a287ee430fec6a355`、sdist SHA256 `9b679b8f28c2a6a9a0c0ad96d20d771d9cffcaffdcde346c89e384d067cbe1c7`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 确定性/默认 monotonic 预算与过期钳零均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；E-06 在此前不实施，未合并、未发布、未部署。
 
 ---
 

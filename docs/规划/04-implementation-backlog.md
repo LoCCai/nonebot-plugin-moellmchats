@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T04:49:02+00:00
+lastmod: 2026-08-21T05:02:39+00:00
 ---
 
 # 04-implementation-backlog
@@ -19,7 +19,7 @@ lastmod: 2026-08-21T04:49:02+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内启动。E-01～E-02 已闭环；E-03 最终 HEAD `69fbf5e76e5c74f6f5b35df23c3d310830c84976` 的 push run `32447053702` / PR run `32447055942` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-04 实现提交 `94a54a7196f7ede832490191f5dc15ae2999c2dc` 定义纯、fail-closed `AgentStateMachine`；Agent runtime 定向 `166 passed`，四版本串行普通全量各 `720 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、Pyright 目标文件、fresh build/Twine/checksum 与四组包外加载均通过。E-04 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；E-05～E-08 未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内启动。E-01～E-03 已闭环；E-04 最终 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 的 push run `32448482843` / PR run `32448485118` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-05 实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 定义进程内 monotonic `DeadlineContext`；Agent runtime 定向 `185 passed`，四版本串行普通全量各 `739 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、Pyright 目标文件、fresh build/Twine/checksum 与四组包外加载均通过。E-05 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；E-06～E-08 未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -687,7 +687,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone E：0.27 Agent Runtime
 
-**状态：🟢 E-01～E-03 精确 HEAD 双 run 远端 gate green；🟡 E-04 本地门禁完成、远端 gate 待完成；E-05～E-08 未开始；D-09 继续锁定；未部署**
+**状态：🟢 E-01～E-04 精确 HEAD 双 run 远端 gate green；🟡 E-05 本地门禁完成、远端 gate 待完成；E-06～E-08 未开始；D-09 继续锁定；未部署**
 
 ---
 
@@ -733,11 +733,19 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 数据与运行边界：`allowed_targets()` 返回不可变集合，`can_transition()` 拒绝原始字符串伪造枚举，`transition()` 保留 run 全部 identity/generation/started_at 并返回新的 frozen 对象。终态必须由调用方显式提供合法 `finished_at`，非终态不得伪造结束时间。策略不读取墙钟、不保存转换历史或 live Bot/Event、不提供跨请求/进程 CAS，不接管 request manager/chat runtime，不引入 Repository、PostgreSQL、Redis、迁移或生产配置，也不读取或删除 D-09 legacy sidecar。E-05 只能在 E-04 精确 HEAD 远端 gate 关闭后开始。
 
-本地门禁：Agent runtime 定向 `166 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `720 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `0a29b10c7541abe151f625d52df21d9fbf142950317dd08ec5379ce366bf2bf2`、sdist SHA256 `d53f3b303f13438b82c0e19830f950eec3737784fa925c6b483c0a25e428f476`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 正常链/确认回路/终态重入拒绝均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
+本地门禁：Agent runtime 定向 `166 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `720 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `0a29b10c7541abe151f625d52df21d9fbf142950317dd08ec5379ce366bf2bf2`、sdist SHA256 `d53f3b303f13438b82c0e19830f950eec3737784fa925c6b483c0a25e428f476`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 正常链/确认回路/终态重入拒绝均通过。
+
+远端证据：E-04 最终文档闭环精确 HEAD `ba72157e323a1e95d99ba5a1516b40b7b0e56c0e` 对应 push run `32448482843` 与 PR run `32448485118`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-05 依赖已解除。未合并、未发布、未部署。
 
 ---
 
 ## E-05 DeadlineContext
+
+实现落点：实现提交 `4bb8b30b57a9fcb7a4f4f8873281ce8dfdecdd47` 在 `agent_runtime.py` 新增 frozen `DeadlineContext`。`deadline_at` 是与 `time.monotonic()` 同源的有限非负绝对截止点；`from_timeout()` 在入口把有限非负总秒数转换为唯一截止点，`remaining()` 返回共享剩余预算并在过期后钳制为 `0.0`。布尔值、字符串、负数、NaN、无穷、非法时钟值和截止点加法溢出均严格拒绝。
+
+数据与运行边界：Context 通过显式传参供所有后续组件共享，不保存 clock callable、不创建会延长总预算的分层 deadline，不序列化或跨进程重启持久化 monotonic 值。本任务尚未改写 `llm_api`、MCP、网络解析或工具执行的既有 timeout，不接管 request manager/chat runtime，不引入 Repository、PostgreSQL、Redis、迁移或生产配置，也不读取或删除 D-09 legacy sidecar。E-06 只能在 E-05 精确 HEAD 远端 gate 关闭后开始。
+
+本地门禁：Agent runtime 定向 `185 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `739 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `12453d2f5cee45ebb6e1437bce761232f9812c4d8caf607a287ee430fec6a355`、sdist SHA256 `9b679b8f28c2a6a9a0c0ad96d20d771d9cffcaffdcde346c89e384d067cbe1c7`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 确定性/默认 monotonic 预算与过期钳零均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
 
 ---
 
