@@ -9,12 +9,48 @@ import pytest
 from nonebot_plugin_moellmchats.agent_runtime import (
     AgentRun,
     AgentRunState,
+    AgentStateMachine,
     AgentStep,
     AgentStepStatus,
     AgentStepType,
     ToolCall,
     ToolCallStatus,
 )
+
+_NONTERMINAL_AGENT_RUN_STATES = (
+    AgentRunState.CREATED,
+    AgentRunState.ADMITTED,
+    AgentRunState.CLASSIFYING,
+    AgentRunState.PLANNING,
+    AgentRunState.EXECUTING,
+    AgentRunState.WAITING_CONFIRMATION,
+    AgentRunState.SUMMARIZING,
+)
+_EXCEPTIONAL_AGENT_RUN_STATES = (
+    AgentRunState.FAILED,
+    AgentRunState.CANCELLED,
+    AgentRunState.TIMED_OUT,
+    AgentRunState.REJECTED,
+)
+_EXCEPTIONAL_AGENT_RUN_TARGETS = frozenset(_EXCEPTIONAL_AGENT_RUN_STATES)
+_NORMAL_AGENT_RUN_TARGETS = {
+    AgentRunState.CREATED: frozenset({AgentRunState.ADMITTED}),
+    AgentRunState.ADMITTED: frozenset({AgentRunState.CLASSIFYING}),
+    AgentRunState.CLASSIFYING: frozenset({AgentRunState.PLANNING}),
+    AgentRunState.PLANNING: frozenset({AgentRunState.EXECUTING}),
+    AgentRunState.EXECUTING: frozenset(
+        {AgentRunState.WAITING_CONFIRMATION, AgentRunState.SUMMARIZING}
+    ),
+    AgentRunState.WAITING_CONFIRMATION: frozenset(
+        {AgentRunState.EXECUTING, AgentRunState.SUMMARIZING}
+    ),
+    AgentRunState.SUMMARIZING: frozenset({AgentRunState.COMPLETED}),
+    AgentRunState.COMPLETED: frozenset(),
+    AgentRunState.FAILED: frozenset(),
+    AgentRunState.CANCELLED: frozenset(),
+    AgentRunState.TIMED_OUT: frozenset(),
+    AgentRunState.REJECTED: frozenset(),
+}
 
 
 def _run(**overrides: object) -> AgentRun:
@@ -206,6 +242,181 @@ def test_agent_run_rejects_finish_before_start() -> None:
             state=AgentRunState.COMPLETED,
             started_at=100.0,
             finished_at=99.0,
+        )
+
+
+def test_agent_state_machine_exposes_the_exact_fail_closed_transition_table() -> None:
+    assert set(_NORMAL_AGENT_RUN_TARGETS) == set(AgentRunState)
+
+    for source, normal_targets in _NORMAL_AGENT_RUN_TARGETS.items():
+        expected = normal_targets
+        if source in _NONTERMINAL_AGENT_RUN_STATES:
+            expected |= _EXCEPTIONAL_AGENT_RUN_TARGETS
+        allowed = AgentStateMachine.allowed_targets(source)
+
+        assert isinstance(allowed, frozenset)
+        assert allowed == expected
+        for target in AgentRunState:
+            assert AgentStateMachine.can_transition(source, target) is (
+                target in expected
+            )
+
+
+def test_agent_state_machine_runs_the_normal_path_without_mutating_prior_runs() -> None:
+    original = _run()
+    run = original
+
+    for target in (
+        AgentRunState.ADMITTED,
+        AgentRunState.CLASSIFYING,
+        AgentRunState.PLANNING,
+        AgentRunState.EXECUTING,
+        AgentRunState.SUMMARIZING,
+    ):
+        previous = run
+        run = AgentStateMachine.transition(run, target)
+        assert run is not previous
+        assert previous.state is not target
+        assert run.state is target
+        assert run.finished_at is None
+
+    completed = AgentStateMachine.transition(
+        run,
+        AgentRunState.COMPLETED,
+        finished_at=110,
+    )
+
+    assert original.state is AgentRunState.CREATED
+    assert original.finished_at is None
+    assert completed.state is AgentRunState.COMPLETED
+    assert completed.finished_at == 110.0
+    assert completed.elapsed == 9.75
+    assert completed.run_id == original.run_id
+    assert completed.request_id == original.request_id
+    assert completed.user_id == original.user_id
+    assert completed.group_id == original.group_id
+    assert completed.generation == original.generation
+
+
+def test_agent_state_machine_supports_confirmation_resume_and_summary() -> None:
+    executing = _run(state=AgentRunState.EXECUTING)
+
+    waiting = AgentStateMachine.transition(
+        executing,
+        AgentRunState.WAITING_CONFIRMATION,
+    )
+    resumed = AgentStateMachine.transition(waiting, AgentRunState.EXECUTING)
+    summarized = AgentStateMachine.transition(
+        waiting,
+        AgentRunState.SUMMARIZING,
+    )
+
+    assert waiting.state is AgentRunState.WAITING_CONFIRMATION
+    assert resumed.state is AgentRunState.EXECUTING
+    assert summarized.state is AgentRunState.SUMMARIZING
+    assert executing.state is AgentRunState.EXECUTING
+
+
+@pytest.mark.parametrize("source", _NONTERMINAL_AGENT_RUN_STATES)
+@pytest.mark.parametrize("target", _EXCEPTIONAL_AGENT_RUN_STATES)
+def test_agent_state_machine_allows_every_exception_from_any_nonterminal(
+    source: AgentRunState,
+    target: AgentRunState,
+) -> None:
+    terminated = AgentStateMachine.transition(
+        _run(state=source),
+        target,
+        finished_at=105.5,
+    )
+
+    assert terminated.state is target
+    assert terminated.finished_at == 105.5
+    assert terminated.is_terminal is True
+
+
+@pytest.mark.parametrize(
+    ("source", "target"),
+    [
+        (AgentRunState.CREATED, AgentRunState.CLASSIFYING),
+        (AgentRunState.ADMITTED, AgentRunState.PLANNING),
+        (AgentRunState.CLASSIFYING, AgentRunState.EXECUTING),
+        (AgentRunState.PLANNING, AgentRunState.SUMMARIZING),
+        (AgentRunState.EXECUTING, AgentRunState.COMPLETED),
+        (AgentRunState.WAITING_CONFIRMATION, AgentRunState.COMPLETED),
+        (AgentRunState.SUMMARIZING, AgentRunState.EXECUTING),
+        (AgentRunState.COMPLETED, AgentRunState.CREATED),
+        (AgentRunState.FAILED, AgentRunState.CREATED),
+    ],
+)
+def test_agent_state_machine_rejects_shortcuts_and_terminal_reentry(
+    source: AgentRunState,
+    target: AgentRunState,
+) -> None:
+    run = _run(
+        state=source,
+        finished_at=101.0 if source not in _NONTERMINAL_AGENT_RUN_STATES else None,
+    )
+    target_finished_at = 110.0 if target not in _NONTERMINAL_AGENT_RUN_STATES else None
+
+    with pytest.raises(ValueError, match="不允许"):
+        AgentStateMachine.transition(
+            run,
+            target,
+            finished_at=target_finished_at,
+        )
+
+
+def test_agent_state_machine_requires_finish_time_only_for_terminal_targets() -> None:
+    with pytest.raises(ValueError, match=r"终态.*finished_at"):
+        AgentStateMachine.transition(
+            _run(state=AgentRunState.SUMMARIZING),
+            AgentRunState.COMPLETED,
+        )
+    with pytest.raises(ValueError, match=r"非终态.*finished_at"):
+        AgentStateMachine.transition(
+            _run(),
+            AgentRunState.ADMITTED,
+            finished_at=101.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "finished_at",
+    [-1.0, 99.0, math.inf, math.nan, True, "101.0"],
+)
+def test_agent_state_machine_rejects_invalid_terminal_timestamps(
+    finished_at: object,
+) -> None:
+    with pytest.raises(ValueError, match=r"finished_at|不能早于"):
+        AgentStateMachine.transition(
+            _run(state=AgentRunState.SUMMARIZING),
+            AgentRunState.COMPLETED,
+            finished_at=finished_at,  # type: ignore[arg-type]
+        )
+
+
+def test_agent_state_machine_rejects_untyped_api_inputs() -> None:
+    with pytest.raises(ValueError, match="state"):
+        AgentStateMachine.allowed_targets("created")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="state"):
+        AgentStateMachine.can_transition(
+            "created",  # type: ignore[arg-type]
+            AgentRunState.ADMITTED,
+        )
+    with pytest.raises(ValueError, match="target"):
+        AgentStateMachine.can_transition(
+            AgentRunState.CREATED,
+            "admitted",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="run"):
+        AgentStateMachine.transition(
+            object(),  # type: ignore[arg-type]
+            AgentRunState.ADMITTED,
+        )
+    with pytest.raises(ValueError, match="target"):
+        AgentStateMachine.transition(
+            _run(),
+            "admitted",  # type: ignore[arg-type]
         )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import math
 import re
@@ -81,13 +81,58 @@ class ToolCallStatus(str, Enum):
     REJECTED = "rejected"
 
 
-_TERMINAL_RUN_STATES = frozenset(
+_EXCEPTIONAL_RUN_STATES = frozenset(
     {
-        AgentRunState.COMPLETED,
         AgentRunState.FAILED,
         AgentRunState.CANCELLED,
         AgentRunState.TIMED_OUT,
         AgentRunState.REJECTED,
+    }
+)
+_TERMINAL_RUN_STATES = frozenset({AgentRunState.COMPLETED}) | _EXCEPTIONAL_RUN_STATES
+_AGENT_RUN_TRANSITIONS: Mapping[
+    AgentRunState,
+    frozenset[AgentRunState],
+] = MappingProxyType(
+    {
+        AgentRunState.CREATED: (
+            frozenset({AgentRunState.ADMITTED}) | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.ADMITTED: (
+            frozenset({AgentRunState.CLASSIFYING}) | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.CLASSIFYING: (
+            frozenset({AgentRunState.PLANNING}) | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.PLANNING: (
+            frozenset({AgentRunState.EXECUTING}) | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.EXECUTING: (
+            frozenset(
+                {
+                    AgentRunState.WAITING_CONFIRMATION,
+                    AgentRunState.SUMMARIZING,
+                }
+            )
+            | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.WAITING_CONFIRMATION: (
+            frozenset(
+                {
+                    AgentRunState.EXECUTING,
+                    AgentRunState.SUMMARIZING,
+                }
+            )
+            | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.SUMMARIZING: (
+            frozenset({AgentRunState.COMPLETED}) | _EXCEPTIONAL_RUN_STATES
+        ),
+        AgentRunState.COMPLETED: frozenset(),
+        AgentRunState.FAILED: frozenset(),
+        AgentRunState.CANCELLED: frozenset(),
+        AgentRunState.TIMED_OUT: frozenset(),
+        AgentRunState.REJECTED: frozenset(),
     }
 )
 _TERMINAL_STEP_STATUSES = frozenset(
@@ -301,6 +346,52 @@ class AgentRun:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }
+
+
+class AgentStateMachine:
+    """Pure, fail-closed transition policy for immutable AgentRun records."""
+
+    @staticmethod
+    def allowed_targets(state: AgentRunState) -> frozenset[AgentRunState]:
+        if not isinstance(state, AgentRunState):
+            raise ValueError("AgentStateMachine.state 必须是 AgentRunState")
+        return _AGENT_RUN_TRANSITIONS[state]
+
+    @classmethod
+    def can_transition(
+        cls,
+        source: AgentRunState,
+        target: AgentRunState,
+    ) -> bool:
+        if not isinstance(target, AgentRunState):
+            raise ValueError("AgentStateMachine.target 必须是 AgentRunState")
+        return target in cls.allowed_targets(source)
+
+    @classmethod
+    def transition(
+        cls,
+        run: AgentRun,
+        target: AgentRunState,
+        *,
+        finished_at: float | None = None,
+    ) -> AgentRun:
+        """Return the next immutable run without reading a clock or live state."""
+
+        if not isinstance(run, AgentRun):
+            raise ValueError("AgentStateMachine.run 必须是 AgentRun")
+        if not isinstance(target, AgentRunState):
+            raise ValueError("AgentStateMachine.target 必须是 AgentRunState")
+        if not cls.can_transition(run.state, target):
+            raise ValueError(
+                "AgentRun 不允许从 "
+                f"{run.state.value} 转换到 {target.value}"
+            )
+        if target in _TERMINAL_RUN_STATES:
+            if finished_at is None:
+                raise ValueError("AgentRun 进入终态必须提供 finished_at")
+        elif finished_at is not None:
+            raise ValueError("AgentRun 进入非终态不得提供 finished_at")
+        return replace(run, state=target, finished_at=finished_at)
 
 
 @dataclass(frozen=True)
