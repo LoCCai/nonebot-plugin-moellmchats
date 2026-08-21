@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T03:37:32+00:00
+lastmod: 2026-08-21T03:54:16+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T03:37:32+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 的 push run `32443308534` / PR run `32443313095` 均为 11/11 green 且各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定；该独立清理门禁不阻断与 sidecar 解耦的增量 Agent 领域对象。E-01 实现提交 `56dae036b4a2eaac8dd9060487e1bf1e18bb9e16` 已新增 frozen、generation-bound `AgentRun` / `AgentRunState` 并完成本地门禁：四版本串行普通全量各 `594 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 零诊断；精确 HEAD 远端双 run gate 待完成，E-02 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01 最终闭环 HEAD `be2e83d54db0021f909cad04e5bca7c6ac19fa12` 的 push run `32444347880` / PR run `32444351420` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-02 实现提交 `29aa74ac7a03e2beb71b6834644171cdceeec50c` 已新增 frozen `AgentStep`、七类步骤、独立状态和有界深冻结 JSON 输入输出；四版本串行普通全量各 `642 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 零诊断；精确 HEAD 远端双 run gate 待完成，E-03 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -370,7 +370,9 @@ AgentRun:
 
 E-01 实现提交 `56dae036b4a2eaac8dd9060487e1bf1e18bb9e16` 新增 `agent_runtime.py`，定义 frozen、generation-bound `AgentRun` 与 `AgentRunState`。状态集合精确覆盖 `CREATED / ADMITTED / CLASSIFYING / PLANNING / EXECUTING / WAITING_CONFIRMATION / SUMMARIZING / COMPLETED / FAILED / CANCELLED / TIMED_OUT / REJECTED`；run/request/user/group identity、非负 runtime generation 与有限非负时间戳均严格校验，五种终态必须携带不早于 `started_at` 的 `finished_at`，非终态不得伪造结束时间。稳定 primitive `as_dict()` 可供后续 audit/API/Repository 共用，但不泄露或保存 live Bot/Event。
 
-本阶段只定义共享领域对象和终态一致性，不生成 run、不接管 `request_manager` / `chat_runtime`、不执行 E-04 状态转换，也不接数据库、Redis、Repository 或 legacy sidecar；D-09 保持原门禁。E-01 定向 `40 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `594 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `31e19c2d2dc83a7d0e12331664939e92e37958939e4fbf2cb8349248dadab237`、sdist SHA256 `f3acf3811ffdf59fbf3ade885bc47d44bc1736dfa08ba228c46ca09e6756fd4b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration 与 packaged `AgentRun` 构造均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；E-02 在此前不实施，未合并、未发布、未部署。
+本阶段只定义共享领域对象和终态一致性，不生成 run、不接管 `request_manager` / `chat_runtime`、不执行 E-04 状态转换，也不接数据库、Redis、Repository 或 legacy sidecar；D-09 保持原门禁。E-01 定向 `40 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `594 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `31e19c2d2dc83a7d0e12331664939e92e37958939e4fbf2cb8349248dadab237`、sdist SHA256 `f3acf3811ffdf59fbf3ade885bc47d44bc1736dfa08ba228c46ca09e6756fd4b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration 与 packaged `AgentRun` 构造均通过。
+
+E-01 最终文档闭环精确 HEAD `be2e83d54db0021f909cad04e5bca7c6ac19fa12` 已完成 push run `32444347880` / PR run `32444351420` 双 run gate；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-02 依赖已解除；未合并、未发布、未部署。
 
 ---
 
@@ -407,6 +409,12 @@ vision
 confirmation
 memory
 ```
+
+E-02 实现提交 `29aa74ac7a03e2beb71b6834644171cdceeec50c` 在同一领域模块新增 frozen `AgentStep`、七类 `AgentStepType`、独立 `AgentStepStatus` 与递归 `AgentJsonValue`。对象精确携带 `step_id / run_id / index / type / model / tool / status / input / output / started_at / finished_at`；step/run identity 与非负 index 严格校验，model/tool step 必须绑定对应 identity，pending/running/五种终态的起止时间一致性 fail closed，非终态不得伪造 output。
+
+输入输出只接受 JSON primitive、字符串键 mapping 与 list/tuple；构造时递归脱离调用方并用只读 mapping/tuple 深冻结，拒绝非有限浮点、非字符串键、非 JSON 对象、循环引用及超过 32 层的嵌套，`as_dict()` 每次返回可 JSON 化的全新副本。E-02 不创建 step、不校验跨对象 index 唯一性、不接管现有请求/工具执行、不实现 E-04 状态转换，也不接数据库、Redis、Repository 或 D-09 sidecar。E-03 只能在 E-02 精确 HEAD 远端 gate 关闭后开始。
+
+E-02 AgentRun/Step 定向 `88 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `642 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `65f2b3356c6bddd4e3c656adee9a55ff07058c6e1f4a62b40adb741a52f1f693`、sdist SHA256 `ed08e853c076872c69b20b70992c5aa7d78a9c3cf3ec216f0537fbe6e3c591cf`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged `AgentStep` 深冻结与序列化均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；E-03 在此前不实施，未合并、未发布、未部署。
 
 ---
 
