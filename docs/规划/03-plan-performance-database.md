@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T09:14:42+00:00
+lastmod: 2026-08-21T09:36:50+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T09:14:42+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-04 已完成精确 HEAD 双 run gate。F-05 最终 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 的 push run `32465645519` / PR run `32465649984` 均为 11/11 green、各恰好一个成功 `release-gate`，F-06 依赖已解除。F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 已加入 `agent_steps` 共享 metadata 与线性 revision `0003_agent_steps`；本地全门禁、fresh 制品及四组包外 AgentStep Schema/graph/DDL smoke 已通过，包含规划的精确 HEAD 双 run gate 待完成，F-07 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-05 已完成精确 HEAD 双 run gate。F-06 最终 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 的 push run `32467140779` / PR run `32467144569` 均为 11/11 green、各恰好一个成功 `release-gate`，F-07 依赖已解除。F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 已加入 `tool_calls` 共享 metadata 与线性 revision `0004_tool_calls`；本地全门禁、fresh 制品及四组包外 ToolCall Schema/graph/DDL smoke 已通过，包含规划的精确 HEAD 双 run gate 待完成，F-08 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
 
 ---
 
@@ -314,7 +314,7 @@ error
 
 F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 将以上字段固化为 `agent_steps`，并以不可变 `0003_agent_steps` 追加到 `0002_agent_runtime`。`id` 为应用生成的有界标识，`run_id` 使用 `RESTRICT` 外键指向 `agent_runs.id`；`(run_id, step_index)` 唯一约束既拒绝同一 run 的重复序号，也提供稳定步骤顺序。step type/status 值域精确绑定现有 `AgentStepType / AgentStepStatus`；MODEL/TOOL 类型必须分别携带 model/tool identity。
 
-pending、running 与五种终态的 `started_at / finished_at / duration_ms` 组合由数据库约束精确执行，时间不得倒序且 duration 不得为负。input/output/error 只允许最长 6000 字符的非空预览，不持久化完整领域 JSON；非终态不得携带 output，completed 不得携带 error。四版本定向各 `38 passed`，联合回归 `429 passed`，四版本全量各 `983 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `edcaac6c69f337d70b078dc0679b360db6bcc9d5228c39606380fbb0d2afeb80` / `b6dffce54dfed796625707e932881d996a52f6759e63e62752fd04903d1e5a26`，四组包外 AgentStep Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，F-07 等待 F-06 精确 HEAD 双 run gate；未运行 migration，未连接或修改数据库。
+pending、running 与五种终态的 `started_at / finished_at / duration_ms` 组合由数据库约束精确执行，时间不得倒序且 duration 不得为负。input/output/error 只允许最长 6000 字符的非空预览，不持久化完整领域 JSON；非终态不得携带 output，completed 不得携带 error。四版本定向各 `38 passed`，联合回归 `429 passed`，四版本全量各 `983 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `edcaac6c69f337d70b078dc0679b360db6bcc9d5228c39606380fbb0d2afeb80` / `b6dffce54dfed796625707e932881d996a52f6759e63e62752fd04903d1e5a26`，四组包外 AgentStep Schema/graph/DDL smoke 均通过。最终文档闭环 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 对应 push run `32467140779` / PR run `32467144569`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-07 依赖已解除；未运行 migration，未连接或修改数据库。
 
 ---
 
@@ -342,6 +342,10 @@ duration_ms
 created_at
 finished_at
 ```
+
+F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 将以上字段固化为 `tool_calls`，并以不可变 `0004_tool_calls` 追加到 `0003_agent_steps`。`ToolCallStatus / ToolSource` 值域与领域枚举精确同步；arguments 使用非空 JSONB object，result 只保存最长 6000 字符预览。Generated 来源必须同时绑定合法 bundle ID 与 64 位小写 digest，其他来源必须保持两者为空；等待确认和 confirmed 记录必须绑定 confirmation ID，且同一 confirmation 只能对应一条调用。
+
+`run_id` 直接以 `RESTRICT` 指向 `agent_runs`；新 revision 另为 `agent_steps(run_id, id)` 追加支持约束，并用复合 `RESTRICT` 外键保证 call 的 run/step 不会跨 run 错配。五种终态必须携带 `finished_at / duration_ms`，非终态必须保持两者为空且不得携带 result，completed 必须携带 result preview；时间不得倒序、duration 不得为负。run 稳定时间线、step 时间线与状态恢复索引均已声明。四版本定向各 `41 passed`，联合回归 `432 passed`，四版本全量各 `986 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `2ce8bf699fe7919cfca345d90833be99e2453e5025adf9513a9d230eb96f4b4f` / `54a6a8f44d3da165c7fe34704d60d4765164877a4c7b6fbc48c605957f819424`，四组包外 ToolCall Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，F-08 等待 F-07 精确 HEAD 双 run gate；未运行 migration，未连接或修改数据库。
 
 ---
 
@@ -946,10 +950,11 @@ PendingAction store 不可用
 ```text
 0001_users_conversations
 0002_agent_runtime
-0003_tool_bundles
-0004_usage_audit
-0005_memory
+0003_agent_steps
+0004_tool_calls
 ```
+
+F-08 及后续任务继续按依赖追加 revision，不预占或复用已经门禁的编号。
 
 F-03 已完成离线迁移地基；实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 当时保持空 graph，并由入口和 env 双重短路 Alembic 1.13 空图可能生成的误导性 `DROP TABLE alembic_version`。最终文档闭环 HEAD `a4eb771678587e6bfd32f793c8a6f7eda88f29ab` 对应 push run `32461256977` / PR run `32461262286`；两者均 11/11 green、各恰好一个成功 `release-gate`，F-04 依赖已解除。
 
@@ -957,7 +962,9 @@ F-04 实现提交 `21810cf836d89d07c268076d6e3d96b34cdfd04b` 将 graph 推进为
 
 F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 以不可变 `0002_agent_runtime` 将 graph 推进为 `revisions=2 / bases=1 / heads=1`，唯一 head 为该 revision。本阶段只创建 `agent_runs`，F-06/F-07 必须通过后续 revision 扩展，不能回改已经门禁的 `0002`。离线 `0002:0001` downgrade 只删除 `agent_runs`，不触碰 F-04 三张表；在线 migration 继续在 engine 创建前 fail closed。最终文档闭环 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 的 push run `32465645519` / PR run `32465649984` 均为 11/11 green、各恰好一个成功 `release-gate`，F-06 依赖已解除。
 
-F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 以不可变 `0003_agent_steps` 将 graph 推进为 `revisions=3 / bases=1 / heads=1`，唯一 head 为该 revision。本阶段只创建 `agent_steps`，F-07 必须追加新 revision，不能回改已经门禁的 `0001`～`0003`。离线 `0003:0002` downgrade 只删除 `agent_steps`，不触碰前四张表；metadata/revision parity 覆盖三段 graph 的全部列、约束与索引，在线 migration 继续在 engine 创建前 fail closed。当前仅 F-06 本地门禁完成，精确 HEAD 双 run gate 待完成；未读取 DSN，未运行 migration，未连接或修改任何数据库。
+F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 以不可变 `0003_agent_steps` 将 graph 推进为 `revisions=3 / bases=1 / heads=1`，唯一 head 为该 revision。本阶段只创建 `agent_steps`，F-07 必须追加新 revision，不能回改已经门禁的 `0001`～`0003`。离线 `0003:0002` downgrade 只删除 `agent_steps`，不触碰前四张表；metadata/revision parity 覆盖三段 graph 的全部列、约束与索引，在线 migration 继续在 engine 创建前 fail closed。最终文档闭环 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 的 push run `32467140779` / PR run `32467144569` 均为 11/11 green、各恰好一个成功 `release-gate`，F-07 依赖已解除。
+
+F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 以不可变 `0004_tool_calls` 将 graph 推进为 `revisions=4 / bases=1 / heads=1`，唯一 head 为该 revision。新 revision 创建 `tool_calls`，并只为复合父键向 `agent_steps` 追加 `uq_agent_steps_run_id_id`，不回改 `0001`～`0003`；F-08 必须继续追加新 revision。离线 `0004:0003` downgrade 先删除 `tool_calls` 再删除该支持约束，不触碰前五张表；metadata/revision parity 覆盖四段 graph 的全部列、约束与索引，在线 migration 继续在 engine 创建前 fail closed。当前仅 F-07 本地门禁完成，精确 HEAD 双 run gate 待完成；未读取 DSN，未运行 migration，未连接或修改任何数据库。
 
 ---
 

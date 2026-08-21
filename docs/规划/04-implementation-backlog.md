@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T09:14:42+00:00
+lastmod: 2026-08-21T09:36:50+00:00
 ---
 
 # 04-implementation-backlog
@@ -19,7 +19,7 @@ lastmod: 2026-08-21T09:14:42+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环，F-01～F-04 已完成精确 HEAD 双 run gate。F-05 最终 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 对应 push run `32465645519` / PR run `32465649984`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 新增 `agent_steps` Schema 与线性 revision `0003_agent_steps`；四版本定向各 `38 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `429 passed`，四版本普通全量各 `983 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 AgentStep Schema/graph/DDL smoke 均通过。F-06 当前仅本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-07 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环，F-01～F-05 已完成精确 HEAD 双 run gate。F-06 最终 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 对应 push run `32467140779` / PR run `32467144569`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 新增 `tool_calls` Schema 与线性 revision `0004_tool_calls`；四版本定向各 `41 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `432 passed`，四版本普通全量各 `986 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 ToolCall Schema/graph/DDL smoke 均通过。F-07 当前仅本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-08 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-05 精确 HEAD 双 run 远端 gate green；🟡 F-06 本地门禁完成、远端 gate 待完成；F-07～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-06 精确 HEAD 双 run 远端 gate green；🟡 F-07 本地门禁完成、远端 gate 待完成；F-08～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -871,17 +871,31 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `edcaac6c69f337d70b078dc0679b360db6bcc9d5228c39606380fbb0d2afeb80`、sdist SHA256 `b6dffce54dfed796625707e932881d996a52f6759e63e62752fd04903d1e5a26`；两种制品各 64 个文件，均包含三个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认领域 type/status parity、五张表、三 revision graph、TIMESTAMPTZ/FK/unique/check DDL 与定向 downgrade，并在 engine 创建函数被替换为拒绝桩时完成离线渲染。
 
-当前状态：仅本地门禁完成，包含规划的 F-06 精确 HEAD push/PR 双 run gate 待完成；F-07 只能在该 gate 关闭后开始。本阶段不接 runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 legacy sidecar 保持原样。未合并、未发布、未部署。
+远端证据：F-06 最终文档闭环精确 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 对应 push run `32467140779` 与 PR run `32467144569`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。F-07 依赖已解除。未合并、未发布、未部署。
 
 ---
 
 ## F-07 ToolCall Schema
 
-状态：依赖 F-06 精确 HEAD push/PR 双 run gate，当前保持锁定；必须以新 revision 扩展，不能回改 `0001`～`0003`。
+实现落点：实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 在共享 metadata 新增 `tool_calls`，并以不可变 revision `0004_tool_calls` 追加到 `0003_agent_steps`。字段覆盖规划要求的 `id / run_id / step_id / tool_name / tool_source / bundle_id / bundle_digest / arguments_json / result_preview / confirmed / confirmation_id / status / duration_ms / created_at / finished_at`；arguments 为 JSONB object，result 只保存最长 6000 字符预览，不保存完整结果 JSON。
+
+领域与数据边界：`status / tool_source` 值域精确绑定现有 `ToolCallStatus / ToolSource`。Generated 来源必须同时绑定合法 bundle ID 与 64 位小写 digest，其他来源不得伪造 bundle identity。waiting_confirmation 必须保持未确认并绑定 confirmation ID，confirmed 记录也必须绑定 confirmation ID；非空 confirmation ID 以 partial unique index 防止一份待确认动作被复用。五种终态必须携带结束时间与非负毫秒 duration，非终态不得携带 result，completed 必须携带有界 result preview。
+
+引用与查询边界：`run_id` 以 `RESTRICT` 指向 `agent_runs`；为防止跨 run 错挂 step，新 revision 为 `agent_steps(run_id, id)` 追加支持约束，并使用 `(run_id, step_id)` 复合 `RESTRICT` 外键。run 时间线索引使用 `(run_id, created_at DESC, id DESC)` 稳定游标，另有 step 时间线与状态恢复索引。F-07 只声明 Schema，不实现 Repository 映射或真实持久化。
+
+迁移边界：packaged graph 为 `0001_users_conversations → 0002_agent_runtime → 0003_agent_steps → 0004_tool_calls` 的单 base/head 线；不回改已门禁的 `0001`～`0003`，F-08 必须追加后续 revision。离线 `0004:0003` downgrade 先删除 `tool_calls` 再删除复合父键支持约束，不触碰前五张表；metadata/revision parity 覆盖精确 PostgreSQL 类型、全部约束和索引。在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13 与 3.13.13 定向各 `41 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `432 passed`；四版本严格串行普通全量各 `986 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failure/error/skip 均为 0；Ruff 0.16.2、format/diff check 与 Pyright 目标/测试文件 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `2ce8bf699fe7919cfca345d90833be99e2453e5025adf9513a9d230eb96f4b4f`、sdist SHA256 `54a6a8f44d3da165c7fe34704d60d4765164877a4c7b6fbc48c605957f819424`；两种制品各 65 个文件，均包含四个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认领域 status/source parity、六张表、四 revision graph、JSONB/复合 FK/unique/check DDL 与定向 upgrade，并在无生产配置的临时 cwd 完成 `reload("package-smoke")`。
+
+当前状态：仅本地门禁完成，包含规划的 F-07 精确 HEAD push/PR 双 run gate 待完成；F-08 只能在该 gate 关闭后开始。本阶段不接 runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 legacy sidecar 保持原样。未合并、未发布、未部署。
 
 ---
 
 ## F-08 Tool Bundle Metadata Schema
+
+状态：依赖 F-07 精确 HEAD push/PR 双 run gate，当前保持锁定；必须以新 revision 扩展，不能回改 `0001`～`0004`。
 
 ---
 
