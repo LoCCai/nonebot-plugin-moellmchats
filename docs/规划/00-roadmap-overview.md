@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T05:55:04+00:00
+lastmod: 2026-08-21T06:20:07+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-06 已闭环；E-06 最终 HEAD `95a780eeb36a9de1db506664f86fd02bef6968c9` 对应 push run `32450808012` / PR run `32450810445`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-07 实现提交 `7c1c8aa961969eb876c26f26db40a463e737a94b` 新增 frozen `ToolScheduleBatch / ToolSchedule` 与 `ReadOnlyParallelToolScheduler`：只把显式两两 `parallel_with`、同时 ready、无需确认的 `read_only` 工具放入同一有界批次；依赖按拓扑分批，mutating、确认门禁和未知关系保守串行，缺失依赖闭包或未裁决 conflict 均 fail closed。Tool Graph/Scheduler 定向 `79 passed`，Agent Runtime 联合定向 `264 passed`，Python 3.10～3.13 严格串行普通全量各 `818 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外 Scheduler smoke 均通过。E-07 当前仅本地门禁完成，包含规划的精确 HEAD 远端双 run gate 待完成；E-08 尚未开始。E-07 只生成不可变计划，不创建 task、不调用 handler、不执行实际并发或冲突裁决，也不引入数据库、Redis、Repository、迁移、生产配置或 D-09 sidecar。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-07 已闭环；E-07 最终 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 对应 push run `32452551080` / PR run `32452556938`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 新增 frozen `ToolConflictRule / ToolConflictDecision / ToolConflictResolution / ToolConflictPolicy`：未显式 prefer 的选中冲突默认拒绝整次选择；规则只能显式拒绝或指定工具对赢家，且必须匹配当前 ToolGraph；同时决议后若移除全部工具或破坏依赖闭包也整体拒绝，拒绝结果不暴露部分执行集。Graph/Scheduler/Conflict 定向 `125 passed`，Agent Runtime 联合定向 `310 passed`，Python 3.10～3.13 严格串行普通全量各 `864 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外 Policy/Scheduler smoke 均通过。E-08 当前仅本地门禁完成，包含规划的精确 HEAD 远端双 run gate 待完成。E-08 只生成不可变决议，不读取生产规则、不调用 handler、不接真实执行链或持久化，也不引入数据库、Redis、Repository、迁移、生产配置或 D-09 sidecar。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

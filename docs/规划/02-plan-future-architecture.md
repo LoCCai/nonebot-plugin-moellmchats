@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T05:55:04+00:00
+lastmod: 2026-08-21T06:20:07+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T05:55:04+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-06 已闭环；E-06 最终 HEAD `95a780eeb36a9de1db506664f86fd02bef6968c9` 的 push run `32450808012` / PR run `32450810445` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-07 实现提交 `7c1c8aa961969eb876c26f26db40a463e737a94b` 已定义有界、fail-closed 的只读并行调度计划；定向 `79 passed`，四版本串行普通全量各 `818 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 Scheduler smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，E-08 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01～E-07 已闭环；E-07 最终 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 的 push run `32452551080` / PR run `32452556938` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 已定义默认拒绝、显式赢家、结构化审计的 Tool Conflict Policy；定向 `125 passed`，四版本串行普通全量各 `864 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 Policy/Scheduler smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -358,7 +358,15 @@ E-07 实现提交 `7c1c8aa961969eb876c26f26db40a463e737a94b` 新增独立 `tool_
 
 并行是显式 opt-in：同一批次的每一对工具都必须有 `parallel_with`，全部 effect 必须是强类型 `ToolEffect.READ_ONLY`，且不得要求确认；`max_parallelism` 限定为 1～64，值 1 可完全关闭并行。mutating、确认门禁、未知关系一律退化为单工具串行；缺失依赖闭包 fail closed；选中 `conflicts_with` 工具对时不擅自选赢家或排序，而是拒绝并要求先经 E-08 policy。E-07 不创建 asyncio task、不 `gather`、不调用 handler、不授权 capability、不消费或延长 DeadlineContext，也不接管真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar；真正并发执行仍属于 G-09。E-08 只能在 E-07 精确 HEAD 远端 gate 关闭后开始。
 
-本地门禁：Tool Graph/Scheduler 定向 `79 passed`，与 Agent Runtime 联合定向 `264 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `818 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `546962c7f0d4963c4604b5ba6ceeff6bc1171434a58e7a5422e375a9356be771`、sdist SHA256 `57aa7d15e7219cf01ee8c0519e0546b4e15c7177b15319b1920c11ff402d7122`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 分层/只读并行/mutating 串行/conflict 拒绝均通过。当前本地门禁完成，包含规划的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
+本地门禁：Tool Graph/Scheduler 定向 `79 passed`，与 Agent Runtime 联合定向 `264 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `818 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `546962c7f0d4963c4604b5ba6ceeff6bc1171434a58e7a5422e375a9356be771`、sdist SHA256 `57aa7d15e7219cf01ee8c0519e0546b4e15c7177b15319b1920c11ff402d7122`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 分层/只读并行/mutating 串行/conflict 拒绝均通过。最终文档闭环 HEAD `b1c942679bb29fb9b1dca111ce1c6641b9d44d50` 对应 push run `32452551080` / PR run `32452556938`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-08 依赖已解除；未合并、未发布、未部署。
+
+## 6.2 Tool Conflict Policy
+
+E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 新增独立 `tool_conflicts.py`。frozen `ToolConflictRule` 对规范化工具对只允许强类型 `reject / prefer`：reject 不得携带 winner，prefer 必须显式指定两个端点之一。frozen `ToolConflictDecision / ToolConflictResolution` 记录规则是否显式、winner/loser、请求/保留/移除集合、整体 allowed/rejected 状态与拒绝原因，并返回新的 JSON primitive 副本；拒绝状态强制 selected/dropped 均为空，避免调用方误用部分决议。
+
+`ToolConflictPolicy` 默认拒绝所有未配置 prefer 的选中 conflict；规则必须引用图中节点并精确匹配真实 `conflicts_with` 边，陈旧或伪造规则 fail closed。所有选中冲突对按规范顺序同时决议，任一 missing/explicit reject 即拒绝整次选择；全部 prefer 后再统一移除 loser，若循环偏好移除全部工具、或 survivor 的传递依赖被移除/原本缺失，也整体拒绝。Policy 不按输入顺序、effect、权限或 capability 猜 winner，不读取配置或生产状态，不执行工具、不创建 task、不修改 E-07 Scheduler；允许结果可显式交给 Scheduler，仍由 Scheduler 再验证 conflict-free 与 effect/并行约束。本任务不接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。
+
+本地门禁：Graph/Scheduler/Conflict 定向 `125 passed`，与 Agent Runtime 联合定向 `310 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `864 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f33107c781b2eefac8e95577e891b4b58795f1979e6a0313d8418c7819cd644c`、sdist SHA256 `7a1ca883584d30d41edc5c7bad58c41b9c88f065886fbddbb0fc1658e3f5790b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 默认拒绝/显式赢家/依赖破坏拒绝/安全交接 Scheduler 均通过。当前本地门禁完成，包含规划的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
 
 ---
 
