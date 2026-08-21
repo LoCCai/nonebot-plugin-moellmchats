@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T06:42:47+00:00
+lastmod: 2026-08-21T07:18:15+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T06:42:47+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环；E-08 最终 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 的 push run `32454187768` / PR run `32454191418` 均为 11/11 green 且各恰好一个成功 `release-gate`。F-01 实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 已在 backend-neutral 边界定义 Repository Protocol、分页与 CAS 契约，并完成本地全门禁；它不是 PostgreSQL Repository 实现，不安装 SQLAlchemy/asyncpg/Alembic，不建表、不迁移、不连接数据库或 Redis。当前 AgentRun/Step/ToolCall/StateMachine/DeadlineContext/ToolGraph/ToolSchedule/ToolConflictResolution 仍是共享领域与策略对象，内存 PendingAction store 仍不是 F-12 Redis 持久化。F-01 精确 HEAD 远端 gate 尚待完成，F-02 及后续数据库任务继续锁定。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环；F-01 最终 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 的 push run `32455829891` / PR run `32455828489` 均为 11/11 green 且各恰好一个成功 `release-gate`。F-02 实现提交 `cf7c236c3f78c0775ff513f291ef4a55a877e54d` 已新增有界、凭据脱敏、惰性且绑定 PID/event-loop 的 SQLAlchemy Async Engine 生命周期，并完成本地全门禁。当前没有全局 engine/session、Repository 实现、Schema、Alembic 或 Redis client，未读取生产 DSN，也未 checkout 或连接数据库。F-02 精确 HEAD 远端 gate 尚待完成，F-03 及后续数据库任务继续锁定；远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。
 
 ---
 
@@ -143,6 +143,10 @@ Redis：
 redis-py asyncio
 ```
 
+F-02 实现提交 `cf7c236c3f78c0775ff513f291ef4a55a877e54d` 已加入 `sqlalchemy>=2,<3` 与 `asyncpg>=0.30,<1`，但只提供显式构造的 `DatabaseEngineSettings / DatabaseEngineManager`。URL 必须使用 `postgresql+asyncpg`；原始 DSN 不持久保留，日志/诊断/错误不渲染凭据。连接池 size 1～100、overflow 0～100、总量不超过 150，pool/connect/statement/recycle timeout 均有上限；固定启用 pre-ping、LIFO、参数隐藏及 asyncpg 客户端/服务端 timeout。
+
+Manager 惰性创建且每实例至多持有一个 `AsyncEngine`，创建只建立 SQLAlchemy pool 对象，不 checkout 网络连接；创建时绑定 PID/event-loop，跨边界复用与 dispose 竞态 fail closed，释放失败保持可重试。当前不创建全局实例、不接配置或生命周期、不创建 session，不执行 SQL。F-02 定向 `50 passed`，联合 Repository/Agent/Graph/Scheduler/Conflict `391 passed`；四版本最终普通全量各 `945 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright 与 fresh 制品门禁均通过。wheel/sdist SHA256 为 `c5c59aa4c556a4f16bb98a27c979ee174b2d1e46c5695f5ce596a7c617416c8c` / `c932056e00dbada7d55ab07f196996edc6daf3d6b6a5f3a31da6a09e79e4732f`；四组包外 smoke 均为 `checkedout=0`。当前仅本地门禁完成；F-03 等待 F-02 精确 HEAD 双 run gate。
+
 ---
 
 # 4. Repository Layer
@@ -164,7 +168,7 @@ Runtime 只面向接口。
 
 F-01 已在实现提交 `71c9b4ceafe6bc5e4a0d16349d28bb7375f8dbbb` 固化这一边界：除上述六类接口外，补充 `AgentStepRepository / ToolCallRepository / RepositoryTransaction`，并以有界 opaque cursor 统一列表分页。AgentRun replace 使用 state + generation 双重 CAS，ToolCall replace 使用 status CAS；冲突和后端不可用是不同错误类别，避免实现层把未知写入结果误报为可安全重试。
 
-该提交只有 Protocol、不可变分页值对象和契约测试，没有 engine、session、ORM model、SQL、DSN 或 I/O。Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；四个 Python 版本普通全量各 `895 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright、fresh build/Twine/checksum 与 Python 3.10/3.12 × wheel/sdist 四组包外 Repository smoke 均通过。wheel SHA256 为 `373dcba1bcc9c782d933400dad2ac1215c3c754da455f02b17aae19211a76889`，sdist SHA256 为 `61c773e8780aade1766ac257f8d05f015851495ff307865ef386492ae4d8d9ff`。当前仅本地门禁完成；F-02 必须等待 F-01 精确 HEAD 双 run 远端 gate。
+该提交只有 Protocol、不可变分页值对象和契约测试，没有 engine、session、ORM model、SQL、DSN 或 I/O。Repository + Agent Runtime 定向 `216 passed`，联合 Graph/Scheduler/Conflict 为 `341 passed`；四个 Python 版本普通全量各 `895 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright、fresh build/Twine/checksum 与 Python 3.10/3.12 × wheel/sdist 四组包外 Repository smoke 均通过。wheel SHA256 为 `373dcba1bcc9c782d933400dad2ac1215c3c754da455f02b17aae19211a76889`，sdist SHA256 为 `61c773e8780aade1766ac257f8d05f015851495ff307865ef386492ae4d8d9ff`。最终文档闭环 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 对应 push run `32455829891` / PR run `32455828489`；两者均 11/11 green、各恰好一个成功 `release-gate`。F-02 依赖已解除；未合并、未发布、未部署。
 
 ---
 
