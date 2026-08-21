@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 import math
 
 import pytest
 
-from nonebot_plugin_moellmchats.agent_runtime import AgentRun, AgentRunState
+from nonebot_plugin_moellmchats.agent_runtime import (
+    AgentRun,
+    AgentRunState,
+    AgentStep,
+    AgentStepStatus,
+    AgentStepType,
+)
 
 
 def _run(**overrides: object) -> AgentRun:
@@ -21,6 +28,24 @@ def _run(**overrides: object) -> AgentRun:
     }
     values.update(overrides)
     return AgentRun(**values)  # type: ignore[arg-type]
+
+
+def _step(**overrides: object) -> AgentStep:
+    values: dict[str, object] = {
+        "step_id": "step_0001",
+        "run_id": "run_01HZX7Y95Z8QW8D4WTV4VCZZY2",
+        "index": 0,
+        "type": AgentStepType.CLASSIFICATION,
+        "status": AgentStepStatus.PENDING,
+        "model": None,
+        "tool": None,
+        "input": None,
+        "output": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+    values.update(overrides)
+    return AgentStep(**values)  # type: ignore[arg-type]
 
 
 def test_agent_run_is_frozen_generation_bound_and_serializable() -> None:
@@ -163,3 +188,243 @@ def test_agent_run_rejects_finish_before_start() -> None:
             started_at=100.0,
             finished_at=99.0,
         )
+
+
+def test_agent_step_is_frozen_and_serializes_detached_structured_data() -> None:
+    step_input = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "weights": [1, 2.5],
+    }
+    step = _step(input=step_input)
+
+    step_input["messages"][0]["content"] = "tampered"
+    step_input["weights"].append(3)
+    assert isinstance(step.input, Mapping)
+    messages = step.input["messages"]
+    assert isinstance(messages, tuple)
+    assert isinstance(messages[0], Mapping)
+    assert messages[0]["content"] == "hello"
+    assert step.input["weights"] == (1, 2.5)
+    with pytest.raises(TypeError):
+        step.input["new"] = "value"  # type: ignore[index]
+    with pytest.raises(FrozenInstanceError):
+        step.index = 1  # type: ignore[misc]
+
+    serialized = step.as_dict()
+    assert serialized == {
+        "step_id": "step_0001",
+        "run_id": "run_01HZX7Y95Z8QW8D4WTV4VCZZY2",
+        "index": 0,
+        "type": "classification",
+        "model": None,
+        "tool": None,
+        "status": "pending",
+        "input": {
+            "messages": [{"role": "user", "content": "hello"}],
+            "weights": [1, 2.5],
+        },
+        "output": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+    serialized["input"]["messages"][0]["content"] = "changed"
+    assert messages[0]["content"] == "hello"
+
+
+@pytest.mark.parametrize("step_type", list(AgentStepType))
+def test_agent_step_supports_every_planned_step_type(
+    step_type: AgentStepType,
+) -> None:
+    identity = {}
+    if step_type is AgentStepType.MODEL:
+        identity["model"] = "gpt-5"
+    elif step_type is AgentStepType.TOOL:
+        identity["tool"] = "weather_lookup"
+    step = _step(type=step_type, **identity)
+
+    assert step.type is step_type
+    assert step.as_dict()["type"] == step_type.value
+
+
+def test_agent_step_running_state_requires_only_start_timestamp() -> None:
+    step = _step(
+        type=AgentStepType.MODEL,
+        status=AgentStepStatus.RUNNING,
+        model="gpt-5",
+        started_at=20,
+    )
+
+    assert step.started_at == 20.0
+    assert step.finished_at is None
+    assert step.elapsed is None
+    assert step.is_terminal is False
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        AgentStepStatus.COMPLETED,
+        AgentStepStatus.FAILED,
+        AgentStepStatus.CANCELLED,
+        AgentStepStatus.TIMED_OUT,
+        AgentStepStatus.SKIPPED,
+    ],
+)
+def test_agent_step_terminal_states_require_complete_timestamps(
+    status: AgentStepStatus,
+) -> None:
+    step = _step(
+        type=AgentStepType.TOOL,
+        status=status,
+        tool="weather_lookup",
+        output={"ok": status is AgentStepStatus.COMPLETED},
+        started_at=20.0,
+        finished_at=21.25,
+    )
+
+    assert step.is_terminal is True
+    assert step.elapsed == 1.25
+    assert step.as_dict()["status"] == status.value
+
+
+@pytest.mark.parametrize(
+    ("status", "started_at", "finished_at", "message"),
+    [
+        (AgentStepStatus.PENDING, 1.0, None, "pending"),
+        (AgentStepStatus.PENDING, None, 2.0, "pending"),
+        (AgentStepStatus.RUNNING, None, None, "running"),
+        (AgentStepStatus.RUNNING, 1.0, 2.0, "running"),
+        (AgentStepStatus.COMPLETED, None, 2.0, "终态"),
+        (AgentStepStatus.FAILED, 1.0, None, "终态"),
+    ],
+)
+def test_agent_step_rejects_incoherent_status_timestamps(
+    status: AgentStepStatus,
+    started_at: float | None,
+    finished_at: float | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _step(
+            status=status,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+
+@pytest.mark.parametrize(
+    ("step_type", "message"),
+    [
+        (AgentStepType.MODEL, "model"),
+        (AgentStepType.TOOL, "tool"),
+    ],
+)
+def test_agent_step_requires_type_specific_identity(
+    step_type: AgentStepType,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _step(type=step_type)
+
+
+@pytest.mark.parametrize(
+    ("status", "started_at"),
+    [
+        (AgentStepStatus.PENDING, None),
+        (AgentStepStatus.RUNNING, 1.0),
+    ],
+)
+def test_agent_step_nonterminal_states_reject_output(
+    status: AgentStepStatus,
+    started_at: float | None,
+) -> None:
+    with pytest.raises(ValueError, match="output"):
+        _step(status=status, started_at=started_at, output={"partial": True})
+
+
+def test_agent_step_rejects_finish_before_start() -> None:
+    with pytest.raises(ValueError, match="不能早于"):
+        _step(
+            status=AgentStepStatus.COMPLETED,
+            started_at=2.0,
+            finished_at=1.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("step_id", "bad step", "step_id"),
+        ("run_id", "", "run_id"),
+        ("index", -1, "index"),
+        ("index", True, "index"),
+        ("type", "model", "type"),
+        ("status", "pending", "status"),
+        ("model", " model", "model"),
+        ("model", "x" * 129, "model"),
+        ("tool", "tool\nname", "tool"),
+        ("tool", 1, "tool"),
+    ],
+)
+def test_agent_step_rejects_invalid_identity_and_enum_fields(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _step(**{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("started_at", -1.0),
+        ("started_at", math.inf),
+        ("started_at", math.nan),
+        ("started_at", True),
+        ("finished_at", math.inf),
+        ("finished_at", math.nan),
+        ("finished_at", True),
+    ],
+)
+def test_agent_step_rejects_invalid_timestamps(field: str, value: object) -> None:
+    overrides = {
+        "status": AgentStepStatus.COMPLETED,
+        "started_at": 1.0,
+        "finished_at": 2.0,
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=field):
+        _step(**overrides)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        object(),
+        {1: "non-string key"},
+        {"value": math.inf},
+        {"value": math.nan},
+    ],
+)
+def test_agent_step_rejects_non_json_payloads(value: object) -> None:
+    with pytest.raises(ValueError, match="JSON"):
+        _step(input=value)
+
+
+def test_agent_step_rejects_cyclic_json_payloads() -> None:
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+
+    with pytest.raises(ValueError, match="循环"):
+        _step(input=cyclic)
+
+
+def test_agent_step_rejects_excessively_deep_json_payloads() -> None:
+    nested: object = "leaf"
+    for _ in range(34):
+        nested = [nested]
+
+    with pytest.raises(ValueError, match="嵌套"):
+        _step(output=nested)
