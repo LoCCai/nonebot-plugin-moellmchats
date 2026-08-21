@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
 from nonebot_plugin_moellmchats.config import config_parser
 from nonebot_plugin_moellmchats.pending_actions import (
     PendingActionError,
@@ -15,8 +16,26 @@ from nonebot_plugin_moellmchats.runtime_snapshot import (
     RuntimeSnapshot,
     immutable_mapping,
 )
-from nonebot_plugin_moellmchats.tool_contracts import ToolEffect, ToolSpec
+from nonebot_plugin_moellmchats.tool_contracts import (
+    ToolEffect,
+    ToolPolicy,
+    ToolSpec,
+)
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
+from nonebot_plugin_moellmchats.tool_providers import (
+    DiscoveredTool,
+    ProviderCatalogSnapshot,
+    ProviderDiscoveryBatch,
+    ProviderRegistration,
+    ToolTrustOperation,
+    builtin_tool_provider,
+    file_tool_provider,
+    generated_tool_provider,
+    mcp_tool_provider,
+    nonebot_plugin_provider,
+    provider_registry,
+    registered_tool_provider,
+)
 
 
 class FakeBot:
@@ -33,6 +52,9 @@ def _event(user_id: int = 1, group_id: int = 10):
 def _runtime_snapshot(
     generation: int,
     custom_tools: dict[str, dict],
+    *,
+    provider_catalog: ProviderCatalogSnapshot | None = None,
+    config: dict | None = None,
 ) -> RuntimeSnapshot:
     tool_snapshot = ToolSnapshot(
         generation=generation,
@@ -40,10 +62,11 @@ def _runtime_snapshot(
         custom_tools=immutable_mapping(custom_tools),
         tool_dependencies=immutable_mapping({}),
         mcp_tool_names=frozenset(),
+        provider_catalog=provider_catalog,
     )
     return RuntimeSnapshot(
         generation=generation,
-        config=immutable_mapping({}),
+        config=immutable_mapping(config or {}),
         model_state=None,
         temperaments=immutable_mapping({}),
         temperament_assignments=immutable_mapping({}),
@@ -51,6 +74,53 @@ def _runtime_snapshot(
         tool_snapshot=tool_snapshot,
         emotions=(),
         reloaded_at=1.0,
+    )
+
+
+def _registered_provider_catalog(
+    spec: ToolSpec,
+    *,
+    generation: int,
+) -> ProviderCatalogSnapshot:
+    registered = ProviderRegistration.from_provider(registered_tool_provider)
+    custom_file = ProviderRegistration.from_provider(file_tool_provider)
+    generated = ProviderRegistration.from_provider(generated_tool_provider)
+    mcp = ProviderRegistration.from_provider(mcp_tool_provider)
+    builtin = ProviderRegistration.from_provider(builtin_tool_provider)
+    nonebot_plugin = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    registered_record = DiscoveredTool(
+        provider_id=registered.provider_id,
+        source=registered.source,
+        trust=registered.trust,
+        generation=generation,
+        spec=spec,
+    )
+    builtin_records = tuple(
+        DiscoveredTool(
+            provider_id=builtin.provider_id,
+            source=builtin.source,
+            trust=builtin.trust,
+            generation=generation,
+            spec=builtin_spec,
+        )
+        for builtin_spec in builtin_tool_specs()
+    )
+    return provider_registry.build_snapshot(
+        generation,
+        (
+            ProviderDiscoveryBatch(
+                registered,
+                generation,
+                (registered_record,),
+            ),
+            ProviderDiscoveryBatch(custom_file, generation, ()),
+            ProviderDiscoveryBatch(generated, generation, ()),
+            ProviderDiscoveryBatch(mcp, generation, ()),
+            ProviderDiscoveryBatch(builtin, generation, builtin_records),
+            ProviderDiscoveryBatch(nonebot_plugin, generation, ()),
+        ),
     )
 
 
@@ -343,6 +413,168 @@ async def test_confirmation_executes_fixed_snapshot_arguments_and_rechecks_permi
             store=denied_store,
         )
     assert executions == [("original", True)]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_uses_confirmed_provider_view_and_rechecks_actor(
+    pending_config,
+) -> None:
+    executions: list[tuple[str, bool]] = []
+
+    async def mutate(value: str, _tool_context=None):
+        executions.append((value, _tool_context.confirmed))
+        return "provider changed"
+
+    spec = ToolSpec(
+        name="provider_pending_mutate",
+        description="provider pending mutation",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        permission="superuser",
+        policy=ToolPolicy.configured(),
+    )
+    entry = {**spec.as_legacy_schema(), "source": "registered"}
+    snapshot = _runtime_snapshot(
+        10,
+        {spec.name: entry},
+        provider_catalog=_registered_provider_catalog(spec, generation=10),
+    )
+    provider_view = snapshot.tool_snapshot.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert provider_view is not None
+    assert provider_view.provider_authoritative
+    assert provider_view.execution_entry is not provider_view.legacy_entry
+    assert provider_view.execution_entry["func"] is spec.handler
+    assert provider_view.trust_decision is not None
+    assert provider_view.trust_decision.operation is ToolTrustOperation.EXECUTION
+    assert provider_view.trust_decision.confirmation_required
+    assert provider_view.trust_decision.allowed
+
+    bot = FakeBot()
+    event = _event()
+    store = PendingActionStore(nonce_factory=lambda: "F00D42")
+    await store.create(
+        bot=bot,
+        event=event,
+        tool_name=spec.name,
+        arguments={"value": "canonical"},
+        generation=10,
+    )
+    action, result = await execute_pending_action(
+        "F00D42",
+        bot=bot,
+        event=event,
+        runtime_snapshot=snapshot,
+        store=store,
+    )
+    assert action.tool_name == spec.name
+    assert result.text == "provider changed"
+    assert executions == [("canonical", True)]
+
+    denied_store = PendingActionStore(nonce_factory=lambda: "BAD042")
+    ordinary_event = _event(user_id=2)
+    await denied_store.create(
+        bot=bot,
+        event=ordinary_event,
+        tool_name=spec.name,
+        arguments={"value": "denied"},
+        generation=10,
+    )
+    with pytest.raises(PendingActionError, match="超级用户"):
+        await execute_pending_action(
+            "BAD042",
+            bot=bot,
+            event=ordinary_event,
+            runtime_snapshot=snapshot,
+            store=denied_store,
+        )
+    assert executions == [("canonical", True)]
+    assert await denied_store.size() == 0
+
+
+@pytest.mark.asyncio
+async def test_confirmation_uses_runtime_pinned_provider_rollback_flag(
+    pending_config,
+    monkeypatch,
+) -> None:
+    executions: list[bool] = []
+
+    async def mutate(_tool_context=None):
+        executions.append(_tool_context.confirmed)
+        return "legacy changed"
+
+    spec = ToolSpec(
+        name="pending_runtime_rollback",
+        description="pending runtime rollback",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = _runtime_snapshot(
+        11,
+        {
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        provider_catalog=_registered_provider_catalog(spec, generation=11),
+        config={"provider_catalog_pending_actions_enabled": False},
+    )
+    resolved_views = []
+    original = ToolSnapshot.resolve_pending_action_execution
+
+    def capture_view(self, tool_name, *, is_superuser, provider_cutover=None):
+        view = original(
+            self,
+            tool_name,
+            is_superuser=is_superuser,
+            provider_cutover=provider_cutover,
+        )
+        resolved_views.append((provider_cutover, view))
+        return view
+
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "resolve_pending_action_execution",
+        capture_view,
+    )
+    store = PendingActionStore(nonce_factory=lambda: "FACE00")
+    bot = FakeBot()
+    event = _event()
+    await store.create(
+        bot=bot,
+        event=event,
+        tool_name=spec.name,
+        arguments={},
+        generation=11,
+    )
+
+    _, result = await execute_pending_action(
+        "FACE00",
+        bot=bot,
+        event=event,
+        runtime_snapshot=snapshot,
+        store=store,
+    )
+
+    assert result.text == "legacy changed"
+    assert executions == [True]
+    assert len(resolved_views) == 1
+    provider_cutover, view = resolved_views[0]
+    assert provider_cutover is False
+    assert view is not None
+    assert not view.provider_authoritative
 
 
 @pytest.mark.asyncio

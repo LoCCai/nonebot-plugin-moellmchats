@@ -38,7 +38,7 @@ def ensure_cancellable_mutating_handler(
         )
 
 
-def _is_superuser(bot: Any, event: Any) -> bool:
+def is_tool_superuser(bot: Any, event: Any) -> bool:
     superusers = {
         str(user_id)
         for user_id in getattr(getattr(bot, "config", None), "superusers", set())
@@ -145,7 +145,7 @@ async def _prepare_custom_tool_call(
         raise ToolExecutionError(f"工具 {tool_name} handler 不可调用")
     spec = tool_entry.get("tool_spec")
     if spec is not None:
-        if spec.permission == "superuser" and not _is_superuser(bot, event):
+        if spec.permission == "superuser" and not is_tool_superuser(bot, event):
             raise ToolExecutionError(f"工具 {tool_name} 仅允许超级用户执行")
         ensure_cancellable_mutating_handler(tool_name, spec, func)
         if (

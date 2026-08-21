@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import math
 import re
 import secrets
@@ -15,10 +16,11 @@ import uuid
 
 from .config import config_parser
 from .tool_contracts import ToolEffect, ToolResult, validate_tool_arguments
-from .tool_execution import execute_custom_tool
+from .tool_execution import execute_custom_tool, is_tool_superuser
 
 _NONCE_RE = re.compile(r"^[A-F0-9]{6}$")
 _CallerKey = tuple[str, str, str, str | None]
+logger = logging.getLogger(__name__)
 
 
 class PendingActionError(RuntimeError):
@@ -429,21 +431,42 @@ async def execute_pending_action(
         generation=runtime_snapshot.generation,
     )
     tool_snapshot = runtime_snapshot.tool_snapshot
-    tool_entry = tool_snapshot.custom_tools.get(action.tool_name)
-    if not isinstance(tool_entry, Mapping):
+    provider_cutover = runtime_snapshot.config.get(
+        "provider_catalog_pending_actions_enabled",
+        True,
+    )
+    try:
+        execution_view = tool_snapshot.resolve_pending_action_execution(
+            action.tool_name,
+            is_superuser=is_tool_superuser(bot, event),
+            provider_cutover=provider_cutover,
+        )
+    except Exception as error:
+        raise PendingActionError(
+            f"待确认 Provider 执行视图校验失败：{error!s}"
+        ) from error
+    if execution_view is None:
         raise PendingActionError("待确认工具已不可用，操作未执行")
-    spec = tool_entry.get("tool_spec")
+    spec = execution_view.spec
     if spec is None or spec.effect != ToolEffect.MUTATING:
         raise PendingActionError("待确认工具属性已变化，操作未执行")
-    if action.bundle_digest != tool_entry.get("bundle_digest"):
+    if action.bundle_digest != execution_view.bundle_digest:
         raise PendingActionError("待确认工具版本已变化，操作未执行")
+    decision = execution_view.trust_decision
+    if decision is not None:
+        if decision.audit_required:
+            logger.info(f"PendingAction trust decision: {decision.audit_metadata()}")
+        if not decision.allowed:
+            raise PendingActionError(
+                f"待确认工具权限校验失败：{decision.reason}"
+            )
     arguments = action.arguments()
     if error := validate_tool_arguments(arguments, spec.parameters):
         raise PendingActionError(f"待确认工具参数校验失败：{error}")
     try:
         result = await execute_custom_tool(
             action.tool_name,
-            tool_entry,
+            execution_view.execution_entry,
             arguments,
             bot=bot,
             event=event,

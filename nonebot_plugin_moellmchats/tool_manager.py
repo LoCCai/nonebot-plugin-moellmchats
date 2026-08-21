@@ -146,6 +146,85 @@ class LlmToolExecutionView:
 
 
 @dataclass(frozen=True)
+class PendingActionExecutionView:
+    """One confirmation-bound mutating tool execution view.
+
+    The Provider path executes a canonical adapter derived from ``ToolSpec``.
+    ``legacy_entry`` remains available only for per-confirmation parity and the
+    independent rollback path.
+    """
+
+    tool_name: str
+    generation: int
+    source: ToolSource | None
+    spec: ToolSpec | None
+    execution_entry: Mapping[str, Any]
+    legacy_entry: Mapping[str, Any]
+    bundle_digest: str | None
+    provider_authoritative: bool
+    trust_decision: ToolTrustDecision | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_name, str) or not self.tool_name:
+            raise ValueError("PendingAction 执行视图工具名不能为空")
+        if (
+            not isinstance(self.generation, int)
+            or isinstance(self.generation, bool)
+            or self.generation < 0
+        ):
+            raise ValueError("PendingAction 执行视图 generation 非法")
+        if self.source is not None and self.source not in {
+            ToolSource.REGISTERED,
+            ToolSource.CUSTOM_FILE,
+            ToolSource.GENERATED,
+            ToolSource.MCP,
+        }:
+            raise ValueError("PendingAction 执行视图 source 非法")
+        if self.spec is not None and (
+            not isinstance(self.spec, ToolSpec)
+            or self.spec.name != self.tool_name
+        ):
+            raise ValueError("PendingAction 执行视图 ToolSpec identity 不一致")
+        if not isinstance(self.execution_entry, Mapping) or not isinstance(
+            self.legacy_entry,
+            Mapping,
+        ):
+            raise TypeError("PendingAction 执行适配器必须是映射")
+        if self.bundle_digest is not None and not isinstance(
+            self.bundle_digest,
+            str,
+        ):
+            raise TypeError("PendingAction bundle digest 非法")
+        if type(self.provider_authoritative) is not bool:
+            raise TypeError("PendingAction authority 标志必须是布尔值")
+        if self.provider_authoritative:
+            if self.source is None or self.spec is None:
+                raise ValueError("Provider PendingAction 视图缺少 canonical identity")
+            if (
+                self.execution_entry.get("func") is not self.spec.handler
+                or self.execution_entry.get("tool_spec") is not self.spec
+            ):
+                raise ValueError("Provider PendingAction canonical adapter 不一致")
+            if not isinstance(self.trust_decision, ToolTrustDecision):
+                raise ValueError("Provider PendingAction 视图缺少 trust decision")
+            if (
+                self.trust_decision.tool_name != self.tool_name
+                or self.trust_decision.generation != self.generation
+                or self.trust_decision.operation
+                is not ToolTrustOperation.EXECUTION
+                or self.trust_decision.source is not self.source
+                or self.trust_decision.effect is not self.spec.effect
+                or self.trust_decision.permission != self.spec.permission
+            ):
+                raise ValueError("Provider PendingAction trust decision identity 不一致")
+        else:
+            if self.execution_entry is not self.legacy_entry:
+                raise ValueError("legacy PendingAction 必须执行 rollback adapter")
+            if self.trust_decision is not None:
+                raise ValueError("legacy PendingAction 不得伪造 trust decision")
+
+
+@dataclass(frozen=True)
 class ToolSnapshot:
     generation: int
     plugin_info: Mapping[str, Mapping[str, Any]]
@@ -528,6 +607,140 @@ class ToolSnapshot:
             source=item.source,
             spec=item.spec,
             legacy_entry=legacy_view.legacy_entry,
+            provider_authoritative=True,
+            trust_decision=decision,
+        )
+
+    def _legacy_pending_action_execution_view(
+        self,
+        tool_name: str,
+    ) -> PendingActionExecutionView | None:
+        legacy_entry = self.custom_tools.get(tool_name)
+        if legacy_entry is None:
+            return None
+        raw_source = legacy_entry.get("source")
+        source = (
+            {
+                "registered": ToolSource.REGISTERED,
+                "custom_file": ToolSource.CUSTOM_FILE,
+                "generated": ToolSource.GENERATED,
+                "mcp": ToolSource.MCP,
+            }.get(raw_source)
+            if isinstance(raw_source, str)
+            else None
+        )
+        if tool_name in self.mcp_tool_names:
+            source = ToolSource.MCP
+        spec = legacy_entry.get("tool_spec")
+        bundle_digest = legacy_entry.get("bundle_digest")
+        if bundle_digest is not None and not isinstance(bundle_digest, str):
+            raise ProviderConsumerParityError(
+                f"PendingAction legacy bundle digest 非法: {tool_name}"
+            )
+        return PendingActionExecutionView(
+            tool_name=tool_name,
+            generation=self.generation,
+            source=source,
+            spec=spec if isinstance(spec, ToolSpec) else None,
+            execution_entry=legacy_entry,
+            legacy_entry=legacy_entry,
+            bundle_digest=bundle_digest,
+            provider_authoritative=False,
+        )
+
+    def resolve_pending_action_execution(
+        self,
+        tool_name: str,
+        *,
+        is_superuser: bool,
+        provider_cutover: bool | None = None,
+    ) -> PendingActionExecutionView | None:
+        """Resolve a confirmed mutating call with Provider/legacy parity."""
+
+        if not isinstance(tool_name, str) or not tool_name:
+            raise TypeError("PendingAction tool_name 必须是非空字符串")
+        if type(is_superuser) is not bool:
+            raise TypeError("PendingAction is_superuser 必须是布尔值")
+        legacy_view = self._legacy_pending_action_execution_view(tool_name)
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_pending_actions_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("PendingAction Provider cutover 开关必须是布尔值")
+
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not provider_cutover
+            or provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return legacy_view
+
+        item = provider_catalog.tools.get(tool_name)
+        if item is None:
+            if legacy_view is not None:
+                raise ProviderConsumerParityError(
+                    f"PendingAction Provider identity 缺失: {tool_name}"
+                )
+            return None
+        if item.source not in {
+            ToolSource.REGISTERED,
+            ToolSource.CUSTOM_FILE,
+            ToolSource.GENERATED,
+            ToolSource.MCP,
+        }:
+            raise ProviderConsumerParityError(
+                f"PendingAction Provider source 不可确认执行: {tool_name}"
+            )
+        if legacy_view is None:
+            raise ProviderConsumerParityError(
+                f"PendingAction legacy rollback identity 缺失: {tool_name}"
+            )
+
+        spec_matches = legacy_view.spec is item.spec
+        if item.source is ToolSource.MCP and legacy_view.spec is None:
+            entry = legacy_view.legacy_entry
+            spec_matches = (
+                entry.get("name", tool_name) == tool_name
+                and entry.get("func") is item.spec.handler
+                and entry.get("description") == item.spec.description
+                and mutable_value(entry.get("parameters"))
+                == mutable_value(item.spec.parameters)
+            )
+        provider_bundle_digest = (
+            item.artifact.bundle_digest if item.artifact is not None else None
+        )
+        if (
+            legacy_view.source is not item.source
+            or not spec_matches
+            or legacy_view.bundle_digest != provider_bundle_digest
+        ):
+            raise ProviderConsumerParityError(
+                "PendingAction Provider 执行视图与 legacy rollback view 不一致: "
+                f"{tool_name}"
+            )
+
+        decision = provider_catalog.decide_trust(
+            tool_name,
+            ToolTrustOperation.EXECUTION,
+            is_superuser=is_superuser,
+            confirmed=True,
+        )
+        return PendingActionExecutionView(
+            tool_name=tool_name,
+            generation=self.generation,
+            source=item.source,
+            spec=item.spec,
+            execution_entry=immutable_mapping(item.spec.as_legacy_schema()),
+            legacy_entry=legacy_view.legacy_entry,
+            bundle_digest=provider_bundle_digest,
             provider_authoritative=True,
             trust_decision=decision,
         )

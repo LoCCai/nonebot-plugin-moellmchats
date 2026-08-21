@@ -36,6 +36,7 @@ from nonebot_plugin_moellmchats.tool_contracts import (
 )
 from nonebot_plugin_moellmchats.tool_manager import (
     LlmToolExecutionRoute,
+    PendingActionExecutionView,
     ProviderConsumerParityError,
     ToolManager,
     ToolSnapshot,
@@ -2440,6 +2441,354 @@ def test_llm_tools_provider_cutover_config_requires_boolean(flag) -> None:
     with pytest.raises(
         ValueError,
         match="provider_catalog_llm_tools_enabled",
+    ):
+        ConfigParser._validate(candidate)
+
+
+def test_pending_action_provider_view_is_canonical_for_custom_sources() -> None:
+    async def mutate() -> str:
+        return "changed"
+
+    generation = 56
+    registered_spec = ToolSpec(
+        name="pending_registered",
+        description="registered mutation",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    registered_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            registered_spec.name: {
+                **registered_spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog(
+            (registered_spec,),
+            generation=generation,
+        ),
+    )
+
+    file_spec = ToolSpec(
+        name="pending_file",
+        description="file mutation",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    file_artifact = _file_artifact(file_spec, generation=generation)
+    file_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={file_spec.name: _file_legacy_schema(file_artifact)},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_file_catalog(
+            file_artifact,
+            generation=generation,
+        ),
+    )
+
+    generated_spec = ToolSpec(
+        name="pending_generated",
+        description="generated mutation",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=generation,
+    )
+    generated_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            generated_spec.name: _generated_legacy_schema(
+                generated_artifact
+            )
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_generated_catalog(
+            generated_artifact,
+            generation=generation,
+        ),
+    )
+
+    mcp_spec = ToolSpec(
+        name="mcp__pending__mutate",
+        description="mcp mutation",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+    )
+    mcp_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={mcp_spec.name: _mcp_legacy_schema(mcp_spec)},
+        tool_dependencies={},
+        mcp_tool_names={mcp_spec.name},
+        provider_catalog=_mcp_catalog(mcp_spec, generation=generation),
+    )
+
+    cases = (
+        (registered_snapshot, registered_spec, ToolSource.REGISTERED, None),
+        (file_snapshot, file_spec, ToolSource.CUSTOM_FILE, None),
+        (
+            generated_snapshot,
+            generated_spec,
+            ToolSource.GENERATED,
+            generated_artifact.bundle_digest,
+        ),
+        (mcp_snapshot, mcp_spec, ToolSource.MCP, None),
+    )
+    for snapshot, spec, source, bundle_digest in cases:
+        rollback = snapshot.resolve_pending_action_execution(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=False,
+        )
+        provider = snapshot.resolve_pending_action_execution(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        assert isinstance(rollback, PendingActionExecutionView)
+        assert isinstance(provider, PendingActionExecutionView)
+        assert not rollback.provider_authoritative
+        assert provider.provider_authoritative
+        assert provider.source is rollback.source is source
+        assert provider.spec is spec
+        assert provider.legacy_entry is rollback.legacy_entry
+        assert provider.execution_entry is not provider.legacy_entry
+        assert provider.execution_entry["func"] is spec.handler
+        assert provider.execution_entry["tool_spec"] is spec
+        assert provider.bundle_digest == rollback.bundle_digest == bundle_digest
+        assert provider.trust_decision is not None
+        assert provider.trust_decision.operation is ToolTrustOperation.EXECUTION
+        assert provider.trust_decision.confirmation_required
+        assert provider.trust_decision.allowed
+
+
+def test_pending_action_provider_rechecks_permission_after_confirmation() -> None:
+    async def mutate() -> str:
+        return "changed"
+
+    spec = ToolSpec(
+        name="pending_admin",
+        description="admin mutation",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        permission="superuser",
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=57,
+        plugin_info={},
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=57),
+    )
+
+    denied = snapshot.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert denied is not None
+    assert denied.trust_decision is not None
+    assert not denied.trust_decision.allowed
+    assert "超级用户" in denied.trust_decision.reason
+
+    allowed = snapshot.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert allowed is not None
+    assert allowed.trust_decision is not None
+    assert allowed.trust_decision.allowed
+    assert allowed.trust_decision.confirmation_required
+
+
+def test_pending_action_provider_cutover_fails_closed_on_parity_drift(
+    monkeypatch,
+) -> None:
+    async def mutate() -> str:
+        return "changed"
+
+    spec = ToolSpec(
+        name="pending_parity",
+        description="pending parity",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=58,
+        plugin_info={},
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=58),
+    )
+    original = ToolSnapshot._legacy_pending_action_execution_view
+
+    def drifted_legacy(self, tool_name):
+        view = original(self, tool_name)
+        assert view is not None
+        return replace(view, source=ToolSource.MCP)
+
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "_legacy_pending_action_execution_view",
+        drifted_legacy,
+    )
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.resolve_pending_action_execution(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+    rollback = snapshot.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=False,
+    )
+    assert rollback is not None
+    assert rollback.source is ToolSource.MCP
+
+
+def test_pending_action_provider_cutover_handles_unknown_and_legacy_snapshot() -> None:
+    complete = ToolSnapshot(
+        generation=59,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((), generation=59),
+    )
+    assert (
+        complete.resolve_pending_action_execution(
+            "unknown_pending",
+            is_superuser=False,
+            provider_cutover=True,
+        )
+        is None
+    )
+
+    async def mutate() -> str:
+        return "changed"
+
+    spec = ToolSpec(
+        name="pending_legacy",
+        description="legacy pending",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+    )
+    legacy = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={spec.name: spec.as_legacy_schema()},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    view = legacy.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert view is not None
+    assert not view.provider_authoritative
+    assert view.source is None
+    assert view.spec is spec
+
+
+def test_pending_action_provider_cutover_default_and_config_rollback(
+    monkeypatch,
+) -> None:
+    async def mutate() -> str:
+        return "changed"
+
+    spec = ToolSpec(
+        name="pending_default_cutover",
+        description="pending default",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=60,
+        plugin_info={},
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=60),
+    )
+
+    def get_default(key: str, default=None):
+        assert key == "provider_catalog_pending_actions_enabled"
+        assert default is True
+        return DEFAULT_CONFIG[key]
+
+    monkeypatch.setattr(config_parser, "get_config", get_default)
+    provider = snapshot.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=True,
+    )
+    assert provider is not None
+    assert provider.provider_authoritative
+
+    monkeypatch.setattr(config_parser, "get_config", lambda *_args: False)
+    rollback = snapshot.resolve_pending_action_execution(
+        spec.name,
+        is_superuser=True,
+    )
+    assert rollback is not None
+    assert not rollback.provider_authoritative
+
+
+@pytest.mark.parametrize("flag", [1, "true", [], {}])
+def test_pending_action_provider_cutover_rejects_non_boolean_override(flag) -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+    with pytest.raises(ValueError, match="cutover"):
+        snapshot.resolve_pending_action_execution(
+            "unknown",
+            is_superuser=False,
+            provider_cutover=flag,
+        )
+
+
+@pytest.mark.parametrize("flag", [None, 1, "true", [], {}])
+def test_pending_action_provider_cutover_config_requires_boolean(flag) -> None:
+    candidate = dict(DEFAULT_CONFIG)
+    candidate["provider_catalog_pending_actions_enabled"] = flag
+
+    with pytest.raises(
+        ValueError,
+        match="provider_catalog_pending_actions_enabled",
     ):
         ConfigParser._validate(candidate)
 
