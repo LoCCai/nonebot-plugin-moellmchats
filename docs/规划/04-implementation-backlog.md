@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T07:56:27+00:00
+lastmod: 2026-08-21T08:30:34+00:00
 ---
 
 # 04-implementation-backlog
@@ -19,7 +19,7 @@ lastmod: 2026-08-21T07:56:27+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环。F-01 最终 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 的双 run gate 已 green。F-02 最终 HEAD `f8292f94c2dbeab80949436b495ee997382b5cac` 对应 push run `32458307603` / PR run `32458311280`；两者均 11/11 green、各恰好一个成功 `release-gate`。F-03 实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 新增离线-only Alembic 基础设施、空 metadata 根、可打包模板、单线 graph 校验与安全 upgrade SQL renderer；定向 `26 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `417 passed`，四版本普通全量各 `971 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check、Pyright、fresh build/Twine/checksum 与四组包外空图/零 SQL smoke 均通过。F-03 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；没有 revision、表、全局 engine/session 或数据库连接，F-04 继续锁定。远端分支与 PR head 仍为 F-02 HEAD，PR #2 为 `OPEN / CLEAN`。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环。F-01 / F-02 已完成精确 HEAD 双 run gate。F-03 最终 HEAD `a4eb771678587e6bfd32f793c8a6f7eda88f29ab` 对应 push run `32461256977` / PR run `32461262286`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-04 实现提交 `21810cf836d89d07c268076d6e3d96b34cdfd04b` 新增 `users / conversations / messages` Schema 与首个线性 revision；四版本定向各 `32 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `423 passed`，四版本普通全量最终各 `977 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 Schema/graph/DDL smoke 均通过。F-04 当前仅本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-05 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01 / F-02 精确 HEAD 双 run 远端 gate green；🟡 F-03 本地门禁完成、远端 gate 待完成；F-04～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-03 精确 HEAD 双 run 远端 gate green；🟡 F-04 本地门禁完成、远端 gate 待完成；F-05～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -823,11 +823,23 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 执行边界：只开放离线 PostgreSQL upgrade SQL 渲染，在线路径无条件抛出 `DatabaseMigrationOnlineDisabledError`，外部 Config 缺少显式 offline marker 或携带 URL 也 fail closed。当前 graph 为空；renderer 与 env 双重短路空图，避免最低支持 Alembic 1.13 生成误导性的 `DROP TABLE alembic_version`。本任务不创建任何 revision、业务表、ORM model、Repository 实现、engine/session 或生命周期接线，不读取生产 DSN，不调用 F-02 manager，不连接 PostgreSQL/Redis；D-09 legacy sidecar 保持原样。首个业务 Schema 与 revision 属于 F-04。
 
-本地门禁：F-03 定向 `26 passed`，与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `417 passed`；Python 3.10.20（额外覆盖 Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 严格串行普通全量各 `971 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failure/error/skip 均为 0；Ruff 0.16.2 全量、目标文件 format、diff check 与 Pyright 1.1.407 目标/测试文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `834c709638f6b618a4765ed5ad490678405bd761dcc61aa172290648701bba23`、sdist SHA256 `7a39dc3b3aaaa2c55e8d205dd7a555fcb3cae12338e09bbf1f42c7172b472935`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载均确认 Alembic 依赖、四份 packaged migration resource、`revisions=0` 与离线 SQL 0 字节。当前仅本地门禁完成，包含规划的 F-03 精确 HEAD push/PR 双 run gate 待完成；F-04 只能在该 gate 关闭后开始。未合并、未发布、未部署。
+本地门禁：F-03 定向 `26 passed`，与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `417 passed`；Python 3.10.20（额外覆盖 Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 严格串行普通全量各 `971 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failure/error/skip 均为 0；Ruff 0.16.2 全量、目标文件 format、diff check 与 Pyright 1.1.407 目标/测试文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `834c709638f6b618a4765ed5ad490678405bd761dcc61aa172290648701bba23`、sdist SHA256 `7a39dc3b3aaaa2c55e8d205dd7a555fcb3cae12338e09bbf1f42c7172b472935`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载均确认 Alembic 依赖、四份 packaged migration resource、`revisions=0` 与离线 SQL 0 字节。
+
+远端证据：F-03 最终文档闭环精确 HEAD `a4eb771678587e6bfd32f793c8a6f7eda88f29ab` 对应 push run `32461256977` 与 PR run `32461262286`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。F-04 依赖已解除。未合并、未发布、未部署。
 
 ---
 
 ## F-04 User / Conversation / Message Schema
+
+实现落点：实现提交 `21810cf836d89d07c268076d6e3d96b34cdfd04b` 新增纯声明式 `database_schema.py` 与首个线性 revision `0001_users_conversations`。`users.id / conversations.id` 为最长 128 字符的应用生成 ID；`messages.id` 为 PostgreSQL `BIGINT IDENTITY`，支持 `(conversation_id, id DESC)` 稳定分页；`structured_content` 为 JSONB，全部时间字段带时区。用户平台身份使用唯一约束，群聊/私聊范围及会话内平台消息 ID 使用 partial unique index；外键删除策略全部为 `RESTRICT`。
+
+迁移边界：packaged graph 现在精确为单一 `revision/base/head = 0001_users_conversations`。离线 upgrade 创建 `users → conversations → messages` 及约束/索引且不含 `DROP`，离线 downgrade 按逆依赖顺序删除；临时空图继续保持零 SQL。metadata/revision parity 测试覆盖列顺序、类型、nullability、server default、Identity、PK/FK/unique/check/index 名称和 PostgreSQL 条件。在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13 与 3.13.13 定向各 `32 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `423 passed`；四版本严格串行普通全量最终各 `977 passed, 1 skipped`。Python 3.13 首轮有一个既有 watcher 3 秒时序 node 超时；该 node 随后连续 `5/5` 通过，完整 3.13 全量重跑通过，未修改无关 watcher。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failure/error/skip 均为 0；Ruff 0.16.2、format/diff check 与 Pyright 目标/测试文件 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `7c22c093605dd4213e8c5bb8751fa81f26925cc45e56d391366016762d679739`、sdist SHA256 `b5b52c0125fea1a9f565e531241fb19fd20bfb2a89e00d325a28a47d9b88c262`；两种制品均包含 Schema、env/template 与首个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认依赖元数据、三张表、单线 graph、Identity/JSONB/partial index/`RESTRICT` DDL，并在 engine 创建函数被替换为拒绝桩时完成离线渲染。
+
+当前状态：仅本地门禁完成，包含规划的 F-04 精确 HEAD push/PR 双 run gate 待完成；F-05 只能在该 gate 关闭后开始。本阶段不提供 Repository 实现或 runtime 接线，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 legacy sidecar 保持原样。未合并、未发布、未部署。
 
 ---
 
