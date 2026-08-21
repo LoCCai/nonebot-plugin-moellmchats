@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T07:18:15+00:00
+lastmod: 2026-08-21T07:56:27+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-08 已闭环；E-08 最终 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 对应 push run `32454187768` / PR run `32454191418`，两者均 11/11 green、各恰好一个成功 `release-gate`。Milestone F 已按依赖启动：F-01 最终 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 的 push run `32455829891` / PR run `32455828489` 均为 11/11 green、各恰好一个成功 `release-gate`。F-02 实现提交 `cf7c236c3f78c0775ff513f291ef4a55a877e54d` 新增 SQLAlchemy 2.x + asyncpg 依赖、严格验证且凭据脱敏的 `DatabaseEngineSettings`，以及惰性单 engine、PID/event-loop 绑定、可重试释放的 `DatabaseEngineManager`。连接池 size/overflow/总量与 connect/pool/statement/recycle timeout 全部有界，固定启用 pre-ping、LIFO 与参数隐藏；构造 engine 不 checkout 连接。本阶段不读取配置或环境 DSN、不创建全局 manager、不接插件启动/关闭、不创建 session/Repository/Schema/Alembic，也不连接数据库或 Redis。F-02 定向 `50 passed`，与 Repository/Agent/Graph/Scheduler/Conflict 联合 `391 passed`；四版本普通全量最终各 `945 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 零诊断，fresh build/Twine/checksum 与四组包外零连接 engine smoke 均通过。F-02 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；F-03 保持锁定。远端分支与 PR head 仍一致，PR #2 为 `OPEN / CLEAN`；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01～E-08 已闭环；F-01 最终 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 的双 run gate 已 green。F-02 最终 HEAD `f8292f94c2dbeab80949436b495ee997382b5cac` 对应 push run `32458307603` / PR run `32458311280`；两者均 11/11 green、各恰好一个成功 `release-gate`，F-03 依赖已解除。F-03 实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 新增 Alembic 运行依赖、空 metadata 根、可打包 migration 环境、线性 revision graph 校验和无 DSN 的离线 upgrade SQL 渲染；在线模式始终 fail closed，当前没有 revision 或业务表。F-03 定向 `26 passed`，与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `417 passed`；四版本普通全量各 `971 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check、Pyright、fresh build/Twine/checksum 与四组包外空图/零 SQL smoke 均通过。当前仅 F-03 本地门禁完成，F-04 等待包含规划的精确 HEAD 双 run gate；远端分支与 PR head 仍为 F-02 HEAD，PR #2 为 `OPEN / CLEAN`。未读取生产 DSN，未创建 engine/session、表或 migration revision，未连接 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -358,7 +358,7 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 领域对象已固化，但持久化 Schema 与 Repository 实现尚未开始
-- ToolProvider 与 Repository 接口均已完成远端门禁，F-02 engine 本地门禁已完成，但持久化 Schema/Repository 实现尚未开始
+- ToolProvider、Repository 接口与 F-02 engine 均已完成远端门禁，F-03 离线迁移基础设施仅完成本地门禁，持久化 Schema/Repository 实现尚未开始
 - Redis / PostgreSQL 的运行态与持久化边界尚未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T07:18:15+00:00
+lastmod: 2026-08-21T07:56:27+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T07:18:15+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环；F-01 最终 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 的 push run `32455829891` / PR run `32455828489` 均为 11/11 green 且各恰好一个成功 `release-gate`。F-02 实现提交 `cf7c236c3f78c0775ff513f291ef4a55a877e54d` 已新增有界、凭据脱敏、惰性且绑定 PID/event-loop 的 SQLAlchemy Async Engine 生命周期，并完成本地全门禁。当前没有全局 engine/session、Repository 实现、Schema、Alembic 或 Redis client，未读取生产 DSN，也未 checkout 或连接数据库。F-02 精确 HEAD 远端 gate 尚待完成，F-03 及后续数据库任务继续锁定；远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环；F-01 最终 HEAD `678adb423e87fef8a851a8a792ae9c39a268dc15` 的双 run gate 已 green。F-02 最终 HEAD `f8292f94c2dbeab80949436b495ee997382b5cac` 的 push run `32458307603` / PR run `32458311280` 均为 11/11 green、各恰好一个成功 `release-gate`。F-03 实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 已加入离线-only Alembic 基础设施、空 metadata 根、打包模板与线性 graph 校验；当前没有 revision、业务表、全局 engine/session、Repository 实现或 Redis client，在线 migration 无条件拒绝。F-03 本地全门禁已通过，精确 HEAD 远端双 run gate 待完成，F-04 继续锁定；远端分支与 PR head 仍为 F-02 HEAD，PR #2 为 `OPEN / CLEAN`。未读取生产 DSN，也未 checkout 或连接数据库。
 
 ---
 
@@ -145,7 +145,9 @@ redis-py asyncio
 
 F-02 实现提交 `cf7c236c3f78c0775ff513f291ef4a55a877e54d` 已加入 `sqlalchemy>=2,<3` 与 `asyncpg>=0.30,<1`，但只提供显式构造的 `DatabaseEngineSettings / DatabaseEngineManager`。URL 必须使用 `postgresql+asyncpg`；原始 DSN 不持久保留，日志/诊断/错误不渲染凭据。连接池 size 1～100、overflow 0～100、总量不超过 150，pool/connect/statement/recycle timeout 均有上限；固定启用 pre-ping、LIFO、参数隐藏及 asyncpg 客户端/服务端 timeout。
 
-Manager 惰性创建且每实例至多持有一个 `AsyncEngine`，创建只建立 SQLAlchemy pool 对象，不 checkout 网络连接；创建时绑定 PID/event-loop，跨边界复用与 dispose 竞态 fail closed，释放失败保持可重试。当前不创建全局实例、不接配置或生命周期、不创建 session，不执行 SQL。F-02 定向 `50 passed`，联合 Repository/Agent/Graph/Scheduler/Conflict `391 passed`；四版本最终普通全量各 `945 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright 与 fresh 制品门禁均通过。wheel/sdist SHA256 为 `c5c59aa4c556a4f16bb98a27c979ee174b2d1e46c5695f5ce596a7c617416c8c` / `c932056e00dbada7d55ab07f196996edc6daf3d6b6a5f3a31da6a09e79e4732f`；四组包外 smoke 均为 `checkedout=0`。当前仅本地门禁完成；F-03 等待 F-02 精确 HEAD 双 run gate。
+Manager 惰性创建且每实例至多持有一个 `AsyncEngine`，创建只建立 SQLAlchemy pool 对象，不 checkout 网络连接；创建时绑定 PID/event-loop，跨边界复用与 dispose 竞态 fail closed，释放失败保持可重试。当前不创建全局实例、不接配置或生命周期、不创建 session，不执行 SQL。F-02 定向 `50 passed`，联合 Repository/Agent/Graph/Scheduler/Conflict `391 passed`；四版本最终普通全量各 `945 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright 与 fresh 制品门禁均通过。wheel/sdist SHA256 为 `c5c59aa4c556a4f16bb98a27c979ee174b2d1e46c5695f5ce596a7c617416c8c` / `c932056e00dbada7d55ab07f196996edc6daf3d6b6a5f3a31da6a09e79e4732f`；四组包外 smoke 均为 `checkedout=0`。最终文档闭环 HEAD `f8292f94c2dbeab80949436b495ee997382b5cac` 对应 push run `32458307603` / PR run `32458311280`；两者均 11/11 green、各恰好一个成功 `release-gate`。F-03 依赖已解除；未合并、未发布、未部署。
+
+F-03 实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 加入 `alembic>=1.13,<2`，并定义共享但仍为空的 `database_metadata`、可随 wheel/sdist 分发的 env/template/versions 布局以及显式离线 API。graph 必须保持单 base/head 且拒绝 merge、branch label、`depends_on` 和不安全 revision；Config 不读取 ini、DSN、环境变量、插件配置或 secret file。空 graph 在 renderer 与 env 双重短路，在线路径始终 fail closed。F-03 不创建 revision、表、engine/session 或 Repository 实现；F-04 才开始首个业务 Schema 与 revision。
 
 ---
 
@@ -932,6 +934,8 @@ PendingAction store 不可用
 0004_usage_audit
 0005_memory
 ```
+
+F-03 已完成离线迁移地基但尚未完成任何一条 Migration：实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 的 graph 当前为 `revisions=0 / bases=0 / heads=0`，离线 upgrade 输出为 0 字节；在线 migration 被明确禁用。Alembic 1.13 对空图可能生成 `DROP TABLE alembic_version` 的差异已由入口和 env 双重空图短路覆盖。F-03 定向 `26 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `417 passed`；四版本普通全量各 `971 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/format/diff/Pyright 与 fresh 制品门禁均通过。wheel/sdist SHA256 为 `834c709638f6b618a4765ed5ad490678405bd761dcc61aa172290648701bba23` / `7a39dc3b3aaaa2c55e8d205dd7a555fcb3cae12338e09bbf1f42c7172b472935`；四组包外 smoke 均确认 packaged resources、空 graph 与零 SQL。当前仅本地门禁完成，F-04 等待 F-03 精确 HEAD 双 run gate；未连接或修改任何数据库。
 
 ---
 
