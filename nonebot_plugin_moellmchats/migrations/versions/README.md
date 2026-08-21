@@ -1,3 +1,3 @@
 # Revision directory
 
-F-03 intentionally contains no revision. The first linear PostgreSQL revision is created with the F-04 business schema.
+Revisions form one linear PostgreSQL history. F-04 starts it with `0001_users_conversations`.

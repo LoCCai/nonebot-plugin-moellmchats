@@ -15,6 +15,7 @@ from nonebot_plugin_moellmchats.database_metadata import (
     database_metadata,
     database_naming_convention,
 )
+import nonebot_plugin_moellmchats.database_migrations as database_migrations_module
 from nonebot_plugin_moellmchats.database_migrations import (
     DatabaseMigrationConfigurationError,
     DatabaseMigrationGraph,
@@ -24,9 +25,10 @@ from nonebot_plugin_moellmchats.database_migrations import (
     inspect_database_migration_graph,
     render_offline_upgrade_sql,
 )
+from nonebot_plugin_moellmchats.database_schema import DATABASE_TABLES
 
 
-def test_database_metadata_starts_empty_with_deterministic_names() -> None:
+def test_database_metadata_has_deterministic_names() -> None:
     expected = {
         "ix": "ix_%(table_name)s_%(column_0_name)s",
         "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -38,7 +40,7 @@ def test_database_metadata_starts_empty_with_deterministic_names() -> None:
     convention = database_naming_convention()
     assert convention == expected
     assert database_metadata.naming_convention == expected
-    assert not database_metadata.tables
+    assert tuple(database_metadata.tables) == tuple(table.name for table in DATABASE_TABLES)
 
     convention["pk"] = "changed"
     assert database_naming_convention() == expected
@@ -52,6 +54,7 @@ def test_packaged_migration_layout_is_complete() -> None:
     assert (location / "README.md").is_file()
     assert (location / "env.py").is_file()
     assert (location / "script.py.mako").is_file()
+    assert (location / "versions" / "0001_users_conversations.py").is_file()
     assert (location / "versions" / "README.md").is_file()
 
 
@@ -68,22 +71,46 @@ def test_offline_config_has_no_database_url_or_external_file() -> None:
     assert config.attributes == {"moellmchats_offline_only": True}
 
 
-def test_empty_migration_graph_is_linear_and_returns_fresh_diagnostics() -> None:
+def test_packaged_migration_graph_is_linear_and_returns_fresh_diagnostics() -> None:
     graph = inspect_database_migration_graph()
     diagnostics = graph.as_dict()
 
-    assert graph == DatabaseMigrationGraph(revisions=(), bases=(), heads=())
-    assert graph.revision_count == 0
-    assert graph.empty is True
+    assert graph == DatabaseMigrationGraph(
+        revisions=("0001_users_conversations",),
+        bases=("0001_users_conversations",),
+        heads=("0001_users_conversations",),
+    )
+    assert graph.revision_count == 1
+    assert graph.empty is False
     assert diagnostics == {
-        "revision_count": 0,
-        "empty": True,
-        "revisions": [],
-        "bases": [],
-        "heads": [],
+        "revision_count": 1,
+        "empty": False,
+        "revisions": ["0001_users_conversations"],
+        "bases": ["0001_users_conversations"],
+        "heads": ["0001_users_conversations"],
     }
     diagnostics["revisions"].append("changed")  # type: ignore[union-attr]
-    assert graph.as_dict()["revisions"] == []
+    assert graph.as_dict()["revisions"] == ["0001_users_conversations"]
+
+
+def test_temporary_empty_graph_still_renders_no_sql(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_location = tmp_path / "migrations"
+    shutil.copytree(database_migration_script_location(), temporary_location)
+    (temporary_location / "versions" / "0001_users_conversations.py").unlink()
+    monkeypatch.setattr(
+        database_migrations_module,
+        "database_migration_script_location",
+        lambda: temporary_location,
+    )
+
+    graph = inspect_database_migration_graph()
+
+    assert graph == DatabaseMigrationGraph(revisions=(), bases=(), heads=())
+    assert graph.empty is True
+    assert render_offline_upgrade_sql() == ""
 
 
 def test_migration_graph_value_object_accepts_consistent_nonempty_snapshot() -> None:
@@ -121,7 +148,7 @@ def test_revision_template_generates_valid_python_in_temporary_copy(tmp_path: Pa
     scripts = ScriptDirectory.from_config(config)
 
     revision = scripts.generate_revision(
-        revid="0001_example",
+        revid="0002_example",
         message="example",
         head="head",
     )
@@ -131,9 +158,9 @@ def test_revision_template_generates_valid_python_in_temporary_copy(tmp_path: Pa
     assert generated_path.parent == temporary_location / "versions"
     source = generated_path.read_text(encoding="utf-8")
     ast.parse(source)
-    assert revision.revision == "0001_example"
-    assert revision.down_revision is None
-    assert "down_revision: str | Sequence[str] | None = None" in source
+    assert revision.revision == "0002_example"
+    assert revision.down_revision == "0001_users_conversations"
+    assert "down_revision: str | Sequence[str] | None = '0001_users_conversations'" in source
 
 
 def test_offline_upgrade_renders_without_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,14 +171,47 @@ def test_offline_upgrade_renders_without_connecting(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("sqlalchemy.engine.create.create_engine", unexpected_connection)
     monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", unexpected_connection)
 
-    assert render_offline_upgrade_sql() == ""
+    rendered = render_offline_upgrade_sql()
     direct_output = StringIO()
     command.upgrade(
         build_offline_alembic_config(output_buffer=direct_output),
         "heads",
         sql=True,
     )
-    assert direct_output.getvalue() == ""
+    assert direct_output.getvalue() == rendered
+    assert rendered.startswith("BEGIN;")
+    assert "DROP " not in rendered
+    assert "CREATE TABLE users" in rendered
+    assert "CREATE TABLE conversations" in rendered
+    assert "CREATE TABLE messages" in rendered
+    assert "structured_content JSONB" in rendered
+    assert "id BIGINT GENERATED BY DEFAULT AS IDENTITY" in rendered
+    assert "CREATE INDEX ix_messages_conversation_id_id_desc ON messages (conversation_id, id DESC)" in rendered
+    assert rendered.index("CREATE TABLE users") < rendered.index("CREATE TABLE conversations")
+    assert rendered.index("CREATE TABLE conversations") < rendered.index("CREATE TABLE messages")
+
+
+def test_offline_downgrade_renders_inverse_dependency_order_without_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_connection(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("offline migration attempted to create a database engine")
+
+    monkeypatch.setattr("sqlalchemy.create_engine", unexpected_connection)
+    monkeypatch.setattr("sqlalchemy.engine.create.create_engine", unexpected_connection)
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", unexpected_connection)
+    output = StringIO()
+
+    command.downgrade(
+        build_offline_alembic_config(output_buffer=output),
+        "0001_users_conversations:base",
+        sql=True,
+    )
+
+    rendered = output.getvalue()
+    assert "CREATE TABLE users" not in rendered
+    assert rendered.index("DROP TABLE messages") < rendered.index("DROP TABLE conversations")
+    assert rendered.index("DROP TABLE conversations") < rendered.index("DROP TABLE users")
 
 
 def test_online_upgrade_fails_closed_before_engine_creation(monkeypatch: pytest.MonkeyPatch) -> None:

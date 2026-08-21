@@ -18,6 +18,7 @@ _REQUIRED_MIGRATION_FILES = (
     "README.md",
     "env.py",
     "script.py.mako",
+    "versions/0001_users_conversations.py",
     "versions/README.md",
 )
 
@@ -31,7 +32,7 @@ class DatabaseMigrationConfigurationError(DatabaseMigrationError):
 
 
 class DatabaseMigrationOnlineDisabledError(DatabaseMigrationError):
-    """Online migration execution is intentionally unavailable in F-03."""
+    """Online migration execution is intentionally unavailable."""
 
 
 @dataclass(frozen=True)

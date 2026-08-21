@@ -3,11 +3,11 @@ from __future__ import annotations
 from alembic import context
 from alembic.script import ScriptDirectory
 
-from nonebot_plugin_moellmchats.database_metadata import database_metadata
 from nonebot_plugin_moellmchats.database_migrations import (
     DatabaseMigrationConfigurationError,
     DatabaseMigrationOnlineDisabledError,
 )
+from nonebot_plugin_moellmchats.database_schema import database_metadata
 
 _OFFLINE_ONLY_ATTRIBUTE = "moellmchats_offline_only"
 
@@ -19,7 +19,7 @@ def run_migrations_offline() -> None:
     if config.attributes.get(_OFFLINE_ONLY_ATTRIBUTE) is not True:
         raise DatabaseMigrationConfigurationError("Alembic 环境只能通过显式离线配置调用")
     if config.get_main_option("sqlalchemy.url", default=None) is not None:
-        raise DatabaseMigrationConfigurationError("F-03 离线 Alembic 配置不得包含 sqlalchemy.url")
+        raise DatabaseMigrationConfigurationError("离线 Alembic 配置不得包含 sqlalchemy.url")
     if not ScriptDirectory.from_config(config).get_heads():
         return
 
@@ -45,7 +45,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Fail closed until an explicit online migration design is reviewed."""
 
-    raise DatabaseMigrationOnlineDisabledError("F-03 禁止在线 migration；当前仅允许离线 SQL 渲染")
+    raise DatabaseMigrationOnlineDisabledError("当前禁止在线 migration；仅允许离线 SQL 渲染")
 
 
 if context.is_offline_mode():

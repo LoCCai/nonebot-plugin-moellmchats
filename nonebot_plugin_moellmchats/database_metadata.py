@@ -18,4 +18,4 @@ def database_naming_convention() -> dict[str, str]:
 
 
 database_metadata = MetaData(naming_convention=database_naming_convention())
-"""Shared empty metadata root; business tables begin in F-04."""
+"""Shared metadata root for the versioned PostgreSQL schema."""
