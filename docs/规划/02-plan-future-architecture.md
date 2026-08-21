@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T08:30:34+00:00
+lastmod: 2026-08-21T08:51:47+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T08:30:34+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。Milestone E 的 E-01～E-08 已闭环，F-01 / F-02 已完成精确 HEAD 双 run gate。F-03 最终 HEAD `a4eb771678587e6bfd32f793c8a6f7eda88f29ab` 的 push run `32461256977` / PR run `32461262286` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致。F-04 实现提交 `21810cf836d89d07c268076d6e3d96b34cdfd04b` 已加入 `users / conversations / messages` Schema 与 `0001_users_conversations`；四版本普通全量最终各 `977 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Schema/DDL smoke 均通过。当前仅 F-04 本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-05 继续锁定。在线 migration 仍直接拒绝；未创建 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-03 已完成精确 HEAD 双 run gate。F-04 最终 HEAD `9a343cfcc71a2824257afd9f7537edf4ab8af4f2` 的 push run `32463913845` / PR run `32463917189` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致。F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 已加入 `agent_runs` Schema 与 `0002_agent_runtime`；四版本普通全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 AgentRun Schema/DDL smoke 均通过。当前仅 F-05 本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-06 继续锁定。在线 migration 仍直接拒绝；未创建 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -891,7 +891,11 @@ F-03 实现提交 `f9598561247e40a5ce8327a0ccd8d9f21f3fe04e` 新增 `alembic>=1.
 
 F-04 实现提交 `21810cf836d89d07c268076d6e3d96b34cdfd04b` 新增纯声明式 `database_schema.py` 与首个 revision `0001_users_conversations`。`users` 使用应用生成的有界 ID，并以 `(platform, platform_user_id)` 唯一标识平台用户；`conversations` 为群聊/私聊范围提供 partial unique index；`messages.id` 使用 PostgreSQL `BIGINT IDENTITY`，`structured_content` 使用 JSONB，并提供 `(conversation_id, id DESC)`、`created_at` 及会话内平台消息 ID 索引。时间字段均带时区，外键删除策略均为 `RESTRICT`；metadata/revision parity、离线 upgrade 与逆依赖 downgrade 顺序均有契约测试。
 
-F-04 四版本定向各 `32 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `423 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 最终普通全量各 `977 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 目标/测试文件零诊断。fresh wheel/sdist SHA256 为 `7c22c093605dd4213e8c5bb8751fa81f26925cc45e56d391366016762d679739` / `b5b52c0125fea1a9f565e531241fb19fd20bfb2a89e00d325a28a47d9b88c262`，Twine、制品内容检查及 Python 3.10/3.12 × wheel/sdist 四组仓库外 Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，包含规划的 F-04 精确 HEAD 双 run gate 待完成，F-05 继续锁定。本阶段不提供 Repository 实现或 runtime 接线，不创建 engine/session，不读取 DSN，不运行 migration，不连接 PostgreSQL/Redis；未合并、未发布、未部署。
+F-04 四版本定向各 `32 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `423 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 最终普通全量各 `977 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 目标/测试文件零诊断。fresh wheel/sdist SHA256 为 `7c22c093605dd4213e8c5bb8751fa81f26925cc45e56d391366016762d679739` / `b5b52c0125fea1a9f565e531241fb19fd20bfb2a89e00d325a28a47d9b88c262`，Twine、制品内容检查及 Python 3.10/3.12 × wheel/sdist 四组仓库外 Schema/graph/DDL smoke 均通过。最终文档闭环 HEAD `9a343cfcc71a2824257afd9f7537edf4ab8af4f2` 对应 push run `32463913845` / PR run `32463917189`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / CLEAN`。F-05 依赖已解除；未合并、未发布、未部署。
+
+F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 追加不可变 revision `0002_agent_runtime` 与 `agent_runs` 表。字段覆盖 `request/user/group/conversation/generation/model/status/time/token/cost/error`；状态集合精确绑定现有 `AgentRunState`，终态必须有结束时间，非终态不得伪造结束时间。`request_id` 因进程重启后可能复用而不设唯一约束；用户和会话外键均为 `RESTRICT`。会话时间线、用户时间线与状态恢复查询各有有界索引，`generation + status` 列为后续 Repository CAS 保留，但本阶段不实现 Repository。
+
+F-05 四版本定向各 `35 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `426 passed`；四版本普通全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 目标/测试文件零诊断。fresh wheel/sdist SHA256 为 `1d47c5d1eee9686c8e642fb8d52bfb50e01894a2a71c7ba560ac16df5d8c8f8b` / `41a8d65dd33c8343bcb64e91444e220099bcdf1a66fe210d6974f4f3cb5de2f1`，Twine、制品内容检查及 Python 3.10/3.12 × wheel/sdist 四组仓库外 AgentRun Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，包含规划的 F-05 精确 HEAD 双 run gate 待完成，F-06 继续锁定。本阶段不接 runtime 或 Repository，不创建 engine/session，不读取 DSN，不运行 migration，不连接 PostgreSQL/Redis；未合并、未发布、未部署。
 
 ---
 
