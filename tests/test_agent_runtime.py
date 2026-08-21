@@ -12,6 +12,8 @@ from nonebot_plugin_moellmchats.agent_runtime import (
     AgentStep,
     AgentStepStatus,
     AgentStepType,
+    ToolCall,
+    ToolCallStatus,
 )
 
 
@@ -46,6 +48,23 @@ def _step(**overrides: object) -> AgentStep:
     }
     values.update(overrides)
     return AgentStep(**values)  # type: ignore[arg-type]
+
+
+def _tool_call(**overrides: object) -> ToolCall:
+    values: dict[str, object] = {
+        "tool_call_id": "call_0001",
+        "run_id": "run_01HZX7Y95Z8QW8D4WTV4VCZZY2",
+        "step_id": "step_0001",
+        "tool_name": "weather_lookup",
+        "bundle_digest": None,
+        "arguments": {"city": "Shanghai"},
+        "status": ToolCallStatus.PENDING,
+        "confirmed": False,
+        "result": None,
+        "elapsed": None,
+    }
+    values.update(overrides)
+    return ToolCall(**values)  # type: ignore[arg-type]
 
 
 def test_agent_run_is_frozen_generation_bound_and_serializable() -> None:
@@ -428,3 +447,180 @@ def test_agent_step_rejects_excessively_deep_json_payloads() -> None:
 
     with pytest.raises(ValueError, match="嵌套"):
         _step(output=nested)
+
+
+def test_tool_call_is_frozen_and_detaches_arguments() -> None:
+    arguments = {
+        "city": "Shanghai",
+        "options": {"units": "metric", "days": [1, 2]},
+    }
+    call = _tool_call(arguments=arguments)
+
+    arguments["city"] = "tampered"
+    arguments["options"]["days"].append(3)
+    assert call.arguments["city"] == "Shanghai"
+    assert isinstance(call.arguments["options"], Mapping)
+    assert call.arguments["options"]["days"] == (1, 2)
+    with pytest.raises(TypeError):
+        call.arguments["city"] = "changed"  # type: ignore[index]
+    with pytest.raises(FrozenInstanceError):
+        call.status = ToolCallStatus.RUNNING  # type: ignore[misc]
+
+    assert call.as_dict() == {
+        "tool_call_id": "call_0001",
+        "run_id": "run_01HZX7Y95Z8QW8D4WTV4VCZZY2",
+        "step_id": "step_0001",
+        "tool_name": "weather_lookup",
+        "bundle_digest": None,
+        "arguments": {
+            "city": "Shanghai",
+            "options": {"units": "metric", "days": [1, 2]},
+        },
+        "status": "pending",
+        "confirmed": False,
+        "result": None,
+        "elapsed": None,
+    }
+
+
+def test_completed_tool_call_requires_and_detaches_result() -> None:
+    result = {
+        "text": "sunny",
+        "images": [],
+        "metadata": {"source": "provider"},
+    }
+    call = _tool_call(
+        bundle_digest="a" * 64,
+        status=ToolCallStatus.COMPLETED,
+        confirmed=True,
+        result=result,
+        elapsed=0.75,
+    )
+
+    result["metadata"]["source"] = "tampered"
+    assert call.is_terminal is True
+    assert call.elapsed == 0.75
+    assert isinstance(call.result, Mapping)
+    metadata = call.result["metadata"]
+    assert isinstance(metadata, Mapping)
+    assert metadata["source"] == "provider"
+    assert call.as_dict()["bundle_digest"] == "a" * 64
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ToolCallStatus.FAILED,
+        ToolCallStatus.CANCELLED,
+        ToolCallStatus.TIMED_OUT,
+        ToolCallStatus.REJECTED,
+    ],
+)
+def test_noncompleted_tool_call_terminal_states_allow_empty_result(
+    status: ToolCallStatus,
+) -> None:
+    call = _tool_call(status=status, elapsed=0)
+
+    assert call.is_terminal is True
+    assert call.elapsed == 0.0
+    assert call.result is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ToolCallStatus.PENDING,
+        ToolCallStatus.WAITING_CONFIRMATION,
+        ToolCallStatus.RUNNING,
+    ],
+)
+def test_tool_call_nonterminal_states_reject_result_and_elapsed(
+    status: ToolCallStatus,
+) -> None:
+    with pytest.raises(ValueError, match="非终态"):
+        _tool_call(status=status, result={"text": "early"})
+    with pytest.raises(ValueError, match="非终态"):
+        _tool_call(status=status, elapsed=0.1)
+
+
+def test_tool_call_confirmation_state_is_fail_closed() -> None:
+    waiting = _tool_call(status=ToolCallStatus.WAITING_CONFIRMATION)
+
+    assert waiting.confirmed is False
+    assert waiting.is_terminal is False
+    with pytest.raises(ValueError, match="confirmed"):
+        _tool_call(
+            status=ToolCallStatus.WAITING_CONFIRMATION,
+            confirmed=True,
+        )
+
+
+def test_completed_tool_call_requires_result_and_all_terminals_require_elapsed() -> None:
+    with pytest.raises(ValueError, match="result"):
+        _tool_call(status=ToolCallStatus.COMPLETED, elapsed=1.0)
+    with pytest.raises(ValueError, match="elapsed"):
+        _tool_call(status=ToolCallStatus.FAILED)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("tool_call_id", "bad call", "tool_call_id"),
+        ("run_id", "", "run_id"),
+        ("step_id", "bad step", "step_id"),
+        ("tool_name", "bad tool", "tool_name"),
+        ("tool_name", "x" * 65, "tool_name"),
+        ("bundle_digest", "A" * 64, "bundle_digest"),
+        ("bundle_digest", "a" * 63, "bundle_digest"),
+        ("status", "pending", "status"),
+        ("confirmed", 1, "confirmed"),
+    ],
+)
+def test_tool_call_rejects_invalid_identity_and_state_fields(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _tool_call(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        -1.0,
+        math.inf,
+        math.nan,
+        True,
+        "1.0",
+    ],
+)
+def test_tool_call_rejects_invalid_elapsed(value: object) -> None:
+    with pytest.raises(ValueError, match="elapsed"):
+        _tool_call(status=ToolCallStatus.FAILED, elapsed=value)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [],
+        "city=Shanghai",
+        {1: "non-string key"},
+        {"temperature": math.inf},
+    ],
+)
+def test_tool_call_rejects_invalid_arguments(arguments: object) -> None:
+    with pytest.raises(ValueError, match="arguments"):
+        _tool_call(arguments=arguments)
+
+
+def test_tool_call_rejects_cyclic_result() -> None:
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+
+    with pytest.raises(ValueError, match="循环"):
+        _tool_call(
+            status=ToolCallStatus.COMPLETED,
+            result=cyclic,
+            elapsed=0.1,
+        )
