@@ -286,6 +286,167 @@ class SearchExtractorView:
             raise ValueError("legacy Search extractor 不得伪造 trust decision")
 
 
+class ToolManagementTargetKind(str, Enum):
+    EXACT_TOOL = "exact_tool"
+    MCP_SERVICE = "mcp_service"
+
+
+@dataclass(frozen=True)
+class ToolManagementView:
+    """One generation-bound identifier consumed by tool management commands.
+
+    Exact tools are bound to one canonical ``ToolSpec`` and management trust
+    decision on the Provider path.  MCP service and wildcard selectors bind to
+    the frozen server identifier plus every canonical MCP member in the same
+    generation; a configured service is still a valid selector before it
+    discovers its first tool.
+    """
+
+    identifier: str
+    generation: int
+    kind: ToolManagementTargetKind
+    label: str
+    source: ToolSource | None
+    spec: ToolSpec | None
+    legacy_entry: Mapping[str, Any] | None
+    matched_tool_names: tuple[str, ...]
+    provider_authoritative: bool
+    trust_decisions: tuple[ToolTrustDecision, ...] = ()
+    selector_allowed: bool = True
+    selector_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identifier, str) or not self.identifier:
+            raise ValueError("工具管理视图标识不能为空")
+        if (
+            not isinstance(self.generation, int)
+            or isinstance(self.generation, bool)
+            or self.generation < 0
+        ):
+            raise ValueError("工具管理视图 generation 非法")
+        if not isinstance(self.kind, ToolManagementTargetKind):
+            raise TypeError("工具管理视图 target kind 非法")
+        if not isinstance(self.label, str) or not self.label:
+            raise ValueError("工具管理视图 label 不能为空")
+        if self.source is not None and not isinstance(self.source, ToolSource):
+            raise TypeError("工具管理视图 source 非法")
+        if self.spec is not None and (
+            not isinstance(self.spec, ToolSpec)
+            or self.spec.name != self.identifier
+        ):
+            raise ValueError("工具管理视图 ToolSpec identity 不一致")
+        if self.legacy_entry is not None and not isinstance(
+            self.legacy_entry,
+            Mapping,
+        ):
+            raise TypeError("工具管理 legacy entry 必须是映射")
+        if (
+            not isinstance(self.matched_tool_names, tuple)
+            or tuple(sorted(set(self.matched_tool_names)))
+            != self.matched_tool_names
+            or not all(
+                isinstance(name, str) and name
+                for name in self.matched_tool_names
+            )
+        ):
+            raise ValueError("工具管理匹配工具名必须是有序唯一字符串元组")
+        if type(self.provider_authoritative) is not bool:
+            raise TypeError("工具管理 authority 标志必须是布尔值")
+        if not isinstance(self.trust_decisions, tuple) or not all(
+            isinstance(decision, ToolTrustDecision)
+            for decision in self.trust_decisions
+        ):
+            raise TypeError("工具管理 trust decisions 必须是不可变元组")
+        if type(self.selector_allowed) is not bool:
+            raise TypeError("工具管理 selector allowed 必须是布尔值")
+        if self.selector_allowed:
+            if self.selector_reason is not None:
+                raise ValueError("允许的工具管理 selector 不得携带拒绝原因")
+        elif not isinstance(self.selector_reason, str) or not self.selector_reason:
+            raise ValueError("拒绝的工具管理 selector 必须携带原因")
+
+        if self.kind is ToolManagementTargetKind.EXACT_TOOL:
+            if self.matched_tool_names != (self.identifier,):
+                raise ValueError("精确工具管理视图匹配 identity 不一致")
+        else:
+            if self.source is not ToolSource.MCP or self.spec is not None:
+                raise ValueError("MCP 服务管理视图 identity 非法")
+            if self.legacy_entry is not None:
+                raise ValueError("MCP 服务管理视图不得携带工具 sidecar")
+
+        if self.provider_authoritative:
+            decision_names = tuple(
+                sorted(decision.tool_name for decision in self.trust_decisions)
+            )
+            if decision_names != self.matched_tool_names:
+                raise ValueError("Provider 工具管理 trust decision 集合不一致")
+            if self.kind is ToolManagementTargetKind.EXACT_TOOL and (
+                self.source is None
+                or self.spec is None
+                or len(self.trust_decisions) != 1
+            ):
+                raise ValueError("Provider 精确工具管理视图缺少 canonical identity")
+            exact_spec = self.spec
+            for decision in self.trust_decisions:
+                if (
+                    decision.generation != self.generation
+                    or decision.operation is not ToolTrustOperation.MANAGEMENT
+                ):
+                    raise ValueError("Provider 工具管理 trust decision identity 不一致")
+                if self.kind is ToolManagementTargetKind.EXACT_TOOL:
+                    assert exact_spec is not None
+                    if (
+                        decision.source is not self.source
+                        or decision.effect is not exact_spec.effect
+                        or decision.permission != exact_spec.permission
+                    ):
+                        raise ValueError(
+                            "Provider 精确工具管理 decision/spec 不一致"
+                        )
+                if self.kind is ToolManagementTargetKind.MCP_SERVICE and (
+                    decision.source is not ToolSource.MCP
+                ):
+                    raise ValueError("MCP 服务管理 decision source 不一致")
+        else:
+            if self.trust_decisions:
+                raise ValueError("legacy 工具管理视图不得伪造 trust decision")
+            if not self.selector_allowed or self.selector_reason is not None:
+                raise ValueError("legacy 工具管理视图不得伪造 selector policy")
+
+    @property
+    def allowed(self) -> bool:
+        return self.selector_allowed and all(
+            decision.allowed for decision in self.trust_decisions
+        )
+
+    @property
+    def denial_reason(self) -> str | None:
+        if not self.selector_allowed:
+            return self.selector_reason
+        return next(
+            (
+                decision.reason
+                for decision in self.trust_decisions
+                if not decision.allowed
+            ),
+            None,
+        )
+
+    def selector_audit_metadata(self) -> dict[str, object]:
+        """Return argument-free fields for an MCP group-selector audit."""
+
+        return {
+            "identifier": self.identifier,
+            "generation": self.generation,
+            "target_kind": self.kind.value,
+            "source": self.source.value if self.source is not None else None,
+            "provider_authoritative": self.provider_authoritative,
+            "matched_tool_count": len(self.matched_tool_names),
+            "allowed": self.allowed,
+            "reason": self.denial_reason or "trust policy 允许",
+        }
+
+
 @dataclass(frozen=True)
 class ToolSnapshot:
     generation: int
@@ -294,6 +455,8 @@ class ToolSnapshot:
     tool_dependencies: Mapping[str, AbstractSet[str]]
     mcp_tool_names: AbstractSet[str]
     provider_catalog: ProviderCatalogSnapshot | None = None
+    legacy_plugin_names: AbstractSet[str] | None = None
+    mcp_server_identifiers: AbstractSet[str] | None = None
     generated_state_revision: int = 0
     generated_state_digest: str = ""
     generated_active: Mapping[str, str] = field(default_factory=dict)
@@ -309,6 +472,15 @@ class ToolSnapshot:
         ):
             raise ValueError("ToolSnapshot.mcp_tool_names 必须是工具名集合")
         object.__setattr__(self, "mcp_tool_names", frozenset(self.mcp_tool_names))
+        for field_name in ("legacy_plugin_names", "mcp_server_identifiers"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if not isinstance(value, AbstractSet) or not all(
+                isinstance(name, str) and name for name in value
+            ):
+                raise ValueError(f"ToolSnapshot.{field_name} 必须是字符串集合")
+            object.__setattr__(self, field_name, frozenset(value))
         provider_catalog = self.provider_catalog
         if provider_catalog is None:
             provider_catalog = ProviderCatalogSnapshot.empty(self.generation)
@@ -919,6 +1091,306 @@ class ToolSnapshot:
             trust_decision=decision,
         )
 
+    @staticmethod
+    def _management_label_for_source(source: ToolSource) -> str:
+        if source is ToolSource.BUILTIN:
+            return "联网搜索工具"
+        if source is ToolSource.NONEBOT_PLUGIN:
+            return "NoneBot 插件"
+        if source is ToolSource.MCP:
+            return "MCP 工具"
+        return "自定义函数工具"
+
+    @staticmethod
+    def _mcp_service_token(identifier: str) -> str | None:
+        if not identifier.startswith("mcp__"):
+            return None
+        suffix = identifier.removeprefix("mcp__")
+        if identifier.endswith("__*"):
+            token = suffix.removesuffix("__*")
+        elif "__" not in suffix:
+            token = suffix
+        else:
+            return None
+        return token or None
+
+    def _legacy_management_plugin_names(self) -> frozenset[str]:
+        if self.legacy_plugin_names is not None:
+            return frozenset(self.legacy_plugin_names)
+        return frozenset(
+            plugin.name for plugin in nonebot.plugin.get_loaded_plugins()
+        )
+
+    def _legacy_management_mcp_server_identifiers(self) -> frozenset[str]:
+        if self.mcp_server_identifiers is not None:
+            return frozenset(self.mcp_server_identifiers)
+        # Old/bootstrap snapshots did not freeze this sidecar.  Keep their
+        # bounded rollback behavior; formal runtime candidates always publish
+        # the generation-bound set.
+        mcp_manager.load_config()
+        return mcp_manager.configured_server_identifiers()
+
+    def _legacy_tool_management_view(
+        self,
+        identifier: str,
+    ) -> ToolManagementView | None:
+        if identifier == WEB_SEARCH_TOOL_SPEC.name:
+            return ToolManagementView(
+                identifier=identifier,
+                generation=self.generation,
+                kind=ToolManagementTargetKind.EXACT_TOOL,
+                label="联网搜索工具",
+                source=ToolSource.BUILTIN,
+                spec=WEB_SEARCH_TOOL_SPEC,
+                legacy_entry=None,
+                matched_tool_names=(identifier,),
+                provider_authoritative=False,
+            )
+
+        if identifier in self._legacy_management_plugin_names():
+            legacy_entry = self.plugin_info.get(identifier)
+            raw_spec = (
+                legacy_entry.get("tool_spec")
+                if legacy_entry is not None
+                else None
+            )
+            return ToolManagementView(
+                identifier=identifier,
+                generation=self.generation,
+                kind=ToolManagementTargetKind.EXACT_TOOL,
+                label="NoneBot 插件",
+                source=ToolSource.NONEBOT_PLUGIN,
+                spec=raw_spec if isinstance(raw_spec, ToolSpec) else None,
+                legacy_entry=legacy_entry,
+                matched_tool_names=(identifier,),
+                provider_authoritative=False,
+            )
+
+        legacy_entry = self.custom_tools.get(identifier)
+        if legacy_entry is not None:
+            raw_source = legacy_entry.get("source")
+            source = (
+                {
+                    "registered": ToolSource.REGISTERED,
+                    "custom_file": ToolSource.CUSTOM_FILE,
+                    "generated": ToolSource.GENERATED,
+                    "mcp": ToolSource.MCP,
+                }.get(raw_source)
+                if isinstance(raw_source, str)
+                else None
+            )
+            if identifier in self.mcp_tool_names:
+                source = ToolSource.MCP
+            raw_spec = legacy_entry.get("tool_spec")
+            return ToolManagementView(
+                identifier=identifier,
+                generation=self.generation,
+                kind=ToolManagementTargetKind.EXACT_TOOL,
+                label=(
+                    "MCP 工具"
+                    if source is ToolSource.MCP
+                    else "自定义函数工具"
+                ),
+                source=source,
+                spec=raw_spec if isinstance(raw_spec, ToolSpec) else None,
+                legacy_entry=legacy_entry,
+                matched_tool_names=(identifier,),
+                provider_authoritative=False,
+            )
+
+        server_token = self._mcp_service_token(identifier)
+        if server_token is None:
+            return None
+        prefix = f"mcp__{server_token}__"
+        matched_tool_names = tuple(
+            sorted(
+                name
+                for name in self.mcp_tool_names
+                if name.startswith(prefix)
+            )
+        )
+        if (
+            server_token
+            not in self._legacy_management_mcp_server_identifiers()
+            and not matched_tool_names
+        ):
+            return None
+        return ToolManagementView(
+            identifier=identifier,
+            generation=self.generation,
+            kind=ToolManagementTargetKind.MCP_SERVICE,
+            label="MCP 服务",
+            source=ToolSource.MCP,
+            spec=None,
+            legacy_entry=None,
+            matched_tool_names=matched_tool_names,
+            provider_authoritative=False,
+        )
+
+    @staticmethod
+    def _management_exact_identity_matches(
+        legacy_view: ToolManagementView,
+        item: DiscoveredTool,
+    ) -> bool:
+        if (
+            legacy_view.kind is not ToolManagementTargetKind.EXACT_TOOL
+            or legacy_view.identifier != item.spec.name
+            or legacy_view.source is not item.source
+            or legacy_view.label
+            != ToolSnapshot._management_label_for_source(item.source)
+        ):
+            return False
+        if legacy_view.spec is item.spec:
+            return True
+        if (
+            item.source is not ToolSource.MCP
+            or legacy_view.spec is not None
+            or legacy_view.legacy_entry is None
+        ):
+            return False
+        entry = legacy_view.legacy_entry
+        return (
+            entry.get("name", item.spec.name) == item.spec.name
+            and entry.get("func") is item.spec.handler
+            and entry.get("description") == item.spec.description
+            and mutable_value(entry.get("parameters"))
+            == mutable_value(item.spec.parameters)
+        )
+
+    def resolve_tool_management(
+        self,
+        identifier: str,
+        *,
+        is_superuser: bool,
+        provider_cutover: bool | None = None,
+    ) -> ToolManagementView | None:
+        """Resolve one blacklist-add target with Provider/legacy parity."""
+
+        identifier = str(identifier or "").strip()
+        if not identifier:
+            return None
+        if type(is_superuser) is not bool:
+            raise TypeError("工具管理 is_superuser 必须是布尔值")
+        legacy_view = self._legacy_tool_management_view(identifier)
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_management_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("工具管理 Provider cutover 开关必须是布尔值")
+
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not provider_cutover
+            or provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return legacy_view
+
+        item = provider_catalog.tools.get(identifier)
+        if item is not None:
+            if legacy_view is None:
+                raise ProviderConsumerParityError(
+                    f"工具管理 legacy rollback identity 缺失: {identifier}"
+                )
+            if not self._management_exact_identity_matches(legacy_view, item):
+                raise ProviderConsumerParityError(
+                    "工具管理 Provider identity 与 legacy rollback view 不一致: "
+                    f"{identifier}"
+                )
+            decision = provider_catalog.decide_trust(
+                identifier,
+                ToolTrustOperation.MANAGEMENT,
+                is_superuser=is_superuser,
+            )
+            return ToolManagementView(
+                identifier=identifier,
+                generation=self.generation,
+                kind=ToolManagementTargetKind.EXACT_TOOL,
+                label=self._management_label_for_source(item.source),
+                source=item.source,
+                spec=item.spec,
+                legacy_entry=legacy_view.legacy_entry,
+                matched_tool_names=(identifier,),
+                provider_authoritative=True,
+                trust_decisions=(decision,),
+            )
+
+        server_token = self._mcp_service_token(identifier)
+        if server_token is not None:
+            prefix = f"mcp__{server_token}__"
+            provider_names = tuple(
+                sorted(
+                    name
+                    for name, provider_item in provider_catalog.tools.items()
+                    if provider_item.source is ToolSource.MCP
+                    and name.startswith(prefix)
+                )
+            )
+            if legacy_view is None:
+                if provider_names:
+                    raise ProviderConsumerParityError(
+                        "工具管理 MCP Provider selector 缺少 legacy rollback view: "
+                        f"{identifier}"
+                    )
+                return None
+            if (
+                legacy_view.kind is not ToolManagementTargetKind.MCP_SERVICE
+                or legacy_view.matched_tool_names != provider_names
+            ):
+                raise ProviderConsumerParityError(
+                    "工具管理 MCP Provider selector 与 legacy rollback view "
+                    f"不一致: {identifier}"
+                )
+
+            decisions: list[ToolTrustDecision] = []
+            for tool_name in provider_names:
+                provider_item = provider_catalog.tools[tool_name]
+                legacy_member = self._legacy_tool_management_view(tool_name)
+                if legacy_member is None or not self._management_exact_identity_matches(
+                    legacy_member,
+                    provider_item,
+                ):
+                    raise ProviderConsumerParityError(
+                        "工具管理 MCP selector member 与 legacy rollback view "
+                        f"不一致: {tool_name}"
+                    )
+                decisions.append(
+                    provider_catalog.decide_trust(
+                        tool_name,
+                        ToolTrustOperation.MANAGEMENT,
+                        is_superuser=is_superuser,
+                    )
+                )
+            return ToolManagementView(
+                identifier=identifier,
+                generation=self.generation,
+                kind=ToolManagementTargetKind.MCP_SERVICE,
+                label="MCP 服务",
+                source=ToolSource.MCP,
+                spec=None,
+                legacy_entry=None,
+                matched_tool_names=provider_names,
+                provider_authoritative=True,
+                trust_decisions=tuple(decisions),
+                selector_allowed=is_superuser,
+                selector_reason=(
+                    None if is_superuser else "工具管理只允许超级用户"
+                ),
+            )
+
+        if legacy_view is not None:
+            raise ProviderConsumerParityError(
+                f"工具管理 Provider identity 缺失: {identifier}"
+            )
+        return None
+
     def get_brief_catalog(
         self,
         *,
@@ -1508,6 +1980,14 @@ async def extract_webpage(
                 plugin_info[plugin.name] = info
         return plugin_info
 
+    @staticmethod
+    def loaded_plugin_names() -> frozenset[str]:
+        """Capture the legacy management namespace for one reload candidate."""
+
+        return frozenset(
+            plugin.name for plugin in nonebot.plugin.get_loaded_plugins()
+        )
+
     def refresh_plugins(self):
         self.plugin_info = build_nonebot_plugin_candidate(
             self.build_plugin_info()
@@ -1731,9 +2211,25 @@ async def extract_webpage(
             and not is_superuser
         )
 
-    def validate_tool_identifier(self, tool_name: str) -> tuple[bool, str]:
+    @staticmethod
+    def tool_identifier_not_found_message(tool_name: str) -> str:
+        return (
+            f"找不到工具标识：{tool_name}\n"
+            "请确认它是已加载的 NoneBot 插件包名、自定义函数名，"
+            "或已配置/已发现的 MCP 标识。可先发送“刷新工具”后重试。\n"
+            "MCP 示例：mcp__filesystem、mcp__filesystem__read_file、"
+            "mcp__filesystem__*"
+        )
+
+    def validate_tool_identifier(
+        self,
+        tool_name: str,
+        *,
+        is_superuser: bool = True,
+        provider_cutover: bool | None = None,
+    ) -> tuple[bool, str]:
         """
-        校验工具标识是否对应当前可识别的 NoneBot 插件、自定义函数或 MCP。
+        Compatibility facade for generation-bound management resolution.
 
         支持 MCP 服务级标识：
         - mcp__server
@@ -1742,33 +2238,29 @@ async def extract_webpage(
         tool_name = str(tool_name or "").strip()
         if not tool_name:
             return False, "工具标识不能为空"
+        from .runtime_snapshot import runtime_snapshots
 
-        if tool_name == WEB_SEARCH_TOOL_SPEC.name:
-            return True, "联网搜索工具"
-
-        loaded_plugin_names = {
-            plugin.name for plugin in nonebot.plugin.get_loaded_plugins()
-        }
-        if tool_name in loaded_plugin_names:
-            return True, "NoneBot 插件"
-
-        if tool_name in self.custom_tools:
-            if tool_name in getattr(self, "mcp_tool_names", set()):
-                return True, "MCP 工具"
-            return True, "自定义函数工具"
-
-        if self._is_known_mcp_identifier(tool_name):
-            return True, "MCP 服务"
-
-        return (
-            False,
-            (
-                f"找不到工具标识：{tool_name}\n"
-                "请确认它是已加载的 NoneBot 插件包名、自定义函数名，"
-                "或已配置/已发现的 MCP 标识。可先发送“刷新工具”后重试。\n"
-                "MCP 示例：mcp__filesystem、mcp__filesystem__read_file、mcp__filesystem__*"
-            ),
+        runtime_snapshot = runtime_snapshots.active()
+        snapshot = (
+            runtime_snapshot.tool_snapshot
+            if runtime_snapshot is not None
+            else self.snapshot()
         )
+        if provider_cutover is None and runtime_snapshot is not None:
+            provider_cutover = runtime_snapshot.config.get(
+                "provider_catalog_management_enabled",
+                True,
+            )
+        view = snapshot.resolve_tool_management(
+            tool_name,
+            is_superuser=is_superuser,
+            provider_cutover=provider_cutover,
+        )
+        if view is None:
+            return False, self.tool_identifier_not_found_message(tool_name)
+        if not view.allowed:
+            return False, view.denial_reason or "工具管理 trust policy 拒绝"
+        return True, view.label
 
     def _is_known_mcp_identifier(self, tool_name: str) -> bool:
         if not tool_name.startswith("mcp__"):
@@ -1787,12 +2279,8 @@ async def extract_webpage(
             return False
 
         mcp_manager.load_config()
-        for server_name, conf in getattr(mcp_manager, "servers", {}).items():
-            if not isinstance(conf, dict):
-                continue
-            safe_server = mcp_manager._safe_identifier(server_name)
-            if safe_server == server_token:
-                return True
+        if server_token in mcp_manager.configured_server_identifiers():
+            return True
 
         prefix = f"mcp__{server_token}__"
         return any(

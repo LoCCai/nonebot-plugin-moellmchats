@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from nonebot.log import logger
 
@@ -170,6 +170,9 @@ class RuntimeReloader:
             ),
             asyncio.to_thread(mcp_manager.load_config_candidate),
         )
+        legacy_plugin_names = await asyncio.to_thread(
+            tool_manager.loaded_plugin_names
+        )
         plugin_info, nonebot_plugin_specs = build_nonebot_plugin_candidate(
             plugin_info
         )
@@ -334,6 +337,15 @@ class RuntimeReloader:
             tool_dependencies=immutable_mapping(dependencies),
             mcp_tool_names=frozenset(mcp_names),
             provider_catalog=provider_catalog,
+            legacy_plugin_names=(
+                legacy_plugin_names
+                | frozenset(cast("dict[str, object]", plugin_info))
+            ),
+            mcp_server_identifiers=(
+                mcp_manager.configured_server_identifiers(
+                    cast("dict[str, dict[str, Any]]", mcp_servers)
+                )
+            ),
             generated_state_revision=generated_state.revision,
             generated_state_digest=generated_state.state_digest,
             generated_active=generated_state.active,

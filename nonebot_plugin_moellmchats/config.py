@@ -56,6 +56,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "provider_catalog_llm_tools_enabled": True,
     "provider_catalog_pending_actions_enabled": True,
     "provider_catalog_search_enabled": True,
+    "provider_catalog_management_enabled": True,
     "user_history_expire_seconds": 600,
     "cd_seconds": 120,
     "search_api": "your api",
@@ -194,6 +195,7 @@ class ConfigParser:
             "provider_catalog_llm_tools_enabled",
             "provider_catalog_pending_actions_enabled",
             "provider_catalog_search_enabled",
+            "provider_catalog_management_enabled",
         ):
             if type(candidate.get(field)) is not bool:
                 raise ValueError(f"config.json: {field} 必须是布尔值")

@@ -63,7 +63,7 @@ from .tool_contracts import (
     ToolSpec,
     register_tool,
 )
-from .tool_manager import tool_manager
+from .tool_manager import ToolManagementView, ToolSnapshot, tool_manager
 from .tool_runtime import reload_tools_for_commands
 from .utils import (
     close_session,
@@ -435,13 +435,59 @@ async def manage_tool_blacklist_command(
                 f"{_retained_tool_generation(_current_tool_generation())}。"
                 "详情请查看后台日志。"
             )
-        validate_tool_identifier = getattr(tool_manager, "validate_tool_identifier", None)
-        if not callable(validate_tool_identifier):
+        runtime_snapshot = runtime_snapshots.current()
+        tool_snapshot = (
+            runtime_snapshot.tool_snapshot
+            if runtime_snapshot is not None
+            else None
+        )
+        if not isinstance(tool_snapshot, ToolSnapshot):
             await manage_blacklist_matcher.finish("当前工具管理器不支持工具存在性校验，请重启 Bot 或更新插件后重试。")
+            return
 
-        exists, validate_msg = validate_tool_identifier(plugin_name)
-        if not exists:
-            await manage_blacklist_matcher.finish(validate_msg)
+        management_view: ToolManagementView | None
+        try:
+            assert runtime_snapshot is not None
+            provider_cutover = runtime_snapshot.config.get(
+                "provider_catalog_management_enabled",
+                True,
+            )
+            management_view = tool_snapshot.resolve_tool_management(
+                plugin_name,
+                is_superuser=True,
+                provider_cutover=provider_cutover,
+            )
+        except Exception:
+            logger.exception("添加黑名单前的 Provider 工具身份校验失败")
+            await manage_blacklist_matcher.finish(
+                "❌ 添加黑名单前的工具身份校验失败，黑名单未修改；"
+                f"{_retained_tool_generation(_current_tool_generation())}。"
+                "详情请查看后台日志。"
+            )
+            return
+
+        if management_view is None:
+            await manage_blacklist_matcher.finish(
+                tool_manager.tool_identifier_not_found_message(plugin_name)
+            )
+            return
+        for decision in management_view.trust_decisions:
+            if decision.audit_required:
+                logger.info(
+                    f"工具管理 trust decision: {decision.audit_metadata()}"
+                )
+        if (
+            management_view.provider_authoritative
+            and not management_view.trust_decisions
+        ):
+            logger.info(
+                "工具管理 selector decision: "
+                f"{management_view.selector_audit_metadata()}"
+            )
+        if not management_view.allowed:
+            await manage_blacklist_matcher.finish(
+                management_view.denial_reason or "工具管理 trust policy 拒绝"
+            )
 
     result = model_selector.manage_tool_blacklist(action, plugin_name)
 
@@ -672,6 +718,9 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
 
     command_name = event.message.extract_plain_text().split()[0].strip()
     action = "add" if "添加" in command_name else "remove"
+    # Resident entries are intentionally permissive configuration inputs.
+    # D-08b ignores stale names at payload construction, and removal must stay
+    # available even after a tool disappears; this is not an identity consumer.
     result = model_selector.manage_resident_plugins(action, plugin_name)
     await manage_resident_matcher.finish(result)
 

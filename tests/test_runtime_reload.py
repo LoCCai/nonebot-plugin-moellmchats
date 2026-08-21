@@ -251,14 +251,20 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     monkeypatch.setattr(
         reload_module.mcp_manager,
         "load_config_candidate",
-        lambda: {},
+        lambda: {
+            "runtime": {},
+            "disabled server": {"enabled": False},
+        },
     )
 
     async def discover_mcp(*, commit: bool, servers, strict: bool):
         nonlocal mcp_discovery_calls
         mcp_discovery_calls += 1
         assert commit is False
-        assert servers == {}
+        assert servers == {
+            "runtime": {},
+            "disabled server": {"enabled": False},
+        }
         assert strict is True
         schema = {
             "name": mcp_spec.name,
@@ -313,6 +319,8 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         "tool_dependencies",
         "mcp_tool_names",
         "provider_catalog",
+        "legacy_plugin_names",
+        "mcp_server_identifiers",
         "generated_state_revision",
         "generated_state_digest",
         "generated_active",
@@ -373,6 +381,12 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     }
     assert "tool_spec" not in mcp_entry
     assert snapshot.mcp_tool_names == {mcp_spec.name}
+    assert isinstance(snapshot.legacy_plugin_names, frozenset)
+    assert plugin_name in snapshot.legacy_plugin_names
+    assert snapshot.mcp_server_identifiers == {
+        "runtime",
+        "disabled_server",
+    }
     assert not hasattr(candidate.snapshot, "providers")
     assert not hasattr(candidate.snapshot, "discovered_tools")
     assert not hasattr(registered_tool_provider, "execute")

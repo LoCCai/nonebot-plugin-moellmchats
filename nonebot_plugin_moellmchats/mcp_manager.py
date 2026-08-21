@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 import hashlib
 import inspect
@@ -122,6 +122,21 @@ description = "旧版 SSE MCP 示例"
         except Exception as error:
             logger.error(f"读取 mcp_servers.toml 失败: {error}")
             self.servers = {}
+
+    def configured_server_identifiers(
+        self,
+        servers: Mapping[str, object] | None = None,
+    ) -> frozenset[str]:
+        """Freeze the legacy service-level selectors for one MCP candidate."""
+
+        candidate = self.servers if servers is None else servers
+        if not isinstance(candidate, Mapping):
+            raise TypeError("MCP server candidate 必须是映射")
+        return frozenset(
+            self._safe_identifier(server_name)
+            for server_name, conf in candidate.items()
+            if isinstance(server_name, str) and isinstance(conf, dict)
+        )
 
     async def discover_tools(
         self,

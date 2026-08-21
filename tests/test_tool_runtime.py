@@ -130,6 +130,7 @@ async def test_blacklist_validation_reload_failure_stops_before_write(
         return "unexpected"
 
     monkeypatch.setattr(plugin, "manage_blacklist_matcher", matcher)
+    monkeypatch.setattr(plugin, "ToolSnapshot", SimpleNamespace)
     monkeypatch.setattr(plugin, "reload_tools_for_commands", reload)
     monkeypatch.setattr(plugin.model_selector, "get_tool_blacklist", lambda: [])
     monkeypatch.setattr(plugin.model_selector, "manage_tool_blacklist", manage)
@@ -172,6 +173,7 @@ async def test_blacklist_post_write_reload_failure_reports_runtime_stale(
         )
 
     monkeypatch.setattr(plugin, "manage_blacklist_matcher", matcher)
+    monkeypatch.setattr(plugin, "ToolSnapshot", SimpleNamespace)
     monkeypatch.setattr(plugin, "reload_tools_for_commands", reload)
     monkeypatch.setattr(plugin.model_selector, "get_tool_blacklist", lambda: [])
     monkeypatch.setattr(
@@ -180,14 +182,20 @@ async def test_blacklist_post_write_reload_failure_reports_runtime_stale(
         lambda action, name: f"已将 {name} 加入工具黑名单",
     )
     monkeypatch.setattr(
-        plugin.tool_manager,
-        "validate_tool_identifier",
-        lambda _name: (True, ""),
-    )
-    monkeypatch.setattr(
         plugin.runtime_snapshots,
         "current",
-        lambda: SimpleNamespace(generation=19),
+        lambda: SimpleNamespace(
+            generation=19,
+            config={"provider_catalog_management_enabled": True},
+            tool_snapshot=SimpleNamespace(
+                resolve_tool_management=lambda *_args, **_kwargs: SimpleNamespace(
+                    trust_decisions=(),
+                    provider_authoritative=False,
+                    allowed=True,
+                    denial_reason=None,
+                )
+            ),
+        ),
     )
     event = SimpleNamespace(message=PlainText("添加插件黑名单 demo_tool"))
 
@@ -204,3 +212,197 @@ async def test_blacklist_post_write_reload_failure_reports_runtime_stale(
     assert "工具运行快照同步失败" in message
     assert "旧 generation 19 已保留" in message
     assert "must-not-leak" not in message
+
+
+@pytest.mark.asyncio
+async def test_blacklist_add_uses_generation_bound_provider_management_view(
+    monkeypatch,
+) -> None:
+    matcher = FakeMatcher()
+    reload_calls = 0
+    resolutions: list[tuple[str, bool, bool]] = []
+    writes: list[tuple[str, str]] = []
+    audit_logs: list[str] = []
+
+    async def reload() -> ReloadResult:
+        nonlocal reload_calls
+        reload_calls += 1
+        return ReloadResult(
+            generation=20 + reload_calls,
+            changed=("tool-command",),
+            custom_tools=1,
+            mcp_tools=0,
+        )
+
+    decision = SimpleNamespace(
+        audit_required=True,
+        audit_metadata=lambda: {
+            "tool_name": "demo_tool",
+            "operation": "management",
+        },
+    )
+    management_view = SimpleNamespace(
+        trust_decisions=(decision,),
+        provider_authoritative=True,
+        allowed=True,
+        denial_reason=None,
+    )
+
+    def resolve(identifier, *, is_superuser, provider_cutover):
+        resolutions.append((identifier, is_superuser, provider_cutover))
+        return management_view
+
+    runtime_snapshot = SimpleNamespace(
+        generation=21,
+        config={"provider_catalog_management_enabled": True},
+        tool_snapshot=SimpleNamespace(resolve_tool_management=resolve),
+    )
+    monkeypatch.setattr(plugin, "manage_blacklist_matcher", matcher)
+    monkeypatch.setattr(plugin, "ToolSnapshot", SimpleNamespace)
+    monkeypatch.setattr(plugin, "reload_tools_for_commands", reload)
+    monkeypatch.setattr(plugin.model_selector, "get_tool_blacklist", lambda: [])
+    monkeypatch.setattr(
+        plugin.model_selector,
+        "manage_tool_blacklist",
+        lambda action, name: (
+            writes.append((action, name))
+            or f"已将 {name} 加入工具黑名单"
+        ),
+    )
+    monkeypatch.setattr(
+        plugin.runtime_snapshots,
+        "current",
+        lambda: runtime_snapshot,
+    )
+    monkeypatch.setattr(plugin.logger, "info", audit_logs.append)
+    event = SimpleNamespace(message=PlainText("添加插件黑名单 demo_tool"))
+
+    with pytest.raises(MatcherFinished):
+        await plugin.manage_tool_blacklist_command(
+            object(),
+            event,
+            PlainText("demo_tool"),
+        )
+
+    assert reload_calls == 2
+    assert resolutions == [("demo_tool", True, True)]
+    assert writes == [("add", "demo_tool")]
+    assert audit_logs
+    assert "management" in audit_logs[0]
+    assert matcher.messages == ["已将 demo_tool 加入工具黑名单"]
+
+
+@pytest.mark.asyncio
+async def test_blacklist_provider_parity_failure_stops_before_write(
+    monkeypatch,
+) -> None:
+    matcher = FakeMatcher()
+    writes: list[tuple[str, str]] = []
+    logged: list[str] = []
+
+    async def reload() -> ReloadResult:
+        return ReloadResult(
+            generation=22,
+            changed=("tool-command",),
+            custom_tools=1,
+            mcp_tools=0,
+        )
+
+    def resolve(*_args, **_kwargs):
+        raise RuntimeError("secret=must-not-leak")
+
+    runtime_snapshot = SimpleNamespace(
+        generation=22,
+        config={"provider_catalog_management_enabled": True},
+        tool_snapshot=SimpleNamespace(resolve_tool_management=resolve),
+    )
+    monkeypatch.setattr(plugin, "manage_blacklist_matcher", matcher)
+    monkeypatch.setattr(plugin, "ToolSnapshot", SimpleNamespace)
+    monkeypatch.setattr(plugin, "reload_tools_for_commands", reload)
+    monkeypatch.setattr(plugin.model_selector, "get_tool_blacklist", lambda: [])
+    monkeypatch.setattr(
+        plugin.model_selector,
+        "manage_tool_blacklist",
+        lambda action, name: writes.append((action, name)) or "unexpected",
+    )
+    monkeypatch.setattr(
+        plugin.runtime_snapshots,
+        "current",
+        lambda: runtime_snapshot,
+    )
+    monkeypatch.setattr(plugin.logger, "exception", logged.append)
+    event = SimpleNamespace(message=PlainText("添加插件黑名单 demo_tool"))
+
+    with pytest.raises(MatcherFinished):
+        await plugin.manage_tool_blacklist_command(
+            object(),
+            event,
+            PlainText("demo_tool"),
+        )
+
+    assert writes == []
+    assert logged == ["添加黑名单前的 Provider 工具身份校验失败"]
+    assert "工具身份校验失败" in matcher.messages[0]
+    assert "旧 generation 22 已保留" in matcher.messages[0]
+    assert "must-not-leak" not in matcher.messages[0]
+
+
+@pytest.mark.asyncio
+async def test_blacklist_remove_preserves_stale_identifier_cleanup(
+    monkeypatch,
+) -> None:
+    matcher = FakeMatcher()
+    reload_calls = 0
+    writes: list[tuple[str, str]] = []
+
+    async def reload() -> ReloadResult:
+        nonlocal reload_calls
+        reload_calls += 1
+        return ReloadResult(
+            generation=23,
+            changed=("tool-command",),
+            custom_tools=0,
+            mcp_tools=0,
+        )
+
+    def forbidden_resolve(*_args, **_kwargs):
+        raise AssertionError("remove must not validate a stale identifier")
+
+    monkeypatch.setattr(plugin, "manage_blacklist_matcher", matcher)
+    monkeypatch.setattr(plugin, "reload_tools_for_commands", reload)
+    monkeypatch.setattr(
+        plugin.model_selector,
+        "get_tool_blacklist",
+        lambda: ["removed_tool"],
+    )
+    monkeypatch.setattr(
+        plugin.model_selector,
+        "manage_tool_blacklist",
+        lambda action, name: (
+            writes.append((action, name))
+            or f"已将 {name} 从工具黑名单移除"
+        ),
+    )
+    monkeypatch.setattr(
+        plugin.runtime_snapshots,
+        "current",
+        lambda: SimpleNamespace(
+            generation=23,
+            config={"provider_catalog_management_enabled": True},
+            tool_snapshot=SimpleNamespace(
+                resolve_tool_management=forbidden_resolve
+            ),
+        ),
+    )
+    event = SimpleNamespace(message=PlainText("移除插件黑名单 removed_tool"))
+
+    with pytest.raises(MatcherFinished):
+        await plugin.manage_tool_blacklist_command(
+            object(),
+            event,
+            PlainText("removed_tool"),
+        )
+
+    assert reload_calls == 1
+    assert writes == [("remove", "removed_tool")]
+    assert matcher.messages == ["已将 removed_tool 从工具黑名单移除"]

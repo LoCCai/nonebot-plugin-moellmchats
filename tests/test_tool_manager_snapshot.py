@@ -39,6 +39,8 @@ from nonebot_plugin_moellmchats.tool_manager import (
     PendingActionExecutionView,
     ProviderConsumerParityError,
     SearchExtractorView,
+    ToolManagementTargetKind,
+    ToolManagementView,
     ToolManager,
     ToolSnapshot,
     model_selector,
@@ -3108,6 +3110,604 @@ def test_search_extractor_provider_cutover_config_requires_boolean(flag) -> None
     with pytest.raises(
         ValueError,
         match="provider_catalog_search_enabled",
+    ):
+        ConfigParser._validate(candidate)
+
+
+def test_management_provider_cutover_resolves_all_six_sources() -> None:
+    generation = 67
+    registered_spec = ToolSpec(
+        name="management_registered",
+        description="registered management",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    registered_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            registered_spec.name: {
+                **registered_spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog(
+            (registered_spec,),
+            generation=generation,
+        ),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+
+    file_spec = ToolSpec(
+        name="management_file",
+        description="file management",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    file_artifact = _file_artifact(file_spec, generation=generation)
+    file_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={file_spec.name: _file_legacy_schema(file_artifact)},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_file_catalog(file_artifact, generation=generation),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+
+    generated_spec = ToolSpec(
+        name="management_generated",
+        description="generated management",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        timeout_seconds=30,
+        result_limit=6000,
+        policy=ToolPolicy.generated(),
+    )
+    generated_artifact = _generated_artifact(
+        generated_spec,
+        generation=generation,
+    )
+    generated_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            generated_spec.name: _generated_legacy_schema(
+                generated_artifact
+            )
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_generated_catalog(
+            generated_artifact,
+            generation=generation,
+        ),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+
+    mcp_spec = ToolSpec(
+        name="mcp__management__lookup",
+        description="mcp management",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    mcp_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={mcp_spec.name: _mcp_legacy_schema(mcp_spec)},
+        tool_dependencies={},
+        mcp_tool_names={mcp_spec.name},
+        provider_catalog=_mcp_catalog(mcp_spec, generation=generation),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers={"management"},
+    )
+
+    plugin_info, plugin_specs = build_nonebot_plugin_candidate(
+        {
+            "management_plugin": {
+                "description": "plugin management",
+                "usage": "/management",
+            }
+        }
+    )
+    base = _registered_catalog((), generation=generation)
+    plugin_registration = ProviderRegistration.from_provider(
+        nonebot_plugin_provider
+    )
+    plugin_record = DiscoveredTool(
+        provider_id=plugin_registration.provider_id,
+        source=plugin_registration.source,
+        trust=plugin_registration.trust,
+        generation=generation,
+        spec=plugin_specs[0],
+    )
+    plugin_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info=plugin_info,
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=ProviderCatalogSnapshot(
+            generation=generation,
+            registrations=base.registrations,
+            tools={**base.tools, plugin_specs[0].name: plugin_record},
+        ),
+        legacy_plugin_names={plugin_specs[0].name},
+        mcp_server_identifiers=set(),
+    )
+    builtin_snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=base,
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+
+    cases = (
+        (
+            registered_snapshot,
+            registered_spec,
+            ToolSource.REGISTERED,
+            "自定义函数工具",
+        ),
+        (
+            file_snapshot,
+            file_spec,
+            ToolSource.CUSTOM_FILE,
+            "自定义函数工具",
+        ),
+        (
+            generated_snapshot,
+            generated_spec,
+            ToolSource.GENERATED,
+            "自定义函数工具",
+        ),
+        (mcp_snapshot, mcp_spec, ToolSource.MCP, "MCP 工具"),
+        (
+            builtin_snapshot,
+            builtin_tool_specs()[0],
+            ToolSource.BUILTIN,
+            "联网搜索工具",
+        ),
+        (
+            plugin_snapshot,
+            plugin_specs[0],
+            ToolSource.NONEBOT_PLUGIN,
+            "NoneBot 插件",
+        ),
+    )
+    for snapshot, spec, source, label in cases:
+        rollback = snapshot.resolve_tool_management(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=False,
+        )
+        provider = snapshot.resolve_tool_management(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        assert isinstance(rollback, ToolManagementView)
+        assert isinstance(provider, ToolManagementView)
+        assert not rollback.provider_authoritative
+        assert provider.provider_authoritative
+        assert provider.kind is ToolManagementTargetKind.EXACT_TOOL
+        assert provider.source is rollback.source is source
+        assert provider.spec is spec
+        assert provider.legacy_entry is rollback.legacy_entry
+        assert provider.label == rollback.label == label
+        assert provider.matched_tool_names == (spec.name,)
+        assert len(provider.trust_decisions) == 1
+        decision = provider.trust_decisions[0]
+        assert decision.operation is ToolTrustOperation.MANAGEMENT
+        assert decision.allowed
+        assert decision.audit_required
+        assert provider.allowed
+
+
+def test_management_provider_requires_superuser_even_for_user_tool() -> None:
+    spec = ToolSpec(
+        name="management_actor",
+        description="management actor",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        permission="user",
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=68,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=68),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+
+    denied = snapshot.resolve_tool_management(
+        spec.name,
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert denied is not None
+    assert not denied.allowed
+    assert denied.denial_reason == "工具管理只允许超级用户"
+
+    allowed = snapshot.resolve_tool_management(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert allowed is not None
+    assert allowed.allowed
+
+    rollback = snapshot.resolve_tool_management(
+        spec.name,
+        is_superuser=False,
+        provider_cutover=False,
+    )
+    assert rollback is not None
+    assert rollback.allowed
+    assert rollback.trust_decisions == ()
+
+
+def test_management_provider_preserves_mcp_service_and_wildcard_selectors() -> None:
+    generation = 69
+    specs = (
+        ToolSpec(
+            name="mcp__files__read",
+            description="read",
+            parameters={"type": "object", "properties": {}},
+            handler=_handler,
+        ),
+        ToolSpec(
+            name="mcp__files__write",
+            description="write",
+            parameters={"type": "object", "properties": {}},
+            handler=_handler,
+        ),
+    )
+    base = _registered_catalog((), generation=generation)
+    registration = ProviderRegistration.from_provider(mcp_tool_provider)
+    records = {
+        spec.name: DiscoveredTool(
+            provider_id=registration.provider_id,
+            source=registration.source,
+            trust=registration.trust,
+            generation=generation,
+            spec=spec,
+        )
+        for spec in specs
+    }
+    catalog = ProviderCatalogSnapshot(
+        generation=generation,
+        registrations=base.registrations,
+        tools={**base.tools, **records},
+    )
+    snapshot = ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={
+            spec.name: _mcp_legacy_schema(spec) for spec in specs
+        },
+        tool_dependencies={},
+        mcp_tool_names={spec.name for spec in specs},
+        provider_catalog=catalog,
+        legacy_plugin_names=set(),
+        mcp_server_identifiers={"files", "empty"},
+    )
+
+    expected_names = tuple(sorted(spec.name for spec in specs))
+    for identifier in ("mcp__files", "mcp__files__*"):
+        view = snapshot.resolve_tool_management(
+            identifier,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        assert view is not None
+        assert view.provider_authoritative
+        assert view.kind is ToolManagementTargetKind.MCP_SERVICE
+        assert view.label == "MCP 服务"
+        assert view.matched_tool_names == expected_names
+        assert tuple(
+            decision.tool_name for decision in view.trust_decisions
+        ) == expected_names
+        assert view.allowed
+
+    empty = snapshot.resolve_tool_management(
+        "mcp__empty",
+        is_superuser=True,
+        provider_cutover=True,
+    )
+    assert empty is not None
+    assert empty.provider_authoritative
+    assert empty.matched_tool_names == ()
+    assert empty.trust_decisions == ()
+    assert empty.allowed
+    assert empty.selector_audit_metadata() == {
+        "identifier": "mcp__empty",
+        "generation": generation,
+        "target_kind": "mcp_service",
+        "source": "mcp",
+        "provider_authoritative": True,
+        "matched_tool_count": 0,
+        "allowed": True,
+        "reason": "trust policy 允许",
+    }
+
+    empty_denied = snapshot.resolve_tool_management(
+        "mcp__empty",
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert empty_denied is not None
+    assert not empty_denied.allowed
+    assert empty_denied.denial_reason == "工具管理只允许超级用户"
+
+    assert (
+        snapshot.resolve_tool_management(
+            "mcp__unknown",
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        is None
+    )
+    assert (
+        snapshot.resolve_tool_management(
+            "mcp__files__missing",
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        is None
+    )
+
+
+def test_management_provider_cutover_fails_closed_on_identity_drift(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="management_parity",
+        description="management parity",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=70,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=70),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+    original = ToolSnapshot._legacy_tool_management_view
+
+    def drifted_legacy(self, identifier):
+        view = original(self, identifier)
+        assert view is not None
+        return replace(view, source=ToolSource.MCP)
+
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "_legacy_tool_management_view",
+        drifted_legacy,
+    )
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.resolve_tool_management(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+    rollback = snapshot.resolve_tool_management(
+        spec.name,
+        is_superuser=True,
+        provider_cutover=False,
+    )
+    assert rollback is not None
+    assert rollback.source is ToolSource.MCP
+
+
+def test_management_provider_cutover_checks_mcp_member_parity(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="mcp__parity__lookup",
+        description="mcp parity",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    snapshot = ToolSnapshot(
+        generation=71,
+        plugin_info={},
+        custom_tools={spec.name: _mcp_legacy_schema(spec)},
+        tool_dependencies={},
+        mcp_tool_names={spec.name},
+        provider_catalog=_mcp_catalog(spec, generation=71),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers={"parity"},
+    )
+    original = ToolSnapshot._legacy_tool_management_view
+
+    def drifted_legacy(self, identifier):
+        view = original(self, identifier)
+        assert view is not None
+        if identifier == spec.name:
+            legacy_entry = dict(view.legacy_entry or {})
+            legacy_entry["description"] = "drifted"
+            return replace(view, legacy_entry=legacy_entry)
+        return view
+
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "_legacy_tool_management_view",
+        drifted_legacy,
+    )
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.resolve_tool_management(
+            spec.name,
+            is_superuser=True,
+            provider_cutover=True,
+        )
+    with pytest.raises(ProviderConsumerParityError, match="selector member"):
+        snapshot.resolve_tool_management(
+            "mcp__parity__*",
+            is_superuser=True,
+            provider_cutover=True,
+        )
+
+
+def test_management_provider_cutover_handles_unknown_and_legacy_snapshot() -> None:
+    complete = ToolSnapshot(
+        generation=72,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((), generation=72),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+    assert (
+        complete.resolve_tool_management(
+            "unknown_management",
+            is_superuser=True,
+            provider_cutover=True,
+        )
+        is None
+    )
+
+    spec = ToolSpec(
+        name="management_legacy",
+        description="legacy management",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+    )
+    legacy = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={spec.name: spec.as_legacy_schema()},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+    view = legacy.resolve_tool_management(
+        spec.name,
+        is_superuser=False,
+        provider_cutover=True,
+    )
+    assert view is not None
+    assert not view.provider_authoritative
+    assert view.label == "自定义函数工具"
+    assert view.allowed
+
+
+def test_management_provider_cutover_default_and_config_rollback(
+    monkeypatch,
+) -> None:
+    spec = ToolSpec(
+        name="management_default_cutover",
+        description="management default",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    snapshot = ToolSnapshot(
+        generation=73,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_registered_catalog((spec,), generation=73),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+
+    def get_default(key: str, default=None):
+        assert key == "provider_catalog_management_enabled"
+        assert default is True
+        return DEFAULT_CONFIG[key]
+
+    monkeypatch.setattr(config_parser, "get_config", get_default)
+    provider = snapshot.resolve_tool_management(
+        spec.name,
+        is_superuser=True,
+    )
+    assert provider is not None
+    assert provider.provider_authoritative
+
+    monkeypatch.setattr(config_parser, "get_config", lambda *_args: False)
+    rollback = snapshot.resolve_tool_management(
+        spec.name,
+        is_superuser=True,
+    )
+    assert rollback is not None
+    assert not rollback.provider_authoritative
+
+
+@pytest.mark.parametrize("flag", [1, "true", [], {}])
+def test_management_provider_cutover_rejects_non_boolean_override(flag) -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+    with pytest.raises(ValueError, match="cutover"):
+        snapshot.resolve_tool_management(
+            "unknown",
+            is_superuser=True,
+            provider_cutover=flag,
+        )
+
+
+def test_management_provider_cutover_rejects_non_boolean_actor() -> None:
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        legacy_plugin_names=set(),
+        mcp_server_identifiers=set(),
+    )
+    with pytest.raises(TypeError, match="is_superuser"):
+        snapshot.resolve_tool_management(
+            "unknown",
+            is_superuser=1,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("flag", [None, 1, "true", [], {}])
+def test_management_provider_cutover_config_requires_boolean(flag) -> None:
+    candidate = dict(DEFAULT_CONFIG)
+    candidate["provider_catalog_management_enabled"] = flag
+
+    with pytest.raises(
+        ValueError,
+        match="provider_catalog_management_enabled",
     ):
         ConfigParser._validate(candidate)
 
