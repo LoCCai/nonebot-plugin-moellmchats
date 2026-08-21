@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T02:05:00+00:00
+lastmod: 2026-08-21T03:20:50+00:00
 ---
 
 # 04-implementation-backlog
@@ -18,7 +18,8 @@ lastmod: 2026-08-21T02:05:00+00:00
 - CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
-- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a～D-08d 已完成精确 HEAD 双 run gate；D-08d 最终闭环 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 对应 push run `32434441897` / PR run `32434445098`，两者均 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08e Search 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 已完成本地门禁，精确 HEAD 远端双 run gate 待完成；D-08f 与 D-09 均未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08e 已完成各自精确 HEAD 双 run gate；D-08e 最终闭环 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 对应 push run `32438803052` / PR run `32438809768`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。
+- D-08f 管理命令实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 已完成本地门禁：管理/Snapshot/Reload 定向 `148 passed`，Provider 与全部已切换 consumer 联合 `277 passed`，Python 3.10～3.13 串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、fresh build/Twine、四组包外加载均通过；Pyright 归一化零新增并消除 2 条旧诊断。精确 HEAD 远端双 run gate 待完成；D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -595,7 +596,7 @@ admin policy
 
 ## D-08 Consumer Cutover
 
-**状态：🟢 D-08a～D-08d 精确 HEAD 双 run 远端 gate green；🟡 D-08e Search 本地门禁完成、远端 gate 待完成；D-08f 未开始；未部署**
+**状态：🟢 D-08a～D-08e 精确 HEAD 双 run 远端 gate green；🟡 D-08f 管理命令本地门禁完成、远端 gate 待完成；未部署**
 
 按 `categorize → llm_payload → llm_tools → pending action → search → 管理命令` 逐个切换，每个消费端单独保留新旧视图等价回归与可回滚开关。
 
@@ -647,17 +648,27 @@ admin policy
 
 本地门禁：D-08e 定向 `121 passed`，Provider/Snapshot/Reload/Search 联合 `226 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `534 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 77 errors、3 warnings、80 条既有诊断，归一化 multiset 零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `039779623e9a8617e2e4578bccf215edfe69d53e2407c088975375bdb7bc0587`、sdist SHA256 `4986c57c514a30934bd4c99c17b5de3caf84f1b1af876b78fab93d684cd4f736`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认 Search 开关与 canonical extractor absence 均通过。
 
-远端状态：D-08e 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-08f 在此前不实施。未合并、未发布、未部署。
+远端证据：D-08e 最终文档闭环精确 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 对应 push run `32438803052` 与 PR run `32438809768`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。D-08f 依赖已解除。未合并、未发布、未部署。
 
-### D-08f 后续依赖
+### D-08f 管理命令
+
+实现落点：实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 新增 frozen、generation-bound `ToolManagementView`，并只切换黑名单添加时的工具身份管理 consumer。完整 schema v3 六 Provider catalog 下，精确 Registered / Custom File / Generated / MCP / Builtin / NoneBot Plugin 目标以 canonical source、精确 `ToolSpec` 与 `ToolTrustOperation.MANAGEMENT` decision 为权威；legacy rollback view 每次添加均校验 source/spec identity，MCP 历史 sidecar 无 `tool_spec` 时严格比较 handler、description、parameters 与 name。Provider 管理决策对普通用户一律 fail closed，允许或拒绝均只记录不含调用参数的固定 audit metadata。
+
+安全、事务与兼容边界：runtime candidate 将历史 loaded-plugin namespace 与 MCP configured-server selector 冻结进同一 `ToolSnapshot` generation；`mcp__server`、`mcp__server__*` 绑定该代全部 canonical MCP member，尚未发现工具的已配置服务仍可提前加入黑名单，但同样执行超级用户 selector policy 与审计。命令在预校验原子 reload 成功后捕获当前 `RuntimeSnapshot`，并从该快照读取独立严格布尔开关 `provider_catalog_management_enabled=true`；设为 `false` 只回滚管理 consumer，启动期或旧式不完整六 Provider catalog 继续有界 legacy。添加发生前的 reload/parity/trust 任一失败都不写配置；移除路径仍可清理已失效 blacklist 项并保留写后 reload 语义。常驻列表继续允许 stale 配置，由 D-08b payload 视图忽略未知项，未新增存在性限制。刷新/重载事务、其他 consumer 与 legacy sidecar 均未改变。
+
+本地门禁：管理/Snapshot/Reload 定向 `148 passed`，Provider/Snapshot/Reload 与全部已切换 consumer 联合 `277 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对父提交/当前树同一 8 文件分别为 103/101 errors、2/2 warnings，归一化 multiset 零新增并消除 2 条旧诊断。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `297c079c82139e7de7fe6200b25bfa34ac258571bb7a2e0494d410af2ea6e170`、sdist SHA256 `a2768b84bdd16872097396aa6fae639c7a3e91b72ae922c37e243cd361cb0db8`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认管理开关、canonical management decision 与空 MCP 服务 selector 均通过。
+
+远端状态：D-08f 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成。D-09 在此前不实施。未合并、未发布、未部署。
+
+### D-08 依赖闭环
 
 ```text
 D-08a categorize（远端 gate green）
   → D-08b llm_payload（远端 gate green）
   → D-08c llm_tools（远端 gate green）
   → D-08d pending action（远端 gate green）
-  → D-08e search（本地 gate green，远端 gate 待完成）
-  → D-08f 管理命令（等待 D-08e 关闭）
+  → D-08e search（远端 gate green）
+  → D-08f 管理命令（本地 gate green，远端 gate 待完成）
 ```
 
 每一项都必须有独立开关、legacy rollback view、Provider parity、定向/全量/打包门禁和精确 HEAD 远端 gate；前项未关闭时不提前实现后项。
@@ -666,7 +677,11 @@ D-08a categorize（远端 gate green）
 
 ## D-09 Legacy Sidecar Removal
 
+**状态：🔒 发布周期观察门禁未满足；未实施**
+
 只在全部 Provider、扩展 capability 和 D-08 消费端切换门禁通过，且至少完成一个发布周期的 parity 观察后，才单独删除 legacy sidecar。本任务不与 consumer cutover 混在同一 PR。
+
+D-08f 远端 gate 关闭后仅满足前置条件之一；当前没有可证明的发布周期 parity 观察，且本轮明确禁止生产操作，因此不得删除 sidecar、不得把测试或 CI 结果替代发布观察，也不提前标记 D-09 完成。
 
 ---
 

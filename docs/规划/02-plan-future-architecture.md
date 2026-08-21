@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T02:05:00+00:00
+lastmod: 2026-08-21T02:53:07+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T02:05:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07 与 D-08a～D-08d 已完成精确 HEAD 远端 gate；D-08d 最终闭环 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 的 push run `32434441897` / PR run `32434445098` 均为 11/11 green 且各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08e Search 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 已完成本地门禁：请求绑定的 canonical extractor identity、selection trust decision、当前 actor 权限与黑名单决定 URL 提示，legacy parity 每次调用校验，独立开关只回滚该 consumer。四版本串行普通全量各 `534 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包及四组包外 smoke 均通过，Pyright parent/current 没有新增或删除诊断。D-08e 精确 HEAD 远端双 run gate 待完成；D-08f 未开始，legacy sidecar 继续保留。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08e 已完成各自精确 HEAD 远端 gate；D-08e 最终闭环 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 的 push run `32438803052` / PR run `32438809768` 均为 11/11 green 且各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-08f 管理 consumer 实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 已完成本地门禁：当前 generation 的 canonical Provider identity、management trust decision、legacy rollback parity 与独立开关均已接入黑名单添加校验；MCP 服务级/通配符、stale blacklist 移除和 stale resident 兼容语义保留。四版本串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包及四组包外 smoke 均通过，Pyright 归一化零新增并消除 2 条旧诊断。D-08f 精确 HEAD 远端双 run gate 待完成；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -199,7 +199,15 @@ D-08e 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 只切换 Search �
 
 权限与回滚边界：`llm_tools → execute_web_search → Search` 显式传递当前 actor 的 `is_superuser`；Provider 路径只有 selection decision 允许且工具未被黑名单命中时才披露来源 URL 和 `extract_webpage` 调用提示，拒绝时只返回标题。独立严格布尔开关 `provider_catalog_search_enabled=true` 默认启用；设为 `false` 只回滚 Search consumer，并精确保留历史 membership-only 行为。启动期、无请求快照或旧式不完整六 Provider catalog 继续有界 legacy 兼容；管理命令与 legacy sidecar 尚未切换。
 
-D-08e 定向 `121 passed`，Provider/Snapshot/Reload/Search 联合 `226 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `534 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 77 errors、3 warnings、80 条既有诊断，归一化 multiset 零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `039779623e9a8617e2e4578bccf215edfe69d53e2407c088975375bdb7bc0587`、sdist SHA256 `4986c57c514a30934bd4c99c17b5de3caf84f1b1af876b78fab93d684cd4f736`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认 Search 开关与 canonical extractor absence 均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；D-08f 尚未开始，未合并、未发布、未部署。
+D-08e 定向 `121 passed`，Provider/Snapshot/Reload/Search 联合 `226 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `534 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 的 parent/current 均为 77 errors、3 warnings、80 条既有诊断，归一化 multiset 零新增、零删除。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `039779623e9a8617e2e4578bccf215edfe69d53e2407c088975375bdb7bc0587`、sdist SHA256 `4986c57c514a30934bd4c99c17b5de3caf84f1b1af876b78fab93d684cd4f736`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认 Search 开关与 canonical extractor absence 均通过。
+
+D-08e 最终文档闭环精确 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 已完成 push run `32438803052` / PR run `32438809768` 双 run gate；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均指向该 SHA，PR #2 为 `OPEN / CLEAN`。D-08f 依赖已解除；未合并、未发布、未部署。
+
+D-08f 实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 只切换黑名单添加时的工具身份管理 consumer。新增 frozen、generation-bound `ToolManagementView`；完整 schema v3 六 Provider catalog 下，精确 Registered / Custom File / Generated / MCP / Builtin / NoneBot Plugin 目标以 canonical source、精确 `ToolSpec` 与 `ToolTrustOperation.MANAGEMENT` decision 为权威，legacy rollback view 每次添加均校验 source/spec identity，MCP 历史 sidecar 无 `tool_spec` 时严格比较 handler、description、parameters 与 name。Provider 管理决策对普通用户一律 fail closed，允许或拒绝均只记录不含调用参数的固定 audit metadata。
+
+兼容与事务边界：正式 runtime candidate 将历史 loaded-plugin namespace 与 MCP configured-server selector 冻结进同一 `ToolSnapshot` generation；`mcp__server`、`mcp__server__*` 绑定该代全部 canonical MCP member，尚未发现工具的已配置服务仍可提前加入黑名单，但同样执行超级用户 selector policy 与审计。命令在预校验原子 reload 成功后捕获当前 `RuntimeSnapshot`，并从该快照读取独立严格布尔开关 `provider_catalog_management_enabled=true`；设为 `false` 只回滚管理 consumer，旧式或不完整 catalog 继续有界 legacy。添加发生前的 reload/parity/trust 任一失败都不写配置；移除路径仍可清理已失效 blacklist 项并保留写后 reload 语义。常驻列表继续允许 stale 配置，由 D-08b payload 视图忽略未知项，未借本次迁移新增存在性限制。刷新/重载事务、其他 consumer 与 legacy sidecar 均未改变。
+
+D-08f 管理/Snapshot/Reload 定向 `148 passed`，Provider/Snapshot/Reload 与全部已切换 consumer 联合 `277 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2 与 diff check 通过。Pyright 1.1.407 对父提交/当前树同一 8 文件分别为 103/101 errors、2/2 warnings，归一化 multiset 零新增并消除 2 条旧诊断。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `297c079c82139e7de7fe6200b25bfa34ac258571bb7a2e0494d410af2ea6e170`、sdist SHA256 `a2768b84bdd16872097396aa6fae639c7a3e91b72ae922c37e243cd361cb0db8`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、`reload("package-smoke")`、generation 1、完整六 Provider registration、默认管理开关、canonical management decision 与空 MCP 服务 selector 均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；D-09 未解锁，未合并、未发布、未部署。
 
 ---
 

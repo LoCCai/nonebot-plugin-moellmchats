@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T02:05:00+00:00
+lastmod: 2026-08-21T02:53:07+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a、D-02、D-01b、D-03、D-04、D-05、D-05a、D-05b、D-06、D-07、D-08a～D-08d 已完成精确 HEAD 双 run 远端门禁；D-08d 最终文档闭环 HEAD `2576fca54fc7086aca4716ef5f98864d5dd8d78e` 的 push run `32434441897` / PR run `32434445098` 均为 11/11 green、各恰好一个成功 `release-gate`，PR #2 为 `OPEN / CLEAN`。D-08e Search 实现提交 `e26729db158023fba482ebe8c13cc99909f91ddf` 已完成本地门禁：generation-bound `SearchExtractorView` 在完整六 Provider catalog 下以 canonical `extract_webpage` source/spec 与 selection trust decision 为权威，当前 actor 权限和黑名单决定是否在搜索结果中披露可调用 URL；legacy rollback view 逐调用校验 identity/parity，独立默认开启开关只回滚该 consumer，旧式或不完整 catalog 有界兼容，管理命令尚未切换。定向 `121 passed`，Provider/Snapshot/Reload/Search 联合 `226 passed`，Python 3.10～3.13 串行普通全量各 `534 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、fresh build/Twine 与四组包外加载均通过；Pyright parent/current 均为 77 errors、3 warnings、80 条既有诊断，零新增、零删除。D-08e 精确 HEAD 远端双 run gate 待完成，D-08f 尚未开始；D-09 sidecar 删除仍需全部 consumer 完成并经历至少一个发布周期观察。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08e 已完成各自精确 HEAD 双 run 远端门禁；D-08e 最终闭环 HEAD `9540938816f5a5b8e26fa9589f3be53b7a8f7ef4` 的 push run `32438803052` / PR run `32438809768` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-08f 管理命令实现提交 `9238bd7ff415550ccc27fad750b573a023755403` 已完成本地门禁：generation-bound `ToolManagementView` 以 canonical Provider identity 与 management trust decision 校验黑名单添加，逐调用执行 legacy parity；MCP 精确工具、服务级标识、通配符及尚无已发现工具的已配置服务均绑定同一 generation，普通用户在 Provider 视图中 fail closed。独立开关只回滚管理 consumer；移除已失效黑名单项与 permissive stale resident 配置语义保持不变。管理/Snapshot/Reload 定向 `148 passed`，Provider/全部已切换 consumer 联合 `277 passed`，Python 3.10～3.13 串行普通全量各 `554 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、fresh build/Twine 与四组包外加载均通过；Pyright parent/current 为 103→101 errors、2→2 warnings，归一化 multiset 零新增并消除 2 条旧诊断。D-08f 精确 HEAD 远端双 run gate 待完成；D-09 sidecar 删除仍需 D-08f gate 关闭并至少经历一个发布周期观察，在“不操作生产”约束下保持锁定。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
