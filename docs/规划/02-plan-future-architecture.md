@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T03:54:16+00:00
+lastmod: 2026-08-21T04:24:31+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T03:54:16+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01 最终闭环 HEAD `be2e83d54db0021f909cad04e5bca7c6ac19fa12` 的 push run `32444347880` / PR run `32444351420` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-02 实现提交 `29aa74ac7a03e2beb71b6834644171cdceeec50c` 已新增 frozen `AgentStep`、七类步骤、独立状态和有界深冻结 JSON 输入输出；四版本串行普通全量各 `642 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 零诊断；精确 HEAD 远端双 run gate 待完成，E-03 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。E-01 已闭环；E-02 最终 HEAD `8ca202ef0c53355567f44c740dd31f006377e72c` 的 push run `32445217116` / PR run `32445220594` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-03 实现提交 `2b4af0ea847f18b074ade33f9f6abcb0520ce1cf` 已新增 frozen `ToolCall`、独立状态与有界深冻结 arguments/result；四版本串行普通全量各 `672 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，打包与四组包外 smoke 均通过，Pyright 目标文件零诊断；当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成，E-04 尚未开始。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -412,9 +412,9 @@ memory
 
 E-02 实现提交 `29aa74ac7a03e2beb71b6834644171cdceeec50c` 在同一领域模块新增 frozen `AgentStep`、七类 `AgentStepType`、独立 `AgentStepStatus` 与递归 `AgentJsonValue`。对象精确携带 `step_id / run_id / index / type / model / tool / status / input / output / started_at / finished_at`；step/run identity 与非负 index 严格校验，model/tool step 必须绑定对应 identity，pending/running/五种终态的起止时间一致性 fail closed，非终态不得伪造 output。
 
-输入输出只接受 JSON primitive、字符串键 mapping 与 list/tuple；构造时递归脱离调用方并用只读 mapping/tuple 深冻结，拒绝非有限浮点、非字符串键、非 JSON 对象、循环引用及超过 32 层的嵌套，`as_dict()` 每次返回可 JSON 化的全新副本。E-02 不创建 step、不校验跨对象 index 唯一性、不接管现有请求/工具执行、不实现 E-04 状态转换，也不接数据库、Redis、Repository 或 D-09 sidecar。E-03 只能在 E-02 精确 HEAD 远端 gate 关闭后开始。
+输入输出只接受 JSON primitive、字符串键 mapping 与 list/tuple；构造时递归脱离调用方并用只读 mapping/tuple 深冻结，拒绝非有限浮点、非字符串键、非 JSON 对象、循环引用及超过 32 层的嵌套，`as_dict()` 每次返回可 JSON 化的全新副本。E-02 不创建 step、不校验跨对象 index 唯一性、不接管现有请求/工具执行、不实现 E-04 状态转换，也不接数据库、Redis、Repository 或 D-09 sidecar。E-02 最终精确 HEAD 远端 gate 关闭后才开始 E-03。
 
-E-02 AgentRun/Step 定向 `88 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `642 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `65f2b3356c6bddd4e3c656adee9a55ff07058c6e1f4a62b40adb741a52f1f693`、sdist SHA256 `ed08e853c076872c69b20b70992c5aa7d78a9c3cf3ec216f0537fbe6e3c591cf`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged `AgentStep` 深冻结与序列化均通过。当前本地门禁完成、精确 HEAD 远端双 run gate 待完成；E-03 在此前不实施，未合并、未发布、未部署。
+E-02 AgentRun/Step 定向 `88 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `642 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine 通过，wheel SHA256 `65f2b3356c6bddd4e3c656adee9a55ff07058c6e1f4a62b40adb741a52f1f693`、sdist SHA256 `ed08e853c076872c69b20b70992c5aa7d78a9c3cf3ec216f0537fbe6e3c591cf`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged `AgentStep` 深冻结与序列化均通过。最终文档闭环 HEAD `8ca202ef0c53355567f44c740dd31f006377e72c` 对应 push run `32445217116` / PR run `32445220594`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-03 依赖已解除；未合并、未发布、未部署。
 
 ---
 
@@ -438,6 +438,12 @@ ToolCall:
     result
     elapsed
 ```
+
+E-03 实现提交 `2b4af0ea847f18b074ade33f9f6abcb0520ce1cf` 在 `agent_runtime.py` 新增 frozen `ToolCall` 与独立 `ToolCallStatus`。对象精确携带 `tool_call_id / run_id / step_id / tool_name / bundle_digest / arguments / status / confirmed / result / elapsed`；工具名沿用统一安全命名规则，可选 bundle digest 只接受 64 位小写 SHA-256，identity、枚举和布尔字段均拒绝宽松转换。状态覆盖 `pending / waiting_confirmation / running / completed / failed / cancelled / timed_out / rejected`；等待确认时不得伪造 confirmed，非终态不得携带 result/elapsed，completed 必须携带 result，所有终态必须有有限非负 elapsed。
+
+arguments 必须是字符串键 JSON object，arguments/result 复用 E-02 的有限、无环、最多 32 层 JSON 边界；构造时递归脱离调用方并深冻结，`as_dict()` 返回可 JSON 化的新副本。E-03 只定义工具调用领域记录及固有不变量，不创建调用、不校验跨 AgentRun/AgentStep 的引用完整性，不接管 handler、Bot/Event、真实执行、PendingAction、数据库、Redis、Repository 或 D-09 legacy sidecar，也不提前实现 E-04 状态转换。
+
+本地门禁：Agent runtime 定向 `118 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `672 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `2c18d53efad7d0fc2927d3d7949163aac1f3ea8960c18a56f46773119bcc2718`、sdist SHA256 `6472298ceee587548ad82978a110edcc639640ac09142b7b318c6daa2c2d25c7`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged `ToolCall` 深冻结与序列化均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；E-04 在此前不实施，未合并、未发布、未部署。
 
 ---
 

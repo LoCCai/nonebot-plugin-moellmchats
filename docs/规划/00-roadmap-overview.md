@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T03:54:16+00:00
+lastmod: 2026-08-21T04:24:31+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01 最终闭环 HEAD `be2e83d54db0021f909cad04e5bca7c6ac19fa12` 已完成 push run `32444347880` / PR run `32444351420` 双 run gate；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-02 实现提交 `29aa74ac7a03e2beb71b6834644171cdceeec50c` 新增 frozen `AgentStep`、七类 `AgentStepType`、独立 `AgentStepStatus` 与有界深冻结 `AgentJsonValue`；step/run identity、非负 index、类型专属 model/tool、状态时间线及终态输出均 fail closed，输入输出只接受有限、无环、深度受限的 JSON，稳定序列化返回脱离内部快照的副本。实现不接管请求流、状态转换、数据库、Redis 或 D-09 sidecar。AgentRun/Step 定向 `88 passed`，Python 3.10～3.13 串行普通全量各 `642 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 零诊断，fresh build/Twine/checksum 与四组包外加载均通过。E-02 精确 HEAD 远端双 run gate 待完成；E-03 尚未开始。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-21）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各有 11 个成功 job、恰好一个成功 `release-gate`，基分支 required check 已配置。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run 远端门禁；D-09 sidecar 删除仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。Milestone E 的 E-01 已闭环；E-02 最终 HEAD `8ca202ef0c53355567f44c740dd31f006377e72c` 对应 push run `32445217116` / PR run `32445220594`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-03 实现提交 `2b4af0ea847f18b074ade33f9f6abcb0520ce1cf` 新增 frozen `ToolCall`、独立状态、工具与 bundle identity、有界深冻结 arguments/result 及 fail-closed 终态/确认/elapsed 不变量；不接管真实工具执行、PendingAction、数据库、Redis、Repository 或 D-09 sidecar。Agent runtime 定向 `118 passed`，Python 3.10～3.13 串行普通全量各 `672 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check 与 Pyright 目标文件零诊断，fresh build/Twine/checksum 与四组包外加载均通过。E-03 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；E-04～E-08 未开始。未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
