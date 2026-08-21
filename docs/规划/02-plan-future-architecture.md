@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T08:51:47+00:00
+lastmod: 2026-08-21T09:14:42+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T08:51:47+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-03 已完成精确 HEAD 双 run gate。F-04 最终 HEAD `9a343cfcc71a2824257afd9f7537edf4ab8af4f2` 的 push run `32463913845` / PR run `32463917189` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致。F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 已加入 `agent_runs` Schema 与 `0002_agent_runtime`；四版本普通全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 AgentRun Schema/DDL smoke 均通过。当前仅 F-05 本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-06 继续锁定。在线 migration 仍直接拒绝；未创建 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-04 已完成精确 HEAD 双 run gate。F-05 最终 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 的 push run `32465645519` / PR run `32465649984` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致。F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 已加入 `agent_steps` Schema 与 `0003_agent_steps`；四版本普通全量各 `983 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 AgentStep Schema/DDL smoke 均通过。当前仅 F-06 本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-07 继续锁定。在线 migration 仍直接拒绝；未创建 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -895,7 +895,11 @@ F-04 四版本定向各 `32 passed`，联合 Engine/Repository/Agent/Graph/Sched
 
 F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 追加不可变 revision `0002_agent_runtime` 与 `agent_runs` 表。字段覆盖 `request/user/group/conversation/generation/model/status/time/token/cost/error`；状态集合精确绑定现有 `AgentRunState`，终态必须有结束时间，非终态不得伪造结束时间。`request_id` 因进程重启后可能复用而不设唯一约束；用户和会话外键均为 `RESTRICT`。会话时间线、用户时间线与状态恢复查询各有有界索引，`generation + status` 列为后续 Repository CAS 保留，但本阶段不实现 Repository。
 
-F-05 四版本定向各 `35 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `426 passed`；四版本普通全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 目标/测试文件零诊断。fresh wheel/sdist SHA256 为 `1d47c5d1eee9686c8e642fb8d52bfb50e01894a2a71c7ba560ac16df5d8c8f8b` / `41a8d65dd33c8343bcb64e91444e220099bcdf1a66fe210d6974f4f3cb5de2f1`，Twine、制品内容检查及 Python 3.10/3.12 × wheel/sdist 四组仓库外 AgentRun Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，包含规划的 F-05 精确 HEAD 双 run gate 待完成，F-06 继续锁定。本阶段不接 runtime 或 Repository，不创建 engine/session，不读取 DSN，不运行 migration，不连接 PostgreSQL/Redis；未合并、未发布、未部署。
+F-05 四版本定向各 `35 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `426 passed`；四版本普通全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 目标/测试文件零诊断。fresh wheel/sdist SHA256 为 `1d47c5d1eee9686c8e642fb8d52bfb50e01894a2a71c7ba560ac16df5d8c8f8b` / `41a8d65dd33c8343bcb64e91444e220099bcdf1a66fe210d6974f4f3cb5de2f1`，Twine、制品内容检查及 Python 3.10/3.12 × wheel/sdist 四组仓库外 AgentRun Schema/graph/DDL smoke 均通过。最终文档闭环 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 对应 push run `32465645519` / PR run `32465649984`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / CLEAN`。F-06 依赖已解除；未合并、未发布、未部署。
+
+F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 追加不可变 revision `0003_agent_steps` 与 `agent_steps` 表。字段覆盖 step identity/type/status/model/tool、带时区起止时间、毫秒 duration 及有界 input/output/error preview；不持久化完整领域 JSON。`(run_id, step_index)` 唯一约束同时支持稳定顺序读取，run 外键为 `RESTRICT`。数据库约束精确执行 pending/running/terminal 时间语义、MODEL/TOOL identity 要求、非终态不得有 output 及 completed 不得伪造 error。
+
+F-06 四版本定向各 `38 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `429 passed`；四版本普通全量各 `983 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、format/diff check 与 Pyright 目标/测试文件零诊断。fresh wheel/sdist SHA256 为 `edcaac6c69f337d70b078dc0679b360db6bcc9d5228c39606380fbb0d2afeb80` / `b6dffce54dfed796625707e932881d996a52f6759e63e62752fd04903d1e5a26`，Twine、制品内容检查及四组仓库外 AgentStep Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，包含规划的 F-06 精确 HEAD 双 run gate 待完成，F-07 继续锁定。本阶段不接 runtime 或 Repository，不创建 engine/session，不读取 DSN，不运行 migration，不连接 PostgreSQL/Redis；未合并、未发布、未部署。
 
 ---
 

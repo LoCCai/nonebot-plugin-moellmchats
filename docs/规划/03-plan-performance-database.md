@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T08:51:47+00:00
+lastmod: 2026-08-21T09:14:42+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T08:51:47+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-03 已完成精确 HEAD 双 run gate。F-04 最终 HEAD `9a343cfcc71a2824257afd9f7537edf4ab8af4f2` 的 push run `32463913845` / PR run `32463917189` 均为 11/11 green、各恰好一个成功 `release-gate`，F-05 依赖已解除。F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 已加入 `agent_runs` 共享 metadata 与线性 revision `0002_agent_runtime`；本地全门禁、fresh 制品及四组包外 AgentRun Schema/graph/DDL smoke 已通过，包含规划的精确 HEAD 双 run gate 待完成，F-06 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-21）：Plan 1 远端发布门禁与 required `release-gate` 已完成；Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 远端 gate，D-09 在不操作生产的约束下继续锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-04 已完成精确 HEAD 双 run gate。F-05 最终 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 的 push run `32465645519` / PR run `32465649984` 均为 11/11 green、各恰好一个成功 `release-gate`，F-06 依赖已解除。F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 已加入 `agent_steps` 共享 metadata 与线性 revision `0003_agent_steps`；本地全门禁、fresh 制品及四组包外 AgentStep Schema/graph/DDL smoke 已通过，包含规划的精确 HEAD 双 run gate 待完成，F-07 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
 
 ---
 
@@ -278,7 +278,7 @@ error_message
 
 F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 将以上字段固化为 `agent_runs`，并以不可变 `0002_agent_runtime` 追加到 `0001_users_conversations`。`id` 为应用生成的有界标识；`request_id` 使用正数 BIGINT 但不设唯一约束，因为当前进程内计数在重启后可能复用。`user_id / conversation_id` 为非空 `RESTRICT` 外键，`group_id / model / token / cost / error` 按生命周期允许 NULL；cost 为 `NUMERIC(24, 12)`，token/cost/generation 均拒绝负数。
 
-`status` 值域精确绑定当前 `AgentRunState`；五种终态必须带 `finished_at`，其他状态必须保持 `finished_at IS NULL`，并统一约束结束时间不得早于开始时间。会话时间线索引为 `(conversation_id, started_at DESC, id DESC)`，另有用户时间线与 `(status, started_at)` 恢复索引；`generation + status` 为后续条件更新保留，但 F-05 不实现 Repository 或运行时接线。四版本定向各 `35 passed`，联合回归 `426 passed`，四版本全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `1d47c5d1eee9686c8e642fb8d52bfb50e01894a2a71c7ba560ac16df5d8c8f8b` / `41a8d65dd33c8343bcb64e91444e220099bcdf1a66fe210d6974f4f3cb5de2f1`，四组包外 smoke 均通过。当前仅本地门禁完成，F-06 等待 F-05 精确 HEAD 双 run gate；未运行 migration，未连接或修改数据库。
+`status` 值域精确绑定当前 `AgentRunState`；五种终态必须带 `finished_at`，其他状态必须保持 `finished_at IS NULL`，并统一约束结束时间不得早于开始时间。会话时间线索引为 `(conversation_id, started_at DESC, id DESC)`，另有用户时间线与 `(status, started_at)` 恢复索引；`generation + status` 为后续条件更新保留，但 F-05 不实现 Repository 或运行时接线。四版本定向各 `35 passed`，联合回归 `426 passed`，四版本全量各 `980 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `1d47c5d1eee9686c8e642fb8d52bfb50e01894a2a71c7ba560ac16df5d8c8f8b` / `41a8d65dd33c8343bcb64e91444e220099bcdf1a66fe210d6974f4f3cb5de2f1`，四组包外 smoke 均通过。最终文档闭环 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 对应 push run `32465645519` / PR run `32465649984`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-06 依赖已解除；未运行 migration，未连接或修改数据库。
 
 ---
 
@@ -311,6 +311,10 @@ error
 ```text
 (run_id, step_index)
 ```
+
+F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 将以上字段固化为 `agent_steps`，并以不可变 `0003_agent_steps` 追加到 `0002_agent_runtime`。`id` 为应用生成的有界标识，`run_id` 使用 `RESTRICT` 外键指向 `agent_runs.id`；`(run_id, step_index)` 唯一约束既拒绝同一 run 的重复序号，也提供稳定步骤顺序。step type/status 值域精确绑定现有 `AgentStepType / AgentStepStatus`；MODEL/TOOL 类型必须分别携带 model/tool identity。
+
+pending、running 与五种终态的 `started_at / finished_at / duration_ms` 组合由数据库约束精确执行，时间不得倒序且 duration 不得为负。input/output/error 只允许最长 6000 字符的非空预览，不持久化完整领域 JSON；非终态不得携带 output，completed 不得携带 error。四版本定向各 `38 passed`，联合回归 `429 passed`，四版本全量各 `983 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `edcaac6c69f337d70b078dc0679b360db6bcc9d5228c39606380fbb0d2afeb80` / `b6dffce54dfed796625707e932881d996a52f6759e63e62752fd04903d1e5a26`，四组包外 AgentStep Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，F-07 等待 F-06 精确 HEAD 双 run gate；未运行 migration，未连接或修改数据库。
 
 ---
 
@@ -951,7 +955,9 @@ F-03 已完成离线迁移地基；实现提交 `f9598561247e40a5ce8327a0ccd8d9f
 
 F-04 实现提交 `21810cf836d89d07c268076d6e3d96b34cdfd04b` 将 graph 推进为 `revisions=1 / bases=1 / heads=1`，三者唯一标识均为 `0001_users_conversations`。离线 upgrade 只生成 version table、`users / conversations / messages` 及其约束/索引，明确不含 `DROP`；离线 downgrade 按 `messages → conversations → users` 逆依赖顺序删除。最终文档闭环 HEAD `9a343cfcc71a2824257afd9f7537edf4ab8af4f2` 的 push run `32463913845` / PR run `32463917189` 均为 11/11 green、各恰好一个成功 `release-gate`，F-05 依赖已解除。
 
-F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 以不可变 `0002_agent_runtime` 将 graph 推进为 `revisions=2 / bases=1 / heads=1`，唯一 head 为该 revision。本阶段只创建 `agent_runs`，F-06/F-07 必须通过后续 revision 扩展，不能回改已经门禁的 `0002`。离线 `0002:0001` downgrade 只删除 `agent_runs`，不触碰 F-04 三张表；在线 migration 继续在 engine 创建前 fail closed。当前仅 F-05 本地门禁完成，精确 HEAD 双 run gate 待完成；未读取 DSN，未运行 migration，未连接或修改任何数据库。
+F-05 实现提交 `c177fc51e73b3961617cc2b09082ceeb0e436897` 以不可变 `0002_agent_runtime` 将 graph 推进为 `revisions=2 / bases=1 / heads=1`，唯一 head 为该 revision。本阶段只创建 `agent_runs`，F-06/F-07 必须通过后续 revision 扩展，不能回改已经门禁的 `0002`。离线 `0002:0001` downgrade 只删除 `agent_runs`，不触碰 F-04 三张表；在线 migration 继续在 engine 创建前 fail closed。最终文档闭环 HEAD `d23e156e4df44442bc9b7382fef5e53c88433148` 的 push run `32465645519` / PR run `32465649984` 均为 11/11 green、各恰好一个成功 `release-gate`，F-06 依赖已解除。
+
+F-06 实现提交 `ea405674e38082a5089304789a1628024da7d2ec` 以不可变 `0003_agent_steps` 将 graph 推进为 `revisions=3 / bases=1 / heads=1`，唯一 head 为该 revision。本阶段只创建 `agent_steps`，F-07 必须追加新 revision，不能回改已经门禁的 `0001`～`0003`。离线 `0003:0002` downgrade 只删除 `agent_steps`，不触碰前四张表；metadata/revision parity 覆盖三段 graph 的全部列、约束与索引，在线 migration 继续在 engine 创建前 fail closed。当前仅 F-06 本地门禁完成，精确 HEAD 双 run gate 待完成；未读取 DSN，未运行 migration，未连接或修改任何数据库。
 
 ---
 
