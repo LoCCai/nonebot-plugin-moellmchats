@@ -19,6 +19,7 @@ _REQUIRED_MIGRATION_FILES = (
     "env.py",
     "script.py.mako",
     "versions/0001_users_conversations.py",
+    "versions/0002_agent_runtime.py",
     "versions/README.md",
 )
 

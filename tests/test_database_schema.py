@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from alembic import op as alembic_op
 from alembic.script import ScriptDirectory
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -9,12 +10,16 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
+from nonebot_plugin_moellmchats.agent_runtime import AgentRunState
 from nonebot_plugin_moellmchats.database_migrations import (
     build_offline_alembic_config,
 )
 import nonebot_plugin_moellmchats.database_schema as database_schema_module
 from nonebot_plugin_moellmchats.database_schema import (
+    AGENT_RUN_STATUS_VALUES,
+    AGENT_RUN_TERMINAL_STATUS_VALUES,
     DATABASE_TABLES,
+    agent_runs_table,
     conversations_table,
     database_metadata,
     messages_table,
@@ -36,9 +41,7 @@ def _column_signature(column: sa.Column[Any]) -> tuple[object, ...]:
         default_sql = _normalize_sql(getattr(default, "arg", default))
     return (
         column.name,
-        type(column.type).__name__,
-        getattr(column.type, "length", None),
-        getattr(column.type, "timezone", None),
+        _normalize_sql(column.type.compile(dialect=postgresql.dialect())),
         column.nullable,
         column.identity is not None,
         default_sql,
@@ -117,41 +120,89 @@ class _MigrationRecorder:
 
 
 def test_first_schema_has_exact_tables_and_columns() -> None:
-    assert DATABASE_TABLES == (users_table, conversations_table, messages_table)
-    assert tuple(database_metadata.tables) == ("users", "conversations", "messages")
+    assert DATABASE_TABLES == (users_table, conversations_table, messages_table, agent_runs_table)
+    assert tuple(database_metadata.tables) == ("users", "conversations", "messages", "agent_runs")
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
     assert tuple(_column_signature(column) for column in users_table.columns) == (
-        ("id", "String", 128, None, False, False, None),
-        ("platform", "String", 32, None, False, False, None),
-        ("platform_user_id", "String", 128, None, False, False, None),
-        ("display_name", "String", 255, None, True, False, None),
-        ("created_at", "DateTime", None, True, False, False, "CURRENT_TIMESTAMP"),
-        ("updated_at", "DateTime", None, True, False, False, "CURRENT_TIMESTAMP"),
+        ("id", "VARCHAR(128)", False, False, None),
+        ("platform", "VARCHAR(32)", False, False, None),
+        ("platform_user_id", "VARCHAR(128)", False, False, None),
+        ("display_name", "VARCHAR(255)", True, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+        ("updated_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
     )
     assert tuple(_column_signature(column) for column in conversations_table.columns) == (
-        ("id", "String", 128, None, False, False, None),
-        ("type", "String", 32, None, False, False, None),
-        ("platform", "String", 32, None, False, False, None),
-        ("group_id", "String", 128, None, True, False, None),
-        ("user_id", "String", 128, None, True, False, None),
-        ("created_at", "DateTime", None, True, False, False, "CURRENT_TIMESTAMP"),
-        ("updated_at", "DateTime", None, True, False, False, "CURRENT_TIMESTAMP"),
-        ("last_message_at", "DateTime", None, True, True, False, None),
+        ("id", "VARCHAR(128)", False, False, None),
+        ("type", "VARCHAR(32)", False, False, None),
+        ("platform", "VARCHAR(32)", False, False, None),
+        ("group_id", "VARCHAR(128)", True, False, None),
+        ("user_id", "VARCHAR(128)", True, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+        ("updated_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+        ("last_message_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
     )
     assert tuple(_column_signature(column) for column in messages_table.columns) == (
-        ("id", "BigInteger", None, None, False, True, None),
-        ("conversation_id", "String", 128, None, False, False, None),
-        ("platform_message_id", "String", 128, None, True, False, None),
-        ("role", "String", 32, None, False, False, None),
-        ("sender_id", "String", 128, None, True, False, None),
-        ("content", "Text", None, None, True, False, None),
-        ("structured_content", "JSONB", None, None, True, False, None),
-        ("created_at", "DateTime", None, True, False, False, "CURRENT_TIMESTAMP"),
+        ("id", "BIGINT", False, True, None),
+        ("conversation_id", "VARCHAR(128)", False, False, None),
+        ("platform_message_id", "VARCHAR(128)", True, False, None),
+        ("role", "VARCHAR(32)", False, False, None),
+        ("sender_id", "VARCHAR(128)", True, False, None),
+        ("content", "TEXT", True, False, None),
+        ("structured_content", "JSONB", True, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
     )
     assert isinstance(messages_table.c.structured_content.type, postgresql.JSONB)
     assert isinstance(messages_table.c.id.identity, sa.Identity)
     assert messages_table.c.id.identity.always is False
+
+
+def test_agent_run_schema_has_exact_columns_and_domain_states() -> None:
+    assert (
+        AGENT_RUN_STATUS_VALUES
+        == tuple(state.value for state in AgentRunState)
+        == (
+            "created",
+            "admitted",
+            "classifying",
+            "planning",
+            "executing",
+            "waiting_confirmation",
+            "summarizing",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+            "rejected",
+        )
+    )
+    assert AGENT_RUN_TERMINAL_STATUS_VALUES == (
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "rejected",
+    )
+    assert tuple(_column_signature(column) for column in agent_runs_table.columns) == (
+        ("id", "VARCHAR(128)", False, False, None),
+        ("request_id", "BIGINT", False, False, None),
+        ("user_id", "VARCHAR(128)", False, False, None),
+        ("group_id", "VARCHAR(128)", True, False, None),
+        ("conversation_id", "VARCHAR(128)", False, False, None),
+        ("generation", "BIGINT", False, False, None),
+        ("model", "VARCHAR(255)", True, False, None),
+        ("status", "VARCHAR(32)", False, False, None),
+        ("started_at", "TIMESTAMP WITH TIME ZONE", False, False, None),
+        ("finished_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+        ("input_tokens", "BIGINT", True, False, None),
+        ("output_tokens", "BIGINT", True, False, None),
+        ("cost", "NUMERIC(24, 12)", True, False, None),
+        ("error_type", "VARCHAR(128)", True, False, None),
+        ("error_message", "TEXT", True, False, None),
+    )
+    assert isinstance(agent_runs_table.c.cost.type, sa.Numeric)
+    assert agent_runs_table.c.cost.type.precision == 24
+    assert agent_runs_table.c.cost.type.scale == 12
 
 
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
@@ -268,23 +319,132 @@ def test_first_schema_has_exact_constraints_and_indexes() -> None:
     )
 
 
-def test_revision_operations_are_identical_to_declared_metadata(
+def test_agent_run_schema_has_exact_constraints_and_indexes() -> None:
+    status_sql = ", ".join(f"'{value}'" for value in AGENT_RUN_STATUS_VALUES)
+    terminal_status_sql = ", ".join(f"'{value}'" for value in AGENT_RUN_TERMINAL_STATUS_VALUES)
+    finish_status_check = (
+        f"(status IN ({terminal_status_sql}) AND finished_at IS NOT NULL) OR "
+        f"(status NOT IN ({terminal_status_sql}) AND finished_at IS NULL)"
+    )
+
+    assert frozenset(_constraint_signature(value) for value in agent_runs_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_agent_runs", ("id",)),
+            (
+                "foreign_key",
+                "fk_agent_runs_user_id_users",
+                ("user_id",),
+                ("users.id",),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_agent_runs_conversation_id_conversations",
+                ("conversation_id",),
+                ("conversations.id",),
+                "RESTRICT",
+            ),
+            ("check", "ck_agent_runs_id_present", "char_length(id) > 0"),
+            ("check", "ck_agent_runs_request_id_positive", "request_id > 0"),
+            ("check", "ck_agent_runs_user_id_present", "char_length(user_id) > 0"),
+            (
+                "check",
+                "ck_agent_runs_group_id_present",
+                "group_id IS NULL OR char_length(group_id) > 0",
+            ),
+            (
+                "check",
+                "ck_agent_runs_conversation_id_present",
+                "char_length(conversation_id) > 0",
+            ),
+            ("check", "ck_agent_runs_generation_nonnegative", "generation >= 0"),
+            (
+                "check",
+                "ck_agent_runs_model_present",
+                "model IS NULL OR char_length(model) > 0",
+            ),
+            ("check", "ck_agent_runs_status_valid", f"status IN ({status_sql})"),
+            ("check", "ck_agent_runs_finish_matches_status", finish_status_check),
+            (
+                "check",
+                "ck_agent_runs_timestamp_order",
+                "finished_at IS NULL OR finished_at >= started_at",
+            ),
+            (
+                "check",
+                "ck_agent_runs_input_tokens_nonnegative",
+                "input_tokens IS NULL OR input_tokens >= 0",
+            ),
+            (
+                "check",
+                "ck_agent_runs_output_tokens_nonnegative",
+                "output_tokens IS NULL OR output_tokens >= 0",
+            ),
+            (
+                "check",
+                "ck_agent_runs_cost_nonnegative",
+                "cost IS NULL OR cost >= 0",
+            ),
+            (
+                "check",
+                "ck_agent_runs_error_type_present",
+                "error_type IS NULL OR char_length(error_type) > 0",
+            ),
+            (
+                "check",
+                "ck_agent_runs_error_message_present",
+                "error_message IS NULL OR char_length(error_message) > 0",
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in agent_runs_table.indexes) == frozenset(
+        {
+            (
+                "ix_agent_runs_conversation_id_started_at_id_desc",
+                ("conversation_id", "started_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_agent_runs_user_id_started_at",
+                ("user_id", "started_at DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_agent_runs_status_started_at",
+                ("status", "started_at"),
+                False,
+                None,
+            ),
+        }
+    )
+
+
+def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = _MigrationRecorder()
     scripts = ScriptDirectory.from_config(build_offline_alembic_config())
-    revision = scripts.get_revision("0001_users_conversations")
-    assert revision is not None
-    module = revision.module
-    monkeypatch.setattr(module.op, "create_table", recorder.create_table)
-    monkeypatch.setattr(module.op, "create_index", recorder.create_index)
+    monkeypatch.setattr(alembic_op, "create_table", recorder.create_table)
+    monkeypatch.setattr(alembic_op, "create_index", recorder.create_index)
 
-    module.upgrade()
+    for revision_id, down_revision in (
+        ("0001_users_conversations", None),
+        ("0002_agent_runtime", "0001_users_conversations"),
+    ):
+        revision = scripts.get_revision(revision_id)
+        assert revision is not None
+        module = revision.module
+        assert module.op is alembic_op
 
-    assert module.revision == "0001_users_conversations"
-    assert module.down_revision is None
-    assert module.branch_labels is None
-    assert module.depends_on is None
+        module.upgrade()
+
+        assert module.revision == revision_id
+        assert module.down_revision == down_revision
+        assert module.branch_labels is None
+        assert module.depends_on is None
+
     assert tuple(recorder.metadata.tables) == tuple(database_metadata.tables)
     for table_name, table in database_metadata.tables.items():
         assert _table_signature(recorder.metadata.tables[table_name]) == _table_signature(table)
