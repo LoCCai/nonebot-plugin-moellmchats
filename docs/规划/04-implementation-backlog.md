@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T05:25:58+00:00
+lastmod: 2026-08-21T05:55:04+00:00
 ---
 
 # 04-implementation-backlog
@@ -19,7 +19,7 @@ lastmod: 2026-08-21T05:25:58+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内启动。E-01～E-04 已闭环；E-05 最终 HEAD `3ac210b28ecda3019b822bf961196f63cfd795ce` 的 push run `32449378433` / PR run `32449381716` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-06 实现提交 `8af287e1a99e4f837dcbfb9a35071b17d5097c96` 定义不可变 Tool Graph；Tool Graph 定向 `42 passed`，四版本串行普通全量各 `781 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、Pyright 目标文件、fresh build/Twine/checksum 与四组包外 ToolGraph smoke 均通过。E-06 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；E-07～E-08 尚未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内启动。E-01～E-06 已闭环；E-06 最终 HEAD `95a780eeb36a9de1db506664f86fd02bef6968c9` 的 push run `32450808012` / PR run `32450810445` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。E-07 实现提交 `7c1c8aa961969eb876c26f26db40a463e737a94b` 定义只读并行调度计划；Tool Graph/Scheduler 定向 `79 passed`，四版本串行普通全量各 `818 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff、diff check、Pyright 目标文件、fresh build/Twine/checksum 与四组包外 Scheduler smoke 均通过。E-07 当前仅本地门禁完成，精确 HEAD 远端双 run gate 待完成；E-08 尚未开始。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -687,7 +687,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone E：0.27 Agent Runtime
 
-**状态：🟢 E-01～E-05 精确 HEAD 双 run 远端 gate green；🟡 E-06 本地门禁完成、远端 gate 待完成；E-07～E-08 未开始；D-09 继续锁定；未部署**
+**状态：🟢 E-01～E-06 精确 HEAD 双 run 远端 gate green；🟡 E-07 本地门禁完成、远端 gate 待完成；E-08 未开始；D-09 继续锁定；未部署**
 
 ---
 
@@ -757,11 +757,19 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 数据与运行边界：查询 API 只确定性返回拓扑序、直接/传递依赖、直接 dependent、parallel/conflict 邻居及确认/capability 要求，`as_dict()` 返回可 JSON 化的新副本。本任务不选择或执行工具，不判断 read-only，不调度并发，不执行 E-08 冲突裁决，不保存 live Bot/Event，不接管 request manager/chat runtime，不引入 Repository、PostgreSQL、Redis、迁移或生产配置，也不读取或删除 D-09 legacy sidecar。E-07 只能在 E-06 精确 HEAD 远端 gate 关闭后开始。
 
-本地门禁：Tool Graph 定向 `42 passed`，与 Agent Runtime 联合定向 `227 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `781 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `73bd52305aaf277481fe2c13ceafff0294744259f314d922e4ce289db3b9da3d`、sdist SHA256 `d8983ae6cbe30cc8d3f47516d6ea4968b627f9096ac1df6825ea99d7aff73351`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged ToolGraph 深冻结/确定性依赖/环路拒绝均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
+本地门禁：Tool Graph 定向 `42 passed`，与 Agent Runtime 联合定向 `227 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `781 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `73bd52305aaf277481fe2c13ceafff0294744259f314d922e4ce289db3b9da3d`、sdist SHA256 `d8983ae6cbe30cc8d3f47516d6ea4968b627f9096ac1df6825ea99d7aff73351`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged ToolGraph 深冻结/确定性依赖/环路拒绝均通过。
+
+远端证据：E-06 最终文档闭环精确 HEAD `95a780eeb36a9de1db506664f86fd02bef6968c9` 对应 push run `32450808012` 与 PR run `32450810445`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。E-07 依赖已解除。未合并、未发布、未部署。
 
 ---
 
 ## E-07 Read-only Parallel Tool Scheduler
+
+实现落点：实现提交 `7c1c8aa961969eb876c26f26db40a463e737a94b` 新增 `tool_scheduler.py`，定义 frozen `ToolScheduleBatch / ToolSchedule`、强类型 `ToolScheduleMode` 与纯 `ReadOnlyParallelToolScheduler`。计划先验证选中工具、强类型 effect 映射与完整传递依赖闭包，再按 Tool Graph 的确定性拓扑 ready 集合分批；每批工具唯一，primitive `as_dict()` 每次返回新副本。
+
+数据与运行边界：并行必须显式两两 `parallel_with`、全部为 `ToolEffect.READ_ONLY` 且无需确认，单批并行度限定 1～64；mutating、确认门禁与未知关系均保守退化为单工具串行。缺失依赖闭包直接拒绝；选中 conflict 不排序也不选赢家，而是 fail closed 并要求 E-08 policy。本任务不创建 asyncio task、不 `gather`、不调用 handler、不授权 capability、不消费或延长 DeadlineContext，不接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、迁移或生产配置，也不读取或删除 D-09 legacy sidecar；真实并发执行保留到 G-09。E-08 只能在 E-07 精确 HEAD 远端 gate 关闭后开始。
+
+本地门禁：Tool Graph/Scheduler 定向 `79 passed`，与 Agent Runtime 联合定向 `264 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `818 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `546962c7f0d4963c4604b5ba6ceeff6bc1171434a58e7a5422e375a9356be771`、sdist SHA256 `57aa7d15e7219cf01ee8c0519e0546b4e15c7177b15319b1920c11ff402d7122`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 分层/只读并行/mutating 串行/conflict 拒绝均通过。当前本地门禁完成，包含文档的精确 HEAD push/PR 双 run gate 待完成；未合并、未发布、未部署。
 
 ---
 
