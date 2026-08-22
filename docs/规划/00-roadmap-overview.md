@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:10:00+00:00
+lastmod: 2026-08-22T14:20:19+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-06 已闭环；F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 的 push run `32469057942` / PR run `32469061094` 均为 11/11 green、各恰好一个 `completed/success release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-08 依赖已解除。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 新增 `tool_bundles / tool_bundle_versions` 共享 metadata 与线性 revision `0005_tool_bundle_metadata`；四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `435 passed`，四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 Schema/graph/DDL/reload smoke 均通过。F-08 当前仅本地门禁完成，精确 HEAD 的 push/PR 双 run gate 待完成，F-09 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session 或 Repository 实现，未运行 migration，未连接 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-08 已闭环：F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 新增 `tool_bundles / tool_bundle_versions` 共享 metadata 与线性 revision `0005_tool_bundle_metadata`；四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `435 passed`，四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 Schema/graph/DDL/reload smoke 均通过。F-08 最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-09 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session 或 Repository 实现，未运行 migration，未连接 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

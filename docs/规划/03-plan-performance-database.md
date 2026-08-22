@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:10:00+00:00
+lastmod: 2026-08-22T14:20:19+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T14:10:00+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-06 已闭环。F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 的 push run `32469057942` / PR run `32469061094` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-08 依赖已解除。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 已加入 Tool Bundle metadata 与线性 revision `0005_tool_bundle_metadata`；本地全门禁、fresh 制品及四组包外 8 表/5 revision/DDL/reload smoke 已通过，精确 HEAD 双 run gate 待完成，F-09 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-08 已闭环。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 已加入 Tool Bundle metadata 与线性 revision `0005_tool_bundle_metadata`；本地全门禁、fresh 制品及四组包外 8 表/5 revision/DDL/reload smoke 已通过。最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-09 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
 
 ---
 
@@ -393,7 +393,7 @@ F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 将以上模型固�
 
 版本 `state` 精确绑定 `VersionState` 的 `approved / activated / deprecated / archived`，各状态的 `activated_at / deprecated_at / archived_at` 组合和全时间顺序由数据库约束执行。bundle 的 active pointer 使用同 bundle 复合 `RESTRICT` 外键，防止跨 bundle 错挂；partial unique index 保证每个 bundle 至多一个 activated 版本。版本时间线 `(bundle_id, created_at DESC, id DESC)`、状态恢复与 bundle 更新时间线均有确定性索引。
 
-packaged graph 现在为五段单 base/head 线，唯一 head 为 `0005_tool_bundle_metadata`；离线 `0005:0004` downgrade 先移除循环 active FK，再按 `tool_bundle_versions → tool_bundles` 逆依赖顺序删除，不触碰 `tool_calls` 及前六张表。四版本定向各 `44 passed`，联合回归 `435 passed`，四版本全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `441964bdd651746d1a61eadea63ea389ea40e42fd0bfe3599d1921ecc93230cf` / `6968f782e685c7fdfc55b5fa2d3c456d0a86f8dbb677c262ca9bd5639d60ee92`，四组包外 smoke 均通过。当前仅本地门禁完成，F-09 等待 F-08 精确 HEAD 双 run gate；未运行 migration，未连接或修改数据库。
+packaged graph 现在为五段单 base/head 线，唯一 head 为 `0005_tool_bundle_metadata`；离线 `0005:0004` downgrade 先移除循环 active FK，再按 `tool_bundle_versions → tool_bundles` 逆依赖顺序删除，不触碰 `tool_calls` 及前六张表。四版本定向各 `44 passed`，联合回归 `435 passed`，四版本全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；fresh wheel/sdist SHA256 为 `441964bdd651746d1a61eadea63ea389ea40e42fd0bfe3599d1921ecc93230cf` / `6968f782e685c7fdfc55b5fa2d3c456d0a86f8dbb677c262ca9bd5639d60ee92`，四组包外 smoke 均通过。最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push/PR 双 run gate 已关闭，F-09 依赖已解除；未运行 migration，未连接或修改数据库。
 
 注意：
 

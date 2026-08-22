@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:10:00+00:00
+lastmod: 2026-08-22T14:20:19+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T14:10:00+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-06 已完成精确 HEAD 双 run gate。F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 的 push run `32469057942` / PR run `32469061094` 均为 11/11 green、各恰好一个 `completed/success release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 已加入 Tool Bundle metadata 与 `0005_tool_bundle_metadata`；四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Schema/graph/DDL/reload smoke 均通过。当前仅 F-08 本地门禁完成，精确 HEAD 双 run gate 待完成，F-09 继续锁定。在线 migration 仍直接拒绝；未创建全局 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-08 已完成精确 HEAD 双 run gate。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 已加入 Tool Bundle metadata 与 `0005_tool_bundle_metadata`；四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Schema/graph/DDL/reload smoke 均通过。最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-09 依赖已解除。在线 migration 仍直接拒绝；未创建全局 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 

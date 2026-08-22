@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-07 精确 HEAD 双 run 远端 gate green；🟡 F-08 本地门禁完成、远端 gate 待完成；F-09～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-08 精确 HEAD 双 run 远端 gate green；F-09 依赖已解除；F-10～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -907,7 +907,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `441964bdd651746d1a61eadea63ea389ea40e42fd0bfe3599d1921ecc93230cf`、sdist SHA256 `6968f782e685c7fdfc55b5fa2d3c456d0a86f8dbb677c262ca9bd5639d60ee92`；两种制品各 66 个文件，均包含五个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 8 张表、五段单线 graph、VersionState parity、JSONB/复合 FK/partial unique/check DDL、定向 downgrade 与 `reload("package-smoke")`。
 
-当前状态：仅本地门禁完成，F-08 精确 HEAD push/PR 双 run gate 待完成；F-09 只能在该 gate 关闭后开始。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
+远端证据：F-08 最终文档闭环精确 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 对应 push run `32578200654` 与 PR run `32578203172`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-09 依赖已解除。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
