@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:51:58+00:00
+lastmod: 2026-08-22T18:30:26+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-13 精确 HEAD 双 run 远端 gate green；F-14 依赖已解除；未连接真实数据库/Redis；未部署**
+**状态：🟡 F-01～F-13 精确 HEAD 双 run 远端 gate green；F-14 本地全门禁 green、远端精确 HEAD 双 run gate 待验证；Milestone G 依赖锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -988,6 +988,18 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## F-14 Admission Redis
+
+实现落点：实现提交 `9b095cceca5fee997d6884677579446127104499` 新增 backend-neutral `AdmissionGateProtocol / AdmissionStoreProtocol` 与 frozen lease/reservation/activation/renewal/release/snapshot value objects，并新增独立 `redis_admission.py`。默认单进程 `AdmissionController`、`get_llm_controller()` 配置解析和现有调用行为保持不变；`handle_llm(..., admission_controller=...)` 只有在调用方显式传入时才使用其他 gate，显式 falsey controller 也不会回退内存。Redis store/controller 只接受显式 redis-py asyncio client，不读取插件配置、环境 Redis URL 或 secret file，不创建全局 client/store/controller，也不注册 startup/shutdown。
+
+原子、公平与恢复边界：每个 namespace 使用单个带 Cluster hash tag、总字节/记录数有界且自动 TTL 的 JSON state key；`int | str | None` key identity 经类型区分的 SHA-256 fingerprint 保存，不暴露原始用户标识。reserve/activate/renew/release/snapshot 均以 Redis server time 在 WATCH/MULTI 中原子执行，严格维持全局 active/pending、per-key active+pending 总量和同 key 至多一个 active。激活选择最早 eligible pending，避免同用户的等待项阻塞其他用户；pending 轮询续租、active heartbeat 续租，取消、失联、进程退出及未知结果遗留依靠 record/key TTL 回收。旧 lease、foreign namespace lease 与已过期 owner 不能释放当前记录。
+
+故障边界：只有明确 `WatchError` 有界重试；Redis TIME/PTTL/SET/DELETE/EXEC 异常响应、严格 schema/TTL/容量损坏、重试耗尽、lease 丢失，以及 EXEC 已提交但响应丢失均 fail closed，不返回未确认 lease/成功状态且不自动 fallback 到 Memory。错误仅公开异常类型、不含 endpoint/credential 且无 exception cause；`CancelledError` 原样传播。Python 3.10 heartbeat 显式兼容 `asyncio.TimeoutError`。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 F-14 定向各 `66 passed`；Python 3.10 固定 Redis 5.2.0 / FakeRedis 2.31.0，其他版本使用 Redis 6.4.0 / FakeRedis 2.37.1。四版本 admission/chat/cooldown/tool-authoring/event-simulator 联合回归各 `125 passed`，严格串行普通全量各 `1208 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0。Ruff 0.16.2 全量、新文件 format、diff check，以及 Pyright 1.1.407 在 Redis 5.2 / 6.4 两套依赖环境的目标/测试文件均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `3ca59cca2f54320466184dd162ce57ded1b2c4721ef1fe2d8d99da9f13add2e4`、sdist SHA256 `1a5698dd2ed01795c824c946f394050c274fa7a0646bc15a4ee36436f9b9c640`；两种制品各 74 个文件，均包含 Admission Protocol/Redis module、精确 Redis runtime dependency 与七个 revision，不包含 fakeredis runtime dependency、`uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-smoke")`、显式 manager→PendingAction/Cooldown/Admission store 与 controller 构造、模块无全局 Redis client/store/controller，真实 Redis command/connect 计数始终为 0。
+
+远端状态：上述本地证据对应实现提交 `9b095cceca5fee997d6884677579446127104499`，push/PR 精确 HEAD 双 run gate 尚待验证，因此 Milestone G 继续锁定。本阶段不读取插件 Redis 配置、环境 Redis URL、生产 DSN 或 secret file，不注册 startup/shutdown，不接 legacy sidecar、Repository 或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
