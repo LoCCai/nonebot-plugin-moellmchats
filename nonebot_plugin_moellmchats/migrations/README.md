@@ -8,4 +8,5 @@ This packaged Alembic environment remains intentionally offline-only in F-04.
 - Revision `0002_agent_runtime` adds the initial `agent_runs` table.
 - Revision `0003_agent_steps` adds bounded step records.
 - Revision `0004_tool_calls` adds source-bound tool call audit records.
+- Revision `0005_tool_bundle_metadata` adds bundle/version metadata and lifecycle constraints.
 - Production migration execution requires a later, separately reviewed release gate.

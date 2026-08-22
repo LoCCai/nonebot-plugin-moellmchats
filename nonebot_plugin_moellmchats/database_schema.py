@@ -10,6 +10,7 @@ from .agent_runtime import (
     ToolCallStatus,
 )
 from .database_metadata import database_metadata
+from .generated_tool_lifecycle import VersionState
 from .tool_providers import ToolSource
 
 ENTITY_ID_MAX_CHARS = 128
@@ -32,6 +33,10 @@ TOOL_CALL_STATUS_MAX_CHARS = 32
 BUNDLE_ID_MAX_CHARS = 64
 BUNDLE_DIGEST_MAX_CHARS = 64
 TOOL_CALL_RESULT_PREVIEW_MAX_CHARS = 6_000
+TOOL_BUNDLE_DESCRIPTION_MAX_BYTES = 65_536
+TOOL_BUNDLE_SOURCE_MAX_BYTES = 65_536
+TOOL_BUNDLE_VERSION_STATE_MAX_CHARS = 32
+TOOL_BUNDLE_METADATA_MAX_BYTES = 65_536
 
 AGENT_RUN_STATUS_VALUES = tuple(state.value for state in AgentRunState)
 AGENT_RUN_TERMINAL_STATUS_VALUES = (
@@ -65,6 +70,7 @@ TOOL_CALL_TERMINAL_STATUS_VALUES = (
     ToolCallStatus.TIMED_OUT.value,
     ToolCallStatus.REJECTED.value,
 )
+TOOL_BUNDLE_VERSION_STATE_VALUES = tuple(state.value for state in VersionState)
 
 
 def _sql_string_list(values: tuple[str, ...]) -> str:
@@ -593,6 +599,189 @@ sa.Index(
     postgresql_where=tool_calls_table.c.confirmation_id.is_not(None),
 )
 
+tool_bundles_table = sa.Table(
+    "tool_bundles",
+    database_metadata,
+    sa.Column("id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("bundle_id", sa.String(BUNDLE_ID_MAX_CHARS), nullable=False),
+    sa.Column("description", sa.Text(), nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
+    ),
+    sa.Column(
+        "updated_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
+    ),
+    sa.Column(
+        "active_version_id",
+        sa.String(ENTITY_ID_MAX_CHARS),
+        nullable=True,
+    ),
+    sa.PrimaryKeyConstraint("id", name="pk_tool_bundles"),
+    sa.UniqueConstraint("bundle_id", name="uq_tool_bundles_bundle_id"),
+    sa.ForeignKeyConstraint(
+        ("bundle_id", "active_version_id"),
+        (
+            "tool_bundle_versions.bundle_id",
+            "tool_bundle_versions.id",
+        ),
+        name="fk_tool_bundles_active_version",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "char_length(id) > 0",
+        name="ck_tool_bundles_id_present",
+    ),
+    sa.CheckConstraint(
+        "bundle_id ~ '^[A-Za-z][A-Za-z0-9_-]{0,63}$'",
+        name="ck_tool_bundles_bundle_id_valid",
+    ),
+    sa.CheckConstraint(
+        f"char_length(btrim(description)) > 0 AND octet_length(description) <= {TOOL_BUNDLE_DESCRIPTION_MAX_BYTES}",
+        name="ck_tool_bundles_description_bounded",
+    ),
+    sa.CheckConstraint(
+        "active_version_id IS NULL OR char_length(active_version_id) > 0",
+        name="ck_tool_bundles_active_version_id_present",
+    ),
+    sa.CheckConstraint(
+        "updated_at >= created_at",
+        name="ck_tool_bundles_timestamp_order",
+    ),
+)
+
+sa.Index(
+    "ix_tool_bundles_updated_at_id_desc",
+    tool_bundles_table.c.updated_at.desc(),
+    tool_bundles_table.c.id.desc(),
+)
+
+_tool_bundle_version_state_sql = _sql_string_list(TOOL_BUNDLE_VERSION_STATE_VALUES)
+
+tool_bundle_versions_table = sa.Table(
+    "tool_bundle_versions",
+    database_metadata,
+    sa.Column("id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("bundle_id", sa.String(BUNDLE_ID_MAX_CHARS), nullable=False),
+    sa.Column("digest", sa.String(BUNDLE_DIGEST_MAX_CHARS), nullable=False),
+    sa.Column("manifest_json", postgresql.JSONB(), nullable=False),
+    sa.Column("source", sa.Text(), nullable=False),
+    sa.Column("tests_source", sa.Text(), nullable=False),
+    sa.Column(
+        "state",
+        sa.String(TOOL_BUNDLE_VERSION_STATE_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column("risks_json", postgresql.JSONB(), nullable=False),
+    sa.Column("capabilities_json", postgresql.JSONB(), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("approved_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("activated_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("deprecated_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
+    sa.PrimaryKeyConstraint("id", name="pk_tool_bundle_versions"),
+    sa.ForeignKeyConstraint(
+        ("bundle_id",),
+        ("tool_bundles.bundle_id",),
+        name="fk_tool_bundle_versions_bundle_id_tool_bundles",
+        ondelete="RESTRICT",
+    ),
+    sa.UniqueConstraint(
+        "bundle_id",
+        "digest",
+        name="uq_tool_bundle_versions_bundle_id_digest",
+    ),
+    sa.UniqueConstraint(
+        "bundle_id",
+        "id",
+        name="uq_tool_bundle_versions_bundle_id_id",
+    ),
+    sa.CheckConstraint(
+        "char_length(id) > 0",
+        name="ck_tool_bundle_versions_id_present",
+    ),
+    sa.CheckConstraint(
+        "bundle_id ~ '^[A-Za-z][A-Za-z0-9_-]{0,63}$'",
+        name="ck_tool_bundle_versions_bundle_id_valid",
+    ),
+    sa.CheckConstraint(
+        "digest ~ '^[a-f0-9]{64}$'",
+        name="ck_tool_bundle_versions_digest_valid",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(manifest_json) = 'object'",
+        name="ck_tool_bundle_versions_manifest_object",
+    ),
+    sa.CheckConstraint(
+        "manifest_json ? 'bundle_id' AND "
+        "jsonb_typeof(manifest_json -> 'bundle_id') = 'string' AND "
+        "manifest_json ->> 'bundle_id' = bundle_id",
+        name="ck_tool_bundle_versions_manifest_identity",
+    ),
+    sa.CheckConstraint(
+        f"octet_length(manifest_json::text) <= {TOOL_BUNDLE_METADATA_MAX_BYTES}",
+        name="ck_tool_bundle_versions_manifest_bounded",
+    ),
+    sa.CheckConstraint(
+        f"octet_length(source) BETWEEN 1 AND {TOOL_BUNDLE_SOURCE_MAX_BYTES}",
+        name="ck_tool_bundle_versions_source_bounded",
+    ),
+    sa.CheckConstraint(
+        f"octet_length(tests_source) BETWEEN 1 AND {TOOL_BUNDLE_SOURCE_MAX_BYTES}",
+        name="ck_tool_bundle_versions_tests_source_bounded",
+    ),
+    sa.CheckConstraint(
+        f"state IN ({_tool_bundle_version_state_sql})",
+        name="ck_tool_bundle_versions_state_valid",
+    ),
+    sa.CheckConstraint(
+        f"jsonb_typeof(risks_json) = 'array' AND octet_length(risks_json::text) <= {TOOL_BUNDLE_METADATA_MAX_BYTES}",
+        name="ck_tool_bundle_versions_risks_array",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(capabilities_json) = 'object' AND "
+        f"octet_length(capabilities_json::text) <= {TOOL_BUNDLE_METADATA_MAX_BYTES}",
+        name="ck_tool_bundle_versions_capabilities_object",
+    ),
+    sa.CheckConstraint(
+        "(state = 'approved' AND activated_at IS NULL AND deprecated_at IS NULL AND archived_at IS NULL) OR "
+        "(state = 'activated' AND activated_at IS NOT NULL AND deprecated_at IS NULL AND archived_at IS NULL) OR "
+        "(state = 'deprecated' AND activated_at IS NOT NULL AND deprecated_at IS NOT NULL AND archived_at IS NULL) OR "
+        "(state = 'archived' AND activated_at IS NOT NULL AND deprecated_at IS NOT NULL AND archived_at IS NOT NULL)",
+        name="ck_tool_bundle_versions_lifecycle_fields",
+    ),
+    sa.CheckConstraint(
+        "approved_at >= created_at AND "
+        "(activated_at IS NULL OR activated_at >= approved_at) AND "
+        "(deprecated_at IS NULL OR deprecated_at >= activated_at) AND "
+        "(archived_at IS NULL OR archived_at >= deprecated_at)",
+        name="ck_tool_bundle_versions_timestamp_order",
+    ),
+)
+
+sa.Index(
+    "ix_tool_bundle_versions_bundle_id_created_at_id_desc",
+    tool_bundle_versions_table.c.bundle_id,
+    tool_bundle_versions_table.c.created_at.desc(),
+    tool_bundle_versions_table.c.id.desc(),
+)
+sa.Index(
+    "ix_tool_bundle_versions_state_created_at",
+    tool_bundle_versions_table.c.state,
+    tool_bundle_versions_table.c.created_at,
+)
+sa.Index(
+    "uq_tool_bundle_versions_active_bundle_id",
+    tool_bundle_versions_table.c.bundle_id,
+    unique=True,
+    postgresql_where=sa.text("state = 'activated'"),
+)
+
 DATABASE_TABLES = (
     users_table,
     conversations_table,
@@ -600,4 +789,6 @@ DATABASE_TABLES = (
     agent_runs_table,
     agent_steps_table,
     tool_calls_table,
+    tool_bundles_table,
+    tool_bundle_versions_table,
 )

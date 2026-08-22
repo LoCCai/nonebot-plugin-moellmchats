@@ -28,6 +28,7 @@ from nonebot_plugin_moellmchats.database_schema import (
     AGENT_STEP_TERMINAL_STATUS_VALUES,
     AGENT_STEP_TYPE_VALUES,
     DATABASE_TABLES,
+    TOOL_BUNDLE_VERSION_STATE_VALUES,
     TOOL_CALL_STATUS_VALUES,
     TOOL_CALL_TERMINAL_STATUS_VALUES,
     TOOL_SOURCE_VALUES,
@@ -36,9 +37,12 @@ from nonebot_plugin_moellmchats.database_schema import (
     conversations_table,
     database_metadata,
     messages_table,
+    tool_bundle_versions_table,
+    tool_bundles_table,
     tool_calls_table,
     users_table,
 )
+from nonebot_plugin_moellmchats.generated_tool_lifecycle import VersionState
 from nonebot_plugin_moellmchats.tool_providers import ToolSource
 
 if TYPE_CHECKING:
@@ -130,7 +134,18 @@ class _MigrationRecorder:
         **kwargs: Any,
     ) -> sa.Index:
         table = self.metadata.tables[table_name]
-        expressions: tuple[Any, ...] = tuple(table.c[column] if isinstance(column, str) else column for column in columns)
+        expressions: list[Any] = []
+        for column in columns:
+            if isinstance(column, str):
+                expressions.append(table.c[column])
+                continue
+            text = getattr(column, "text", None)
+            if isinstance(text, str) and text.endswith(" DESC"):
+                column_name = text.removesuffix(" DESC")
+                if column_name in table.c:
+                    expressions.append(table.c[column_name].desc())
+                    continue
+            expressions.append(column)
         return sa.Index(name, *expressions, unique=unique, **kwargs)
 
     def create_unique_constraint(
@@ -147,6 +162,26 @@ class _MigrationRecorder:
             name=name,
         )
 
+    def create_foreign_key(
+        self,
+        name: str,
+        source_table: str,
+        referent_table: str,
+        local_columns: tuple[str, ...],
+        remote_columns: tuple[str, ...],
+        **kwargs: Any,
+    ) -> sa.ForeignKeyConstraint:
+        ondelete = kwargs.pop("ondelete", None)
+        assert not kwargs
+        constraint = sa.ForeignKeyConstraint(
+            tuple(local_columns),
+            tuple(f"{referent_table}.{column}" for column in remote_columns),
+            name=name,
+            ondelete=ondelete,
+        )
+        self.metadata.tables[source_table].append_constraint(constraint)
+        return constraint
+
 
 def test_first_schema_has_exact_tables_and_columns() -> None:
     assert DATABASE_TABLES == (
@@ -156,6 +191,8 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         agent_runs_table,
         agent_steps_table,
         tool_calls_table,
+        tool_bundles_table,
+        tool_bundle_versions_table,
     )
     assert tuple(database_metadata.tables) == (
         "users",
@@ -164,6 +201,8 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         "agent_runs",
         "agent_steps",
         "tool_calls",
+        "tool_bundles",
+        "tool_bundle_versions",
     )
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
@@ -357,6 +396,41 @@ def test_tool_call_schema_has_exact_columns_and_domain_identities() -> None:
         ("finished_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
     )
     assert isinstance(tool_calls_table.c.arguments_json.type, postgresql.JSONB)
+
+
+def test_tool_bundle_schema_has_exact_columns_and_domain_states() -> None:
+    assert (
+        TOOL_BUNDLE_VERSION_STATE_VALUES
+        == tuple(value.value for value in VersionState)
+        == ("approved", "activated", "deprecated", "archived")
+    )
+    assert tuple(_column_signature(column) for column in tool_bundles_table.columns) == (
+        ("id", "VARCHAR(128)", False, False, None),
+        ("bundle_id", "VARCHAR(64)", False, False, None),
+        ("description", "TEXT", False, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+        ("updated_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+        ("active_version_id", "VARCHAR(128)", True, False, None),
+    )
+    assert tuple(_column_signature(column) for column in tool_bundle_versions_table.columns) == (
+        ("id", "VARCHAR(128)", False, False, None),
+        ("bundle_id", "VARCHAR(64)", False, False, None),
+        ("digest", "VARCHAR(64)", False, False, None),
+        ("manifest_json", "JSONB", False, False, None),
+        ("source", "TEXT", False, False, None),
+        ("tests_source", "TEXT", False, False, None),
+        ("state", "VARCHAR(32)", False, False, None),
+        ("risks_json", "JSONB", False, False, None),
+        ("capabilities_json", "JSONB", False, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, None),
+        ("approved_at", "TIMESTAMP WITH TIME ZONE", False, False, None),
+        ("activated_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+        ("deprecated_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+        ("archived_at", "TIMESTAMP WITH TIME ZONE", True, False, None),
+    )
+    assert isinstance(tool_bundle_versions_table.c.manifest_json.type, postgresql.JSONB)
+    assert isinstance(tool_bundle_versions_table.c.risks_json.type, postgresql.JSONB)
+    assert isinstance(tool_bundle_versions_table.c.capabilities_json.type, postgresql.JSONB)
 
 
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
@@ -788,6 +862,181 @@ def test_tool_call_schema_has_exact_constraints_and_indexes() -> None:
     )
 
 
+def test_tool_bundle_schema_has_exact_constraints_and_indexes() -> None:
+    assert frozenset(_constraint_signature(value) for value in tool_bundles_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_tool_bundles", ("id",)),
+            ("unique", "uq_tool_bundles_bundle_id", ("bundle_id",)),
+            (
+                "foreign_key",
+                "fk_tool_bundles_active_version",
+                ("bundle_id", "active_version_id"),
+                (
+                    "tool_bundle_versions.bundle_id",
+                    "tool_bundle_versions.id",
+                ),
+                "RESTRICT",
+            ),
+            ("check", "ck_tool_bundles_id_present", "char_length(id) > 0"),
+            (
+                "check",
+                "ck_tool_bundles_bundle_id_valid",
+                "bundle_id ~ '^[A-Za-z][A-Za-z0-9_-]{0,63}$'",
+            ),
+            (
+                "check",
+                "ck_tool_bundles_description_bounded",
+                "char_length(btrim(description)) > 0 AND octet_length(description) <= 65536",
+            ),
+            (
+                "check",
+                "ck_tool_bundles_active_version_id_present",
+                "active_version_id IS NULL OR char_length(active_version_id) > 0",
+            ),
+            (
+                "check",
+                "ck_tool_bundles_timestamp_order",
+                "updated_at >= created_at",
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in tool_bundles_table.indexes) == frozenset(
+        {
+            (
+                "ix_tool_bundles_updated_at_id_desc",
+                ("updated_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+        }
+    )
+
+    state_sql = ", ".join(f"'{value}'" for value in TOOL_BUNDLE_VERSION_STATE_VALUES)
+    lifecycle_check = (
+        "(state = 'approved' AND activated_at IS NULL AND deprecated_at IS NULL AND archived_at IS NULL) OR "
+        "(state = 'activated' AND activated_at IS NOT NULL AND deprecated_at IS NULL AND archived_at IS NULL) OR "
+        "(state = 'deprecated' AND activated_at IS NOT NULL AND deprecated_at IS NOT NULL AND archived_at IS NULL) OR "
+        "(state = 'archived' AND activated_at IS NOT NULL AND deprecated_at IS NOT NULL AND archived_at IS NOT NULL)"
+    )
+    timestamp_check = (
+        "approved_at >= created_at AND "
+        "(activated_at IS NULL OR activated_at >= approved_at) AND "
+        "(deprecated_at IS NULL OR deprecated_at >= activated_at) AND "
+        "(archived_at IS NULL OR archived_at >= deprecated_at)"
+    )
+    assert frozenset(_constraint_signature(value) for value in tool_bundle_versions_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_tool_bundle_versions", ("id",)),
+            (
+                "foreign_key",
+                "fk_tool_bundle_versions_bundle_id_tool_bundles",
+                ("bundle_id",),
+                ("tool_bundles.bundle_id",),
+                "RESTRICT",
+            ),
+            (
+                "unique",
+                "uq_tool_bundle_versions_bundle_id_digest",
+                ("bundle_id", "digest"),
+            ),
+            (
+                "unique",
+                "uq_tool_bundle_versions_bundle_id_id",
+                ("bundle_id", "id"),
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_id_present",
+                "char_length(id) > 0",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_bundle_id_valid",
+                "bundle_id ~ '^[A-Za-z][A-Za-z0-9_-]{0,63}$'",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_digest_valid",
+                "digest ~ '^[a-f0-9]{64}$'",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_manifest_object",
+                "jsonb_typeof(manifest_json) = 'object'",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_manifest_identity",
+                "manifest_json ? 'bundle_id' AND "
+                "jsonb_typeof(manifest_json -> 'bundle_id') = 'string' AND "
+                "manifest_json ->> 'bundle_id' = bundle_id",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_manifest_bounded",
+                "octet_length(manifest_json::text) <= 65536",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_source_bounded",
+                "octet_length(source) BETWEEN 1 AND 65536",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_tests_source_bounded",
+                "octet_length(tests_source) BETWEEN 1 AND 65536",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_state_valid",
+                f"state IN ({state_sql})",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_risks_array",
+                "jsonb_typeof(risks_json) = 'array' AND octet_length(risks_json::text) <= 65536",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_capabilities_object",
+                "jsonb_typeof(capabilities_json) = 'object' AND octet_length(capabilities_json::text) <= 65536",
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_lifecycle_fields",
+                lifecycle_check,
+            ),
+            (
+                "check",
+                "ck_tool_bundle_versions_timestamp_order",
+                timestamp_check,
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in tool_bundle_versions_table.indexes) == frozenset(
+        {
+            (
+                "ix_tool_bundle_versions_bundle_id_created_at_id_desc",
+                ("bundle_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_tool_bundle_versions_state_created_at",
+                ("state", "created_at"),
+                False,
+                None,
+            ),
+            (
+                "uq_tool_bundle_versions_active_bundle_id",
+                ("bundle_id",),
+                True,
+                "state = 'activated'",
+            ),
+        }
+    )
+
+
 def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -800,12 +1049,18 @@ def test_linear_revision_operations_are_identical_to_declared_metadata(
         "create_unique_constraint",
         recorder.create_unique_constraint,
     )
+    monkeypatch.setattr(
+        alembic_op,
+        "create_foreign_key",
+        recorder.create_foreign_key,
+    )
 
     for revision_id, down_revision in (
         ("0001_users_conversations", None),
         ("0002_agent_runtime", "0001_users_conversations"),
         ("0003_agent_steps", "0002_agent_runtime"),
         ("0004_tool_calls", "0003_agent_steps"),
+        ("0005_tool_bundle_metadata", "0004_tool_calls"),
     ):
         revision = scripts.get_revision(revision_id)
         assert revision is not None
