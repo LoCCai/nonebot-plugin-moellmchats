@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T20:06:29+00:00
+lastmod: 2026-08-22T20:13:07+00:00
 ---
 
 # 03-plan-performance-database
@@ -13,6 +13,8 @@ lastmod: 2026-08-22T20:06:29+00:00
 > 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E、F-01～F-14 与 G-01 已完成远端门禁；D-09 在不操作生产的约束下继续锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变 Conversation/Message records 与显式 `AsyncSession` 注入的 PostgreSQL Repository；最近历史以显式列、`conversation_id`、`id DESC`、`LIMIT+1` 查询，使用绑定会话指纹的 `before_message_id` keyset 游标并在应用层反转。Repository 不拥有 session 生命周期，不隐式 commit/rollback/retry；`RETURNING` 只确认当前事务 statement，最终 commit 仍由调用方负责。Integrity/缺失记录是冲突，后端异常、损坏结果与未知写入是 unavailable，错误脱敏且取消原样传播。四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低数据库依赖、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
 
 > G-02 本地门禁（2026-08-22）：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push `32593312310` / PR `32593315775` 已各 11/11 green。实现提交 `e865838` 新增 committed `HistoryWindow`、`HistoryHotCacheProtocol`、Memory/Redis 两类 backend 和 128-bit reservation generation；Memory 固定 TTL、LRU、会话数/消息数/载荷上限并拒绝跨 PID/loop 复用，Redis 显式注入 client，以 SHA-256 会话 key、canonical JSON、TTL 与 WATCH/MULTI 做 CAS。缓存从不替代 PostgreSQL 真源，损坏/超限/缺 TTL/后端未知均不返回命中，晚到 load 在 durable commit 后 invalidation 发生时必须发布失败。四版本定向各 `84 passed`、联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0、静态、fresh 制品及四组包外零 I/O smoke 均通过。G-02 精确 HEAD 双 run gate 待完成，G-03 锁定；未接配置、生命周期、Repository 编排、`MessagesHandler` 或生产。
+
+> G-02 远端闭环（2026-08-22）：本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 对应 push run `32595899079` / PR run `32595902263`；两者各 11 个 job 全绿、各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-03 依赖已解除；未连接真实数据库/Redis，未合并、未发布、未部署。
 
 ---
 
@@ -682,7 +684,7 @@ backend 边界：`MemoryHistoryHotCache` 使用 monotonic 固定 TTL、LRU、最
 
 制品门禁：实现提交 `e865838` 的 fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `afc4fdf0a95b476fba195adabac75e142ab323e4f2b20be4505e84a707163246`、sdist SHA256 `1fc9fec196ef41559c85264254fe94b55a1aa4bd04d77b5d192dd26f66488ba4`；两者各 78 个文件，均包含两个 G-02 module、精确 Redis/数据库依赖与七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组 fresh 仓库外安装均确认 10 表、7 revision、离线 DDL、plugin reload、Memory hit/publish、显式 client→Redis cache 构造及模块无全局 Redis client；Redis command、数据库 connect/execute 计数始终为 0。制品目录 `/tmp/moellm-g02-dist.avoM6m`，smoke 根目录 `/tmp/moellm-g02-smoke.H6N3D5`。
 
-远端边界：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push run `32593312310` 与 PR run `32593315775` 已各 11/11 green、各恰好一个 `completed/success release-gate`；远端分支、PR head 与本地 SHA 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-02 本地门禁已完成，但其精确 HEAD push/PR 双 run gate 尚待完成，因此 G-03 继续锁定。未读取 Redis URL、生产 DSN 或 secret，未创建全局 client/cache/engine/session，未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径、PostgreSQL Repository 编排或生产 runtime；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未 promotion、未发布、未部署。
+远端证据：G-02 本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 对应 push run `32595899079` 与 PR run `32595902263`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-03 依赖已解除。未读取 Redis URL、生产 DSN 或 secret，未创建全局 client/cache/engine/session，未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径、PostgreSQL Repository 编排或生产 runtime；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -1152,7 +1154,7 @@ runner_start_duration
 - [ ] ToolCall 持久化
 - [ ] Token Usage 持久化
 - [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
-- [ ] History Hot Cache（G-02 本地门禁已完成；精确 HEAD 双 run gate 待完成）
+- [x] History Hot Cache（G-02 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [ ] Session Summary
 - [ ] Batch Insert
 - [ ] DB Failure Spool
