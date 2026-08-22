@@ -20,6 +20,11 @@ MessageRecordT = TypeVar("MessageRecordT")
 ToolRecordT = TypeVar("ToolRecordT")
 UsageRecordT = TypeVar("UsageRecordT")
 AuditRecordT = TypeVar("AuditRecordT")
+SessionSummaryRecordT = TypeVar("SessionSummaryRecordT")
+SessionSummaryMessageRecordT = TypeVar(
+    "SessionSummaryMessageRecordT",
+    covariant=True,
+)
 PageRecordT = TypeVar("PageRecordT")
 
 
@@ -103,6 +108,37 @@ class MessageRepository(Protocol[MessageRecordT]):
         conversation_id: str,
         page: RepositoryPageRequest,
     ) -> RepositoryPage[MessageRecordT]: ...
+
+
+@runtime_checkable
+class SessionSummaryRepository(
+    Protocol[SessionSummaryRecordT, SessionSummaryMessageRecordT],
+):
+    async def append(
+        self,
+        summary: SessionSummaryRecordT,
+        *,
+        expected_previous_summary_id: str | None,
+    ) -> None: ...
+
+    async def get(
+        self,
+        conversation_id: str,
+        summary_id: str,
+    ) -> SessionSummaryRecordT | None: ...
+
+    async def get_latest(
+        self,
+        conversation_id: str,
+    ) -> SessionSummaryRecordT | None: ...
+
+    async def list_source_messages(
+        self,
+        conversation_id: str,
+        *,
+        after_message_id: int | None,
+        limit: int,
+    ) -> tuple[SessionSummaryMessageRecordT, ...]: ...
 
 
 @runtime_checkable

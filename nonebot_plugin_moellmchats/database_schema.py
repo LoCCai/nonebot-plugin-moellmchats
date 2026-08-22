@@ -44,6 +44,9 @@ AUDIT_METADATA_MAX_BYTES = 65_536
 MODEL_PROVIDER_MAX_CHARS = 128
 MODEL_USAGE_COST_PRECISION = 24
 MODEL_USAGE_COST_SCALE = 12
+SESSION_SUMMARY_DIGEST_MAX_CHARS = 64
+SESSION_SUMMARY_POLICY_MAX_CHARS = 32
+SESSION_SUMMARY_MAX_CHARS = 16_000
 
 AGENT_RUN_STATUS_VALUES = tuple(state.value for state in AgentRunState)
 AGENT_RUN_TERMINAL_STATUS_VALUES = (
@@ -210,6 +213,11 @@ messages_table = sa.Table(
         server_default=sa.text("CURRENT_TIMESTAMP"),
     ),
     sa.PrimaryKeyConstraint("id", name="pk_messages"),
+    sa.UniqueConstraint(
+        "conversation_id",
+        "id",
+        name="uq_messages_conversation_id_id",
+    ),
     sa.ForeignKeyConstraint(
         ("conversation_id",),
         ("conversations.id",),
@@ -1000,6 +1008,149 @@ sa.Index(
     model_usage_table.c.id.desc(),
 )
 
+session_summaries_table = sa.Table(
+    "session_summaries",
+    database_metadata,
+    sa.Column("id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("conversation_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("generation", sa.BigInteger(), nullable=False),
+    sa.Column("previous_summary_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=True),
+    sa.Column("covered_from_message_id", sa.BigInteger(), nullable=False),
+    sa.Column("covered_through_message_id", sa.BigInteger(), nullable=False),
+    sa.Column("covered_message_count", sa.BigInteger(), nullable=False),
+    sa.Column("source_message_count", sa.BigInteger(), nullable=False),
+    sa.Column(
+        "source_digest",
+        sa.String(SESSION_SUMMARY_DIGEST_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column(
+        "policy_version",
+        sa.String(SESSION_SUMMARY_POLICY_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column("trigger_message_count", sa.BigInteger(), nullable=False),
+    sa.Column("keep_recent_message_count", sa.BigInteger(), nullable=False),
+    sa.Column("max_source_chars", sa.BigInteger(), nullable=False),
+    sa.Column("source_char_count", sa.BigInteger(), nullable=False),
+    sa.Column(
+        "model_provider",
+        sa.String(MODEL_PROVIDER_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column("model", sa.String(MODEL_NAME_MAX_CHARS), nullable=False),
+    sa.Column("content", sa.Text(), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    sa.PrimaryKeyConstraint("id", name="pk_session_summaries"),
+    sa.UniqueConstraint(
+        "conversation_id",
+        "id",
+        name="uq_session_summaries_conversation_id_id",
+    ),
+    sa.UniqueConstraint(
+        "conversation_id",
+        "generation",
+        name="uq_session_summaries_conversation_generation",
+    ),
+    sa.UniqueConstraint(
+        "conversation_id",
+        "covered_through_message_id",
+        name="uq_session_summaries_conversation_watermark",
+    ),
+    sa.ForeignKeyConstraint(
+        ("conversation_id",),
+        ("conversations.id",),
+        name="fk_session_summaries_conversation",
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ("conversation_id", "previous_summary_id"),
+        ("session_summaries.conversation_id", "session_summaries.id"),
+        name="fk_session_summaries_previous_summary",
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ("conversation_id", "covered_from_message_id"),
+        ("messages.conversation_id", "messages.id"),
+        name="fk_session_summaries_covered_from_message",
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ("conversation_id", "covered_through_message_id"),
+        ("messages.conversation_id", "messages.id"),
+        name="fk_session_summaries_covered_through_message",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "char_length(id) > 0",
+        name="ck_session_summaries_id_present",
+    ),
+    sa.CheckConstraint(
+        "char_length(conversation_id) > 0",
+        name="ck_session_summaries_conversation_id_present",
+    ),
+    sa.CheckConstraint(
+        "generation > 0",
+        name="ck_session_summaries_generation_positive",
+    ),
+    sa.CheckConstraint(
+        "(generation = 1 AND previous_summary_id IS NULL) OR (generation > 1 AND previous_summary_id IS NOT NULL)",
+        name="ck_session_summaries_previous_matches_generation",
+    ),
+    sa.CheckConstraint(
+        "covered_from_message_id > 0 AND covered_through_message_id >= covered_from_message_id",
+        name="ck_session_summaries_message_watermark_order",
+    ),
+    sa.CheckConstraint(
+        "covered_message_count > 0",
+        name="ck_session_summaries_covered_count_positive",
+    ),
+    sa.CheckConstraint(
+        "source_message_count > 0 AND source_message_count <= covered_message_count",
+        name="ck_session_summaries_source_count_valid",
+    ),
+    sa.CheckConstraint(
+        "generation <> 1 OR source_message_count = covered_message_count",
+        name="ck_session_summaries_initial_count_valid",
+    ),
+    sa.CheckConstraint(
+        "source_digest ~ '^[a-f0-9]{64}$'",
+        name="ck_session_summaries_source_digest_valid",
+    ),
+    sa.CheckConstraint(
+        "policy_version ~ '^[a-z][a-z0-9_.-]{0,31}$'",
+        name="ck_session_summaries_policy_version_valid",
+    ),
+    sa.CheckConstraint(
+        "trigger_message_count BETWEEN 2 AND 200 AND keep_recent_message_count BETWEEN 1 AND trigger_message_count - 1",
+        name="ck_session_summaries_message_policy_bounded",
+    ),
+    sa.CheckConstraint(
+        "max_source_chars BETWEEN 1024 AND 1000000 AND source_char_count BETWEEN 1 AND max_source_chars",
+        name="ck_session_summaries_source_chars_bounded",
+    ),
+    sa.CheckConstraint(
+        "char_length(btrim(model_provider)) > 0",
+        name="ck_session_summaries_model_provider_present",
+    ),
+    sa.CheckConstraint(
+        "char_length(btrim(model)) > 0",
+        name="ck_session_summaries_model_present",
+    ),
+    sa.CheckConstraint(
+        f"char_length(btrim(content)) > 0 AND char_length(content) <= {SESSION_SUMMARY_MAX_CHARS}",
+        name="ck_session_summaries_content_bounded",
+    ),
+)
+
+sa.Index(
+    "uq_session_summaries_conversation_previous",
+    session_summaries_table.c.conversation_id,
+    session_summaries_table.c.previous_summary_id,
+    unique=True,
+    postgresql_where=session_summaries_table.c.previous_summary_id.is_not(None),
+)
+
 DATABASE_TABLES = (
     users_table,
     conversations_table,
@@ -1011,4 +1162,5 @@ DATABASE_TABLES = (
     tool_bundle_versions_table,
     audit_events_table,
     model_usage_table,
+    session_summaries_table,
 )

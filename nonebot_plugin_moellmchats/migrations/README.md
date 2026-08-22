@@ -11,4 +11,5 @@ This packaged Alembic environment remains intentionally offline-only in F-04.
 - Revision `0005_tool_bundle_metadata` adds bundle/version metadata and lifecycle constraints.
 - Revision `0006_audit_events` adds bounded, reference-safe audit event records.
 - Revision `0007_model_usage` adds per-run provider/model token and cost records.
+- Revision `0008_session_summaries` adds append-only, source-bound session summary chains.
 - Production migration execution requires a later, separately reviewed release gate.

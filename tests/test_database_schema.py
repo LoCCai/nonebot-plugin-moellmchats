@@ -39,6 +39,7 @@ from nonebot_plugin_moellmchats.database_schema import (
     database_metadata,
     messages_table,
     model_usage_table,
+    session_summaries_table,
     tool_bundle_versions_table,
     tool_bundles_table,
     tool_calls_table,
@@ -197,6 +198,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         tool_bundle_versions_table,
         audit_events_table,
         model_usage_table,
+        session_summaries_table,
     )
     assert tuple(database_metadata.tables) == (
         "users",
@@ -209,6 +211,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         "tool_bundle_versions",
         "audit_events",
         "model_usage",
+        "session_summaries",
     )
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
@@ -470,6 +473,29 @@ def test_model_usage_schema_has_exact_columns() -> None:
     )
 
 
+def test_session_summary_schema_has_exact_columns() -> None:
+    assert tuple(_column_signature(column) for column in session_summaries_table.columns) == (
+        ("id", "VARCHAR(128)", False, False, None),
+        ("conversation_id", "VARCHAR(128)", False, False, None),
+        ("generation", "BIGINT", False, False, None),
+        ("previous_summary_id", "VARCHAR(128)", True, False, None),
+        ("covered_from_message_id", "BIGINT", False, False, None),
+        ("covered_through_message_id", "BIGINT", False, False, None),
+        ("covered_message_count", "BIGINT", False, False, None),
+        ("source_message_count", "BIGINT", False, False, None),
+        ("source_digest", "VARCHAR(64)", False, False, None),
+        ("policy_version", "VARCHAR(32)", False, False, None),
+        ("trigger_message_count", "BIGINT", False, False, None),
+        ("keep_recent_message_count", "BIGINT", False, False, None),
+        ("max_source_chars", "BIGINT", False, False, None),
+        ("source_char_count", "BIGINT", False, False, None),
+        ("model_provider", "VARCHAR(128)", False, False, None),
+        ("model", "VARCHAR(255)", False, False, None),
+        ("content", "TEXT", False, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, None),
+    )
+
+
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
     assert frozenset(_constraint_signature(value) for value in users_table.constraints) == frozenset(
         {
@@ -516,6 +542,11 @@ def test_first_schema_has_exact_constraints_and_indexes() -> None:
     assert frozenset(_constraint_signature(value) for value in messages_table.constraints) == frozenset(
         {
             ("primary_key", "pk_messages", ("id",)),
+            (
+                "unique",
+                "uq_messages_conversation_id_id",
+                ("conversation_id", "id"),
+            ),
             (
                 "foreign_key",
                 "fk_messages_conversation_id_conversations",
@@ -1265,6 +1296,145 @@ def test_model_usage_schema_has_exact_constraints_and_indexes() -> None:
     )
 
 
+def test_session_summary_schema_has_exact_constraints_and_indexes() -> None:
+    assert frozenset(_constraint_signature(value) for value in session_summaries_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_session_summaries", ("id",)),
+            (
+                "unique",
+                "uq_session_summaries_conversation_id_id",
+                ("conversation_id", "id"),
+            ),
+            (
+                "unique",
+                "uq_session_summaries_conversation_generation",
+                ("conversation_id", "generation"),
+            ),
+            (
+                "unique",
+                "uq_session_summaries_conversation_watermark",
+                ("conversation_id", "covered_through_message_id"),
+            ),
+            (
+                "foreign_key",
+                "fk_session_summaries_conversation",
+                ("conversation_id",),
+                ("conversations.id",),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_session_summaries_previous_summary",
+                ("conversation_id", "previous_summary_id"),
+                (
+                    "session_summaries.conversation_id",
+                    "session_summaries.id",
+                ),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_session_summaries_covered_from_message",
+                ("conversation_id", "covered_from_message_id"),
+                ("messages.conversation_id", "messages.id"),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_session_summaries_covered_through_message",
+                ("conversation_id", "covered_through_message_id"),
+                ("messages.conversation_id", "messages.id"),
+                "RESTRICT",
+            ),
+            (
+                "check",
+                "ck_session_summaries_id_present",
+                "char_length(id) > 0",
+            ),
+            (
+                "check",
+                "ck_session_summaries_conversation_id_present",
+                "char_length(conversation_id) > 0",
+            ),
+            (
+                "check",
+                "ck_session_summaries_generation_positive",
+                "generation > 0",
+            ),
+            (
+                "check",
+                "ck_session_summaries_previous_matches_generation",
+                "(generation = 1 AND previous_summary_id IS NULL) OR (generation > 1 AND previous_summary_id IS NOT NULL)",
+            ),
+            (
+                "check",
+                "ck_session_summaries_message_watermark_order",
+                "covered_from_message_id > 0 AND covered_through_message_id >= covered_from_message_id",
+            ),
+            (
+                "check",
+                "ck_session_summaries_covered_count_positive",
+                "covered_message_count > 0",
+            ),
+            (
+                "check",
+                "ck_session_summaries_source_count_valid",
+                "source_message_count > 0 AND source_message_count <= covered_message_count",
+            ),
+            (
+                "check",
+                "ck_session_summaries_initial_count_valid",
+                "generation <> 1 OR source_message_count = covered_message_count",
+            ),
+            (
+                "check",
+                "ck_session_summaries_source_digest_valid",
+                "source_digest ~ '^[a-f0-9]{64}$'",
+            ),
+            (
+                "check",
+                "ck_session_summaries_policy_version_valid",
+                "policy_version ~ '^[a-z][a-z0-9_.-]{0,31}$'",
+            ),
+            (
+                "check",
+                "ck_session_summaries_message_policy_bounded",
+                "trigger_message_count BETWEEN 2 AND 200 AND keep_recent_message_count BETWEEN 1 AND trigger_message_count - 1",
+            ),
+            (
+                "check",
+                "ck_session_summaries_source_chars_bounded",
+                "max_source_chars BETWEEN 1024 AND 1000000 AND source_char_count BETWEEN 1 AND max_source_chars",
+            ),
+            (
+                "check",
+                "ck_session_summaries_model_provider_present",
+                "char_length(btrim(model_provider)) > 0",
+            ),
+            (
+                "check",
+                "ck_session_summaries_model_present",
+                "char_length(btrim(model)) > 0",
+            ),
+            (
+                "check",
+                "ck_session_summaries_content_bounded",
+                "char_length(btrim(content)) > 0 AND char_length(content) <= 16000",
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in session_summaries_table.indexes) == frozenset(
+        {
+            (
+                "uq_session_summaries_conversation_previous",
+                ("conversation_id", "previous_summary_id"),
+                True,
+                "previous_summary_id IS NOT NULL",
+            ),
+        }
+    )
+
+
 def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1291,6 +1461,7 @@ def test_linear_revision_operations_are_identical_to_declared_metadata(
         ("0005_tool_bundle_metadata", "0004_tool_calls"),
         ("0006_audit_events", "0005_tool_bundle_metadata"),
         ("0007_model_usage", "0006_audit_events"),
+        ("0008_session_summaries", "0007_model_usage"),
     ):
         revision = scripts.get_revision(revision_id)
         assert revision is not None
@@ -1314,3 +1485,12 @@ def test_schema_declaration_has_no_engine_session_or_connection() -> None:
 
     assert not any(isinstance(value, forbidden_runtime_objects) for value in vars(database_schema_module).values())
     assert "DatabaseEngineManager" not in vars(database_schema_module)
+
+
+def test_postgresql_schema_identifiers_fit_the_server_limit() -> None:
+    names = [table.name for table in DATABASE_TABLES]
+    for table in DATABASE_TABLES:
+        names.extend(item.name for item in (*table.constraints, *table.indexes) if item.name is not None)
+
+    assert names
+    assert max(map(len, names)) <= 63

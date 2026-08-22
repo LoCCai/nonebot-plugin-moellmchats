@@ -1,3 +1,3 @@
 # Revision directory
 
-Revisions form one linear PostgreSQL history. F-04 starts it with `0001_users_conversations`; F-05 appends `0002_agent_runtime`; F-06 appends `0003_agent_steps`; F-07 appends `0004_tool_calls`; F-08 appends `0005_tool_bundle_metadata`; F-09 appends `0006_audit_events`; F-10 appends `0007_model_usage`.
+Revisions form one linear PostgreSQL history. F-04 starts it with `0001_users_conversations`; F-05 appends `0002_agent_runtime`; F-06 appends `0003_agent_steps`; F-07 appends `0004_tool_calls`; F-08 appends `0005_tool_bundle_metadata`; F-09 appends `0006_audit_events`; F-10 appends `0007_model_usage`; G-03 appends `0008_session_summaries`.

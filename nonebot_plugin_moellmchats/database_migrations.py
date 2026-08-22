@@ -22,6 +22,10 @@ _REQUIRED_MIGRATION_FILES = (
     "versions/0002_agent_runtime.py",
     "versions/0003_agent_steps.py",
     "versions/0004_tool_calls.py",
+    "versions/0005_tool_bundle_metadata.py",
+    "versions/0006_audit_events.py",
+    "versions/0007_model_usage.py",
+    "versions/0008_session_summaries.py",
     "versions/README.md",
 )
 
