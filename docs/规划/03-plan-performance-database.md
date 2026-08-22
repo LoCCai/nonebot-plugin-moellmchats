@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T19:16:21+00:00
+lastmod: 2026-08-22T20:06:29+00:00
 ---
 
 # 03-plan-performance-database
@@ -11,6 +11,8 @@ lastmod: 2026-08-22T19:16:21+00:00
 > 推荐目标版本：`0.28 → 0.30`
 
 > 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E、F-01～F-14 与 G-01 已完成远端门禁；D-09 在不操作生产的约束下继续锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变 Conversation/Message records 与显式 `AsyncSession` 注入的 PostgreSQL Repository；最近历史以显式列、`conversation_id`、`id DESC`、`LIMIT+1` 查询，使用绑定会话指纹的 `before_message_id` keyset 游标并在应用层反转。Repository 不拥有 session 生命周期，不隐式 commit/rollback/retry；`RETURNING` 只确认当前事务 statement，最终 commit 仍由调用方负责。Integrity/缺失记录是冲突，后端异常、损坏结果与未知写入是 unavailable，错误脱敏且取消原样传播。四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低数据库依赖、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
+
+> G-02 本地门禁（2026-08-22）：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push `32593312310` / PR `32593315775` 已各 11/11 green。实现提交 `e865838` 新增 committed `HistoryWindow`、`HistoryHotCacheProtocol`、Memory/Redis 两类 backend 和 128-bit reservation generation；Memory 固定 TTL、LRU、会话数/消息数/载荷上限并拒绝跨 PID/loop 复用，Redis 显式注入 client，以 SHA-256 会话 key、canonical JSON、TTL 与 WATCH/MULTI 做 CAS。缓存从不替代 PostgreSQL 真源，损坏/超限/缺 TTL/后端未知均不返回命中，晚到 load 在 durable commit 后 invalidation 发生时必须发布失败。四版本定向各 `84 passed`、联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0、静态、fresh 制品及四组包外零 I/O smoke 均通过。G-02 精确 HEAD 双 run gate 待完成，G-03 锁定；未接配置、生命周期、Repository 编排、`MessagesHandler` 或生产。
 
 ---
 
@@ -668,6 +670,20 @@ G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增 `chat_histor
 
 远端证据：G-01 最终本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 对应 push run `32593099818` 与 PR run `32593102078`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-02 依赖已解除。本阶段不读取生产 DSN 或 secret file，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有 `MessagesHandler`/内存历史或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
+## 13.2 History Hot Cache（G-02）
+
+实现落点：实现提交 `e865838` 新增 `history_hot_cache.py` 与 `redis_history_hot_cache.py`。`HistoryWindow` 是脱离 backend 的 frozen hot window，只接受同一 `conversation_id`、携带正 PostgreSQL BIGINT identity 且按 identity 严格递增的 `MessageRecord`；空窗口不得伪造 `has_older`，裁剪只保留最新后缀并正确提升更早历史标记。`HistoryCacheLookup` 必须且只能返回命中窗口或短期 `HistoryCacheLoadToken`，token 的 repr 不暴露会话指纹/代际。
+
+一致性与事务边界：miss 先用 128-bit 随机 generation 保留一个有界 loading state；publish 必须同时匹配会话 SHA-256 指纹、generation、未过期 reservation 与 loading 状态，成功一次后重复 publish 失败。durable source write commit 后的 invalidate 会原子替换 generation，因此 commit 前已启动、commit 后才返回的旧 PostgreSQL load 不得覆盖新状态。协议明确要求只有已确认 committed source view 才可 publish、只有 durable commit 成功后才可 invalidate；cache 不写 Repository、不创建 transaction，也不把 statement-level `RETURNING` 当成 durable proof。
+
+backend 边界：`MemoryHistoryHotCache` 使用 monotonic 固定 TTL、LRU、最大会话/消息/载荷上限与单 PID/event-loop ownership；过期、淘汰或 clear 后的 token 不能复活状态。`RedisHistoryHotCache` 只接受调用方显式注入的 redis-py asyncio client，构造时不发命令；key 仅含可配置安全前缀和 conversation SHA-256，value 是版本化、canonical ASCII JSON，消息会在读取时重新经过 G-01 records 校验。loading/ready key 均必须携带有界 TTL；publish 通过 WATCH/MULTI CAS，损坏、非 canonical、超限、跨会话、乱序、缺 TTL、异常响应或 retry budget 耗尽均不作为命中或成功。异常只含安全操作名/类型，不泄漏 key 原文、消息或 endpoint，`CancelledError` 原样传播。缓存 unavailable 后是否旁路 PostgreSQL 属于未来 runtime 编排策略，本阶段不静默吞错。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 G-02 定向各 `84 passed`；与 Repository、Engine、Migration、Schema、G-01 PostgreSQL History、Redis Client/PendingAction/Cooldown/Admission、Message Context、Context Budget 与 Chat Runtime 联合各 `455 passed`。四版本严格串行普通全量各 `1328 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failure/error/skip 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / fakeredis 2.31.0 使用同一联合门禁；Ruff 0.16.2 全量、目标 format 与 Pyright 1.1.407 目标源码/测试均通过。
+
+制品门禁：实现提交 `e865838` 的 fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `afc4fdf0a95b476fba195adabac75e142ab323e4f2b20be4505e84a707163246`、sdist SHA256 `1fc9fec196ef41559c85264254fe94b55a1aa4bd04d77b5d192dd26f66488ba4`；两者各 78 个文件，均包含两个 G-02 module、精确 Redis/数据库依赖与七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组 fresh 仓库外安装均确认 10 表、7 revision、离线 DDL、plugin reload、Memory hit/publish、显式 client→Redis cache 构造及模块无全局 Redis client；Redis command、数据库 connect/execute 计数始终为 0。制品目录 `/tmp/moellm-g02-dist.avoM6m`，smoke 根目录 `/tmp/moellm-g02-smoke.H6N3D5`。
+
+远端边界：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push run `32593312310` 与 PR run `32593315775` 已各 11/11 green、各恰好一个 `completed/success release-gate`；远端分支、PR head 与本地 SHA 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-02 本地门禁已完成，但其精确 HEAD push/PR 双 run gate 尚待完成，因此 G-03 继续锁定。未读取 Redis URL、生产 DSN 或 secret，未创建全局 client/cache/engine/session，未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径、PostgreSQL Repository 编排或生产 runtime；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未 promotion、未发布、未部署。
+
 ---
 
 # 14. 上下文分层
@@ -1135,8 +1151,8 @@ runner_start_duration
 - [ ] AgentStep 持久化
 - [ ] ToolCall 持久化
 - [ ] Token Usage 持久化
-- [ ] Chat History 持久化
-- [ ] History Hot Cache
+- [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
+- [ ] History Hot Cache（G-02 本地门禁已完成；精确 HEAD 双 run gate 待完成）
 - [ ] Session Summary
 - [ ] Batch Insert
 - [ ] DB Failure Spool

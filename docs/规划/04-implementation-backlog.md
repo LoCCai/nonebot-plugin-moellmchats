@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T19:16:21+00:00
+lastmod: 2026-08-22T20:06:29+00:00
 ---
 
 # 04-implementation-backlog
@@ -15,6 +15,8 @@ lastmod: 2026-08-22T19:16:21+00:00
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
 - G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
+- G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push `32593312310` / PR `32593315775` 已完成最终 11/11 双 gate。G-02 实现提交 `e865838` 已完成四版本定向/联合/全量、Sandbox、最低依赖、静态、fresh 制品与四组包外零 I/O smoke；精确 HEAD 双 run gate 待完成，G-03 继续锁定。
+- G-02 只提供 committed `HistoryWindow`、失效代际协议及显式 Memory/Redis backend；未接 G-01 Repository、`MessagesHandler`、配置、生命周期或生产 runtime，未读取 Redis URL/DSN，未连接真实服务。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -1022,6 +1024,16 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## G-02 History Hot Cache
+
+实现落点：实现提交 `e865838` 新增 backend-neutral `HistoryWindow / HistoryCacheLoadToken / HistoryCacheLookup / HistoryHotCacheProtocol`、`MemoryHistoryHotCache` 与 `RedisHistoryHotCache`。window 只缓存同一会话、带正 BIGINT identity、严格递增的 frozen `MessageRecord`；最近后缀裁剪保持 `has_older` 真值，draft、跨会话、重复/乱序与超限载荷在 backend I/O 前拒绝。
+
+一致性与故障边界：cache miss 先保留带 TTL 的 128-bit generation；publish 只有在会话指纹、generation、reservation TTL 和 loading state 全部匹配时才成功一次，invalidate 以新 generation 拒绝 durable commit 前启动的晚到 load。协议要求 publish 只接收已确认 committed source view，invalidate 只发生在 durable commit 成功后；cache 不写数据库、不提交事务，也不把 G-01 `RETURNING` 当成 commit 证明。Memory backend 为固定 TTL/LRU、有界会话/消息/载荷且绑定单 PID/loop。Redis backend 只接受显式 redis-py client，构造零命令；key 使用会话 SHA-256，canonical JSON value 重新经过 records 校验，TTL 与 WATCH/MULTI CAS 必须成立。损坏、缺 TTL、超限、异常响应或并发预算耗尽均不作为命中，错误脱敏且取消原样传播；runtime 的 cache-unavailable→PostgreSQL bypass 策略尚未接线。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `84 passed`，与 Repository/Engine/Migration/Schema/G-01/Redis Stores/Context/Chat Runtime 联合各 `455 passed`，普通全量各 `1328 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / fakeredis 2.31.0 联合门禁通过；Ruff 0.16.2、format 与 Pyright 1.1.407 为 0 错误。
+
+制品门禁：实现提交 `e865838` 的 fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `afc4fdf0a95b476fba195adabac75e142ab323e4f2b20be4505e84a707163246`、sdist SHA256 `1fc9fec196ef41559c85264254fe94b55a1aa4bd04d77b5d192dd26f66488ba4`；两者各 78 个文件，包含两个 G-02 module、七个 revision，不含 `uv.lock`、cache/bytecode。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 表、7 revision、离线 DDL、reload、Memory cache roundtrip、显式 Redis cache 构造、无模块级 client，真实 Redis command 与数据库 connect/execute 均为 0。
+
+远端边界：G-02 精确 HEAD 双 run gate 待完成，完成前 G-03 不启动。本阶段未读取连接配置或 secret，未创建全局 client/cache/engine/session，未接配置、startup/shutdown、legacy sidecar、G-01 Repository、现有内存历史或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未 promotion、未发布、未部署。
 
 ---
 
