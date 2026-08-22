@@ -3,7 +3,7 @@ import asyncio
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 
 from . import moe_llm as llm
-from .admission import AdmissionRejected, get_llm_controller
+from .admission import AdmissionGateProtocol, AdmissionRejected, get_llm_controller
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
@@ -61,6 +61,7 @@ async def handle_llm(
     is_ai=False,
     *,
     cooldown_store: CooldownStoreProtocol | None = None,
+    admission_controller: AdmissionGateProtocol | None = None,
 ):
     user_id = event.sender.user_id
     if user_id is None:
@@ -84,7 +85,12 @@ async def handle_llm(
         async with timeout_scope(
             config_parser.get_config("request_timeout_seconds", 180)
         ):
-            async with get_llm_controller().slot(user_id):
+            admission_gate = (
+                get_llm_controller()
+                if admission_controller is None
+                else admission_controller
+            )
+            async with admission_gate.slot(user_id):
                 snapshot = runtime_snapshots.current()
                 with runtime_snapshots.bind(snapshot):
                     temp = (
