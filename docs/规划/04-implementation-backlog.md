@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T21:09:27+00:00
+lastmod: 2026-08-22T21:58:33+00:00
 ---
 
 # 04-implementation-backlog
@@ -20,7 +20,7 @@ lastmod: 2026-08-22T21:09:27+00:00
 - G-02 本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 的 push `32595899079` / PR `32595902263` 已各 11/11 green、各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-03 依赖已解除。
 - G-03 实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 已完成四版本定向/联合/全量、Sandbox、最低依赖、静态、fresh 制品及四组仓库外 11 表/8 revision/零 I/O smoke；本地证据 HEAD `3fb6792ec18566c571ab9e9628c0ea9ec1854a53` 的 push `32598610770` / PR `32598613406` 已各 11/11 green、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-04 依赖已解除。
 - G-03 只提供不可变 summary chain、确定性 50/10 compaction、append-only `0008_session_summaries` 与显式 session Repository；未调用摘要模型，未接 G-01/G-02、`MessagesHandler`、配置、生命周期或生产 runtime，未读取连接信息、未运行 migration、未连接服务。
-- G-04 实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 已完成四版本定向各 `161 passed`、相关联合各 `306 passed`、普通全量各 `1433 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/cache roundtrip/reload/零 I/O smoke；精确 HEAD 双 run gate 待完成，G-05 继续锁定。
+- G-04 实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 已完成四版本定向各 `161 passed`、相关联合各 `306 passed`、普通全量各 `1433 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/cache roundtrip/reload/零 I/O smoke；本地证据 HEAD `6fd7509f11c0a851addc93dd78e52979b436215a` 的 push `32600965570` / PR `32600967324` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-05 依赖已解除但尚未实现。
 - G-04 只提供完整 policy identity、不可变 catalog record、backend-neutral Protocol、显式 parity-safe ToolSnapshot 渲染入口与单 PID/loop Memory LRU；现有 `Categorize.get_brief_catalog()` 同步路径保持未接线，没有全局 cache、Redis backend、配置或生命周期，不读取 DSN/Redis URL，不连接真实服务。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
@@ -796,7 +796,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-03 精确 HEAD 双 run 远端 gate green；G-04 本地门禁完成、远端 gate 待完成；G-05 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-04 精确 HEAD 双 run 远端 gate green；G-05 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1066,9 +1066,13 @@ Schema 与并发边界：append-only `0008_session_summaries` 不改写 `0001`�
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `ab805c305183bddd1e49b3e417534ca09abc4d2f4970c9df3f40d477b61c06b0` / `0348bc4627dfbb6a6d227842fcbda072724b9838cc67ef7d1607e87807d3bb37`，各 82 个文件且包含 G-04 module、不含 `uv.lock` 或 bytecode。Python 3.10/3.12 × wheel/sdist 四组包外安装确认 site-packages 加载、11 表、8 revision、离线 DDL、reload、ToolSnapshot record、Memory miss/publish/hit、无模块级 cache，数据库/Redis I/O 计数全为 0。精确 HEAD 双 run 是 G-05 前置门禁；当前不接现有 Categorize、配置、startup/shutdown 或生产 runtime，不实现 Redis backend，不读取连接信息、不迁移、不连接真实服务，未合并、未发布、未部署。
 
+远端证据：G-04 本地证据 HEAD `6fd7509f11c0a851addc93dd78e52979b436215a` 对应 push run `32600965570` 与 PR run `32600967324`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-05 依赖已解除。本阶段未读取连接配置或 secret，未创建全局 cache，不接配置、startup/shutdown、现有 Categorize 或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未 promotion、未发布、未部署。
+
 ---
 
 ## G-05 Tool Schema Cache
+
+状态：G-04 本地与精确 HEAD 双 run 远端门禁已完成，前置依赖已解除；G-05 尚未实现或接入运行时。
 
 ---
 
