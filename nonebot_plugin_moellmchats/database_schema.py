@@ -37,6 +37,10 @@ TOOL_BUNDLE_DESCRIPTION_MAX_BYTES = 65_536
 TOOL_BUNDLE_SOURCE_MAX_BYTES = 65_536
 TOOL_BUNDLE_VERSION_STATE_MAX_CHARS = 32
 TOOL_BUNDLE_METADATA_MAX_BYTES = 65_536
+AUDIT_EVENT_TYPE_MAX_CHARS = 128
+AUDIT_ACTOR_TYPE_MAX_CHARS = 32
+AUDIT_TARGET_TYPE_MAX_CHARS = 64
+AUDIT_METADATA_MAX_BYTES = 65_536
 
 AGENT_RUN_STATUS_VALUES = tuple(state.value for state in AgentRunState)
 AGENT_RUN_TERMINAL_STATUS_VALUES = (
@@ -484,6 +488,11 @@ tool_calls_table = sa.Table(
     sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint("id", name="pk_tool_calls"),
+    sa.UniqueConstraint(
+        "run_id",
+        "id",
+        name="uq_tool_calls_run_id_id",
+    ),
     sa.ForeignKeyConstraint(
         ("run_id",),
         ("agent_runs.id",),
@@ -782,6 +791,130 @@ sa.Index(
     postgresql_where=sa.text("state = 'activated'"),
 )
 
+audit_events_table = sa.Table(
+    "audit_events",
+    database_metadata,
+    sa.Column("id", sa.BigInteger(), sa.Identity(), nullable=False),
+    sa.Column(
+        "event_type",
+        sa.String(AUDIT_EVENT_TYPE_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column("actor_user_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=True),
+    sa.Column(
+        "actor_type",
+        sa.String(AUDIT_ACTOR_TYPE_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column(
+        "target_type",
+        sa.String(AUDIT_TARGET_TYPE_MAX_CHARS),
+        nullable=False,
+    ),
+    sa.Column("target_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("run_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=True),
+    sa.Column("tool_call_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=True),
+    sa.Column("metadata_json", postgresql.JSONB(), nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
+    ),
+    sa.PrimaryKeyConstraint("id", name="pk_audit_events"),
+    sa.ForeignKeyConstraint(
+        ("actor_user_id",),
+        ("users.id",),
+        name="fk_audit_events_actor_user_id_users",
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ("run_id",),
+        ("agent_runs.id",),
+        name="fk_audit_events_run_id_agent_runs",
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ("run_id", "tool_call_id"),
+        ("tool_calls.run_id", "tool_calls.id"),
+        name="fk_audit_events_run_id_tool_call_id_tool_calls",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "event_type ~ '^[a-z][a-z0-9_.:-]{0,127}$'",
+        name="ck_audit_events_event_type_valid",
+    ),
+    sa.CheckConstraint(
+        "actor_user_id IS NULL OR char_length(actor_user_id) > 0",
+        name="ck_audit_events_actor_user_id_present",
+    ),
+    sa.CheckConstraint(
+        "actor_type ~ '^[a-z][a-z0-9_.:-]{0,31}$'",
+        name="ck_audit_events_actor_type_valid",
+    ),
+    sa.CheckConstraint(
+        "target_type ~ '^[a-z][a-z0-9_.:-]{0,63}$'",
+        name="ck_audit_events_target_type_valid",
+    ),
+    sa.CheckConstraint(
+        "char_length(target_id) > 0",
+        name="ck_audit_events_target_id_present",
+    ),
+    sa.CheckConstraint(
+        "run_id IS NULL OR char_length(run_id) > 0",
+        name="ck_audit_events_run_id_present",
+    ),
+    sa.CheckConstraint(
+        "tool_call_id IS NULL OR char_length(tool_call_id) > 0",
+        name="ck_audit_events_tool_call_id_present",
+    ),
+    sa.CheckConstraint(
+        "tool_call_id IS NULL OR run_id IS NOT NULL",
+        name="ck_audit_events_tool_call_has_run",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(metadata_json) = 'object'",
+        name="ck_audit_events_metadata_object",
+    ),
+    sa.CheckConstraint(
+        f"octet_length(metadata_json::text) <= {AUDIT_METADATA_MAX_BYTES}",
+        name="ck_audit_events_metadata_bounded",
+    ),
+)
+
+sa.Index(
+    "ix_audit_events_run_id_created_at_id_desc",
+    audit_events_table.c.run_id,
+    audit_events_table.c.created_at.desc(),
+    audit_events_table.c.id.desc(),
+)
+sa.Index(
+    "ix_audit_events_tool_call_id_created_at_id_desc",
+    audit_events_table.c.tool_call_id,
+    audit_events_table.c.created_at.desc(),
+    audit_events_table.c.id.desc(),
+)
+sa.Index(
+    "ix_audit_events_actor_created_at_id_desc",
+    audit_events_table.c.actor_type,
+    audit_events_table.c.actor_user_id,
+    audit_events_table.c.created_at.desc(),
+    audit_events_table.c.id.desc(),
+)
+sa.Index(
+    "ix_audit_events_target_created_at_id_desc",
+    audit_events_table.c.target_type,
+    audit_events_table.c.target_id,
+    audit_events_table.c.created_at.desc(),
+    audit_events_table.c.id.desc(),
+)
+sa.Index(
+    "ix_audit_events_event_type_created_at_id_desc",
+    audit_events_table.c.event_type,
+    audit_events_table.c.created_at.desc(),
+    audit_events_table.c.id.desc(),
+)
+
 DATABASE_TABLES = (
     users_table,
     conversations_table,
@@ -791,4 +924,5 @@ DATABASE_TABLES = (
     tool_calls_table,
     tool_bundles_table,
     tool_bundle_versions_table,
+    audit_events_table,
 )

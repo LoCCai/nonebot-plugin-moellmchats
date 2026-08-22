@@ -34,6 +34,7 @@ from nonebot_plugin_moellmchats.database_schema import (
     TOOL_SOURCE_VALUES,
     agent_runs_table,
     agent_steps_table,
+    audit_events_table,
     conversations_table,
     database_metadata,
     messages_table,
@@ -193,6 +194,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         tool_calls_table,
         tool_bundles_table,
         tool_bundle_versions_table,
+        audit_events_table,
     )
     assert tuple(database_metadata.tables) == (
         "users",
@@ -203,6 +205,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         "tool_calls",
         "tool_bundles",
         "tool_bundle_versions",
+        "audit_events",
     )
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
@@ -431,6 +434,22 @@ def test_tool_bundle_schema_has_exact_columns_and_domain_states() -> None:
     assert isinstance(tool_bundle_versions_table.c.manifest_json.type, postgresql.JSONB)
     assert isinstance(tool_bundle_versions_table.c.risks_json.type, postgresql.JSONB)
     assert isinstance(tool_bundle_versions_table.c.capabilities_json.type, postgresql.JSONB)
+
+
+def test_audit_schema_has_exact_columns() -> None:
+    assert tuple(_column_signature(column) for column in audit_events_table.columns) == (
+        ("id", "BIGINT", False, True, None),
+        ("event_type", "VARCHAR(128)", False, False, None),
+        ("actor_user_id", "VARCHAR(128)", True, False, None),
+        ("actor_type", "VARCHAR(32)", False, False, None),
+        ("target_type", "VARCHAR(64)", False, False, None),
+        ("target_id", "VARCHAR(128)", False, False, None),
+        ("run_id", "VARCHAR(128)", True, False, None),
+        ("tool_call_id", "VARCHAR(128)", True, False, None),
+        ("metadata_json", "JSONB", False, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+    )
+    assert isinstance(audit_events_table.c.metadata_json.type, postgresql.JSONB)
 
 
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
@@ -748,6 +767,7 @@ def test_tool_call_schema_has_exact_constraints_and_indexes() -> None:
     assert frozenset(_constraint_signature(value) for value in tool_calls_table.constraints) == frozenset(
         {
             ("primary_key", "pk_tool_calls", ("id",)),
+            ("unique", "uq_tool_calls_run_id_id", ("run_id", "id")),
             (
                 "foreign_key",
                 "fk_tool_calls_run_id_agent_runs",
@@ -1037,6 +1057,119 @@ def test_tool_bundle_schema_has_exact_constraints_and_indexes() -> None:
     )
 
 
+def test_audit_schema_has_exact_constraints_and_indexes() -> None:
+    assert frozenset(_constraint_signature(value) for value in audit_events_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_audit_events", ("id",)),
+            (
+                "foreign_key",
+                "fk_audit_events_actor_user_id_users",
+                ("actor_user_id",),
+                ("users.id",),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_audit_events_run_id_agent_runs",
+                ("run_id",),
+                ("agent_runs.id",),
+                "RESTRICT",
+            ),
+            (
+                "foreign_key",
+                "fk_audit_events_run_id_tool_call_id_tool_calls",
+                ("run_id", "tool_call_id"),
+                ("tool_calls.run_id", "tool_calls.id"),
+                "RESTRICT",
+            ),
+            (
+                "check",
+                "ck_audit_events_event_type_valid",
+                "event_type ~ '^[a-z][a-z0-9_.:-]{0,127}$'",
+            ),
+            (
+                "check",
+                "ck_audit_events_actor_user_id_present",
+                "actor_user_id IS NULL OR char_length(actor_user_id) > 0",
+            ),
+            (
+                "check",
+                "ck_audit_events_actor_type_valid",
+                "actor_type ~ '^[a-z][a-z0-9_.:-]{0,31}$'",
+            ),
+            (
+                "check",
+                "ck_audit_events_target_type_valid",
+                "target_type ~ '^[a-z][a-z0-9_.:-]{0,63}$'",
+            ),
+            (
+                "check",
+                "ck_audit_events_target_id_present",
+                "char_length(target_id) > 0",
+            ),
+            (
+                "check",
+                "ck_audit_events_run_id_present",
+                "run_id IS NULL OR char_length(run_id) > 0",
+            ),
+            (
+                "check",
+                "ck_audit_events_tool_call_id_present",
+                "tool_call_id IS NULL OR char_length(tool_call_id) > 0",
+            ),
+            (
+                "check",
+                "ck_audit_events_tool_call_has_run",
+                "tool_call_id IS NULL OR run_id IS NOT NULL",
+            ),
+            (
+                "check",
+                "ck_audit_events_metadata_object",
+                "jsonb_typeof(metadata_json) = 'object'",
+            ),
+            (
+                "check",
+                "ck_audit_events_metadata_bounded",
+                "octet_length(metadata_json::text) <= 65536",
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in audit_events_table.indexes) == frozenset(
+        {
+            (
+                "ix_audit_events_run_id_created_at_id_desc",
+                ("run_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_audit_events_tool_call_id_created_at_id_desc",
+                ("tool_call_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_audit_events_actor_created_at_id_desc",
+                ("actor_type", "actor_user_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_audit_events_target_created_at_id_desc",
+                ("target_type", "target_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_audit_events_event_type_created_at_id_desc",
+                ("event_type", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+        }
+    )
+
+
 def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1061,6 +1194,7 @@ def test_linear_revision_operations_are_identical_to_declared_metadata(
         ("0003_agent_steps", "0002_agent_runtime"),
         ("0004_tool_calls", "0003_agent_steps"),
         ("0005_tool_bundle_metadata", "0004_tool_calls"),
+        ("0006_audit_events", "0005_tool_bundle_metadata"),
     ):
         revision = scripts.get_revision(revision_id)
         assert revision is not None
