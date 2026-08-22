@@ -11,7 +11,7 @@ import math
 import re
 import secrets
 import time
-from typing import Any
+from typing import Any, Protocol
 import uuid
 
 from .config import config_parser
@@ -25,6 +25,38 @@ logger = logging.getLogger(__name__)
 
 class PendingActionError(RuntimeError):
     """A pending action could not be safely created, resolved, or executed."""
+
+
+class PendingActionStoreProtocol(Protocol):
+    """Backend-neutral contract for one-shot pending action storage."""
+
+    async def create(
+        self,
+        *,
+        bot: Any,
+        event: Any,
+        tool_name: str,
+        arguments: dict[str, Any],
+        generation: int,
+        bundle_digest: str | None = None,
+    ) -> PendingAction: ...
+
+    async def consume(
+        self,
+        nonce: str,
+        *,
+        bot: Any,
+        event: Any,
+        generation: int,
+    ) -> PendingAction: ...
+
+    async def cancel(self, nonce: str, *, bot: Any, event: Any) -> None: ...
+
+    async def clear(self) -> None: ...
+
+    def remaining_ttl_seconds(self, action: PendingAction) -> int: ...
+
+    async def size(self) -> int: ...
 
 
 def canonicalize_arguments(arguments: dict[str, Any]) -> str:
@@ -419,11 +451,11 @@ async def execute_pending_action(
     bot: Any,
     event: Any,
     runtime_snapshot: Any,
-    store: PendingActionStore | None = None,
+    store: PendingActionStoreProtocol | None = None,
 ) -> tuple[PendingAction, ToolResult]:
     if runtime_snapshot is None:
         raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
-    action_store = store or pending_action_store
+    action_store = pending_action_store if store is None else store
     action = await action_store.consume(
         nonce,
         bot=bot,
