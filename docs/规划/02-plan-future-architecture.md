@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:08:54+00:00
+lastmod: 2026-08-22T17:14:48+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T17:08:54+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-11 已完成精确 HEAD 双 run gate。F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 已加入显式 Redis PendingAction backend 与 backend-neutral store Protocol；默认内存 store 及现有 runtime 行为不变，Redis client 只能由调用方显式注入，Redis 不可用或事务结果未知时 fail closed 且不自动降级。四版本普通全量各 `1096 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Redis/Schema/graph/DDL/reload smoke 均通过且未触发真实 Redis connect。当前仅 F-12 本地门禁完成，精确 HEAD 双 run gate 待完成，F-13～F-14 继续锁定。在线 migration 仍直接拒绝；未创建全局 engine/session/Redis client/store，未接 Repository、runtime 或 lifecycle，未读取生产 DSN/Redis URL，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-12 已完成精确 HEAD 双 run gate。F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 已加入显式 Redis PendingAction backend 与 backend-neutral store Protocol；默认内存 store 及现有 runtime 行为不变，Redis client 只能由调用方显式注入，Redis 不可用或事务结果未知时 fail closed 且不自动降级。四版本普通全量各 `1096 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Redis/Schema/graph/DDL/reload smoke 均通过且未触发真实 Redis connect。最终本地证据 HEAD `23e548e76aa742686668c62405f053c363372e93` 的 push run `32587036476` / PR run `32587039022` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-13 依赖已解除，F-14 继续锁定。在线 migration 仍直接拒绝；未创建全局 engine/session/Redis client/store，未接 Repository、runtime 或 lifecycle，未读取生产 DSN/Redis URL，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 

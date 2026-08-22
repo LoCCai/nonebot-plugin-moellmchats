@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:08:54+00:00
+lastmod: 2026-08-22T17:14:48+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-11 已闭环，F-11 最终 HEAD `13383aee25fe90e8ecd3542a3df9af748f2e11f0` 的 push run `32583576588` / PR run `32583578903` 均为 11/11 green、各恰好一个 `completed/success release-gate`。F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 新增显式注入、namespace 有界且基于 Redis TTL 与 WATCH/MULTI 的一次性 PendingAction store；Bot/adapter/user/group、tool/arguments、generation 与 bundle 均绑定，失败预算分布式且有界，只有明确 `WatchError` 可重试，EXEC 结果未知时绝不返回 action，也不自动回退内存。四版本定向各 `50 passed`（Python 3.10 另锁定 Redis 5.2.0 / FakeRedis 2.31.0），联合回归 `582 passed`，四版本普通全量各 `1096 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 dependency/10 表/7 revision/DDL/reload smoke 均通过且真实 Redis connect 计数为 0。当前仅 F-12 本地门禁完成，精确 HEAD push/PR 双 run gate 待完成，F-13～F-14 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接 Repository、runtime 或 lifecycle，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-12 已闭环。F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 新增显式注入、namespace 有界且基于 Redis TTL 与 WATCH/MULTI 的一次性 PendingAction store；Bot/adapter/user/group、tool/arguments、generation 与 bundle 均绑定，失败预算分布式且有界，只有明确 `WatchError` 可重试，EXEC 结果未知时绝不返回 action，也不自动回退内存。四版本定向各 `50 passed`（Python 3.10 另锁定 Redis 5.2.0 / FakeRedis 2.31.0），联合回归 `582 passed`，四版本普通全量各 `1096 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 dependency/10 表/7 revision/DDL/reload smoke 均通过且真实 Redis connect 计数为 0。F-12 最终本地证据 HEAD `23e548e76aa742686668c62405f053c363372e93` 的 push run `32587036476` / PR run `32587039022` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-13 依赖已解除，F-14 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接 Repository、runtime 或 lifecycle，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
