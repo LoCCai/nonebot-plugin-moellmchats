@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T09:36:50+00:00
+lastmod: 2026-08-22T14:10:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -19,7 +19,7 @@ lastmod: 2026-08-21T09:36:50+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环，F-01～F-05 已完成精确 HEAD 双 run gate。F-06 最终 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 对应 push run `32467140779` / PR run `32467144569`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 新增 `tool_calls` Schema 与线性 revision `0004_tool_calls`；四版本定向各 `41 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `432 passed`，四版本普通全量各 `986 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 ToolCall Schema/graph/DDL smoke 均通过。F-07 当前仅本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-08 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环，F-01～F-06 已完成精确 HEAD 双 run gate。F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 对应 push run `32469057942` / PR run `32469061094`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 新增 Tool Bundle metadata 与线性 revision `0005_tool_bundle_metadata`；四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `435 passed`，四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 Schema/graph/DDL/reload smoke 均通过。F-08 当前仅本地门禁完成，精确 HEAD 双 run gate 待完成，F-09 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
 
 ---
 
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-06 精确 HEAD 双 run 远端 gate green；🟡 F-07 本地门禁完成、远端 gate 待完成；F-08～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-07 精确 HEAD 双 run 远端 gate green；🟡 F-08 本地门禁完成、远端 gate 待完成；F-09～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -889,13 +889,25 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `2ce8bf699fe7919cfca345d90833be99e2453e5025adf9513a9d230eb96f4b4f`、sdist SHA256 `54a6a8f44d3da165c7fe34704d60d4765164877a4c7b6fbc48c605957f819424`；两种制品各 65 个文件，均包含四个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认领域 status/source parity、六张表、四 revision graph、JSONB/复合 FK/unique/check DDL 与定向 upgrade，并在无生产配置的临时 cwd 完成 `reload("package-smoke")`。
 
-当前状态：仅本地门禁完成，包含规划的 F-07 精确 HEAD push/PR 双 run gate 待完成；F-08 只能在该 gate 关闭后开始。本阶段不接 runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 legacy sidecar 保持原样。未合并、未发布、未部署。
+远端证据：F-07 最终文档闭环精确 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 对应 push run `32469057942` 与 PR run `32469061094`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 依赖已解除。未合并、未发布、未部署。
 
 ---
 
 ## F-08 Tool Bundle Metadata Schema
 
-状态：依赖 F-07 精确 HEAD push/PR 双 run gate，当前保持锁定；必须以新 revision 扩展，不能回改 `0001`～`0004`。
+实现落点：实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 在共享 metadata 新增 `tool_bundles / tool_bundle_versions`，并以不可变 revision `0005_tool_bundle_metadata` 追加到 `0004_tool_calls`。字段覆盖 bundle 应用 ID/natural ID/description/时间/active pointer，以及 version 应用 ID/bundle/digest/manifest/source/tests/state/risks/capabilities/完整生命周期时间。
+
+领域与数据边界：版本状态值域精确绑定 `VersionState` 的 `approved / activated / deprecated / archived`；为与当前领域对象一致，规划概要之外显式补齐 `archived_at`。manifest、risks、capabilities 分别要求 JSONB object/array/object 且均有 64 KiB 上限；manifest natural bundle identity 必须与版本列一致。源码与测试源码各限制为 1～65536 bytes，不在本表保存 handler、live Bot/Event 或凭据。
+
+引用与查询边界：`tool_bundle_versions.bundle_id` 以 `RESTRICT` 指向 bundle natural ID，`(bundle_id, digest)` 唯一。bundle 的 `(bundle_id, active_version_id)` 复合 `RESTRICT` 外键只能指向同 bundle 版本，拒绝跨 bundle 错挂；版本侧 partial unique index 保证每个 bundle 至多一个 activated 版本。bundle 更新时间线、版本稳定时间线与状态恢复索引均已声明。跨表 active pointer 与 version state 的最终一致性仍由后续 Repository 事务/CAS 负责，本阶段不伪造触发器或 runtime 接线。
+
+迁移边界：packaged graph 为 `0001_users_conversations → 0002_agent_runtime → 0003_agent_steps → 0004_tool_calls → 0005_tool_bundle_metadata` 的单 base/head 线；未修改已门禁的 `0001`～`0004`，F-09 必须追加后续 revision。为处理两张新表间的循环引用，upgrade 先建 bundle、再建 version，最后追加 active pointer 外键；离线 `0005:0004` downgrade 先删除该外键，再按 `tool_bundle_versions → tool_bundles` 删除，不触碰 `tool_calls` 及前六张表。metadata/revision parity 覆盖精确 PostgreSQL 类型、全部约束和索引；在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `44 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `435 passed`；四版本严格串行普通全量各 `989 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2、format/diff check、PostgreSQL 标识符上限检查与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `441964bdd651746d1a61eadea63ea389ea40e42fd0bfe3599d1921ecc93230cf`、sdist SHA256 `6968f782e685c7fdfc55b5fa2d3c456d0a86f8dbb677c262ca9bd5639d60ee92`；两种制品各 66 个文件，均包含五个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 8 张表、五段单线 graph、VersionState parity、JSONB/复合 FK/partial unique/check DDL、定向 downgrade 与 `reload("package-smoke")`。
+
+当前状态：仅本地门禁完成，F-08 精确 HEAD push/PR 双 run gate 待完成；F-09 只能在该 gate 关闭后开始。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 

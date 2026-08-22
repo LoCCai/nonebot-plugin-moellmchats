@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-21T09:36:50+00:00
+lastmod: 2026-08-22T14:10:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-21T09:36:50+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-21）：Plan 1 精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR `release-gate` 均已 green，PR 基分支 required check 已配置，Plan 2 门禁解除。D-01a～D-08f 已完成各自精确 HEAD 远端 gate；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。Milestone E 的 E-01～E-08 已闭环，F-01～F-05 已完成精确 HEAD 双 run gate。F-06 最终 HEAD `4e5cd600b1efa430bb785bdc5cb7f6a49988be9a` 的 push run `32467140779` / PR run `32467144569` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致。F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 已加入 `tool_calls` Schema 与 `0004_tool_calls`；四版本普通全量各 `986 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 ToolCall Schema/graph/DDL smoke 均通过。当前仅 F-07 本地门禁完成，包含规划的精确 HEAD 双 run gate 待完成，F-08 继续锁定。在线 migration 仍直接拒绝；未创建 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-06 已完成精确 HEAD 双 run gate。F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 的 push run `32469057942` / PR run `32469061094` 均为 11/11 green、各恰好一个 `completed/success release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 已加入 Tool Bundle metadata 与 `0005_tool_bundle_metadata`；四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Schema/graph/DDL/reload smoke 均通过。当前仅 F-08 本地门禁完成，精确 HEAD 双 run gate 待完成，F-09 继续锁定。在线 migration 仍直接拒绝；未创建全局 engine/session 或 Repository 实现，未读取 DSN，未运行 migration，未连接数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
@@ -903,7 +903,13 @@ F-06 四版本定向各 `38 passed`，联合 Engine/Repository/Agent/Graph/Sched
 
 F-07 实现提交 `83a571fbc79e13ce68f237ba7ed9c653607fbb66` 追加不可变 revision `0004_tool_calls` 与 `tool_calls` 表。字段覆盖 run/step/tool/source/bundle、JSONB arguments、有界 result preview、确认 identity、状态与时间；status/source 值域精确绑定现有 `ToolCallStatus / ToolSource`。Generated 来源必须绑定合法 bundle ID 与 64 位小写 digest，其他来源禁止伪造 bundle identity；等待确认与 confirmed 记录必须绑定唯一 confirmation ID。
 
-F-07 通过 `(run_id, step_id) → agent_steps(run_id, id)` 复合外键拒绝跨 run 错挂 step，并在新 revision 中为父键追加支持约束，不回改 `0003`。终态必须携带结束时间与非负毫秒 duration，非终态不得携带结果，completed 必须有最长 6000 字符的 result preview；run 时间线、step 时间线、状态恢复及 confirmation 唯一索引均已声明。四版本定向各 `41 passed`，联合回归 `432 passed`，四版本普通全量各 `986 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff、format/diff check 与 Pyright 零诊断。fresh wheel/sdist SHA256 为 `2ce8bf699fe7919cfca345d90833be99e2453e5025adf9513a9d230eb96f4b4f` / `54a6a8f44d3da165c7fe34704d60d4765164877a4c7b6fbc48c605957f819424`，Twine、制品内容检查及四组仓库外 ToolCall Schema/graph/DDL smoke 均通过。当前仅本地门禁完成，包含规划的 F-07 精确 HEAD 双 run gate 待完成，F-08 继续锁定。本阶段不接 runtime 或 Repository，不创建 engine/session，不读取 DSN，不运行 migration，不连接 PostgreSQL/Redis；未合并、未发布、未部署。
+F-07 通过 `(run_id, step_id) → agent_steps(run_id, id)` 复合外键拒绝跨 run 错挂 step，并在新 revision 中为父键追加支持约束，不回改 `0003`。终态必须携带结束时间与非负毫秒 duration，非终态不得携带结果，completed 必须有最长 6000 字符的 result preview；run 时间线、step 时间线、状态恢复及 confirmation 唯一索引均已声明。四版本定向各 `41 passed`，联合回归 `432 passed`，四版本普通全量各 `986 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff、format/diff check 与 Pyright 零诊断。fresh wheel/sdist SHA256 为 `2ce8bf699fe7919cfca345d90833be99e2453e5025adf9513a9d230eb96f4b4f` / `54a6a8f44d3da165c7fe34704d60d4765164877a4c7b6fbc48c605957f819424`，Twine、制品内容检查及四组仓库外 ToolCall Schema/graph/DDL smoke 均通过。最终文档闭环 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 对应 push run `32469057942` / PR run `32469061094`；两者各 11 个 job 全绿、各恰好一个成功 `release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 依赖已解除；未合并、未发布、未部署。
+
+F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 追加不可变 revision `0005_tool_bundle_metadata` 与 `tool_bundles / tool_bundle_versions` 两张表，不回改 `0001`～`0004`。版本状态精确绑定现有 `VersionState` 的 `approved / activated / deprecated / archived`，并补齐 `archived_at` 以执行当前领域生命周期；manifest、risks、capabilities 使用有界 JSONB，源码与测试源码各限制为 64 KiB。
+
+bundle natural identity 与 digest 组合唯一；`active_version_id` 通过 `(bundle_id, active_version_id) → tool_bundle_versions(bundle_id, id)` 复合 `RESTRICT` 外键拒绝跨 bundle 指针，partial unique index 保证每个 bundle 至多一个 activated 版本。数据库约束同时执行 manifest bundle identity、时间顺序和各状态时间字段组合；本阶段只声明 metadata 与离线 DDL，不接 sidecar、runtime 或 Repository。
+
+F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `435 passed`，四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff、format/diff check 与 Pyright `0 errors, 0 warnings`。fresh wheel/sdist SHA256 为 `441964bdd651746d1a61eadea63ea389ea40e42fd0bfe3599d1921ecc93230cf` / `6968f782e685c7fdfc55b5fa2d3c456d0a86f8dbb677c262ca9bd5639d60ee92`，两种制品各 66 文件，Twine、内容检查及 Python 3.10/3.12 × wheel/sdist 四组仓库外 8 表/5 revision/DDL/downgrade/reload smoke 均通过。当前仅本地门禁完成，F-08 精确 HEAD 双 run gate 待完成，F-09 继续锁定；未创建全局 engine/session，未读取 DSN，未运行 migration，未连接 PostgreSQL/Redis，未合并、未发布、未部署。
 
 ---
 
