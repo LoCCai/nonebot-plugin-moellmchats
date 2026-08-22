@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:56:44+00:00
+lastmod: 2026-08-22T15:08:10+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-09 精确 HEAD 双 run 远端 gate green；F-10 依赖已解除；F-11～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-09 精确 HEAD 双 run 远端 gate green；🟡 F-10 本地门禁完成、远端 gate 待完成；F-11～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -928,6 +928,18 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## F-10 Usage Schema
+
+实现落点：实现提交 `f96b1ffadf43283c77365246b1b065379c013c2e` 在共享 metadata 新增 `model_usage`，并以不可变 revision `0007_model_usage` 追加到 `0006_audit_events`。字段覆盖规划要求的 `id / run_id / provider / model / input_tokens / output_tokens / reasoning_tokens / cached_tokens / cost / created_at`；ID 使用 PostgreSQL `BIGINT IDENTITY`，run 使用非空 `RESTRICT` 外键，provider/model 为有界非空原始标识，四类 token 均为显式非负 BIGINT，cost 使用可空 `NUMERIC(24, 12)` 以区分未知成本与零成本。
+
+数据与查询边界：不强行假定跨供应商 reasoning/cache 与 output/input 的包含关系；run 稳定时间线、provider+model 聚合时间线与全局时间线均包含 `created_at DESC, id DESC`。用户/群统计通过 run 关联，不在 usage 表重复身份。本阶段不改现有 50 条内存 `token_usage_history`，不接 `llm_api`、UsageRepository、批量写入或计价规则。
+
+迁移边界：packaged graph 为 `0001_users_conversations → 0002_agent_runtime → 0003_agent_steps → 0004_tool_calls → 0005_tool_bundle_metadata → 0006_audit_events → 0007_model_usage` 的单 base/head 线；未修改已门禁的 `0001`～`0006`。离线 `0007:0006` downgrade 只删除 `model_usage`，不触碰 `audit_events`、`agent_runs` 或其他既有表；metadata/revision parity 覆盖精确 PostgreSQL 类型、Identity、全部约束和索引。在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `50 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `441 passed`；四版本严格串行普通全量各 `995 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2、目标文件 format、diff check、233 个 PostgreSQL 命名项上限检查（最长 52）与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `b6e1dc17c58b7bca86ea00b84d30f693887d267e25023995d202a3ee32d8df57`、sdist SHA256 `9460a1f640ad2129ec79725637a758eda95161c30d96ab8388f8a38b896f1fec`；两种制品各 68 个文件，均包含七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组已验证仓库外依赖环境均强制重装上述精确制品，并确认 10 张表、七段 graph、BIGINT/Numeric/FK/check/index DDL、定向 downgrade 与 `reload("package-smoke")`。
+
+当前状态：仅本地门禁完成，F-10 精确 HEAD push/PR 双 run gate 待完成；F-11 只能在该 gate 关闭后开始。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session 或 Redis client，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:56:44+00:00
+lastmod: 2026-08-22T15:08:10+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T14:56:44+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-09 已闭环。F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 已加入 Audit metadata 与线性 revision `0006_audit_events`；本地全门禁、fresh 制品及四组包外 9 表/6 revision/DDL/downgrade/reload smoke 已通过。最终 HEAD `be2b3ab14fb7b9ce0d712fc52a2fa96830364993` 的 push run `32580016797` / PR run `32580019661` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-10 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-09 已闭环，F-09 最终 HEAD `be2b3ab14fb7b9ce0d712fc52a2fa96830364993` 的 push run `32580016797` / PR run `32580019661` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-10 实现提交 `f96b1ffadf43283c77365246b1b065379c013c2e` 已加入 model usage metadata 与线性 revision `0007_model_usage`；本地全门禁、fresh 制品及四组包外 10 表/7 revision/DDL/downgrade/reload smoke 已通过，精确 HEAD 双 run gate 待完成，F-11 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
 
 ---
 
@@ -478,6 +478,18 @@ created_at
 模型
 Provider
 ```
+
+F-10 实现提交 `f96b1ffadf43283c77365246b1b065379c013c2e` 将以上模型固化为 `model_usage`，并以不可变 `0007_model_usage` 追加到 `0006_audit_events`。记录 ID 使用 PostgreSQL `BIGINT IDENTITY`，每条 usage 以非空 `RESTRICT` 外键绑定 `agent_runs`；provider/model 为有界非空原始标识，input/output/reasoning/cached token 均为显式非负 BIGINT。cost 使用可空 `NUMERIC(24, 12)`，保留“供应商/计价规则尚不能确定成本”与真实零成本的区别。
+
+数据与查询边界：不强行假定不同供应商的 reasoning/cache 一定包含在 output/input 中，只执行各计数非负与 provider/model 非空不变量。run 稳定时间线、provider+model 聚合时间线与全局时间线均使用 `created_at DESC, id DESC`；按用户/群统计可经已索引的 run 关联完成，不在 usage 表重复用户身份。本阶段不改现有内存 `token_usage_history`，不接 `llm_api`、UsageRepository 或批量写入。
+
+packaged graph 现在为七段单 base/head 线，唯一 head 为 `0007_model_usage`。离线 `0007:0006` downgrade 只删除 `model_usage`，不触碰 `audit_events`、`agent_runs` 或其他既有表；metadata/revision parity 覆盖精确 PostgreSQL 类型、Identity、全部约束和索引。在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `50 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `441 passed`；四版本严格串行普通全量各 `995 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2、目标文件 format、diff check、233 个 PostgreSQL 命名项上限检查（最长 52）与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `b6e1dc17c58b7bca86ea00b84d30f693887d267e25023995d202a3ee32d8df57`、sdist SHA256 `9460a1f640ad2129ec79725637a758eda95161c30d96ab8388f8a38b896f1fec`；两种制品各 68 个文件，均包含七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组已验证仓库外依赖环境均强制重装上述精确制品，并确认 10 张表、七段 graph、BIGINT/Numeric/FK/check/index DDL、定向 downgrade 与 `reload("package-smoke")`。精确 HEAD 的 clean CI package jobs 仍是下一道远端门禁。
+
+当前仅本地门禁完成；F-11 必须等待 F-10 最终 HEAD 的 push/PR 双 `release-gate` 成功。本阶段不实现 Repository、session 或 runtime 写入，不读取 DSN、不运行 migration、不连接 PostgreSQL/Redis；未合并、未发布、未部署。
 
 ---
 
