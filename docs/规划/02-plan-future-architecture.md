@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T16:00:49+00:00
+lastmod: 2026-08-22T16:05:39+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T16:00:49+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-10 已完成精确 HEAD 双 run gate；F-10 最终文档闭环 HEAD `55c55bb2d77ef6c0a33a74fb7b1e476326c6458a` 的 push run `32581245744` / PR run `32581247621` 均为 11/11 green、各恰好一个 `completed/success release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-11 实现提交 `a98f9298e1bbf461498c46b689eadffcf606fcf1` 已加入安全脱敏、惰性且有界的 redis-py asyncio client/pool；四版本普通全量最终各 `1046 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Redis/Schema/graph/DDL/downgrade/reload smoke 均通过且未触发 Redis connect。当前仅 F-11 本地门禁完成，精确 HEAD 双 run gate 待完成，F-12～F-14 继续锁定。在线 migration 仍直接拒绝；未创建全局 engine/session/Redis client，未接 Repository、runtime 或 lifecycle，未读取生产 DSN/Redis URL，未运行 migration，未连接数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-11 已完成精确 HEAD 双 run gate。F-11 实现提交 `a98f9298e1bbf461498c46b689eadffcf606fcf1` 已加入安全脱敏、惰性且有界的 redis-py asyncio client/pool；四版本普通全量最终各 `1046 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、制品和四组包外 Redis/Schema/graph/DDL/downgrade/reload smoke 均通过且未触发 Redis connect。最终 HEAD `13383aee25fe90e8ecd3542a3df9af748f2e11f0` 的 push run `32583576588` / PR run `32583578903` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-12 依赖已解除。在线 migration 仍直接拒绝；未创建全局 engine/session/Redis client，未接 Repository、runtime 或 lifecycle，未读取生产 DSN/Redis URL，未运行 migration，未连接数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 
