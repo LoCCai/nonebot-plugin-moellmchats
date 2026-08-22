@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T20:13:07+00:00
+lastmod: 2026-08-22T21:04:05+00:00
 ---
 
 # 00-roadmap-overview
@@ -13,6 +13,8 @@ lastmod: 2026-08-22T20:13:07+00:00
 > G-02 本地门禁（2026-08-22）：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push run `32593312310` / PR run `32593315775` 已各 11/11 green、各恰好一个成功 `release-gate`，本地、远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `e865838` 新增 backend-neutral `HistoryHotCacheProtocol`、受 PID/event-loop 约束的 TTL/LRU Memory backend 与显式注入 redis-py client 的 Redis backend。`HistoryWindow` 只接受同会话、正 BIGINT identity、严格递增的已持久化不可变消息；miss 会先保留短期 128-bit 失效代际，只有匹配代际的 committed source window 可 CAS 发布，durable commit 后的 invalidate 会拒绝此前启动的晚到加载。Redis key 只含会话 SHA-256 指纹，wire payload 采用有界 canonical JSON、固定 TTL 与 WATCH/MULTI；损坏、超限、无 TTL 或异常响应均不作为命中，错误脱敏且取消原样传播。本地四版本定向各 `84 passed`、相关联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis/SQLAlchemy/Alembic/asyncpg、Ruff/Pyright、fresh 制品与四组包外零 Redis command/数据库 I/O smoke 均通过。G-02 尚待精确 HEAD 双 run 远端门禁，G-03 继续锁定；未接配置、生命周期、`MessagesHandler`、PostgreSQL Repository 或生产 runtime，未读取连接信息、未连接真实服务、未迁移、未合并、未发布、未部署。
 
 > G-02 远端闭环（2026-08-22）：本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 对应 push run `32595899079` 与 PR run `32595902263`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-02 依赖门禁已关闭，G-03 依赖已解除；未触发 promotion、合并、发布、部署或任何生产操作。
+
+> G-03 本地门禁（2026-08-22）：实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 新增不可变 `SessionSummaryRecord / SessionSummaryPlan / SessionSummaryPolicy`、显式 `AsyncSession` 注入的 PostgreSQL Repository，以及 append-only `0008_session_summaries`。默认策略在 oldest-first committed 窗口达到 50 条时压缩最老前缀并至少保留最近 10 条；canonical 输入绑定前一摘要、源消息、水位与策略并以 SHA-256 固化，64,000 字符上限不足时只缩小完整源前缀，绝不截断单条消息后推进水位。摘要 chain 使用会话内 generation、前驱与水位唯一约束、防跨会话复合外键及单条条件 INSERT CAS；Repository 不拥有事务，未知写入不自动重放。四版本定向各 `103 passed`、相关联合各 `551 passed`、普通全量各 `1381 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；最低数据库/Redis 依赖、Ruff/Pyright、fresh 制品和 Python 3.10/3.12 × wheel/sdist 四组 11 表/8 revision/离线 DDL/reload/零 I/O smoke 均通过。wheel SHA256 `db83341f418b0bcf8ae87e8aad5d3c29d1e32ff2bfc4babbc223238afcaca718`，sdist SHA256 `963bc7f6513dfb3b701ba228ca6d743444bf48d50678a7193e399fe73f9ffecf`。精确 HEAD 双 run 远端门禁待完成，G-04 保持锁定；未调用摘要模型，未接配置、`MessagesHandler`、G-01/G-02 编排、生命周期或生产 runtime，未读取连接信息、未运行 migration、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -361,9 +363,9 @@ mcp/external
 
 原因：
 
-- AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史外的具体 Repository 和运行时持久化仍未实现
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository 与 G-02 Memory/Redis History Hot Cache primitive 均已完成精确 HEAD 远端双 gate；G-03 依赖已解除
-- G-01/G-02 均未接现有内存聊天路径、配置或生命周期；Redis / PostgreSQL 的正式运行态编排与持久化边界尚未实现
+- AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史与 G-03 Session Summary 外的具体 Repository 和运行时持久化仍未实现
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository 与 G-02 Memory/Redis History Hot Cache primitive 均已完成精确 HEAD 远端双 gate；G-03 本地门禁完成、远端 gate 待关闭，G-04 仍锁定
+- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期；Redis / PostgreSQL 的正式运行态编排与持久化边界尚未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 
 过早数据库化会导致很快再做第二次 schema migration。

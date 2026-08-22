@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T20:13:07+00:00
+lastmod: 2026-08-22T21:04:05+00:00
 ---
 
 # 02-plan-future-architecture
@@ -15,6 +15,8 @@ lastmod: 2026-08-22T20:13:07+00:00
 > G-02 本地门禁（2026-08-22）：G-01 最终闭环 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 双 run 已全绿。实现提交 `e865838` 以不可变 committed `HistoryWindow` 和短期失效代际统一 Memory/Redis hot-cache contract；Memory 使用固定 TTL、LRU/容量/载荷上限并绑定单 PID/event loop，Redis 只接受显式 client，以会话哈希 key、canonical 有界 payload、TTL 与 WATCH/MULTI 拒绝晚到或重复发布。PostgreSQL 仍是唯一真源；publish 只允许调用方在确认 committed source view 后执行，invalidate 只允许在 durable commit 后执行。四版本定向各 `84 passed`、联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，最低依赖、静态、fresh 制品和四组包外零 I/O smoke 均通过。精确 HEAD 双 run 远端门禁待完成，G-03 继续锁定；未接现有聊天路径、配置、生命周期或生产。
 
 > G-02 远端闭环（2026-08-22）：本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 的 push `32595899079` / PR `32595902263` 均 11/11 success，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-03 依赖已解除；未合并、未发布、未部署。
+
+> G-03 本地门禁（2026-08-22）：实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 将 Session Summary 冻结为不可变、source-digest-bound 的 append-only chain，并追加 `0008_session_summaries` 与调用方显式 session 的 Repository。默认 50 条触发、保留最近 10 条；输入超限时只缩小完整前缀，不以截断内容换取水位前移。会话 generation/前驱/消息水位约束与单条条件 INSERT CAS 拒绝 stale/fork，错误脱敏、取消原样传播、未知写入不重放。四版本定向各 `103 passed`、联合各 `551 passed`、全量各 `1381 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品和四组包外 11 表/8 revision/零 I/O smoke 均通过。远端精确 HEAD 双 run 待完成，G-04 锁定；未调用模型、未接聊天 runtime、未运行 migration、未连接真实服务、未部署。
 
 ---
 

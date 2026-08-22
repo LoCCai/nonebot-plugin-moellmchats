@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T20:13:07+00:00
+lastmod: 2026-08-22T21:04:05+00:00
 ---
 
 # 03-plan-performance-database
@@ -15,6 +15,8 @@ lastmod: 2026-08-22T20:13:07+00:00
 > G-02 本地门禁（2026-08-22）：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push `32593312310` / PR `32593315775` 已各 11/11 green。实现提交 `e865838` 新增 committed `HistoryWindow`、`HistoryHotCacheProtocol`、Memory/Redis 两类 backend 和 128-bit reservation generation；Memory 固定 TTL、LRU、会话数/消息数/载荷上限并拒绝跨 PID/loop 复用，Redis 显式注入 client，以 SHA-256 会话 key、canonical JSON、TTL 与 WATCH/MULTI 做 CAS。缓存从不替代 PostgreSQL 真源，损坏/超限/缺 TTL/后端未知均不返回命中，晚到 load 在 durable commit 后 invalidation 发生时必须发布失败。四版本定向各 `84 passed`、联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0、静态、fresh 制品及四组包外零 I/O smoke 均通过。G-02 精确 HEAD 双 run gate 待完成，G-03 锁定；未接配置、生命周期、Repository 编排、`MessagesHandler` 或生产。
 
 > G-02 远端闭环（2026-08-22）：本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 对应 push run `32595899079` / PR run `32595902263`；两者各 11 个 job 全绿、各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-03 依赖已解除；未连接真实数据库/Redis，未合并、未发布、未部署。
+
+> G-03 本地门禁（2026-08-22）：实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 新增 Session Summary 领域契约、显式 `AsyncSession` Repository 与线性 `0008_session_summaries`。摘要输入、源 digest、累计水位、前驱 identity、generation 和确定性 50/10 策略全部固化；超限时不截断消息、不推进未完整读取的水位。append 使用单条条件 INSERT CAS 且依赖唯一 generation/前驱、防跨会话消息复合外键；Repository 不 commit/rollback/retry。四版本定向各 `103 passed`、联合各 `551 passed`、普通全量各 `1381 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、静态、fresh 制品与四组包外零 I/O smoke 均通过。制品 SHA256 为 wheel `db83341f418b0bcf8ae87e8aad5d3c29d1e32ff2bfc4babbc223238afcaca718`、sdist `963bc7f6513dfb3b701ba228ca6d743444bf48d50678a7193e399fe73f9ffecf`。精确 HEAD 双 run 待完成，G-04 锁定；未调用摘要模型、未接 runtime、未运行 migration、未连接真实数据库/Redis、未部署。
 
 ---
 
@@ -730,6 +732,14 @@ summary
 
 明显降低 Token。
 
+G-03 实现落点：实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 新增 `session_summary.py` 与 `postgres_session_summary_repository.py`。`SessionSummaryPolicy` 只接受同一会话、正 BIGINT identity、oldest-first 严格递增的 committed `MessageRecord`；默认候选窗口为 50 条，压缩最老 40 条并保留最近 10 条。若完整 canonical 输入超过 64,000 字符，则以确定性二分缩小本次完整源前缀并留下更多未覆盖消息；若连下一条完整消息都无法容纳，则抛出明确错误且水位不前移。
+
+一致性与持久化边界：model input 以 canonical JSON 绑定会话 SHA-256、前一摘要 identity/content/digest、策略和完整源消息，`source_digest` 再绑定精确 UTF-8 bytes。`SessionSummaryRecord` 记录 generation、前驱、覆盖起止水位、累计/本次消息数、策略阈值、输入上限/实际字符数、provider/model 与摘要正文。append-only `0008_session_summaries` 为 `messages(conversation_id,id)` 增加复合引用键，并用复合 `RESTRICT` 外键拒绝跨会话前驱或水位；会话内 generation、水位和非空前驱均唯一。Repository 的 append 是单条 `INSERT ... SELECT ... WHERE` head CAS，stale/fork 映射 conflict；后端未知结果映射 unavailable 且不自动重放。Repository 只接受调用方显式 `AsyncSession`，不创建 engine/session，不 commit、rollback、flush、close 或调用模型。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `103 passed`；与 G-01/G-02、Database/Redis Stores、Context/Chat Runtime 联合各 `551 passed`；严格串行普通全量各 `1381 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Python 3.10 最低依赖联合、Ruff 0.16.2、目标 format/diff 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过，PostgreSQL identifier 最长不超过 63。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `db83341f418b0bcf8ae87e8aad5d3c29d1e32ff2bfc4babbc223238afcaca718`、sdist SHA256 `963bc7f6513dfb3b701ba228ca6d743444bf48d50678a7193e399fe73f9ffecf`；两者各 81 个文件，包含 G-03 modules 与 `0008_session_summaries`，不含 `uv.lock`、cache/bytecode。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 11 表、8 revision、离线 upgrade/定向 downgrade、plugin reload、50→40+10 compaction、显式 session→Repository 构造；engine create、SQL execute、asyncpg connect、Redis command/connect 始终为 0。制品目录 `/tmp/moellm-g03-dist.DT96Yd`，smoke 根目录 `/tmp/moellm-g03-smoke.CH0RMT`。精确 HEAD 双 run 远端 gate 仍是 G-04 前置条件；本阶段未读取 DSN/Redis URL/secret，未运行 migration，未连接服务，未调用摘要模型，未接配置、生命周期、G-01/G-02 编排、`MessagesHandler` 或生产 runtime，未合并、未发布、未部署。
+
 ---
 
 # 16. Long-Term Memory
@@ -1155,7 +1165,7 @@ runner_start_duration
 - [ ] Token Usage 持久化
 - [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
 - [x] History Hot Cache（G-02 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [ ] Session Summary
+- [ ] Session Summary（G-03 本地门禁完成，精确 HEAD 双 run 待完成；尚未接生产 runtime）
 - [ ] Batch Insert
 - [ ] DB Failure Spool
 - [ ] Redis Failure Policy
