@@ -38,6 +38,7 @@ from .tool_providers import (
     nonebot_plugin_provider,
     registered_tool_provider,
 )
+from .tool_schema_cache import ToolSchemaRecord, ToolSchemaRenderContext
 
 _FileToolCandidate = tuple[
     Mapping[str, Mapping[str, Any]],
@@ -581,13 +582,28 @@ class ToolSnapshot:
             ),
         )
 
-    def expand_dependencies(self, plugins: set) -> set:
-        expanded = {p for p in plugins if not tool_manager.is_tool_blacklisted(p)}
+    def expand_dependencies(
+        self,
+        plugins: set,
+        *,
+        render_context: ToolSchemaRenderContext | None = None,
+    ) -> set:
+        if render_context is None:
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        else:
+            if not isinstance(render_context, ToolSchemaRenderContext):
+                raise TypeError("render_context 必须是 ToolSchemaRenderContext")
+            if render_context.generation != self.generation:
+                raise ValueError(
+                    "tool schema render_context generation 与 ToolSnapshot 不一致"
+                )
+            is_blacklisted = render_context.is_blacklisted
+        expanded = {p for p in plugins if not is_blacklisted(p)}
         queue = deque(expanded)
         while queue:
             current = queue.popleft()
             for dependency in self.tool_dependencies.get(current, set()):
-                if tool_manager.is_tool_blacklisted(dependency):
+                if is_blacklisted(dependency):
                     continue
                 if dependency not in expanded and (
                     dependency in self.custom_tools or dependency in self.plugin_info
@@ -687,6 +703,135 @@ class ToolSnapshot:
                 "llm_payload Provider schema 与 legacy rollback view 不一致"
             )
         return provider_plugins, provider_schema
+
+    def capture_llm_payload_schema_context(
+        self,
+        plugin_names: AbstractSet[str],
+        *,
+        tools_enabled: bool,
+        search_enabled: bool,
+        is_superuser: bool = False,
+        provider_cutover: bool | None = None,
+    ) -> ToolSchemaRenderContext:
+        """Capture every mutable input before schema cache lookup or rendering."""
+
+        if not isinstance(plugin_names, AbstractSet) or not all(
+            isinstance(name, str) for name in plugin_names
+        ):
+            raise TypeError("llm_payload plugin_names 必须是字符串集合")
+        for field_name, value in (
+            ("tools_enabled", tools_enabled),
+            ("search_enabled", search_enabled),
+            ("is_superuser", is_superuser),
+        ):
+            if type(value) is not bool:
+                raise TypeError(f"llm_payload {field_name} 必须是布尔值")
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_llm_payload_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("llm_payload Provider cutover 开关必须是布尔值")
+        return ToolSchemaRenderContext.capture(
+            generation=self.generation,
+            selected_plugins=plugin_names,
+            is_superuser=is_superuser,
+            provider_cutover=provider_cutover,
+            tools_enabled=tools_enabled,
+            search_enabled=search_enabled,
+            blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
+        )
+
+    def build_llm_payload_schema_record(
+        self,
+        context: ToolSchemaRenderContext,
+    ) -> ToolSchemaRecord:
+        """Build and parity-check one explicit schema context before caching."""
+
+        if not isinstance(context, ToolSchemaRenderContext):
+            raise TypeError("context 必须是 ToolSchemaRenderContext")
+        if context.generation != self.generation:
+            raise ValueError("tool schema context generation 与 ToolSnapshot 不一致")
+
+        initial_plugins = set(context.selected_plugins)
+        legacy_plugins = self.expand_dependencies(
+            initial_plugins,
+            render_context=context,
+        )
+        ordered_plugins = sorted(legacy_plugins)
+        legacy_schema = ToolManager.build_llm_payload_schema(
+            plugin_names=ordered_plugins,
+            tools_enabled=context.tools_enabled,
+            search_enabled=context.search_enabled,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=context.is_superuser,
+            render_context=context,
+        )
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not context.provider_cutover
+            or not context.tools_enabled
+            or provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return ToolSchemaRecord.from_schema(
+                context.cache_key,
+                legacy_plugins,
+                legacy_schema,
+            )
+
+        provider_plugins = ToolManager.expand_provider_dependencies(
+            provider_catalog=provider_catalog,
+            plugin_names=initial_plugins,
+            render_context=context,
+        )
+        if provider_plugins != legacy_plugins:
+            raise ProviderConsumerParityError(
+                "llm_payload Provider 依赖视图与 legacy rollback view 不一致"
+            )
+        provider_schema = ToolManager.build_provider_llm_payload_schema(
+            provider_catalog=provider_catalog,
+            plugin_names=ordered_plugins,
+            search_enabled=context.search_enabled,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=context.is_superuser,
+            render_context=context,
+        )
+        if provider_schema != legacy_schema:
+            raise ProviderConsumerParityError(
+                "llm_payload Provider schema 与 legacy rollback view 不一致"
+            )
+        return ToolSchemaRecord.from_schema(
+            context.cache_key,
+            provider_plugins,
+            provider_schema,
+        )
+
+    def get_llm_payload_schema_record(
+        self,
+        plugin_names: AbstractSet[str],
+        *,
+        tools_enabled: bool,
+        search_enabled: bool,
+        is_superuser: bool = False,
+        provider_cutover: bool | None = None,
+    ) -> ToolSchemaRecord:
+        context = self.capture_llm_payload_schema_context(
+            plugin_names,
+            tools_enabled=tools_enabled,
+            search_enabled=search_enabled,
+            is_superuser=is_superuser,
+            provider_cutover=provider_cutover,
+        )
+        return self.build_llm_payload_schema_record(context)
 
     def _legacy_llm_tool_execution_view(
         self,
@@ -1999,6 +2144,7 @@ async def extract_webpage(
         *,
         provider_catalog: ProviderCatalogSnapshot,
         plugin_names: AbstractSet[str],
+        render_context: ToolSchemaRenderContext | None = None,
     ) -> set[str]:
         """Expand canonical ToolSpec dependencies for the payload consumer."""
 
@@ -2009,10 +2155,21 @@ async def extract_webpage(
         ):
             raise TypeError("llm_payload plugin_names 必须是字符串集合")
 
+        if render_context is None:
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        else:
+            if not isinstance(render_context, ToolSchemaRenderContext):
+                raise TypeError("render_context 必须是 ToolSchemaRenderContext")
+            if render_context.generation != provider_catalog.generation:
+                raise ValueError(
+                    "tool schema render_context generation 与 Provider catalog 不一致"
+                )
+            is_blacklisted = render_context.is_blacklisted
+
         expanded = {
             name
             for name in plugin_names
-            if not tool_manager.is_tool_blacklisted(name)
+            if not is_blacklisted(name)
         }
         queue = deque(expanded)
         while queue:
@@ -2029,7 +2186,7 @@ async def extract_webpage(
                         "llm_payload Provider 依赖缺少 catalog 工具: "
                         f"{current} -> {dependency}"
                     )
-                if tool_manager.is_tool_blacklisted(dependency):
+                if is_blacklisted(dependency):
                     continue
                 if dependency not in expanded:
                     expanded.add(dependency)
@@ -2489,8 +2646,19 @@ async def extract_webpage(
         plugin_info: Mapping[str, Mapping[str, Any]],
         custom_tools: Mapping[str, Mapping[str, Any]],
         is_superuser: bool = False,
+        render_context: ToolSchemaRenderContext | None = None,
     ) -> list[dict[str, Any]]:
         """Build the exact legacy rollback view consumed by llm_payload."""
+
+        if render_context is not None:
+            if not isinstance(render_context, ToolSchemaRenderContext):
+                raise TypeError("render_context 必须是 ToolSchemaRenderContext")
+            if (
+                render_context.tools_enabled is not tools_enabled
+                or render_context.search_enabled is not search_enabled
+                or render_context.is_superuser is not is_superuser
+            ):
+                raise ValueError("tool schema render_context 与 payload 标志不一致")
 
         if not tools_enabled or not plugin_names:
             return []
@@ -2503,6 +2671,7 @@ async def extract_webpage(
             plugin_info=plugin_info,
             custom_tools=custom_tools,
             is_superuser=is_superuser,
+            render_context=render_context,
         )
         if search_enabled and WEB_SEARCH_TOOL_SPEC.name in plugin_names:
             tools.extend(
@@ -2512,6 +2681,7 @@ async def extract_webpage(
                     plugin_info=plugin_info,
                     custom_tools=custom_tools,
                     is_superuser=is_superuser,
+                    render_context=render_context,
                 )
             )
         return tools
@@ -2525,6 +2695,7 @@ async def extract_webpage(
         plugin_info: Mapping[str, Mapping[str, Any]],
         custom_tools: Mapping[str, Mapping[str, Any]],
         is_superuser: bool = False,
+        render_context: ToolSchemaRenderContext | None = None,
     ) -> list[dict[str, Any]]:
         """Build one payload schema from generation-bound Provider records."""
 
@@ -2536,12 +2707,27 @@ async def extract_webpage(
             raise TypeError("llm_payload plugin_names 必须是字符串列表")
         if type(search_enabled) is not bool or type(is_superuser) is not bool:
             raise TypeError("llm_payload feature/actor 标志必须是布尔值")
+        if render_context is None:
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        else:
+            if not isinstance(render_context, ToolSchemaRenderContext):
+                raise TypeError("render_context 必须是 ToolSchemaRenderContext")
+            if render_context.generation != provider_catalog.generation:
+                raise ValueError(
+                    "tool schema render_context generation 与 Provider catalog 不一致"
+                )
+            if (
+                render_context.search_enabled is not search_enabled
+                or render_context.is_superuser is not is_superuser
+            ):
+                raise ValueError("tool schema render_context 与 Provider 标志不一致")
+            is_blacklisted = render_context.is_blacklisted
 
         tools: list[dict[str, Any]] = []
         for name in plugin_names:
             if name == WEB_SEARCH_TOOL_SPEC.name:
                 continue
-            if tool_manager.is_tool_blacklisted(name):
+            if is_blacklisted(name):
                 continue
             item = provider_catalog.tools.get(name)
             if item is None:
@@ -2596,7 +2782,7 @@ async def extract_webpage(
         if (
             search_enabled
             and WEB_SEARCH_TOOL_SPEC.name in plugin_names
-            and not tool_manager.is_tool_blacklisted(WEB_SEARCH_TOOL_SPEC.name)
+            and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name)
         ):
             item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)
             if item is None or item.source is not ToolSource.BUILTIN:
@@ -2629,11 +2815,21 @@ async def extract_webpage(
         plugin_info: Mapping[str, Mapping[str, Any]],
         custom_tools: Mapping[str, Mapping[str, Any]],
         is_superuser: bool = False,
+        render_context: ToolSchemaRenderContext | None = None,
     ) -> list:
         tools = []
 
+        if render_context is None:
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        else:
+            if not isinstance(render_context, ToolSchemaRenderContext):
+                raise TypeError("render_context 必须是 ToolSchemaRenderContext")
+            if render_context.is_superuser is not is_superuser:
+                raise ValueError("tool schema render_context permission 不一致")
+            is_blacklisted = render_context.is_blacklisted
+
         for name in plugin_names:
-            if tool_manager.is_tool_blacklisted(name):
+            if is_blacklisted(name):
                 continue
 
             if name in plugin_info:
@@ -2695,9 +2891,7 @@ async def extract_webpage(
                     }
                 )
 
-        if include_search and not tool_manager.is_tool_blacklisted(
-            WEB_SEARCH_TOOL_SPEC.name
-        ):
+        if include_search and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             tools.append(
                 {
                     "type": "function",
