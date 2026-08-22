@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T15:08:10+00:00
+lastmod: 2026-08-22T15:12:30+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-09 精确 HEAD 双 run 远端 gate green；🟡 F-10 本地门禁完成、远端 gate 待完成；F-11～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-10 精确 HEAD 双 run 远端 gate green；F-11 依赖已解除；F-12～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -939,7 +939,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `b6e1dc17c58b7bca86ea00b84d30f693887d267e25023995d202a3ee32d8df57`、sdist SHA256 `9460a1f640ad2129ec79725637a758eda95161c30d96ab8388f8a38b896f1fec`；两种制品各 68 个文件，均包含七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组已验证仓库外依赖环境均强制重装上述精确制品，并确认 10 张表、七段 graph、BIGINT/Numeric/FK/check/index DDL、定向 downgrade 与 `reload("package-smoke")`。
 
-当前状态：仅本地门禁完成，F-10 精确 HEAD push/PR 双 run gate 待完成；F-11 只能在该 gate 关闭后开始。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session 或 Redis client，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
+远端证据：F-10 最终文档闭环精确 HEAD `a55510697e05b4f0c17d20d36dd91643e8776890` 对应 push run `32580881668` 与 PR run `32580884647`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-11 依赖已解除。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session 或 Redis client，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
