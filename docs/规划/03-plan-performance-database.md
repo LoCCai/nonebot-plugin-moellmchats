@@ -20,6 +20,8 @@ lastmod: 2026-08-22T21:09:27+00:00
 
 > G-03 远端闭环（2026-08-22）：本地证据 HEAD `3fb6792ec18566c571ab9e9628c0ea9ec1854a53` 对应 push run `32598610770` / PR run `32598613406`；两者各 11 个 job 全绿、各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-04 依赖已解除；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
 
+> G-04 本地门禁（2026-08-22）：实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 新增显式 `ToolCatalogRenderContext`、typed `ToolCatalogCacheKey`、digest-stamped frozen `ToolCatalogRecord`、`ToolCatalogCacheProtocol`、`resolve_tool_catalog()` 与 Memory LRU backend。key 除 generation/两级权限外还纳入 Provider cutover、Tools/Search 开关及规范化黑名单 digest，避免相同 generation 下的权限或策略串用；Memory backend 以条目/单值/总字节硬上限和 PID/event-loop ownership 约束复用。同 key 异值、错误 identity、超限、跨 owner 与不可信 backend 结果 fail closed，构建/parity 异常不会 publish。本地四版本定向各 `161 passed`、联合各 `306 passed`、普通全量各 `1433 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 cache roundtrip/reload/零 I/O smoke 均通过。制品 SHA256 为 wheel `ab805c305183bddd1e49b3e417534ca09abc4d2f4970c9df3f40d477b61c06b0`、sdist `0348bc4627dfbb6a6d227842fcbda072724b9838cc67ef7d1607e87807d3bb37`。精确 HEAD 双 run 待完成，G-05 锁定；现有 Categorize 同步路径保持未接线，不创建全局 cache、不读取连接配置、不连接真实服务、不迁移、不部署。
+
 ---
 
 # 1. 计划目标
@@ -784,9 +786,19 @@ permission
 例如：
 
 ```text
-catalog:user:42
-catalog:superuser:42
+catalog:user:42:{policy_digest}
+catalog:superuser:42:{policy_digest}
 ```
+
+G-04 实现落点：实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 新增 `tool_catalog_cache.py`，以 `ToolCatalogRenderContext` 一次性固定 generation、`user / superuser` 权限、Provider categorize cutover、Tools/Search 开关与规范化黑名单。黑名单只接受有界字符串 tuple，去空白、去重、稳定排序后计算 SHA-256；原始 pattern 不进入 `ToolCatalogCacheKey.safe_cache_key` 或 cache value。`ToolCatalogRecord` 为 frozen、UTF-8 字节数与内容 digest 固化的非空目录值，key/value 均拒绝 bool 冒充整数、任意权限字符串、NUL、错误 digest 与绝对超限载荷。
+
+渲染与一致性边界：`ToolSnapshot.capture_brief_catalog_context()` 只负责显式捕获当前 pinned policy，`build_brief_catalog_record(context)` 使用同一 context 分别构建 legacy 与 Provider 目录并维持既有 parity gate；只有 fallback 路径明确选定或两者精确相等后才返回 record。`resolve_tool_catalog()` 先按完整 key lookup，miss 后只接受 exact-key `ToolCatalogRecord` 并要求 backend 精确确认发布；builder/parity 异常不 publish，同 key 异值为 conflict，错误 lookup/publish identity 为 unavailable，cache failure 是否旁路仍由未来 runtime 编排显式决定。
+
+Memory backend：`MemoryToolCatalogCache` 以 `OrderedDict` 实现 LRU，默认最多 256 项、单目录 256 KiB、总目录 8 MiB，并允许调用方在硬上限内显式收紧。实例首次使用时绑定 PID 与 `asyncio` event loop，跨进程/loop 复用 fail closed；clear 只清条目、不转移 owner。generation 或任一策略输入变化会产生新 key，因此不需要 TTL 或主动删除旧 generation；这也允许已经 pin 到旧 generation 的在途请求继续命中，旧值最终由容量 LRU 回收。当前仅提供 backend-neutral 协议和 Memory primitive，不实现 Redis 共享缓存，避免在没有跨进程运行态编排时扩大一致性面。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `161 passed`，ToolManager/Provider/RuntimeSnapshot/Reload/ModelSelector/LLM Payload/Chat/Search/PendingAction 联合各 `306 passed`；严格串行普通全量各 `1433 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 为 0；Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过。Ruff 0.16.2 全量、G-04 新文件 format、diff check，以及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `ab805c305183bddd1e49b3e417534ca09abc4d2f4970c9df3f40d477b61c06b0`、sdist SHA256 `0348bc4627dfbb6a6d227842fcbda072724b9838cc67ef7d1607e87807d3bb37`；两者各 82 个文件，包含 G-04 module，不含 `uv.lock`、cache 或 bytecode。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload、显式 ToolSnapshot render、Memory miss/publish/hit 与无模块级 cache；engine create、SQL execute、asyncpg connect、Redis command/connect 始终为 0。制品目录 `/tmp/moellm-g04-dist.FERb6W`，smoke 根目录 `/tmp/moellm-g04-smoke.Dn1C0A`。精确 HEAD 双 run 是 G-05 前置门禁；本阶段未读取 DSN/Redis URL/secret，未运行 migration，未连接服务，未接配置、startup/shutdown、现有 Categorize 或生产 runtime，未合并、未发布、未部署。
 
 ---
 
@@ -1171,7 +1183,7 @@ runner_start_duration
 - [ ] Batch Insert
 - [ ] DB Failure Spool
 - [ ] Redis Failure Policy
-- [ ] Tool Catalog Cache
+- [ ] Tool Catalog Cache（G-04 本地门禁完成；精确 HEAD 双 run 待完成，尚未接生产 runtime）
 - [ ] read_only tool parallelism
 - [ ] database metrics
 

@@ -20,6 +20,8 @@ lastmod: 2026-08-22T21:09:27+00:00
 
 > G-03 远端闭环（2026-08-22）：本地证据 HEAD `3fb6792ec18566c571ab9e9628c0ea9ec1854a53` 的 push `32598610770` / PR `32598613406` 均 11/11 success，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-04 依赖已解除；未合并、未发布、未部署。
 
+> G-04 本地门禁（2026-08-22）：实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 将目录缓存冻结为显式 policy snapshot、完整 typed key、不可变 digest record、backend-neutral Protocol 与单 PID/loop 的有界 Memory LRU。generation、两级权限、Provider cutover、Tools/Search 和黑名单 digest 共同隔离缓存；旧 generation 不主动删除，避免破坏 pinned request，容量淘汰负责回收。ToolSnapshot 的新显式入口在 legacy/provider parity 后才构造可发布 record，失败不缓存且 cache unavailable 不隐式旁路。本地四版本定向各 `161 passed`、联合各 `306 passed`、全量各 `1433 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外 11 表/8 revision/reload/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，G-05 锁定；未接现有 Categorize 路径、配置、生命周期或生产 runtime，未创建全局 cache，未连接服务、未迁移、未部署。
+
 ---
 
 # 1. 计划目标
