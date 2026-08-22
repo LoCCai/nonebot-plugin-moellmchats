@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T18:35:59+00:00
+lastmod: 2026-08-22T19:09:30+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T18:35:59+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-14 已完成精确 HEAD 双 run gate。F-14 实现提交 `9b095cceca5fee997d6884677579446127104499` 新增 backend-neutral `AdmissionGateProtocol / AdmissionStoreProtocol`、显式 `RedisAdmissionStore / RedisAdmissionController` 和 `handle_llm(..., admission_controller=...)` 注入；默认内存 gate 与配置行为不变，falsey 显式 Redis backend 不回退内存。单个有界、自动 TTL 的 state key 通过 WATCH/MULTI 与 Redis server time 原子维护全局 active/pending、per-key 总量、同 key 单 active、eligible FIFO、pending 续租及 active heartbeat；错误、租约丢失、损坏状态和未知 EXEC 结果均 fail closed。四版本定向各 `66 passed`、联合回归各 `125 passed`、普通全量各 `1208 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品和四组包外 Redis/Schema/graph/DDL/reload smoke 均通过且真实 Redis command/connect 为 0。最终本地证据 HEAD `7f0e2988db896feaf4ae8dd279b02152b8ff3a2f` 的 push run `32591089687` / PR run `32591092104` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-01 依赖已解除。在线 migration 仍直接拒绝；未接配置、startup/shutdown、Repository 或生产 runtime，未读取生产 DSN/Redis URL，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E 与 F-01～F-14 已完成精确 HEAD 双 run gate；legacy sidecar 继续保留，D-09 因无发布周期观察且禁止生产操作而保持锁定。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成本地全门禁，远端精确 HEAD 双 run 待验证，G-02 保持锁定。G-01 用不可变 Conversation/Message records 和调用方显式持有的 `AsyncSession` 实现 PostgreSQL Repository；历史查询固定显式列、`conversation_id`、`id DESC`、有限 `LIMIT+1` 与应用层反转，游标绑定会话指纹和 `before_message_id`，不使用 OFFSET。写入以 `RETURNING` 确认 statement 结果但不隐式 commit/rollback/retry，未知结果 fail closed 且错误脱敏。本地四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，静态、最低依赖、fresh 制品及四组包外零数据库 I/O smoke 均通过。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 

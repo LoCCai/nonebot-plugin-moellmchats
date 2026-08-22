@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T18:35:59+00:00
+lastmod: 2026-08-22T19:09:30+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T18:35:59+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-14 已闭环。F-14 实现提交 `9b095cceca5fee997d6884677579446127104499` 保留默认单进程 `AdmissionController` 与配置行为；只有 `handle_llm(..., admission_controller=...)` 显式注入才使用 Redis，falsey backend 不回退内存。显式 `RedisAdmissionStore / RedisAdmissionController` 用单个有界 JSON state key、Redis server time、WATCH/MULTI 和自动 TTL 维护全局 active/pending、per-key 总量、同 key 单 active、eligible FIFO、pending 续租与 active heartbeat。Redis 错误脱敏，状态损坏、租约丢失与命令结果未知均 fail closed。本地四版本定向各 `66 passed`、联合回归各 `125 passed`、普通全量各 `1208 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，fresh 制品和四组包外 dependency/10 表/7 revision/DDL/reload/三类 Redis store smoke 已通过且真实 Redis command/connect 为 0。最终本地证据 HEAD `7f0e2988db896feaf4ae8dd279b02152b8ff3a2f` 的 push run `32591089687` / PR run `32591092104` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-01 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接配置、startup/shutdown、Repository 或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
+> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E 与 F-01～F-14 已完成远端门禁；D-09 在不操作生产的约束下继续锁定。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成本地全门禁，远端精确 HEAD push/PR 双 run 待验证，G-02 保持锁定。新增深度不可变 Conversation/Message records 与显式 `AsyncSession` 注入的 PostgreSQL Repository；最近历史以显式列、`conversation_id`、`id DESC`、`LIMIT+1` 查询，使用绑定会话指纹的 `before_message_id` keyset 游标并在应用层反转。Repository 不拥有 session 生命周期，不隐式 commit/rollback/retry；`RETURNING` 只确认当前事务 statement，最终 commit 仍由调用方负责。Integrity/缺失记录是冲突，后端异常、损坏结果与未知写入是 unavailable，错误脱敏且取消原样传播。四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低数据库依赖、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
 
 ---
 
@@ -655,6 +655,18 @@ LIMIT 20;
 ```
 
 应用层反向恢复。
+
+G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增 `chat_history.py` 与 `postgres_history_repository.py`。`ConversationRecord / MessageRecord` 为 frozen、UTC 规范化的脱离态值对象；structured content 会校验有限浮点、NUL、循环、深度与节点上限，并递归复制为只读 mapping/tuple，数据库绑定前再生成新鲜 mutable JSON。标识、role、platform、scope、payload 与时间顺序均在 I/O 前按既有 PostgreSQL Schema 上限验证；`message_id=None` 只表示尚未 append 的草稿，持久化读取必须携带正 BIGINT identity。
+
+查询与事务边界：`PostgresConversationRepository / PostgresMessageRepository` 只接受调用方显式提供的 `AsyncSession`，模块不创建 engine/session/factory 或全局实例。Conversation create/replace 与 Message append 使用 PostgreSQL `RETURNING` 验证本次 statement 响应；Repository 不 commit、rollback、flush、close 或自动重试，因此最终 durable commit、rollback 与未知 commit 结果仍由调用方处理。recent history 仅选择八个消息列，以 `conversation_id` 过滤、`id DESC` 排序并取 `limit + 1`；稳定 opaque cursor 包含版本、会话 ID 的 SHA-256 指纹和最旧可见 message ID，下一页使用 `id < before_message_id`，拒绝跨会话、非规范、超长、乱序、重复或错会话结果，最后在应用层恢复由旧到新的顺序。
+
+故障边界：写入 IntegrityError 与 replace 缺失记录明确归类为 conflict，不会被误报为可安全重试；数据库异常、命令结果未知、缺失/异常 `RETURNING`、损坏 row 或违反排序契约均归类为 unavailable。每次操作最多调用一次 `session.execute()`；错误只公开安全操作名和异常类型，不串联可能包含 endpoint、credential 或消息正文的原异常，`CancelledError` 原样传播。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 G-01 定向各 `36 passed`，与 Repository/Engine/Migration/Schema/Message Context/Context Budget/Chat Runtime 联合各 `173 passed`；四版本严格串行普通全量各 `1244 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0。Python 3.10 最低 SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 数据库联合为 `167 passed`；Ruff 0.16.2 全量、目标 format、diff check 与 Pyright 1.1.407 目标文件均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `d300006def5f17f853430513d91c5b973d078aa043ad7617b32a4f85687b159b`、sdist SHA256 `d89af40a1268f341448a142f7489471dcfc9a84e6816846962af2c22c9810061`；两种制品各 76 个文件，均包含两个 G-01 module、精确 SQLAlchemy/asyncpg/Alembic runtime dependency 与七个 revision，且不包含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-g01-smoke")`、不可变 records 与显式 session→两类 Repository 构造，数据库 execute/connect 计数始终为 0。
+
+远端状态：上述本地证据对应实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d`；精确 HEAD push/PR 双 run `release-gate` 尚待验证，因此 G-02 继续锁定。本阶段不读取生产 DSN 或 secret file，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有 `MessagesHandler`/内存历史或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 

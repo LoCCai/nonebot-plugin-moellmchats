@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T18:35:59+00:00
+lastmod: 2026-08-22T19:09:30+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-14 已闭环。F-14 实现提交 `9b095cceca5fee997d6884677579446127104499` 保留默认单进程 `AdmissionController`，新增 backend-neutral gate/store Protocol、显式 Redis store/controller 与 `handle_llm(..., admission_controller=...)` 注入边界；falsey 显式 backend 不回退内存，模块不读取配置也不创建全局 Redis client/store。Redis 以单个有界 JSON state key 和 WATCH/MULTI 原子维护全局 active/pending、per-key 总量及同 key 至多一个 active；最早 eligible pending 不被已 active 的同 key 前项阻塞，pending 轮询续租、active heartbeat 与 Redis TTL 负责故障恢复。Redis 不可用、租约丢失、状态损坏或 EXEC 结果未知均 fail closed，只有明确 `WatchError` 有界重试，错误不泄漏 endpoint/credential。四版本 F-14 定向各 `66 passed`（Python 3.10 固定 Redis 5.2.0 / FakeRedis 2.31.0），四版本联合回归各 `125 passed`、普通全量各 `1208 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/Pyright、fresh 制品及四组包外 10 表/7 revision/DDL/reload/三类 Redis store/Admission controller 零真实 Redis command smoke 均通过。fresh wheel SHA256 `3ca59cca2f54320466184dd162ce57ded1b2c4721ef1fe2d8d99da9f13add2e4`，sdist SHA256 `1a5698dd2ed01795c824c946f394050c274fa7a0646bc15a4ee36436f9b9c640`。F-14 最终本地证据 HEAD `7f0e2988db896feaf4ae8dd279b02152b8ff3a2f` 的 push run `32591089687` / PR run `32591092104` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-01 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接配置、startup/shutdown、Repository 或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07、Plan 2 的 D-01a～D-08f、Milestone E 的 E-01～E-08 以及 F-01～F-14 已按依赖顺序完成精确 HEAD 双 run 门禁；D-09 因缺少发布周期 parity 观察且禁止生产操作而继续锁定。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成本地全门禁，远端精确 HEAD push/PR 双 run 待验证，G-02 保持锁定。G-01 新增深度不可变 `ConversationRecord / MessageRecord` 与显式 `AsyncSession` 注入的 PostgreSQL Conversation/Message Repository；最近历史只查询显式列，以 `(conversation_id, id DESC, LIMIT+1)` 做绑定会话指纹的稳定 keyset 分页，并在应用层恢复时间正序。Repository 不创建、提交、回滚、关闭 session，不隐式重试；`RETURNING` 只确认当前事务内 statement 结果，durable commit 仍由调用方负责。Integrity 冲突、缺失 replace、未知写入/读取结果与后端不可用分开处理，错误不泄漏 endpoint、凭据或消息内容，取消原样传播。本地四版本 G-01 定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低 SQLAlchemy/Alembic/asyncpg 兼容、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -357,8 +357,8 @@ mcp/external
 
 原因：
 
-- AgentRun / AgentStep 领域对象已固化，但持久化 Schema 与 Repository 实现尚未开始
-- ToolProvider、Repository 接口与 F-02 engine 均已完成远端门禁，F-03 离线迁移基础设施仅完成本地门禁，持久化 Schema/Repository 实现尚未开始
+- AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史外的具体 Repository 和运行时持久化仍未实现
+- ToolProvider、Repository 接口、engine、离线迁移与 Schema 已完成门禁；G-01 仅完成本地 Repository 门禁，尚未接现有内存聊天路径，远端双 run 仍待验证
 - Redis / PostgreSQL 的运行态与持久化边界尚未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

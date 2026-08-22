@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T18:35:59+00:00
+lastmod: 2026-08-22T19:09:30+00:00
 ---
 
 # 04-implementation-backlog
@@ -10,12 +10,12 @@ lastmod: 2026-08-22T18:35:59+00:00
 
 > 本文件可直接用于拆 GitHub Issue。
 
-## 当前实施状态（2026-08-21）
+## 当前实施状态（2026-08-22）
 
-- Milestone A、Milestone B 与 C-01～C-07 已在本地工作树完成实现，并按 A → B → C 顺序完成本轮定向复核：A 为 31 个非沙箱 node + 11 个真实 Sandbox case，B 为 24 个非沙箱 node + 12 个真实 Sandbox case，C-01～C-06 为 38 个定向 case。
-- 修复后的最新本地总门禁已通过：Ruff 与 Actionlint 通过；真实非 root 隔离副本为 `335 passed, 13 skipped`；root 下 Python 3.10～3.13 普通全量各 `347 passed, 1 skipped`，其中 Python 3.12 固定 NoneBot 2.4.4 / OneBot 2.4.6；mandatory root Sandbox 为 `40 passed, 0 skipped`。
-- fresh sdist/wheel、Twine、checksum 与 Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载和 `reload("package-smoke")` 全部通过；本地来源元数据明确标记为未提交工作树，不冒充可发布提交。
-- CI 已在本地定义一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；手动 promotion 先验证 job 列表完整且恰好一个精确命名的 `release-gate` 已 `completed/success`，再下载原 run artifact，不构建也不发布 PyPI。
+- Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
+- G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品与四组包外零数据库 I/O 门禁；精确 HEAD push/PR 双 run 尚待验证，G-02 保持锁定。
+- G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
+- CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14 精确 HEAD 双 run 远端 gate green；G-01 依赖已解除；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14 精确 HEAD 双 run 远端 gate green；G-01 本地门禁已完成、远端双 run 待验证；G-02 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1008,6 +1008,16 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## G-01 Chat History Repository
+
+实现落点：实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变、UTC 规范化且与现有 Schema 上限一致的 `ConversationRecord / MessageRecord`，并新增显式 `AsyncSession` 注入的 `PostgresConversationRepository / PostgresMessageRepository`。structured content 在 I/O 前拒绝非有限浮点、NUL、循环及超限嵌套/节点，递归复制为只读值，绑定 JSONB 前再生成新鲜 mutable tree；draft message 使用 `message_id=None`，持久化 row 必须携带正 BIGINT identity。
+
+查询与事务边界：recent history 只选择八个列，以 `conversation_id`、`id DESC` 和有限 `LIMIT+1` 查询；opaque cursor 绑定版本、会话 SHA-256 指纹与 `before_message_id`，下一页使用 `id < before_message_id`，拒绝跨会话、损坏、重复、乱序或错会话结果，并在应用层恢复旧到新顺序。create/replace/append 以 `RETURNING` 验证当前事务 statement 响应；Repository 不创建/提交/回滚/flush/close session，也不自动重试，最终 durable commit 归调用方。Integrity 与 replace 缺失映射 conflict，未知命令结果、损坏 row 和后端错误映射 unavailable；错误仅含安全操作名/异常类型且无 cause，取消原样传播。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `36 passed`，相关联合各 `173 passed`，严格串行普通全量各 `1244 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0。Python 3.10 最低 SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 联合 `167 passed`；Ruff 0.16.2、format/diff 与 Pyright 1.1.407 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `d300006def5f17f853430513d91c5b973d078aa043ad7617b32a4f85687b159b`、sdist SHA256 `d89af40a1268f341448a142f7489471dcfc9a84e6816846962af2c22c9810061`；两者各 76 个文件，包含 G-01 modules、精确数据库依赖与七个 revision，不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 表、7 revision、离线 DDL、reload、不可变 records 与显式 session→Repository 构造，数据库 execute/connect 始终为 0。
+
+远端状态：上述本地证据对应实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d`；精确 HEAD push/PR 双 run `release-gate` 尚待验证，G-02 继续锁定。本阶段不读 DSN/secret，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
