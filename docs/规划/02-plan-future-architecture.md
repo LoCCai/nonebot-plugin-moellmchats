@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T22:56:46+00:00
+lastmod: 2026-08-22T23:03:27+00:00
 ---
 
 # 02-plan-future-architecture
@@ -25,6 +25,8 @@ lastmod: 2026-08-22T22:56:46+00:00
 > G-04 远端闭环（2026-08-22）：本地证据 HEAD `6fd7509f11c0a851addc93dd78e52979b436215a` 的 push `32600965570` / PR `32600967324` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-05 依赖已解除但尚未实现；未合并、未发布、未部署。
 
 > G-05 本地门禁（2026-08-22）：G-04 最终闭环 HEAD `1668a9215c7b02515147c5367798beab513c62d2` 的 push `32601224946` / PR `32601227942` 已完成 11/11 双 gate。在此前提下，实现提交 `803fddb8ed062a61bbf9b38c3eb7714e735c30b9` 将 schema cache 冻结为完整 policy/toolset identity、canonical JSON record、backend-neutral Protocol 与单 PID/loop 的有界 Memory LRU；ToolSnapshot 的显式入口一次捕获选择集、权限、Provider cutover、Tools/Search 与黑名单，并以稳定顺序完成依赖展开和 legacy/provider parity。四版本定向各 `64 passed`、联合各 `369 passed`、全量各 `1497 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外 11 表/8 revision/reload/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，G-06 锁定；未接现有 payload、配置、生命周期或生产 runtime，未创建全局 cache，未连接服务、未迁移、未部署。
+
+> G-05 远端闭环（2026-08-22）：本地证据 HEAD `86753abc14266f3ca055cdad71a271c359d9769f` 的 push `32604058382` / PR `32604060824` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-06 依赖已解除但尚未实现；未合并、未发布、未部署。
 
 ---
 
