@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T23:03:27+00:00
+lastmod: 2026-08-22T23:52:05+00:00
 ---
 
 # 03-plan-performance-database
@@ -27,6 +27,8 @@ lastmod: 2026-08-22T23:03:27+00:00
 > G-05 本地门禁（2026-08-22）：G-04 最终闭环 HEAD `1668a9215c7b02515147c5367798beab513c62d2` 的 push `32601224946` / PR `32601227942` 已各 11/11 green。实现提交 `803fddb8ed062a61bbf9b38c3eb7714e735c30b9` 新增 `ToolSchemaRenderContext / ToolSchemaCacheKey / ToolSchemaRecord`、`ToolSchemaCacheProtocol`、`resolve_tool_schema()` 与 Memory LRU；key 的 `toolset_hash` 绑定选择集、权限、Provider cutover、Tools/Search 与黑名单 digest，canonical record 以有界 JSON、唯一工具名、expanded subset 与 detached materialize 约束完整性。同 key 异值、错误 identity/ack、超限、跨 owner、非法 JSON 与 build/parity 失败均 fail closed。本地四版本定向各 `64 passed`、联合各 `369 passed`、普通全量各 `1497 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 schema roundtrip/reload/零 I/O smoke 均通过。制品 SHA256 为 wheel `8360f85f99987721d877d7f587a62e4aca9bd8adaa4d6b7a205e8c3324662e0f`、sdist `2aa60e39a8de7f889475a834ae61494e0f8f75bd1ccdfac5363fabf41e83c4df`。精确 HEAD 双 run 待完成，G-06 锁定；现有 payload 同步路径保持未接线，不创建全局 cache、不连接真实服务、不迁移、不部署。
 
 > G-05 远端闭环（2026-08-22）：本地证据 HEAD `86753abc14266f3ca055cdad71a271c359d9769f` 对应 push run `32604058382` / PR run `32604060824`；两者各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-06 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
+
+> G-06 本地门禁（2026-08-22）：G-05 最终闭环 HEAD `10cee6a7c0660865509acb7087835183bd5aa9ef` 的 push `32604302971` / PR `32604304677` 已各 11/11 green。实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 新增 `ClassificationRequestScope / ClassificationModelIdentity / ClassificationRenderContext / ClassificationCacheKey / ClassificationCacheRecord`、`ClassificationCacheProtocol`、`resolve_classification()` 与短 TTL Memory LRU；key 的 identity digest 绑定规范化 prompt、目录代际/权限/开关/黑名单/content digest、模型、capability、policy version 与 TTL。任何用户上下文绑定、非 `MODEL_SUCCESS`、错误 identity/ack、同 key 异值、超限、跨 owner 或时钟回退均 fail closed。本地四版本定向各 `110 passed`、联合各 `459 passed`、普通全量各 `1607 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 classification TTL roundtrip/reload/零 I/O smoke 均通过。制品 SHA256 为 wheel `d5c87bdd720081b7d1e6a4b706ece173b96ac595e58591bba2254dfbfe291abd`、sdist `6f2651a89f74c5ba3d9fe042d4a8020a50341f2a67728e60f3c0bfaef92c32b4`。精确 HEAD 双 run 待完成，G-07 锁定；现有 Categorize/payload 路径保持未接线，不创建全局 cache、不连接真实服务、不迁移、不部署。
 
 ---
 
@@ -851,6 +853,8 @@ last-known-good
 
 ## 17.4 Classification Cache
 
+状态：G-05 最终闭环 HEAD 双 run 远端门禁已完成；G-06 本地门禁完成，精确 HEAD 双 run 远端门禁待完成，G-07 保持锁定；尚未接入运行时。
+
 对于高度相似的标准请求，可考虑：
 
 ```text
@@ -863,6 +867,18 @@ normalized_prompt_hash
 - 用户上下文相关分类不应缓存；
 - 涉及权限时必须带 user capability；
 - 缓存时间不能过长。
+
+G-06 实现落点：实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 新增 `classification_cache.py`。`ClassificationRequestScope` 要求调用方显式声明 conversation、attachment、actor identity、session state 与 external state 五类绑定，任一为真即不可缓存；仅 `standard_prompt()` 可进入 `ClassificationRenderContext.capture()`。prompt 经 NFKC 与空白折叠后只保存 SHA-256 和字节数，原文不驻留 context/key；model/endpoint/json-mode 同样只形成 `ClassificationModelIdentity.digest`，permission 自动进入 capability digest，额外 capability 只接受有界安全 token。
+
+完整 identity：安全 key 为 `classification:{generation}:{identity_digest}`。identity 同时绑定规范化版本/prompt hash、Tool Catalog generation、`user / superuser`、Provider cutover、Tools/Search、blacklist digest、catalog content digest、classifier digest、policy version、capability digest 与 TTL；任一变化自然 miss。TTL 是 key 的 typed 部分，默认 60 秒、硬上限 300 秒，避免较宽松缓存条目被较严格调用方复用。
+
+Record 与构建边界：`ClassificationCacheRecord` 只接受 canonical JSON 的 `difficulty=0/1/2`、严格布尔 vision、排序去重且有界的工具名，以及显式 `ClassificationResultSource.MODEL_SUCCESS`；timeout fallback、parse fallback、content blocked、重复字段、非 canonical JSON、控制字符、超限结果均不可发布。`materialize()` 每次返回 detached list。`resolve_classification()` 只接受 async builder，对 lookup/build/publish 的错误类型、identity 或 ack fail closed，不把 cache failure 隐式旁路。
+
+Memory backend：`MemoryClassificationCache` 使用条目/单 record/总字节上限与 LRU，条目在首次 publish 起固定到期，hit 或重复 publish 不续期；到期后方可接受同 identity 的新模型结果。实例绑定首次使用的 PID/event loop，并拒绝无效或回退的单调时钟。当前不实现 Redis backend，也不创建模块级 cache。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 G-06 定向各 `110 passed`，Classification/G-04/G-05/ToolSnapshot/Provider/RuntimeSnapshot/Reload/ModelSelector/LLM Payload/Chat/Search/Builtin 联合各 `459 passed`；严格串行普通全量各 `1607 passed, 1 skipped`。首轮普通全量使用的旧 Python 3.10 临时环境缺少 FakeRedis，仅在 collection 阶段报告 4 个 `ModuleNotFoundError`、未执行测试；切换到依赖完整的四版本环境后全部通过，未修改产品代码规避。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0；Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过。Ruff 0.16.2 全量、新文件 format、diff check，以及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `d5c87bdd720081b7d1e6a4b706ece173b96ac595e58591bba2254dfbfe291abd`、sdist SHA256 `6f2651a89f74c5ba3d9fe042d4a8020a50341f2a67728e60f3c0bfaef92c32b4`；两者各 84 个文件，包含 G-06 module，不含 `uv.lock`、cache 或 bytecode。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload、scope/model/catalog identity、`MODEL_SUCCESS` record、fallback rejection、detached materialize、Memory miss/hit/expiry 与无模块级 cache；engine create、SQL execute、asyncpg connect、Redis command/connect 始终为 0。制品目录 `/tmp/moellm-g06-dist.DxM8lZ`，smoke 根目录 `/tmp/moellm-g06-smoke.01KHrz`。精确 HEAD 双 run 是 G-07 前置门禁；本阶段未读取 DSN/Redis URL/secret，未运行 migration，未连接服务，未接配置、startup/shutdown、`Categorize`、`LlmPayloadMixin` 或生产 runtime，未合并、未发布、未部署。
 
 ---
 
@@ -1207,6 +1223,7 @@ runner_start_duration
 - [ ] Redis Failure Policy
 - [x] Tool Catalog Cache（G-04 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [x] Tool Schema Cache（G-05 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
+- [ ] Classification Cache（G-06 本地门禁完成；精确 HEAD 双 run 待完成，尚未接生产 runtime）
 - [ ] read_only tool parallelism
 - [ ] database metrics
 
