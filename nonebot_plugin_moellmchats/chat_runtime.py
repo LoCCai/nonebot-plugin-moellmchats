@@ -1,5 +1,4 @@
 import asyncio
-import math
 
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 
@@ -7,12 +6,14 @@ from . import moe_llm as llm
 from .admission import AdmissionRejected, get_llm_controller
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
 from .request_manager import register_request, unregister_request
 from .runtime_snapshot import runtime_snapshots
 from .state_store import BoundedValueStore
 from .temperament_manager import temperament_manager
 
 cd = BoundedValueStore(lambda: 0)
+default_cooldown_store = MemoryCooldownStore(cd)
 is_repeat_ask_dict = BoundedValueStore(lambda: False)
 
 
@@ -32,35 +33,50 @@ async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
 
 
 def reset_user_runtime_state(user_id: int) -> None:
-    cd[user_id] = 0
+    default_cooldown_store.reset_user(user_id)
     is_repeat_ask_dict[user_id] = False
 
 
 def reset_all_runtime_state() -> None:
-    cd.clear()
+    default_cooldown_store.clear()
     is_repeat_ask_dict.clear()
 
 
-def _claim_cooldown(user_id: int, event_time: int, cooldown_seconds: int) -> int:
-    """Claim a user's cooldown before queueing and return remaining seconds."""
-    cooldown_seconds = max(0, cooldown_seconds)
-    elapsed = event_time - cd[user_id]
-    if elapsed < cooldown_seconds:
-        return max(1, math.ceil(cooldown_seconds - elapsed))
-    cd[user_id] = event_time
-    return 0
+async def _release_cooldown(
+    store: CooldownStoreProtocol,
+    lease: CooldownLease | None,
+    *,
+    user_id: int,
+) -> None:
+    if lease is not None:
+        await store.release(lease)
+    is_repeat_ask_dict[user_id] = False
 
 
 async def handle_llm(
-    bot: Bot, event: MessageEvent, matcher, format_message_dict: dict, is_ai=False
+    bot: Bot,
+    event: MessageEvent,
+    matcher,
+    format_message_dict: dict,
+    is_ai=False,
+    *,
+    cooldown_store: CooldownStoreProtocol | None = None,
 ):
     user_id = event.sender.user_id
+    if user_id is None:
+        raise CooldownError("LLM cooldown 无法确认当前 user_id")
     cooldown_seconds = int(config_parser.get_config("cd_seconds", 120) or 0)
-    wait_seconds = _claim_cooldown(user_id, event.time, cooldown_seconds)
-    if wait_seconds:
+    action_store = default_cooldown_store if cooldown_store is None else cooldown_store
+    cooldown_claim = await action_store.claim(
+        user_id=user_id,
+        event_time=event.time,
+        cooldown_seconds=cooldown_seconds,
+    )
+    if cooldown_claim.retry_after_seconds:
         sender_name = getattr(event.sender, "card", None) or event.sender.nickname
         await matcher.finish(
-            f"{sender_name}的 LLM 对话冷却中，请在 {wait_seconds} 秒后重试。"
+            f"{sender_name}的 LLM 对话冷却中，请在 "
+            f"{cooldown_claim.retry_after_seconds} 秒后重试。"
         )
 
     is_finished: str | bool = False
@@ -88,18 +104,38 @@ async def handle_llm(
                     finally:
                         unregister_request(request_id)
     except AdmissionRejected:
-        reset_user_runtime_state(user_id)
+        await _release_cooldown(
+            action_store,
+            cooldown_claim.lease,
+            user_id=user_id,
+        )
         await matcher.finish("当前 LLM 请求较多，队列已满或你已有等待中的请求，请稍后再试。")
     except TimeoutError:
-        reset_user_runtime_state(user_id)
+        await _release_cooldown(
+            action_store,
+            cooldown_claim.lease,
+            user_id=user_id,
+        )
         await matcher.finish("本次 LLM 任务已超过总时间预算，已安全终止。")
     except asyncio.CancelledError:
-        reset_user_runtime_state(user_id)
+        await _release_cooldown(
+            action_store,
+            cooldown_claim.lease,
+            user_id=user_id,
+        )
         await matcher.finish("当前 LLM 请求已被超级管理员终止。")
 
     is_repeat_ask_dict[user_id] = False
     if isinstance(is_finished, str):
-        cd[user_id] = 0
+        await _release_cooldown(
+            action_store,
+            cooldown_claim.lease,
+            user_id=user_id,
+        )
         await matcher.finish(is_finished)
     elif not is_finished:
-        cd[user_id] = 0
+        await _release_cooldown(
+            action_store,
+            cooldown_claim.lease,
+            user_id=user_id,
+        )
