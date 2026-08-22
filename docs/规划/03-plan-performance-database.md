@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:46:15+00:00
+lastmod: 2026-08-22T17:51:58+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T17:46:15+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-12 已闭环；F-13 实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 已完成本地全门禁，远端精确 HEAD 双 run gate 待验证，F-14 继续锁定。F-13 保留 `cd[user_id]` 的 user_id 单一身份作用域和 admission 前 claim/失败释放语义，通过 backend-neutral lease Protocol 为默认内存路径补上原子 claim 与 owner-bound release；显式 Redis backend 使用 `SET NX PX`、自动 TTL、哈希 user key 和 token-bound WATCH/MULTI release，过期旧 lease 不会删除后继 claim。Redis 错误脱敏，命令结果未知时 fail closed，且没有 Memory 自动 fallback。本地四版本定向各 `49 passed`、普通全量各 `1142 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，fresh 制品和四组包外 dependency/10 表/7 revision/DDL/reload smoke 已通过且真实 Redis connect 为 0。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接配置、startup/shutdown、Repository 或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-13 已闭环。F-13 实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 保留 `cd[user_id]` 的 user_id 单一身份作用域和 admission 前 claim/失败释放语义，通过 backend-neutral lease Protocol 为默认内存路径补上原子 claim 与 owner-bound release；显式 Redis backend 使用 `SET NX PX`、自动 TTL、哈希 user key 和 token-bound WATCH/MULTI release，过期旧 lease 不会删除后继 claim。Redis 错误脱敏，命令结果未知时 fail closed，且没有 Memory 自动 fallback。本地四版本定向各 `49 passed`、普通全量各 `1142 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，fresh 制品和四组包外 dependency/10 表/7 revision/DDL/reload smoke 已通过且真实 Redis connect 为 0。最终本地证据 HEAD `12f0006784d654037cfeaca36356be481d9ec8a1` 的 push run `32588890993` / PR run `32588892906` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-14 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接配置、startup/shutdown、Repository 或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
 
 ---
 
@@ -585,7 +585,7 @@ F-13 实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 新增 backend-neut
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f76e14e296309723a9bf2a9524361f52f259f4ddd784d2c7d8101894f72677ec`、sdist SHA256 `d476570b9f58a1a19cfc451fb99112e0b4ab7141cb58dde2aac1e9fa223e65c9`；两种制品各 72 个文件，均包含 Memory/Redis Cooldown module、精确 Redis runtime dependency 与七个 revision，且不包含 fakeredis runtime dependency、`uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-smoke")`、显式 manager→PendingAction/Cooldown store 构造、模块无全局 Redis client/store，真实 Redis connect 计数始终为 0。
 
-远端状态：上述本地门禁对应实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c`；精确 HEAD push/PR 双 run `release-gate` 尚待验证，因此 F-14 继续锁定。本阶段不接配置、startup/shutdown、Admission Redis、legacy sidecar 或 Repository，不读取生产 DSN/Redis URL，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
+远端证据：F-13 最终本地证据 HEAD `12f0006784d654037cfeaca36356be481d9ec8a1` 对应 push run `32588890993` 与 PR run `32588892906`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-14 依赖已解除。本阶段不接配置、startup/shutdown、Admission Redis、legacy sidecar 或 Repository，不读取生产 DSN/Redis URL，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 

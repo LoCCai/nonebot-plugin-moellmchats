@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:46:15+00:00
+lastmod: 2026-08-22T17:51:58+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T17:46:15+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-12 已完成精确 HEAD 双 run gate；F-13 实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 已完成本地全门禁，远端精确 HEAD 双 run gate 待验证，F-14 继续锁定。F-13 新增 backend-neutral Cooldown claim/release Protocol、owner-bound 默认内存实现与只接受显式 redis-py asyncio client 的 Redis backend；现有 user_id 作用域、admission 前 claim 和失败释放语义不变，Redis 路径使用 `SET NX PX`、自动 TTL、哈希 user key 与 token-bound WATCH/MULTI release。Redis 不可用或结果未知时 fail closed，显式 falsey backend 不回退 Memory，模块不创建全局 Redis client/store。四版本普通全量各 `1142 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品和四组包外 Redis/Schema/graph/DDL/reload smoke 均通过且真实 Redis connect 为 0。在线 migration 仍直接拒绝；未接配置、startup/shutdown、Repository 或生产 runtime，未读取生产 DSN/Redis URL，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1 远端门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 均已闭环；legacy sidecar 继续保留，D-09 因尚无发布周期观察且禁止生产操作而保持锁定。F-01～F-13 已完成精确 HEAD 双 run gate。F-13 实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 新增 backend-neutral Cooldown claim/release Protocol、owner-bound 默认内存实现与只接受显式 redis-py asyncio client 的 Redis backend；现有 user_id 作用域、admission 前 claim 和失败释放语义不变，Redis 路径使用 `SET NX PX`、自动 TTL、哈希 user key 与 token-bound WATCH/MULTI release。Redis 不可用或结果未知时 fail closed，显式 falsey backend 不回退 Memory，模块不创建全局 Redis client/store。四版本普通全量各 `1142 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品和四组包外 Redis/Schema/graph/DDL/reload smoke 均通过且真实 Redis connect 为 0。最终本地证据 HEAD `12f0006784d654037cfeaca36356be481d9ec8a1` 的 push run `32588890993` / PR run `32588892906` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-14 依赖已解除。在线 migration 仍直接拒绝；未接配置、startup/shutdown、Repository 或生产 runtime，未读取生产 DSN/Redis URL，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:46:15+00:00
+lastmod: 2026-08-22T17:51:58+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：🟡 F-01～F-12 精确 HEAD 双 run 远端 gate green；F-13 本地全门禁 green、远端精确 HEAD 双 run gate 待验证；F-14 依赖锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-13 精确 HEAD 双 run 远端 gate green；F-14 依赖已解除；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -983,7 +983,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f76e14e296309723a9bf2a9524361f52f259f4ddd784d2c7d8101894f72677ec`、sdist SHA256 `d476570b9f58a1a19cfc451fb99112e0b4ab7141cb58dde2aac1e9fa223e65c9`；两种制品各 72 个文件，均包含 Memory/Redis Cooldown module、精确 Redis runtime dependency 与七个 revision，不包含 fakeredis runtime dependency、`uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-smoke")`、显式 manager→PendingAction/Cooldown store 构造、模块无全局 Redis client/store，真实 Redis connect 计数始终为 0。
 
-远端状态：上述本地证据对应实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c`，push/PR 精确 HEAD 双 run gate 尚待验证，因此 F-14 继续锁定。本阶段不读取插件 Redis 配置、环境 Redis URL、生产 DSN 或 secret file，不注册 startup/shutdown，不接 Admission Redis、legacy sidecar、Repository 或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
+远端证据：F-13 最终本地证据 HEAD `12f0006784d654037cfeaca36356be481d9ec8a1` 对应 push run `32588890993` 与 PR run `32588892906`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-14 依赖已解除。本阶段不读取插件 Redis 配置、环境 Redis URL、生产 DSN 或 secret file，不注册 startup/shutdown，不接 Admission Redis、legacy sidecar、Repository 或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
