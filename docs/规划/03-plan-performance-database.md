@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T19:09:30+00:00
+lastmod: 2026-08-22T19:16:21+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T19:09:30+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E 与 F-01～F-14 已完成远端门禁；D-09 在不操作生产的约束下继续锁定。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成本地全门禁，远端精确 HEAD push/PR 双 run 待验证，G-02 保持锁定。新增深度不可变 Conversation/Message records 与显式 `AsyncSession` 注入的 PostgreSQL Repository；最近历史以显式列、`conversation_id`、`id DESC`、`LIMIT+1` 查询，使用绑定会话指纹的 `before_message_id` keyset 游标并在应用层反转。Repository 不拥有 session 生命周期，不隐式 commit/rollback/retry；`RETURNING` 只确认当前事务 statement，最终 commit 仍由调用方负责。Integrity/缺失记录是冲突，后端异常、损坏结果与未知写入是 unavailable，错误脱敏且取消原样传播。四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低数据库依赖、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
+> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E、F-01～F-14 与 G-01 已完成远端门禁；D-09 在不操作生产的约束下继续锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变 Conversation/Message records 与显式 `AsyncSession` 注入的 PostgreSQL Repository；最近历史以显式列、`conversation_id`、`id DESC`、`LIMIT+1` 查询，使用绑定会话指纹的 `before_message_id` keyset 游标并在应用层反转。Repository 不拥有 session 生命周期，不隐式 commit/rollback/retry；`RETURNING` 只确认当前事务 statement，最终 commit 仍由调用方负责。Integrity/缺失记录是冲突，后端异常、损坏结果与未知写入是 unavailable，错误脱敏且取消原样传播。四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低数据库依赖、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，也未 checkout 或连接真实数据库/Redis。
 
 ---
 
@@ -666,7 +666,7 @@ G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增 `chat_histor
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `d300006def5f17f853430513d91c5b973d078aa043ad7617b32a4f85687b159b`、sdist SHA256 `d89af40a1268f341448a142f7489471dcfc9a84e6816846962af2c22c9810061`；两种制品各 76 个文件，均包含两个 G-01 module、精确 SQLAlchemy/asyncpg/Alembic runtime dependency 与七个 revision，且不包含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-g01-smoke")`、不可变 records 与显式 session→两类 Repository 构造，数据库 execute/connect 计数始终为 0。
 
-远端状态：上述本地证据对应实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d`；精确 HEAD push/PR 双 run `release-gate` 尚待验证，因此 G-02 继续锁定。本阶段不读取生产 DSN 或 secret file，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有 `MessagesHandler`/内存历史或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
+远端证据：G-01 最终本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 对应 push run `32593099818` 与 PR run `32593102078`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-02 依赖已解除。本阶段不读取生产 DSN 或 secret file，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有 `MessagesHandler`/内存历史或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 

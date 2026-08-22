@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T19:09:30+00:00
+lastmod: 2026-08-22T19:16:21+00:00
 ---
 
 # 02-plan-future-architecture
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T19:09:30+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E 与 F-01～F-14 已完成精确 HEAD 双 run gate；legacy sidecar 继续保留，D-09 因无发布周期观察且禁止生产操作而保持锁定。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成本地全门禁，远端精确 HEAD 双 run 待验证，G-02 保持锁定。G-01 用不可变 Conversation/Message records 和调用方显式持有的 `AsyncSession` 实现 PostgreSQL Repository；历史查询固定显式列、`conversation_id`、`id DESC`、有限 `LIMIT+1` 与应用层反转，游标绑定会话指纹和 `before_message_id`，不使用 OFFSET。写入以 `RETURNING` 确认 statement 结果但不隐式 commit/rollback/retry，未知结果 fail closed 且错误脱敏。本地四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，静态、最低依赖、fresh 制品及四组包外零数据库 I/O smoke 均通过。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E、F-01～F-14 与 G-01 已完成精确 HEAD 双 run gate；legacy sidecar 继续保留，D-09 因无发布周期观察且禁止生产操作而保持锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 用不可变 Conversation/Message records 和调用方显式持有的 `AsyncSession` 实现 PostgreSQL Repository；历史查询固定显式列、`conversation_id`、`id DESC`、有限 `LIMIT+1` 与应用层反转，游标绑定会话指纹和 `before_message_id`，不使用 OFFSET。写入以 `RETURNING` 确认 statement 结果但不隐式 commit/rollback/retry，未知结果 fail closed 且错误脱敏。本地四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，静态、最低依赖、fresh 制品及四组包外零数据库 I/O smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 ---
 

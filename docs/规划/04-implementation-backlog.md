@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T19:09:30+00:00
+lastmod: 2026-08-22T19:16:21+00:00
 ---
 
 # 04-implementation-backlog
@@ -13,7 +13,7 @@ lastmod: 2026-08-22T19:09:30+00:00
 ## 当前实施状态（2026-08-22）
 
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
-- G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品与四组包外零数据库 I/O 门禁；精确 HEAD push/PR 双 run 尚待验证，G-02 保持锁定。
+- G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14 精确 HEAD 双 run 远端 gate green；G-01 本地门禁已完成、远端双 run 待验证；G-02 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14 与 G-01 精确 HEAD 双 run 远端 gate green；G-02 依赖已解除；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1017,7 +1017,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `d300006def5f17f853430513d91c5b973d078aa043ad7617b32a4f85687b159b`、sdist SHA256 `d89af40a1268f341448a142f7489471dcfc9a84e6816846962af2c22c9810061`；两者各 76 个文件，包含 G-01 modules、精确数据库依赖与七个 revision，不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 表、7 revision、离线 DDL、reload、不可变 records 与显式 session→Repository 构造，数据库 execute/connect 始终为 0。
 
-远端状态：上述本地证据对应实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d`；精确 HEAD push/PR 双 run `release-gate` 尚待验证，G-02 继续锁定。本阶段不读 DSN/secret，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
+远端证据：G-01 最终本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 对应 push run `32593099818` 与 PR run `32593102078`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-02 依赖已解除。本阶段不读 DSN/secret，不创建全局 engine/session，不接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
