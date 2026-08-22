@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:14:48+00:00
+lastmod: 2026-08-22T17:46:15+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-12 精确 HEAD 双 run 远端 gate green；F-13 依赖已解除；F-14 依赖锁定；未连接真实数据库/Redis；未部署**
+**状态：🟡 F-01～F-12 精确 HEAD 双 run 远端 gate green；F-13 本地全门禁 green、远端精确 HEAD 双 run gate 待验证；F-14 依赖锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -974,6 +974,16 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## F-13 Cooldown Redis
+
+实现落点：实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 新增 backend-neutral `CooldownStoreProtocol / CooldownClaim / CooldownLease`、默认 `MemoryCooldownStore` 与独立 `redis_cooldowns.py`。现有 `cd[user_id]` 的单一 user_id 作用域保持不变；claim 仍在 admission queue 前完成，AdmissionRejected、总预算超时、取消及 LLM falsey/string 结果释放本次 lease。默认内存 mapping 继续工作，只有 `handle_llm(..., cooldown_store=...)` 显式注入时才使用其他 backend，显式 falsey store 也不会回退默认 Memory。
+
+原子与故障边界：Memory store 用异步锁原子 claim，并以 128-bit token + claim 时间做 owner-bound release，旧请求不会重置新 claim。Redis store 只接受显式 redis-py asyncio client，以 `<prefix>:cd:{<sha256(user_id)>}` 安全 key 执行 `SET NX PX` 并依靠 TTL 自动回收；重复 claim 用有 TTL 且不超过硬上限的 `PTTL` 返回向上取整等待时间。release 在 WATCH/MULTI 中比较 token 后删除，过期或替代 claim 不受旧 lease 影响。key prefix、最大 cooldown 与操作重试数均有界；只有 key 过期竞态与明确 `WatchError` 可重试。SET/EXEC 已提交但响应丢失、Redis 不可用、损坏 token、缺失/超限 TTL 与异常响应均 fail closed，错误只公开异常类型、不含 endpoint/credential 且无 exception cause；`CancelledError` 原样传播。没有 Redis→Memory 自动 fallback。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 F-13 定向各 `49 passed`；Python 3.10 固定 Redis 5.2.0 / FakeRedis 2.31.0，其他版本使用 Redis 6.4.0 / FakeRedis 2.37.1。四版本严格串行普通全量各 `1142 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0。Ruff 0.16.2 全量、新文件 format、diff check，以及 Pyright 1.1.407 在 Redis 5.2 / 6.4 两套依赖环境的目标/测试文件均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f76e14e296309723a9bf2a9524361f52f259f4ddd784d2c7d8101894f72677ec`、sdist SHA256 `d476570b9f58a1a19cfc451fb99112e0b4ab7141cb58dde2aac1e9fa223e65c9`；两种制品各 72 个文件，均包含 Memory/Redis Cooldown module、精确 Redis runtime dependency 与七个 revision，不包含 fakeredis runtime dependency、`uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-smoke")`、显式 manager→PendingAction/Cooldown store 构造、模块无全局 Redis client/store，真实 Redis connect 计数始终为 0。
+
+远端状态：上述本地证据对应实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c`，push/PR 精确 HEAD 双 run gate 尚待验证，因此 F-14 继续锁定。本阶段不读取插件 Redis 配置、环境 Redis URL、生产 DSN 或 secret file，不注册 startup/shutdown，不接 Admission Redis、legacy sidecar、Repository 或生产 runtime，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 

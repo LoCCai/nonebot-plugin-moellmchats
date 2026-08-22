@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T17:14:48+00:00
+lastmod: 2026-08-22T17:46:15+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-12 已闭环。F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 新增显式注入、namespace 有界且基于 Redis TTL 与 WATCH/MULTI 的一次性 PendingAction store；Bot/adapter/user/group、tool/arguments、generation 与 bundle 均绑定，失败预算分布式且有界，只有明确 `WatchError` 可重试，EXEC 结果未知时绝不返回 action，也不自动回退内存。四版本定向各 `50 passed`（Python 3.10 另锁定 Redis 5.2.0 / FakeRedis 2.31.0），联合回归 `582 passed`，四版本普通全量各 `1096 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 dependency/10 表/7 revision/DDL/reload smoke 均通过且真实 Redis connect 计数为 0。F-12 最终本地证据 HEAD `23e548e76aa742686668c62405f053c363372e93` 的 push run `32587036476` / PR run `32587039022` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-13 依赖已解除，F-14 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接 Repository、runtime 或 lifecycle，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-12 已闭环；F-13 实现提交 `04cf4e3a4d6cecacafc4609ec7bda54443cb0b9c` 已完成本地门禁，精确 HEAD 双 run 远端 gate 待验证，F-14 继续锁定。F-13 新增 backend-neutral `CooldownStoreProtocol`、owner-bound 内存 store 与显式 Redis backend；默认 `cd[user_id]` 路径和 user_id 单一身份作用域保持兼容，claim 仍发生在 admission 前，排队拒绝、超时、取消及 falsey/string 结果释放本次 lease。Redis 使用按安全哈希 user key 隔离的 `SET NX PX` 与自动 TTL；释放由 128-bit token + WATCH/MULTI 绑定，旧请求不能删除替代 claim。只有显式注入才使用 Redis，falsey backend 也不回退内存；Redis 不可用、响应无效或命令结果未知均 fail closed，错误不泄漏 endpoint/credential。四版本 F-13 定向各 `49 passed`（Python 3.10 固定 Redis 5.2.0 / FakeRedis 2.31.0），四版本普通全量各 `1142 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，Ruff/Pyright、fresh 制品及四组包外 dependency/10 表/7 revision/DDL/reload/Redis 零连接 smoke 均通过。fresh wheel SHA256 `f76e14e296309723a9bf2a9524361f52f259f4ddd784d2c7d8101894f72677ec`，sdist SHA256 `d476570b9f58a1a19cfc451fb99112e0b4ab7141cb58dde2aac1e9fa223e65c9`。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接配置、startup/shutdown、Repository 或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
