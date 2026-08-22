@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T16:05:39+00:00
+lastmod: 2026-08-22T17:08:54+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T16:05:39+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-11 已闭环。F-11 实现提交 `a98f9298e1bbf461498c46b689eadffcf606fcf1` 已加入显式、安全脱敏、惰性且有界的 redis-py asyncio client/pool；本地全门禁、fresh 制品及四组包外 Redis dependency/10 表/7 revision/DDL/downgrade/reload smoke 已通过且未触发 Redis connect。最终 HEAD `13383aee25fe90e8ecd3542a3df9af748f2e11f0` 的 push run `32583576588` / PR run `32583578903` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-12 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client，未接 Repository、runtime 或 lifecycle，未运行 migration，也未 checkout 或连接数据库/Redis。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-11 已闭环。F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 已加入显式注入、Redis TTL 与 WATCH/MULTI 原子化的 PendingAction store；一次性消费、全 caller/tool/runtime identity 绑定、namespace 容量与失败预算均有界，未知 EXEC 结果不返回 action，Redis 错误脱敏且无 Memory 自动 fallback。本地全门禁、fresh 制品及四组包外 dependency/10 表/7 revision/DDL/reload smoke 已通过且未触发真实 Redis connect；精确 HEAD 双 run gate 待完成，F-13～F-14 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client/store，未接 Repository、runtime 或 lifecycle，未运行 migration，也未 checkout 或连接真实数据库/Redis。
 
 ---
 
@@ -508,18 +508,29 @@ packaged graph 现在为七段单 base/head 线，唯一 head 为 `0007_model_us
 Plan 1 的二阶段确认在 Redis 中非常适合。
 
 ```text
-moellm:pending-action:{nonce}
+moellm:{pending-action}:action:{nonce}
 ```
 
 Value：
 
 ```json
 {
+  "schema_version": 1,
+  "action_id": "...",
+  "bot_id": "...",
+  "adapter_id": "...",
   "user_id": "...",
   "group_id": "...",
-  "tool": "...",
-  "args_hash": "...",
-  "generation": 42
+  "tool_name": "...",
+  "arguments_json": "{...}",
+  "arguments_hash": "...",
+  "generation": "42",
+  "bundle_digest": null,
+  "created_at": 0.0,
+  "expires_at": 120.0,
+  "nonce": "ABC123",
+  "caller_fingerprint": "...",
+  "slot_fingerprint": "..."
 }
 ```
 
@@ -528,6 +539,18 @@ TTL：
 ```text
 120 sec
 ```
+
+F-12 实现提交 `ca992e967af943b4d9f1067c26deef762aceee4a` 新增 backend-neutral `PendingActionStoreProtocol` 与独立 `RedisPendingActionSettings / RedisPendingActionStore`。Store 只接受调用方显式注入的 redis-py asyncio client，不读取插件配置、环境 Redis URL 或 secret file，也不创建全局 client/store；现有内存 `pending_action_store` 继续是默认，`execute_pending_action()` 仅在显式传入 store 时使用 Redis，且显式后端即使为 falsey 也不会回退内存。`fakeredis>=2.31,<3` 只属于测试依赖，不进入运行制品。
+
+数据与 keyspace 边界：全部动态 key 使用同一 `{pending-action}` Redis Cluster hash tag；action record、caller/tool slot、action/slot expiry index、caller failure key 与 failure expiry index 均按安全前缀隔离。Settings 对 TTL、总容量、参数字节、失败窗口/次数/key 数与 WATCH 重试数设置硬上限。Record 使用精确 schema version，绑定 Bot、adapter、user、group、tool、canonical arguments hash、generation、bundle digest、创建/过期时间与 caller/slot fingerprint；严格解码类型、UTF-8、大小、record 生命周期和 fingerprint，畸形或参数篡改记录在事务内一次性移除并拒绝执行。
+
+原子与故障边界：create 对相同 caller/tool/arguments/generation/bundle 复用 nonce，参数或版本变化原子替换旧 nonce，且永不把旧确认码复用于新参数；consume/cancel 在 WATCH/MULTI 内先检查 caller 失败预算，再执行 caller、generation、TTL 与 arguments 绑定校验，一次性删除发生在任何外部副作用之前。并发 consume 至多一个成功；只有明确 `WatchError` 使用有界重试，其他 Redis 错误及 EXEC 已提交但响应丢失一律返回脱敏的 unavailable error、不串联原异常且不返回 action。失败预算按 Bot/adapter/user/group 隔离，窗口与 key table 均由 Redis TTL/ZSET 有界维护；clear 只清理当前 namespace。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 F-12 定向各 `50 passed`，其中 Python 3.10 额外固定 Redis 5.2.0 / FakeRedis 2.31.0；与 PendingAction/LLM Tools、Redis Client、Database Engine/Migrations/Schema、Repository、Agent、Graph、Scheduler、Conflict 联合 `582 passed`。四版本严格串行普通全量各 `1096 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0。Ruff 0.16.2 全量、新文件 format、diff check，以及 Pyright 1.1.407 在 Redis 5.2 / 6.4 两套依赖环境的目标/测试文件均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `48bdf9419f7edebea4489b71d963364d7ed89fff0e618344e9197c99dd0e1af5`、sdist SHA256 `7581d94865be2fa6f58c1a191bb38b11495f1af574b13398d37c5ed0780c93ec`；两种制品各 70 个文件，均包含 Redis PendingAction module、精确 Redis runtime dependency 与七个 revision，且不包含 fakeredis runtime dependency、`uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认 10 张表、七段 graph、离线 DDL、`reload("package-smoke")`、显式 manager→store 构造以及模块无全局 Redis client/store，真实 Redis connect 计数始终为 0。
+
+当前状态：仅 F-12 本地门禁完成；F-13 必须等待包含本证据的精确 HEAD push/PR 双 `release-gate` 成功。本阶段不接 runtime/config/startup/shutdown，不实现 Cooldown/Admission Redis，不接 legacy sidecar 或 Repository，不读取生产 DSN/Redis URL，不运行 migration，不连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
