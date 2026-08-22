@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T21:58:33+00:00
+lastmod: 2026-08-22T22:56:46+00:00
 ---
 
 # 00-roadmap-overview
@@ -21,6 +21,8 @@ lastmod: 2026-08-22T21:58:33+00:00
 > G-04 本地门禁（2026-08-22）：实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 新增 backend-neutral `ToolCatalogCacheProtocol`、不可变 `ToolCatalogRenderContext / ToolCatalogCacheKey / ToolCatalogRecord` 与受单 PID/event-loop 约束的 Memory LRU backend。cache identity 绑定 runtime generation、`user / superuser` 两级权限、Provider cutover、Tools/Search 开关及规范化黑名单 SHA-256；原始黑名单不进入 cache key/record repr。显式 ToolSnapshot 渲染入口只在 legacy/provider parity 成功后形成 record，构建失败、错误 identity、同 key 异值、超限、跨进程/loop 与不可信 backend 响应均 fail closed；generation 变化自然 miss，旧 generation 为在途请求保留到有界 LRU 淘汰。本地四版本定向各 `161 passed`、相关联合各 `306 passed`、严格串行普通全量各 `1433 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff、新模块/测试 Pyright、fresh 制品与 Python 3.10/3.12 × wheel/sdist 四组 11 表/8 revision/离线 DDL/reload/cache roundtrip/零 I/O smoke 均通过。wheel SHA256 `ab805c305183bddd1e49b3e417534ca09abc4d2f4970c9df3f40d477b61c06b0`，sdist SHA256 `0348bc4627dfbb6a6d227842fcbda072724b9838cc67ef7d1607e87807d3bb37`。精确 HEAD 双 run 远端门禁待完成，G-05 保持锁定；现有 `Categorize.get_brief_catalog()` 同步路径未接 cache，未新增全局 cache、配置、生命周期或 Redis backend，未读取连接信息、未运行 migration、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > G-04 远端闭环（2026-08-22）：本地证据 HEAD `6fd7509f11c0a851addc93dd78e52979b436215a` 对应 push run `32600965570` 与 PR run `32600967324`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-04 依赖门禁已关闭，G-05 依赖已解除；未触发 promotion、合并、发布、部署或任何生产操作。
+
+> G-05 本地门禁（2026-08-22）：G-04 最终闭环 HEAD `1668a9215c7b02515147c5367798beab513c62d2` 的 push run `32601224946` / PR run `32601227942` 已各 11/11 green、无非 success job且各恰好一个成功 `release-gate`。在此前提下，实现提交 `803fddb8ed062a61bbf9b38c3eb7714e735c30b9` 新增完整 typed `ToolSchemaRenderContext / ToolSchemaCacheKey`、canonical JSON `ToolSchemaRecord`、backend-neutral Protocol、resolver 与单 PID/event-loop Memory LRU。安全 key 为 `schema:{generation}:{toolset_hash}`，其 hash 绑定初始工具集、两级权限、Provider cutover、Tools/Search 与黑名单 digest，不暴露原始工具名或黑名单；显式 ToolSnapshot builder 固定同一 policy snapshot、稳定依赖顺序并只在 legacy/provider parity 后形成 record。四版本定向各 `64 passed`、相关联合各 `369 passed`、普通全量各 `1497 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品及 Python 3.10/3.12 × wheel/sdist 四组 11 表/8 revision/离线 DDL/reload/schema cache roundtrip/零 I/O smoke 均通过。wheel SHA256 `8360f85f99987721d877d7f587a62e4aca9bd8adaa4d6b7a205e8c3324662e0f`，sdist SHA256 `2aa60e39a8de7f889475a834ae61494e0f8f75bd1ccdfac5363fabf41e83c4df`。精确 HEAD 双 run 远端门禁待完成，G-06 保持锁定；现有 `get_llm_payload_tools()` / `_build_payload()` 未接 cache，未新增全局 cache、Redis backend、配置或生命周期，未运行 migration、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -370,8 +372,8 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史与 G-03 Session Summary 外的具体 Repository 和运行时持久化仍未实现
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary 与 G-04 Tool Catalog Cache 均已完成精确 HEAD 远端双 gate；G-05 Tool Schema Cache 依赖已解除但尚未实现
-- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04 也未接现有 Categorize、配置或生命周期；Redis / PostgreSQL 的正式运行态编排与持久化边界尚未实现
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary 与 G-04 Tool Catalog Cache 均已完成精确 HEAD 远端双 gate；G-05 Tool Schema Cache 本地门禁已完成、远端双 gate 待完成，G-06 保持锁定
+- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05 也未接现有 Categorize/LLM payload、配置或生命周期；Redis / PostgreSQL 的正式运行态编排与持久化边界尚未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 
 过早数据库化会导致很快再做第二次 schema migration。

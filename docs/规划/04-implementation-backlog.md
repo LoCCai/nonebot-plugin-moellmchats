@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T21:58:33+00:00
+lastmod: 2026-08-22T22:56:46+00:00
 ---
 
 # 04-implementation-backlog
@@ -22,6 +22,8 @@ lastmod: 2026-08-22T21:58:33+00:00
 - G-03 只提供不可变 summary chain、确定性 50/10 compaction、append-only `0008_session_summaries` 与显式 session Repository；未调用摘要模型，未接 G-01/G-02、`MessagesHandler`、配置、生命周期或生产 runtime，未读取连接信息、未运行 migration、未连接服务。
 - G-04 实现提交 `aa6e7d34a8b1335c34540bb50fe93868d70bc9f1` 已完成四版本定向各 `161 passed`、相关联合各 `306 passed`、普通全量各 `1433 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/cache roundtrip/reload/零 I/O smoke；本地证据 HEAD `6fd7509f11c0a851addc93dd78e52979b436215a` 的 push `32600965570` / PR `32600967324` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-05 依赖已解除但尚未实现。
 - G-04 只提供完整 policy identity、不可变 catalog record、backend-neutral Protocol、显式 parity-safe ToolSnapshot 渲染入口与单 PID/loop Memory LRU；现有 `Categorize.get_brief_catalog()` 同步路径保持未接线，没有全局 cache、Redis backend、配置或生命周期，不读取 DSN/Redis URL，不连接真实服务。
+- G-04 最终闭环 HEAD `1668a9215c7b02515147c5367798beab513c62d2` 的 push `32601224946` / PR `32601227942` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-05 实现提交 `803fddb8ed062a61bbf9b38c3eb7714e735c30b9` 已完成四版本定向各 `64 passed`、相关联合各 `369 passed`、普通全量各 `1497 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/schema roundtrip/reload/零 I/O smoke；精确 HEAD 双 run gate 待完成，G-06 继续锁定。
+- G-05 只提供完整 schema/toolset identity、canonical immutable record、backend-neutral Protocol、显式 parity-safe ToolSnapshot builder 与单 PID/loop Memory LRU；现有 `get_llm_payload_tools()` / `_build_payload()` 路径保持未接线，没有全局 cache、Redis backend、配置或生命周期，不读取 DSN/Redis URL，不连接真实服务。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -796,7 +798,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-04 精确 HEAD 双 run 远端 gate green；G-05 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-04 精确 HEAD 双 run 远端 gate green；G-05 本地门禁完成、远端 gate 待完成；G-06 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1072,11 +1074,19 @@ Schema 与并发边界：append-only `0008_session_summaries` 不改写 `0001`�
 
 ## G-05 Tool Schema Cache
 
-状态：G-04 本地与精确 HEAD 双 run 远端门禁已完成，前置依赖已解除；G-05 尚未实现或接入运行时。
+实现落点：实现提交 `803fddb8ed062a61bbf9b38c3eb7714e735c30b9` 新增 frozen `ToolSchemaRenderContext / ToolSchemaCacheKey / ToolSchemaRecord`、runtime-checkable `ToolSchemaCacheProtocol`、`resolve_tool_schema()` 与 `MemoryToolSchemaCache`。context 绑定 generation、规范化初始选择集 digest、`user / superuser` 权限、Provider cutover、Tools/Search 与黑名单 digest；安全 key 为 `schema:{generation}:{toolset_hash}`，原始工具名、黑名单与 schema payload 不进入 cache key、context/record repr 或 diagnostics。
+
+一致性与缓存边界：record 只接受有界 canonical JSON function schema，拒绝重复字段、NUL/非有限值、重复工具名、超出 expanded set、非法结构及深度/节点/字节超限；`materialize()` 总是返回 detached 副本。ToolSnapshot 新增显式 context capture 与 record builder，同一 context 驱动 legacy/provider 依赖展开和 schema 构建，稳定排序后只有 fallback 明确选定或两侧 parity 精确相等才形成 record。resolver 不吞 backend failure、不隐式旁路，Memory backend 使用条目/单 record/总字节上限与 LRU并绑定 PID/event loop；generation/选择/策略变化自然 miss，旧值由容量回收。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `64 passed`、相关联合各 `369 passed`、严格串行普通全量各 `1497 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.12 首轮全量的既有 watcher 3 秒时序节点在主机负载下超时，节点单跑与随后干净全量均通过，未修改产品代码规避。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过；Ruff 0.16.2、新文件 format、diff check 及 Pyright 1.1.407 新模块/测试 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `8360f85f99987721d877d7f587a62e4aca9bd8adaa4d6b7a205e8c3324662e0f` / `2aa60e39a8de7f889475a834ae61494e0f8f75bd1ccdfac5363fabf41e83c4df`，各 83 个文件且包含 G-05 module、不含 `uv.lock`、cache 或 bytecode。Python 3.10/3.12 × wheel/sdist 四组包外安装确认 site-packages 加载、11 表、8 revision、离线 DDL、reload、ToolSnapshot schema record、detached materialize、Memory miss/publish/hit、无模块级 cache，数据库/Redis I/O 计数全为 0。制品目录 `/tmp/moellm-g05-dist.dgjVA3`，smoke 根目录 `/tmp/moellm-g05-smoke.QVlJDl`。精确 HEAD 双 run 是 G-06 前置门禁；当前不接现有 payload、配置、startup/shutdown 或生产 runtime，不实现 Redis backend，不读取连接信息、不迁移、不连接真实服务，未合并、未发布、未部署。
 
 ---
 
 ## G-06 Classification Cache
+
+状态：G-05 精确 HEAD 双 run 远端门禁完成前保持锁定。
 
 ---
 
