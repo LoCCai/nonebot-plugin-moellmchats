@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:20:19+00:00
+lastmod: 2026-08-22T14:50:02+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T14:20:19+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-08 已闭环。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 已加入 Tool Bundle metadata 与线性 revision `0005_tool_bundle_metadata`；本地全门禁、fresh 制品及四组包外 8 表/5 revision/DDL/reload smoke 已通过。最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-09 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-08 已闭环，F-08 最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 已加入 Audit metadata 与线性 revision `0006_audit_events`；本地全门禁、fresh 制品及四组包外 9 表/6 revision/DDL/downgrade/reload smoke 已通过，精确 HEAD 双 run gate 待完成，F-10 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
 
 ---
 
@@ -431,6 +431,18 @@ metadata_json
 
 created_at
 ```
+
+F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 将以上模型固化为 `audit_events`，并以不可变 `0006_audit_events` 追加到 `0005_tool_bundle_metadata`。事件 ID 使用 PostgreSQL `BIGINT IDENTITY`；event/actor/target 类型使用有界 canonical token，target identity 必填，actor user、run 与 tool call identity 可选。`metadata_json` 必须是最多 64 KiB 的 JSONB object；本阶段只定义存储边界，不把现有日志、调用参数、结果或 trust decision 自动写入表。
+
+引用与查询边界：可选 actor user 与 run 分别以 `RESTRICT` 指向 `users / agent_runs`。tool call audit 必须同时携带 run；新 revision 为 `tool_calls(run_id, id)` 追加支持约束，并以 `(run_id, tool_call_id)` 复合 `RESTRICT` 外键拒绝跨 run 错挂。run、tool call、actor、target 与 event type 五类索引均以 `created_at DESC, id DESC` 提供稳定游标；多态 target 不伪造无法由数据库统一验证的跨表外键。
+
+packaged graph 现在为六段单 base/head 线，唯一 head 为 `0006_audit_events`。离线 `0006:0005` downgrade 先删除 `audit_events`，再删除 F-09 新增的 tool call 复合支持约束，不触碰 bundle/version、`tool_calls` 或前六张表；metadata/revision parity 覆盖精确 PostgreSQL 类型、Identity、全部约束和索引。在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `47 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `438 passed`；四版本严格串行普通全量各 `992 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2、目标文件 format、diff check、216 个 PostgreSQL 命名项上限检查（最长 52）与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `72e04d75283bc7624b15608b3948922ed30d4d5775f2c5298c943ce1b7e2266e`、sdist SHA256 `70fa3d5fd779c2f83f9f31ab5b5705711cc99255da07acf6a5e131936874a5a2`；两种制品各 67 个文件，均包含六个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10 × wheel/sdist 使用 fresh venv 完整安装，Python 3.12 × wheel/sdist 在已验证的仓库外依赖环境中强制重装上述精确制品；四组均确认 9 张表、六段 graph、JSONB/复合 FK/unique/check DDL、定向 downgrade 与 `reload("package-smoke")`。精确 HEAD 的 clean CI package jobs 仍是下一道远端门禁。
+
+当前仅本地门禁完成；F-10 必须等待 F-09 最终 HEAD 的 push/PR 双 `release-gate` 成功。本阶段不实现 Repository、session 或 runtime 写入，不读取 DSN、不运行 migration、不连接 PostgreSQL/Redis；未合并、未发布、未部署。
 
 ---
 

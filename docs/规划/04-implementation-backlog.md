@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:10:00+00:00
+lastmod: 2026-08-22T14:50:02+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-08 精确 HEAD 双 run 远端 gate green；F-09 依赖已解除；F-10～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-08 精确 HEAD 双 run 远端 gate green；🟡 F-09 本地门禁完成、远端 gate 待完成；F-10～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -912,6 +912,18 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## F-09 Audit Schema
+
+实现落点：实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 在共享 metadata 新增 `audit_events`，并以不可变 revision `0006_audit_events` 追加到 `0005_tool_bundle_metadata`。字段覆盖规划要求的 `id / event_type / actor_user_id / actor_type / target_type / target_id / run_id / tool_call_id / metadata_json / created_at`；事件 ID 使用 PostgreSQL `BIGINT IDENTITY`，event/actor/target 类型使用有界 canonical token，metadata 必须是最多 64 KiB 的 JSONB object。
+
+引用与查询边界：actor user 与 run 分别以可选 `RESTRICT` 外键指向 `users / agent_runs`；tool call identity 必须同时绑定 run。新 revision 为 `tool_calls(run_id, id)` 追加支持约束，并以 `(run_id, tool_call_id)` 复合 `RESTRICT` 外键拒绝跨 run 错挂。run、tool call、actor、target 与 event type 五类稳定时间线索引均包含 `created_at DESC, id DESC`。多态 target 不伪造跨表 FK；本阶段不把现有日志、参数、结果或 trust decision 接入持久化。
+
+迁移边界：packaged graph 为 `0001_users_conversations → 0002_agent_runtime → 0003_agent_steps → 0004_tool_calls → 0005_tool_bundle_metadata → 0006_audit_events` 的单 base/head 线；未修改已门禁的 `0001`～`0005`，F-10 必须追加后续 revision。离线 `0006:0005` downgrade 先删除 `audit_events`，再删除新复合支持约束，不触碰 bundle/version、`tool_calls` 或前六张表；metadata/revision parity 覆盖精确 PostgreSQL 类型、Identity、全部约束和索引。在线 migration 仍在 engine 创建前无条件拒绝。
+
+本地门禁：Python 3.10.20（Alembic 1.13.0）、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `47 passed`；与 Engine/Repository/Agent/Graph/Scheduler/Conflict 联合 `438 passed`；四版本严格串行普通全量各 `992 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2、目标文件 format、diff check、216 个 PostgreSQL 命名项上限检查（最长 52）与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `72e04d75283bc7624b15608b3948922ed30d4d5775f2c5298c943ce1b7e2266e`、sdist SHA256 `70fa3d5fd779c2f83f9f31ab5b5705711cc99255da07acf6a5e131936874a5a2`；两种制品各 67 个文件，均包含六个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10 × wheel/sdist 使用 fresh venv 完整安装，Python 3.12 × wheel/sdist 在已验证的仓库外依赖环境中强制重装上述精确制品；四组均确认 9 张表、六段 graph、JSONB/复合 FK/unique/check DDL、定向 downgrade 与 `reload("package-smoke")`。
+
+当前状态：仅本地门禁完成，F-09 精确 HEAD push/PR 双 run gate 待完成；F-10 只能在该 gate 关闭后开始。本阶段不接 legacy sidecar、runtime 或 Repository，不创建全局 engine/session，不读取生产 DSN，不运行 migration，不连接 PostgreSQL/Redis；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
