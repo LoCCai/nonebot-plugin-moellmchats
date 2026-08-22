@@ -1,14 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:50:02+00:00
+lastmod: 2026-08-22T14:56:44+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-08 已闭环，F-08 最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个 `completed/success release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 新增 `audit_events` 共享 metadata 与线性 revision `0006_audit_events`；四版本定向各 `47 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `438 passed`，四版本普通全量各 `992 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 9 表/6 revision/DDL/downgrade/reload smoke 均通过。F-09 当前仅本地门禁完成，精确 HEAD 的 push/PR 双 run gate 待完成，F-10 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session 或 Repository 实现，未运行 migration，未连接 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07 已按依赖顺序实现并完成发布门禁；Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成各自精确 HEAD 双 run 门禁。D-09 仍缺至少一个发布周期的 parity 观察，在“不操作生产”约束下保持锁定。F-01～F-09 已闭环：F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 新增 `audit_events` 共享 metadata 与线性 revision `0006_audit_events`；四版本定向各 `47 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `438 passed`，四版本普通全量各 `992 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 9 表/6 revision/DDL/downgrade/reload smoke 均通过。F-09 最终 HEAD `be2b3ab14fb7b9ce0d712fc52a2fa96830364993` 的 push run `32580016797` / PR run `32580019661` 均为 11/11 green、各恰好一个 `completed/success release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-10 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session 或 Repository 实现，未运行 migration，未连接 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`

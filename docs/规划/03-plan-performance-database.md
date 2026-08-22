@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T14:50:02+00:00
+lastmod: 2026-08-22T14:56:44+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T14:50:02+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-08 已闭环，F-08 最终 HEAD `6064c5beb387d06c796439255e3159310ecb70b6` 的 push run `32578200654` / PR run `32578203172` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 已加入 Audit metadata 与线性 revision `0006_audit_events`；本地全门禁、fresh 制品及四组包外 9 表/6 revision/DDL/downgrade/reload smoke 已通过，精确 HEAD 双 run gate 待完成，F-10 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-09 已闭环。F-09 实现提交 `6fe1a4cf57cfec7c7d21342a32b19632a7c7de12` 已加入 Audit metadata 与线性 revision `0006_audit_events`；本地全门禁、fresh 制品及四组包外 9 表/6 revision/DDL/downgrade/reload smoke 已通过。最终 HEAD `be2b3ab14fb7b9ce0d712fc52a2fa96830364993` 的 push run `32580016797` / PR run `32580019661` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-10 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
 
 ---
 
@@ -442,7 +442,7 @@ packaged graph 现在为六段单 base/head 线，唯一 head 为 `0006_audit_ev
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `72e04d75283bc7624b15608b3948922ed30d4d5775f2c5298c943ce1b7e2266e`、sdist SHA256 `70fa3d5fd779c2f83f9f31ab5b5705711cc99255da07acf6a5e131936874a5a2`；两种制品各 67 个文件，均包含六个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10 × wheel/sdist 使用 fresh venv 完整安装，Python 3.12 × wheel/sdist 在已验证的仓库外依赖环境中强制重装上述精确制品；四组均确认 9 张表、六段 graph、JSONB/复合 FK/unique/check DDL、定向 downgrade 与 `reload("package-smoke")`。精确 HEAD 的 clean CI package jobs 仍是下一道远端门禁。
 
-当前仅本地门禁完成；F-10 必须等待 F-09 最终 HEAD 的 push/PR 双 `release-gate` 成功。本阶段不实现 Repository、session 或 runtime 写入，不读取 DSN、不运行 migration、不连接 PostgreSQL/Redis；未合并、未发布、未部署。
+远端证据：F-09 最终文档闭环精确 HEAD `be2b3ab14fb7b9ce0d712fc52a2fa96830364993` 对应 push run `32580016797` 与 PR run `32580019661`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-10 依赖已解除。本阶段不实现 Repository、session 或 runtime 写入，不读取 DSN、不运行 migration、不连接 PostgreSQL/Redis；未合并、未发布、未部署。
 
 ---
 
