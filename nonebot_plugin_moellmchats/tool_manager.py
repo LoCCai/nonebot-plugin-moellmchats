@@ -22,6 +22,7 @@ from .runtime_snapshot import (
     validate_generated_stamp,
 )
 from .tool_artifacts import ToolArtifact
+from .tool_catalog_cache import ToolCatalogRecord, ToolCatalogRenderContext
 from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
 from .tool_providers import (
     DiscoveredTool,
@@ -1434,6 +1435,86 @@ class ToolSnapshot:
             )
         return catalog
 
+    def capture_brief_catalog_context(
+        self,
+        *,
+        is_superuser: bool = False,
+        provider_cutover: bool | None = None,
+    ) -> ToolCatalogRenderContext:
+        """Capture all dynamic catalog inputs before cache lookup or rendering."""
+
+        if type(is_superuser) is not bool:
+            raise TypeError("categorize is_superuser 必须是布尔值")
+        if provider_cutover is None:
+            from .config import config_parser
+
+            provider_cutover = config_parser.get_config(
+                "provider_catalog_categorize_enabled",
+                True,
+            )
+        if type(provider_cutover) is not bool:
+            raise ValueError("categorize Provider cutover 开关必须是布尔值")
+        return ToolCatalogRenderContext.capture(
+            generation=self.generation,
+            is_superuser=is_superuser,
+            provider_cutover=provider_cutover,
+            tools_enabled=model_selector.get_use_tools(),
+            web_search_enabled=model_selector.get_web_search(),
+            blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
+        )
+
+    def build_brief_catalog_record(
+        self,
+        context: ToolCatalogRenderContext,
+    ) -> ToolCatalogRecord:
+        """Render and parity-check one explicit context before making it cacheable."""
+
+        if not isinstance(context, ToolCatalogRenderContext):
+            raise TypeError("context 必须是 ToolCatalogRenderContext")
+        if context.generation != self.generation:
+            raise ValueError("tool catalog context generation 与 ToolSnapshot 不一致")
+        legacy_catalog = ToolManager.build_brief_catalog(
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            mcp_tool_names=self.mcp_tool_names,
+            is_superuser=context.is_superuser,
+            render_context=context,
+        )
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            not context.provider_cutover
+            or provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return ToolCatalogRecord(context.cache_key, legacy_catalog)
+        catalog = ToolManager.build_provider_brief_catalog(
+            provider_catalog=provider_catalog,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=context.is_superuser,
+            render_context=context,
+        )
+        if catalog != legacy_catalog:
+            raise ProviderConsumerParityError(
+                "categorize Provider catalog 与 legacy rollback view 不一致"
+            )
+        return ToolCatalogRecord(context.cache_key, catalog)
+
+    def get_brief_catalog_record(
+        self,
+        *,
+        is_superuser: bool = False,
+        provider_cutover: bool | None = None,
+    ) -> ToolCatalogRecord:
+        context = self.capture_brief_catalog_context(
+            is_superuser=is_superuser,
+            provider_cutover=provider_cutover,
+        )
+        return self.build_brief_catalog_record(context)
+
 
 class ToolManager:
     def __init__(self):
@@ -2027,13 +2108,27 @@ async def extract_webpage(
         custom_tools: Mapping[str, Mapping[str, Any]],
         mcp_tool_names: AbstractSet[str],
         is_superuser: bool = False,
+        render_context: ToolCatalogRenderContext | None = None,
     ) -> str:
         catalog = []
 
-        if model_selector.get_use_tools():
+        if render_context is None:
+            tools_enabled = model_selector.get_use_tools()
+            web_search_enabled = model_selector.get_web_search()
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        else:
+            if not isinstance(render_context, ToolCatalogRenderContext):
+                raise TypeError("render_context 必须是 ToolCatalogRenderContext")
+            if render_context.is_superuser is not is_superuser:
+                raise ValueError("render_context permission 与 is_superuser 不一致")
+            tools_enabled = render_context.tools_enabled
+            web_search_enabled = render_context.web_search_enabled
+            is_blacklisted = render_context.is_blacklisted
+
+        if tools_enabled:
             # 1. NoneBot 原生插件
             for name, info in plugin_info.items():
-                if tool_manager.is_tool_blacklisted(name):
+                if is_blacklisted(name):
                     continue
 
                 plugin_name = info.get("name") or name
@@ -2044,7 +2139,7 @@ async def extract_webpage(
 
             # 2. 自定义函数 + MCP 工具
             for name, info in custom_tools.items():
-                if tool_manager.is_tool_blacklisted(name):
+                if is_blacklisted(name):
                     continue
                 if not ToolManager.is_tool_allowed(info, is_superuser=is_superuser):
                     continue
@@ -2062,9 +2157,7 @@ async def extract_webpage(
                 )
 
         # 3. 联网搜索
-        if model_selector.get_web_search() and not tool_manager.is_tool_blacklisted(
-            WEB_SEARCH_TOOL_SPEC.name
-        ):
+        if web_search_enabled and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             catalog.append(
                 f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | "
                 "回答实时问题、新闻、天气与近期信息"
@@ -2083,6 +2176,7 @@ async def extract_webpage(
         plugin_info: Mapping[str, Mapping[str, Any]],
         custom_tools: Mapping[str, Mapping[str, Any]],
         is_superuser: bool = False,
+        render_context: ToolCatalogRenderContext | None = None,
     ) -> str:
         """Build the categorize view from canonical Provider identities.
 
@@ -2096,16 +2190,32 @@ async def extract_webpage(
             raise TypeError("categorize provider_catalog 非法")
         if type(is_superuser) is not bool:
             raise TypeError("categorize is_superuser 必须是布尔值")
+        if render_context is None:
+            tools_enabled = model_selector.get_use_tools()
+            web_search_enabled = model_selector.get_web_search()
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        else:
+            if not isinstance(render_context, ToolCatalogRenderContext):
+                raise TypeError("render_context 必须是 ToolCatalogRenderContext")
+            if render_context.generation != provider_catalog.generation:
+                raise ValueError(
+                    "render_context generation 与 Provider catalog 不一致"
+                )
+            if render_context.is_superuser is not is_superuser:
+                raise ValueError("render_context permission 与 is_superuser 不一致")
+            tools_enabled = render_context.tools_enabled
+            web_search_enabled = render_context.web_search_enabled
+            is_blacklisted = render_context.is_blacklisted
         catalog: list[str] = []
 
-        if model_selector.get_use_tools():
+        if tools_enabled:
             for name, info in plugin_info.items():
                 item = provider_catalog.tools.get(name)
                 if item is None or item.source is not ToolSource.NONEBOT_PLUGIN:
                     raise ProviderConsumerParityError(
                         f"categorize NoneBot Provider identity 缺失: {name}"
                     )
-                if tool_manager.is_tool_blacklisted(name):
+                if is_blacklisted(name):
                     continue
                 decision = provider_catalog.decide_trust(
                     name,
@@ -2129,7 +2239,7 @@ async def extract_webpage(
                     raise ProviderConsumerParityError(
                         f"categorize Tool Provider identity 缺失: {name}"
                     )
-                if tool_manager.is_tool_blacklisted(name):
+                if is_blacklisted(name):
                     continue
                 decision = provider_catalog.decide_trust(
                     name,
@@ -2148,9 +2258,7 @@ async def extract_webpage(
                     f"{item.spec.description[:160]}"
                 )
 
-        if model_selector.get_web_search() and not tool_manager.is_tool_blacklisted(
-            WEB_SEARCH_TOOL_SPEC.name
-        ):
+        if web_search_enabled and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)
             if item is None or item.source is not ToolSource.BUILTIN:
                 raise ProviderConsumerParityError(
