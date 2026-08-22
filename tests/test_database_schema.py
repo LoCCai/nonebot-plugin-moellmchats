@@ -38,6 +38,7 @@ from nonebot_plugin_moellmchats.database_schema import (
     conversations_table,
     database_metadata,
     messages_table,
+    model_usage_table,
     tool_bundle_versions_table,
     tool_bundles_table,
     tool_calls_table,
@@ -195,6 +196,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         tool_bundles_table,
         tool_bundle_versions_table,
         audit_events_table,
+        model_usage_table,
     )
     assert tuple(database_metadata.tables) == (
         "users",
@@ -206,6 +208,7 @@ def test_first_schema_has_exact_tables_and_columns() -> None:
         "tool_bundles",
         "tool_bundle_versions",
         "audit_events",
+        "model_usage",
     )
     assert all(table.metadata is database_metadata for table in DATABASE_TABLES)
 
@@ -450,6 +453,21 @@ def test_audit_schema_has_exact_columns() -> None:
         ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
     )
     assert isinstance(audit_events_table.c.metadata_json.type, postgresql.JSONB)
+
+
+def test_model_usage_schema_has_exact_columns() -> None:
+    assert tuple(_column_signature(column) for column in model_usage_table.columns) == (
+        ("id", "BIGINT", False, True, None),
+        ("run_id", "VARCHAR(128)", False, False, None),
+        ("provider", "VARCHAR(128)", False, False, None),
+        ("model", "VARCHAR(255)", False, False, None),
+        ("input_tokens", "BIGINT", False, False, None),
+        ("output_tokens", "BIGINT", False, False, None),
+        ("reasoning_tokens", "BIGINT", False, False, None),
+        ("cached_tokens", "BIGINT", False, False, None),
+        ("cost", "NUMERIC(24, 12)", True, False, None),
+        ("created_at", "TIMESTAMP WITH TIME ZONE", False, False, "CURRENT_TIMESTAMP"),
+    )
 
 
 def test_first_schema_has_exact_constraints_and_indexes() -> None:
@@ -1170,6 +1188,83 @@ def test_audit_schema_has_exact_constraints_and_indexes() -> None:
     )
 
 
+def test_model_usage_schema_has_exact_constraints_and_indexes() -> None:
+    assert frozenset(_constraint_signature(value) for value in model_usage_table.constraints) == frozenset(
+        {
+            ("primary_key", "pk_model_usage", ("id",)),
+            (
+                "foreign_key",
+                "fk_model_usage_run_id_agent_runs",
+                ("run_id",),
+                ("agent_runs.id",),
+                "RESTRICT",
+            ),
+            (
+                "check",
+                "ck_model_usage_run_id_present",
+                "char_length(run_id) > 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_provider_present",
+                "char_length(btrim(provider)) > 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_model_present",
+                "char_length(btrim(model)) > 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_input_tokens_nonnegative",
+                "input_tokens >= 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_output_tokens_nonnegative",
+                "output_tokens >= 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_reasoning_tokens_nonnegative",
+                "reasoning_tokens >= 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_cached_tokens_nonnegative",
+                "cached_tokens >= 0",
+            ),
+            (
+                "check",
+                "ck_model_usage_cost_nonnegative",
+                "cost IS NULL OR cost >= 0",
+            ),
+        }
+    )
+    assert frozenset(_index_signature(value) for value in model_usage_table.indexes) == frozenset(
+        {
+            (
+                "ix_model_usage_run_id_created_at_id_desc",
+                ("run_id", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_model_usage_provider_model_created_at_id_desc",
+                ("provider", "model", "created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+            (
+                "ix_model_usage_created_at_id_desc",
+                ("created_at DESC", "id DESC"),
+                False,
+                None,
+            ),
+        }
+    )
+
+
 def test_linear_revision_operations_are_identical_to_declared_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1195,6 +1290,7 @@ def test_linear_revision_operations_are_identical_to_declared_metadata(
         ("0004_tool_calls", "0003_agent_steps"),
         ("0005_tool_bundle_metadata", "0004_tool_calls"),
         ("0006_audit_events", "0005_tool_bundle_metadata"),
+        ("0007_model_usage", "0006_audit_events"),
     ):
         revision = scripts.get_revision(revision_id)
         assert revision is not None

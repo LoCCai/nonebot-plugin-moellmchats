@@ -41,6 +41,9 @@ AUDIT_EVENT_TYPE_MAX_CHARS = 128
 AUDIT_ACTOR_TYPE_MAX_CHARS = 32
 AUDIT_TARGET_TYPE_MAX_CHARS = 64
 AUDIT_METADATA_MAX_BYTES = 65_536
+MODEL_PROVIDER_MAX_CHARS = 128
+MODEL_USAGE_COST_PRECISION = 24
+MODEL_USAGE_COST_SCALE = 12
 
 AGENT_RUN_STATUS_VALUES = tuple(state.value for state in AgentRunState)
 AGENT_RUN_TERMINAL_STATUS_VALUES = (
@@ -915,6 +918,88 @@ sa.Index(
     audit_events_table.c.id.desc(),
 )
 
+model_usage_table = sa.Table(
+    "model_usage",
+    database_metadata,
+    sa.Column("id", sa.BigInteger(), sa.Identity(), nullable=False),
+    sa.Column("run_id", sa.String(ENTITY_ID_MAX_CHARS), nullable=False),
+    sa.Column("provider", sa.String(MODEL_PROVIDER_MAX_CHARS), nullable=False),
+    sa.Column("model", sa.String(MODEL_NAME_MAX_CHARS), nullable=False),
+    sa.Column("input_tokens", sa.BigInteger(), nullable=False),
+    sa.Column("output_tokens", sa.BigInteger(), nullable=False),
+    sa.Column("reasoning_tokens", sa.BigInteger(), nullable=False),
+    sa.Column("cached_tokens", sa.BigInteger(), nullable=False),
+    sa.Column(
+        "cost",
+        sa.Numeric(MODEL_USAGE_COST_PRECISION, MODEL_USAGE_COST_SCALE),
+        nullable=True,
+    ),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
+    ),
+    sa.PrimaryKeyConstraint("id", name="pk_model_usage"),
+    sa.ForeignKeyConstraint(
+        ("run_id",),
+        ("agent_runs.id",),
+        name="fk_model_usage_run_id_agent_runs",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "char_length(run_id) > 0",
+        name="ck_model_usage_run_id_present",
+    ),
+    sa.CheckConstraint(
+        "char_length(btrim(provider)) > 0",
+        name="ck_model_usage_provider_present",
+    ),
+    sa.CheckConstraint(
+        "char_length(btrim(model)) > 0",
+        name="ck_model_usage_model_present",
+    ),
+    sa.CheckConstraint(
+        "input_tokens >= 0",
+        name="ck_model_usage_input_tokens_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "output_tokens >= 0",
+        name="ck_model_usage_output_tokens_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "reasoning_tokens >= 0",
+        name="ck_model_usage_reasoning_tokens_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "cached_tokens >= 0",
+        name="ck_model_usage_cached_tokens_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "cost IS NULL OR cost >= 0",
+        name="ck_model_usage_cost_nonnegative",
+    ),
+)
+
+sa.Index(
+    "ix_model_usage_run_id_created_at_id_desc",
+    model_usage_table.c.run_id,
+    model_usage_table.c.created_at.desc(),
+    model_usage_table.c.id.desc(),
+)
+sa.Index(
+    "ix_model_usage_provider_model_created_at_id_desc",
+    model_usage_table.c.provider,
+    model_usage_table.c.model,
+    model_usage_table.c.created_at.desc(),
+    model_usage_table.c.id.desc(),
+)
+sa.Index(
+    "ix_model_usage_created_at_id_desc",
+    model_usage_table.c.created_at.desc(),
+    model_usage_table.c.id.desc(),
+)
+
 DATABASE_TABLES = (
     users_table,
     conversations_table,
@@ -925,4 +1010,5 @@ DATABASE_TABLES = (
     tool_bundles_table,
     tool_bundle_versions_table,
     audit_events_table,
+    model_usage_table,
 )
