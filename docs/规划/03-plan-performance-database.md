@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T15:12:30+00:00
+lastmod: 2026-08-22T16:00:49+00:00
 ---
 
 # 03-plan-performance-database
@@ -10,7 +10,7 @@ lastmod: 2026-08-22T15:12:30+00:00
 
 > 推荐目标版本：`0.28 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-10 已闭环。F-10 实现提交 `f96b1ffadf43283c77365246b1b065379c013c2e` 已加入 model usage metadata 与线性 revision `0007_model_usage`；本地全门禁、fresh 制品及四组包外 10 表/7 revision/DDL/downgrade/reload smoke 已通过。最终 HEAD `a55510697e05b4f0c17d20d36dd91643e8776890` 的 push run `32580881668` / PR run `32580884647` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，F-11 依赖已解除。在线 migration 仍无条件拒绝；未读取生产 DSN，未创建全局 engine/session、Repository 实现或 Redis client，未运行 migration，也未 checkout 或连接数据库。
+> 实施门禁（2026-08-22）：Plan 1 远端发布门禁、Plan 2 的 D-01a～D-08f 与 Milestone E 的 E-01～E-08 已完成；D-09 在不操作生产的约束下继续锁定。F-01～F-10 已闭环，F-10 最终文档闭环 HEAD `55c55bb2d77ef6c0a33a74fb7b1e476326c6458a` 的 push run `32581245744` / PR run `32581247621` 均为 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-11 实现提交 `a98f9298e1bbf461498c46b689eadffcf606fcf1` 已加入显式、安全脱敏、惰性且有界的 redis-py asyncio client/pool；本地全门禁、fresh 制品及四组包外 Redis dependency/10 表/7 revision/DDL/downgrade/reload smoke 已通过且未触发 Redis connect，精确 HEAD 双 run gate 待完成，F-12～F-14 继续锁定。在线 migration 仍无条件拒绝；未读取生产 DSN/Redis URL，未创建全局 engine/session/Redis client，未接 Repository、runtime 或 lifecycle，未运行 migration，也未 checkout 或连接数据库/Redis。
 
 ---
 
@@ -142,6 +142,16 @@ Redis：
 ```text
 redis-py asyncio
 ```
+
+F-11 实现提交 `a98f9298e1bbf461498c46b689eadffcf606fcf1` 加入 `redis>=5.2,<7` 与独立的 `RedisClientSettings / RedisClientManager`。URL 只接受显式 `redis://` 或 `rediss://`、合法 host 和单一 0～65535 database path，禁止 query 覆盖显式安全参数与 fragment；原始 URL 只保存在私有 redacted wrapper 中，`repr()`、错误和 `safe_diagnostics()` 均不暴露 username、password 或 endpoint。`rediss` 固定要求证书校验与 hostname check。
+
+连接池与生命周期边界：每个 manager 最多惰性创建一个 redis-py asyncio client/pool，pool 上限为 1～1000，socket connect/read timeout 与 health-check interval 均有界，固定 keepalive、UTF-8 strict、RESP2 与 bytes response。创建 client/pool 不执行 `PING`、DNS 或 socket connect；首次创建绑定 PID 与运行中的 event loop，跨进程/loop 复用、关闭期间访问与并发重复关闭均 fail closed。成功关闭后可重建；取消或关闭失败恢复为可重试状态，初始化/关闭错误只公开异常类型且不串联可能含 URL 的原异常。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `51 passed`，Redis 5.2.0 最低依赖兼容定向另为 `51 passed`；与 Database Engine/Migrations/Schema、Repository、Agent、Graph、Scheduler、Conflict 联合 `492 passed`。四版本严格串行普通全量最终各 `1046 passed, 1 skipped`；Python 3.12 首轮命中一个既有 watcher 3 秒时序 node 超时，该 node 随后连续 `5/5` 通过且完整 3.12 全量重跑通过，未修改无关 watcher。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2 全量、目标文件 format、diff check 与 Pyright 1.1.407 目标/测试文件 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `dfbf90d8c3b1fe52ea199fbc3e4e6e44e0b5ef9a90df6421dcda3c885045ca0e`、sdist SHA256 `4fc5552c91f6f79c3dc7cdd0853c5d20ae662992eee9e1ce135cab0bf82832ec`；两种制品各 69 个文件，均包含 Redis Client、精确 Redis 依赖与七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组已验证仓库外依赖环境均强制重装精确制品，确认 Redis 6.4.0 依赖、TLS/pool 参数、10 张表、七段 graph、离线 DDL、定向 downgrade 与 `reload("package-smoke")`，Redis connect 计数始终为 0。
+
+当前仅 F-11 本地门禁完成；F-12 必须等待 F-11 最终 HEAD 的 push/PR 双 `release-gate` 成功。本阶段不创建全局 manager/client，不读取插件配置、环境 Redis URL 或 secret file，不注册 startup/shutdown，不实现 PendingAction/Cooldown/Admission Redis，不接 Repository 或 runtime，也不连接 Redis/PostgreSQL；未合并、未发布、未部署。
 
 F-02 实现提交 `cf7c236c3f78c0775ff513f291ef4a55a877e54d` 已加入 `sqlalchemy>=2,<3` 与 `asyncpg>=0.30,<1`，但只提供显式构造的 `DatabaseEngineSettings / DatabaseEngineManager`。URL 必须使用 `postgresql+asyncpg`；原始 DSN 不持久保留，日志/诊断/错误不渲染凭据。连接池 size 1～100、overflow 0～100、总量不超过 150，pool/connect/statement/recycle timeout 均有上限；固定启用 pre-ping、LIFO、参数隐藏及 asyncpg 客户端/服务端 timeout。
 

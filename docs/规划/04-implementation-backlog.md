@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T15:12:30+00:00
+lastmod: 2026-08-22T16:00:49+00:00
 ---
 
 # 04-implementation-backlog
@@ -789,7 +789,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-10 精确 HEAD 双 run 远端 gate green；F-11 依赖已解除；F-12～F-14 依赖锁定；未连接数据库/Redis；未部署**
+**状态：✅ F-01～F-10 精确 HEAD 双 run 远端 gate green；🟡 F-11 本地门禁完成、远端 gate 待完成；F-12～F-14 依赖锁定；未连接数据库/Redis；未部署**
 
 ---
 
@@ -944,6 +944,16 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 ---
 
 ## F-11 Redis Client
+
+实现落点：实现提交 `a98f9298e1bbf461498c46b689eadffcf606fcf1` 加入运行依赖 `redis>=5.2,<7`，并新增独立 `redis_client.py`。frozen `RedisClientSettings` 只接受显式 `redis://` / `rediss://`、合法 host 和单一 0～65535 database path，拒绝控制字符、错误百分号编码、超长 URL、query 覆盖与 fragment；原始 URL 只保存在私有 redacted wrapper，`repr()`、错误与 `safe_diagnostics()` 均不渲染 username、password 或 endpoint。`rediss` 固定启用证书校验和 hostname check；pool 上限 1～1000，connect/read timeout 与 health-check interval 均有界。
+
+生命周期边界：`RedisClientManager` 只在运行中的 event loop 内惰性创建，每实例至多一个 redis-py asyncio client/pool；创建 client/pool 不执行 `PING`、DNS 或 socket connect。manager 绑定首次创建的 PID 与 event-loop，跨进程/loop 复用、关闭中访问及并发重复关闭全部 fail closed。成功关闭后可重建；取消或关闭失败恢复可重试状态，初始化/关闭异常只公开类型且不串联可能含 URL 的原异常。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13（NoneBot 2.4.4 / OneBot 2.4.6）与 3.13.13 定向各 `51 passed`，Redis 5.2.0 最低依赖兼容定向另为 `51 passed`；与 Database Engine/Migrations/Schema、Repository、Agent、Graph、Scheduler、Conflict 联合 `492 passed`。四版本严格串行普通全量最终各 `1046 passed, 1 skipped`；Python 3.12 首轮有一个既有 watcher 3 秒时序 node 超时，该 node 随后连续 `5/5` 通过，完整 3.12 全量重跑通过，未修改无关 watcher。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit tests=40、failures/errors/skipped 均为 0；Ruff 0.16.2 全量、目标文件 format、diff check 与 Pyright 1.1.407 目标/测试文件 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `dfbf90d8c3b1fe52ea199fbc3e4e6e44e0b5ef9a90df6421dcda3c885045ca0e`、sdist SHA256 `4fc5552c91f6f79c3dc7cdd0853c5d20ae662992eee9e1ce135cab0bf82832ec`；两种制品各 69 个文件，均包含 Redis Client、精确 Redis 依赖与七个 revision，且不含 `uv.lock`、`__pycache__` 或 `.pyc`。Python 3.10/3.12 × wheel/sdist 四组已验证仓库外依赖环境均强制重装上述精确制品，并确认 Redis 6.4.0 元数据、TLS/pool 参数、10 张表、七段 graph、离线 DDL、定向 downgrade 与 `reload("package-smoke")`，Redis connect 计数始终为 0。
+
+当前状态：仅本地门禁完成，F-11 精确 HEAD push/PR 双 run gate 待完成；F-12 只能在该 gate 关闭后开始。本阶段不创建全局 manager/client，不读取插件配置、环境 Redis URL 或 secret file，不注册 startup/shutdown，不实现 PendingAction/Cooldown/Admission Redis，不接 legacy sidecar、Repository 或 runtime，不连接 Redis/PostgreSQL；D-09 保持锁定。未合并、未发布、未部署。
 
 ---
 
