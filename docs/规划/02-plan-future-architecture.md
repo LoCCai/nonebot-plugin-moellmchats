@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T21:04:05+00:00
+lastmod: 2026-08-22T21:09:27+00:00
 ---
 
 # 02-plan-future-architecture
@@ -17,6 +17,8 @@ lastmod: 2026-08-22T21:04:05+00:00
 > G-02 远端闭环（2026-08-22）：本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 的 push `32595899079` / PR `32595902263` 均 11/11 success，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-03 依赖已解除；未合并、未发布、未部署。
 
 > G-03 本地门禁（2026-08-22）：实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 将 Session Summary 冻结为不可变、source-digest-bound 的 append-only chain，并追加 `0008_session_summaries` 与调用方显式 session 的 Repository。默认 50 条触发、保留最近 10 条；输入超限时只缩小完整前缀，不以截断内容换取水位前移。会话 generation/前驱/消息水位约束与单条条件 INSERT CAS 拒绝 stale/fork，错误脱敏、取消原样传播、未知写入不重放。四版本定向各 `103 passed`、联合各 `551 passed`、全量各 `1381 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品和四组包外 11 表/8 revision/零 I/O smoke 均通过。远端精确 HEAD 双 run 待完成，G-04 锁定；未调用模型、未接聊天 runtime、未运行 migration、未连接真实服务、未部署。
+
+> G-03 远端闭环（2026-08-22）：本地证据 HEAD `3fb6792ec18566c571ab9e9628c0ea9ec1854a53` 的 push `32598610770` / PR `32598613406` 均 11/11 success，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-04 依赖已解除；未合并、未发布、未部署。
 
 ---
 

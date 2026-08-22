@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T21:04:05+00:00
+lastmod: 2026-08-22T21:09:27+00:00
 ---
 
 # 03-plan-performance-database
@@ -17,6 +17,8 @@ lastmod: 2026-08-22T21:04:05+00:00
 > G-02 远端闭环（2026-08-22）：本地证据 HEAD `fca62e2a97fdb1b9fcccc5dd67dc604458d754c3` 对应 push run `32595899079` / PR run `32595902263`；两者各 11 个 job 全绿、各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-03 依赖已解除；未连接真实数据库/Redis，未合并、未发布、未部署。
 
 > G-03 本地门禁（2026-08-22）：实现提交 `82ddd7ae89049fd173360ee7662e6d40387156c1` 新增 Session Summary 领域契约、显式 `AsyncSession` Repository 与线性 `0008_session_summaries`。摘要输入、源 digest、累计水位、前驱 identity、generation 和确定性 50/10 策略全部固化；超限时不截断消息、不推进未完整读取的水位。append 使用单条条件 INSERT CAS 且依赖唯一 generation/前驱、防跨会话消息复合外键；Repository 不 commit/rollback/retry。四版本定向各 `103 passed`、联合各 `551 passed`、普通全量各 `1381 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、静态、fresh 制品与四组包外零 I/O smoke 均通过。制品 SHA256 为 wheel `db83341f418b0bcf8ae87e8aad5d3c29d1e32ff2bfc4babbc223238afcaca718`、sdist `963bc7f6513dfb3b701ba228ca6d743444bf48d50678a7193e399fe73f9ffecf`。精确 HEAD 双 run 待完成，G-04 锁定；未调用摘要模型、未接 runtime、未运行 migration、未连接真实数据库/Redis、未部署。
+
+> G-03 远端闭环（2026-08-22）：本地证据 HEAD `3fb6792ec18566c571ab9e9628c0ea9ec1854a53` 对应 push run `32598610770` / PR run `32598613406`；两者各 11 个 job 全绿、各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-04 依赖已解除；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
 
 ---
 
@@ -1165,7 +1167,7 @@ runner_start_duration
 - [ ] Token Usage 持久化
 - [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
 - [x] History Hot Cache（G-02 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [ ] Session Summary（G-03 本地门禁完成，精确 HEAD 双 run 待完成；尚未接生产 runtime）
+- [x] Session Summary（G-03 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [ ] Batch Insert
 - [ ] DB Failure Spool
 - [ ] Redis Failure Policy
