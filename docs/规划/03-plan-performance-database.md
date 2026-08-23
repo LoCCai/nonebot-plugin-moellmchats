@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T16:02:05+00:00
+lastmod: 2026-08-23T16:11:29+00:00
 ---
 
 # 03-plan-performance-database
@@ -21,6 +21,8 @@ lastmod: 2026-08-23T16:02:05+00:00
 > I-03 远端闭环（2026-08-23）：I-02 最终文档 HEAD `06166cc62639e8b0642f3e5ee96d083033fc2631` 双 run 已关闭。实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 完成六字段 structured ToolResult 及 adapter/runner/history/model 接线；四版本全量和 Python 3.10 最低数据库/Redis 依赖全量各 `2663 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，四组包外 11 表/8 revision/离线 DDL/reload/structured contract/零真实 I/O smoke 通过。本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 依赖已解除；I-03 未新增或运行 migration，未连接真实 PostgreSQL/Redis，未合并、发布或部署。
 
 > I-04 本地门禁（2026-08-23）：实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 新增 `PostgresAgentRunRepository / PostgresAgentStepRepository / PostgresToolCallRepository`，严格复用现有 11 表/8 revision，Schema 审计确认全部列、约束、索引和 `(run_id, step_id)` 复合外键已覆盖，故不新增空 `0009`。Repository 仅接受调用方 `AsyncSession`，不拥有事务或重试；Run/ToolCall 使用 CAS，Step/ToolCall 使用绑定 run 的稳定 keyset，未知结果禁止自动重放。本地四版本与 Python 3.10 最低数据库/Redis 依赖全量各 `2704 passed, 1 skipped`，数据库相关联合 `588 passed`，Sandbox `41 passed, 0 skipped`，静态、可复现制品与 Python 3.10/3.12 × wheel/sdist 四组包外零 engine/asyncpg/Redis/socket I/O smoke 均通过。精确 HEAD 双 run 待完成，I-05 锁定；未运行 migration、未连接真实服务，真实 runtime 事务编排仍待 I-05/I-06。
+
+> I-04 远端闭环（2026-08-23）：本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除；未运行 migration、未连接真实 PostgreSQL/Redis，未合并、发布或部署。
 
 > 推荐目标版本：`0.28 → 0.30`
 

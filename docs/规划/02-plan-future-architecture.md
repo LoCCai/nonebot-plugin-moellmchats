@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T16:02:05+00:00
+lastmod: 2026-08-23T16:11:29+00:00
 ---
 
 # 02-plan-future-architecture
@@ -21,6 +21,8 @@ lastmod: 2026-08-23T16:02:05+00:00
 > I-03 远端闭环（2026-08-23）：I-02 最终文档 HEAD `06166cc62639e8b0642f3e5ee96d083033fc2631` 双 run 已严格关闭。实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 保留旧 `text/images/metadata` 构造顺序，新增递归脱离、冻结、有界的 `files/structured/citations`，safe opaque locator/HTTPS citation 与单一 canonical rendering，并接入 Custom/NoneBot Provider、Generated worker/runner、history preview 与模型消息。本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 已完成，I-04 依赖已解除；未发模型/citation 请求，未合并、发布、部署、迁移或连接真实服务。
 
 > I-04 本地门禁（2026-08-23）：实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已对齐 AgentRun/AgentStep/ToolCall 的完整持久化领域字段，并新增三类 caller-owned `AsyncSession` PostgreSQL Repository；现有 11 表/8 revision 足够，不新增空 migration。Run state+generation CAS、ToolCall status CAS、绑定 run 的 Step/ToolCall keyset、复合 run/step identity、未知结果不重放及事务所有权边界均已验证。四版本与最低依赖全量各 `2704 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 通过。I-04 精确 HEAD 双 run 待完成，I-05 继续锁定；真实聊天/runtime 尚未构造或持久化这些对象，未迁移、未连接真实服务、未发布或部署。
+
+> I-04 远端闭环（2026-08-23）：本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除；真实聊天/runtime 仍未构造或持久化 Agent 对象，未合并、发布、部署、迁移或连接真实服务。
 
 > 推荐目标版本：`0.26 → 0.30`
 
