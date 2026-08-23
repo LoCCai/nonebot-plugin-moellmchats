@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T23:52:05+00:00
+lastmod: 2026-08-22T23:58:29+00:00
 ---
 
 # 00-roadmap-overview
@@ -27,6 +27,8 @@ lastmod: 2026-08-22T23:52:05+00:00
 > G-05 远端闭环（2026-08-22）：本地证据 HEAD `86753abc14266f3ca055cdad71a271c359d9769f` 对应 push run `32604058382` 与 PR run `32604060824`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-05 依赖门禁已关闭，G-06 依赖已解除；未触发 promotion、合并、发布、部署或任何生产操作。
 
 > G-06 本地门禁（2026-08-22）：G-05 最终闭环 HEAD `10cee6a7c0660865509acb7087835183bd5aa9ef` 的 push run `32604302971` / PR run `32604304677` 已各 11/11 green、无非 success job且各恰好一个成功 `release-gate`。在此前提下，实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 新增 digest-only `ClassificationRenderContext / ClassificationCacheKey`、显式上下文无关 `ClassificationRequestScope`、分类模型与 capability identity、只接受 `MODEL_SUCCESS` 的 canonical immutable record、backend-neutral Protocol、异步 resolver 与单 PID/event-loop 短 TTL Memory LRU。key 为 `classification:{generation}:{identity_digest}`，绑定 NFKC/空白规范化 prompt hash、目录代际/权限/策略/内容 digest、模型 identity、policy version、capability digest 与 1～300 秒 TTL；原始 prompt、目录、endpoint 与 capability 不进入安全 key/diagnostics。四版本定向各 `110 passed`、相关联合各 `459 passed`、普通全量各 `1607 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品及 Python 3.10/3.12 × wheel/sdist 四组 11 表/8 revision/离线 DDL/reload/classification TTL roundtrip/零 I/O smoke 均通过。wheel SHA256 `d5c87bdd720081b7d1e6a4b706ece173b96ac595e58591bba2254dfbfe291abd`，sdist SHA256 `6f2651a89f74c5ba3d9fe042d4a8020a50341f2a67728e60f3c0bfaef92c32b4`。精确 HEAD 双 run 远端门禁待完成，G-07 保持锁定；现有 `Categorize` / `LlmPayloadMixin` 未接 cache，未新增全局 cache、Redis backend、配置或生命周期，未运行 migration、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
+
+> G-06 远端闭环（2026-08-22）：本地证据 HEAD `6c4332e34cd6a2204b1e6ec9076cede177a054d0` 对应 push run `32606564939` 与 PR run `32606566273`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-06 依赖门禁已关闭，G-07 依赖已解除；未触发 promotion、合并、发布、部署或任何生产操作。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -376,7 +378,7 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史与 G-03 Session Summary 外的具体 Repository 和运行时持久化仍未实现
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache 与 G-05 Tool Schema Cache 均已完成精确 HEAD 远端双 gate；G-06 Classification Cache 本地门禁已完成、远端双 gate 待完成，G-07 保持锁定
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache 与 G-06 Classification Cache 均已完成精确 HEAD 远端双 gate；G-07 Batch Usage Write 依赖已解除但尚未实现
 - G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；Redis / PostgreSQL 的正式运行态编排与持久化边界尚未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

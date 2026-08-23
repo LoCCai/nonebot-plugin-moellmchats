@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T23:52:05+00:00
+lastmod: 2026-08-22T23:58:29+00:00
 ---
 
 # 03-plan-performance-database
@@ -29,6 +29,8 @@ lastmod: 2026-08-22T23:52:05+00:00
 > G-05 远端闭环（2026-08-22）：本地证据 HEAD `86753abc14266f3ca055cdad71a271c359d9769f` 对应 push run `32604058382` / PR run `32604060824`；两者各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-06 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
 
 > G-06 本地门禁（2026-08-22）：G-05 最终闭环 HEAD `10cee6a7c0660865509acb7087835183bd5aa9ef` 的 push `32604302971` / PR `32604304677` 已各 11/11 green。实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 新增 `ClassificationRequestScope / ClassificationModelIdentity / ClassificationRenderContext / ClassificationCacheKey / ClassificationCacheRecord`、`ClassificationCacheProtocol`、`resolve_classification()` 与短 TTL Memory LRU；key 的 identity digest 绑定规范化 prompt、目录代际/权限/开关/黑名单/content digest、模型、capability、policy version 与 TTL。任何用户上下文绑定、非 `MODEL_SUCCESS`、错误 identity/ack、同 key 异值、超限、跨 owner 或时钟回退均 fail closed。本地四版本定向各 `110 passed`、联合各 `459 passed`、普通全量各 `1607 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 classification TTL roundtrip/reload/零 I/O smoke 均通过。制品 SHA256 为 wheel `d5c87bdd720081b7d1e6a4b706ece173b96ac595e58591bba2254dfbfe291abd`、sdist `6f2651a89f74c5ba3d9fe042d4a8020a50341f2a67728e60f3c0bfaef92c32b4`。精确 HEAD 双 run 待完成，G-07 锁定；现有 Categorize/payload 路径保持未接线，不创建全局 cache、不连接真实服务、不迁移、不部署。
+
+> G-06 远端闭环（2026-08-22）：本地证据 HEAD `6c4332e34cd6a2204b1e6ec9076cede177a054d0` 对应 push run `32606564939` / PR run `32606566273`；两者各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-07 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
 
 ---
 
@@ -853,7 +855,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05 最终闭环 HEAD 双 run 远端门禁已完成；G-06 本地门禁完成，精确 HEAD 双 run 远端门禁待完成，G-07 保持锁定；尚未接入运行时。
+状态：G-05 与 G-06 本地及精确 HEAD 双 run 远端门禁均已完成；G-07 前置依赖已解除但尚未实现；G-06 尚未接入运行时。
 
 对于高度相似的标准请求，可考虑：
 
@@ -879,6 +881,8 @@ Memory backend：`MemoryClassificationCache` 使用条目/单 record/总字节�
 本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 G-06 定向各 `110 passed`，Classification/G-04/G-05/ToolSnapshot/Provider/RuntimeSnapshot/Reload/ModelSelector/LLM Payload/Chat/Search/Builtin 联合各 `459 passed`；严格串行普通全量各 `1607 passed, 1 skipped`。首轮普通全量使用的旧 Python 3.10 临时环境缺少 FakeRedis，仅在 collection 阶段报告 4 个 `ModuleNotFoundError`、未执行测试；切换到依赖完整的四版本环境后全部通过，未修改产品代码规避。mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0；Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过。Ruff 0.16.2 全量、新文件 format、diff check，以及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
 
 制品门禁：fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `d5c87bdd720081b7d1e6a4b706ece173b96ac595e58591bba2254dfbfe291abd`、sdist SHA256 `6f2651a89f74c5ba3d9fe042d4a8020a50341f2a67728e60f3c0bfaef92c32b4`；两者各 84 个文件，包含 G-06 module，不含 `uv.lock`、cache 或 bytecode。Python 3.10/3.12 × wheel/sdist 四组仓库外安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload、scope/model/catalog identity、`MODEL_SUCCESS` record、fallback rejection、detached materialize、Memory miss/hit/expiry 与无模块级 cache；engine create、SQL execute、asyncpg connect、Redis command/connect 始终为 0。制品目录 `/tmp/moellm-g06-dist.DxM8lZ`，smoke 根目录 `/tmp/moellm-g06-smoke.01KHrz`。精确 HEAD 双 run 是 G-07 前置门禁；本阶段未读取 DSN/Redis URL/secret，未运行 migration，未连接服务，未接配置、startup/shutdown、`Categorize`、`LlmPayloadMixin` 或生产 runtime，未合并、未发布、未部署。
+
+远端证据：G-06 本地证据 HEAD `6c4332e34cd6a2204b1e6ec9076cede177a054d0` 对应 push run `32606564939` 与 PR run `32606566273`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-07 依赖已解除。本阶段未读取连接配置或 secret，未创建全局 cache，不接配置、startup/shutdown、现有 Categorize/payload 或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -1223,7 +1227,7 @@ runner_start_duration
 - [ ] Redis Failure Policy
 - [x] Tool Catalog Cache（G-04 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [x] Tool Schema Cache（G-05 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [ ] Classification Cache（G-06 本地门禁完成；精确 HEAD 双 run 待完成，尚未接生产 runtime）
+- [x] Classification Cache（G-06 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [ ] read_only tool parallelism
 - [ ] database metrics
 

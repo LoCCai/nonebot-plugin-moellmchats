@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T23:52:05+00:00
+lastmod: 2026-08-22T23:58:29+00:00
 ---
 
 # 02-plan-future-architecture
@@ -29,6 +29,8 @@ lastmod: 2026-08-22T23:52:05+00:00
 > G-05 远端闭环（2026-08-22）：本地证据 HEAD `86753abc14266f3ca055cdad71a271c359d9769f` 的 push `32604058382` / PR `32604060824` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-06 依赖已解除但尚未实现；未合并、未发布、未部署。
 
 > G-06 本地门禁（2026-08-22）：G-05 最终闭环 HEAD `10cee6a7c0660865509acb7087835183bd5aa9ef` 的 push `32604302971` / PR `32604304677` 已完成最终 11/11 双 gate。在此前提下，实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 将分类缓存冻结为上下文无关 scope、规范化 prompt digest、完整 catalog/model/capability/policy identity、仅成功模型结果的 canonical record、backend-neutral Protocol 与单 PID/loop 的短 TTL Memory LRU；timeout/parse fallback、内容拦截、上下文绑定、错误 identity/ack、同 key 异值、超限、时钟回退和跨 owner 均 fail closed。四版本定向各 `110 passed`、联合各 `459 passed`、全量各 `1607 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外 11 表/8 revision/reload/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，G-07 锁定；未接现有 Categorize/payload、配置、生命周期或生产 runtime，未创建全局 cache，未连接服务、未迁移、未部署。
+
+> G-06 远端闭环（2026-08-22）：本地证据 HEAD `6c4332e34cd6a2204b1e6ec9076cede177a054d0` 的 push `32606564939` / PR `32606566273` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-07 依赖已解除但尚未实现；未合并、未发布、未部署。
 
 ---
 
