@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T08:34:00+00:00
+lastmod: 2026-08-23T08:44:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -49,6 +49,7 @@ lastmod: 2026-08-23T08:34:00+00:00
 - H-04 本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 的 push `32625289294` / PR `32625291083` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-05 依赖已解除但尚未实现。
 - H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a51515a099e1bd2` 的 push `32625567979` / PR `32625569546` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-05 实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 已完成四版本定向各 `86 passed`、H-01～H-05/Runtime/Provider/Agent/Repository 相关联合各 `712 passed`、普通全量及最低依赖全量各 `2201 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/目标 Pyright、localhost Chromium、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-05/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-06 继续锁定。
 - H-05 只提供显式构造、未挂载的只读同源 Web Admin 与三项静态资产；token 只驻留页面内存，页面不暴露审批、激活或取消写操作，MCP/Token 明细没有安全 API 时不展示。无模块级 service/app/reader，未接路由/listener、配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime。
+- H-05 本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 的 push `32628961718` / PR `32628964171` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖已解除但尚未实现。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -823,7 +824,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-10、H-01～H-04 精确 HEAD 双 run 远端 gate green；H-05 本地门禁完成、精确 HEAD 双 run 待完成，H-06 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10、H-01～H-05 精确 HEAD 双 run 远端 gate green；H-06 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1283,7 +1284,9 @@ Metrics 数据最小化：`/metrics` 先固定当前 `RuntimeSnapshot`，再读�
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `0ee2b5779124b32ef20b1248004269819decbe969f59e9046f7d73fe19260645` / `8a5740fe27d2ff9ac31adcbc901447bf328b59c249dd20ce04b6045a3c02f76a`，各 97 个成员并包含 `web_admin.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-04 API、H-05 三资产/ASGI 正常，engine create、asyncpg connect 与 Redis client 均为 0。制品目录 `/tmp/moellm-h05-dist.lR9rNr`，重建目录 `/tmp/moellm-h05-rebuild.ZytkV0`，smoke 根目录 `/tmp/moellm-h05-smoke-final.Rzseq9`，Sandbox JUnit `/tmp/moellm-h05-final-sandbox.dNY6Uk/junit.xml`。
 
-状态：H-05 实现与本地门禁完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-06 继续锁定。当前 Web Admin 与 H-01～H-04 API 均未挂载，未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-05 本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 对应 push run `32628961718` 与 PR run `32628964171`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-06 依赖已解除但尚未实现。
+
+状态：H-05 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-06 前置依赖已解除。当前 Web Admin 与 H-01～H-04 API 均未挂载，未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
