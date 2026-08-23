@@ -14,6 +14,7 @@ from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
     ToolEffect,
     ToolResult,
+    render_tool_result,
     validate_tool_arguments,
 )
 from .tool_execution import (
@@ -289,22 +290,23 @@ class LlmToolsMixin:
                     # The shared executor has already applied the ToolSpec-specific
                     # text and image contract. Do not override it with the global
                     # fallback below.
+                    render_limit = (
+                        spec.result_limit
+                        if spec is not None and spec.result_limit is not None
+                        else result_limit
+                    )
                     result_limit = None
-                    result_text = result.text
                     result_images = list(result.images)
                     if result_images:
                         self._pending_vision_images.extend(result_images)
-                        if result_text:
-                            tool_result = (
-                                f"函数执行返回结果：\n{result_text}\n\n"
-                                f"[系统提示]：该函数还返回了 {len(result_images)} 张图片。"
-                            )
-                        else:
-                            tool_result = (
-                                f"函数执行完毕并返回了 {len(result_images)} 张图片。"
-                            )
+                    rendered_result = render_tool_result(
+                        result,
+                        max_chars=render_limit,
+                    )
+                    if rendered_result:
+                        tool_result = f"函数执行返回结果：\n{rendered_result}"
                     else:
-                        tool_result = result_text
+                        tool_result = "函数执行成功，但未返回有效结果。"
                 except Exception as e:
                     logger.error(traceback.format_exc())
                     tool_result = f"函数执行出错: {e!s}"
@@ -329,8 +331,6 @@ class LlmToolsMixin:
                         raise TypeError(
                             "NoneBot Provider handler 必须返回 ToolResult"
                         )
-                    plugin_text = plugin_result.text
-                    plugin_images = list(plugin_result.images)
                 else:
                     plugin_text, plugin_images = (
                         await event_simulator.dispatch_event(
@@ -341,6 +341,11 @@ class LlmToolsMixin:
                             plugin_name=func_name,
                         )
                     )
+                    plugin_result = ToolResult(
+                        text=plugin_text,
+                        images=tuple(plugin_images),
+                    )
+                plugin_images = list(plugin_result.images)
                 _PLUGIN_SYSTEM_HINT = (
                     "\n\n[系统提示]：上述结果已对用户可见。注意：若执行不正确或者用户的原始请求需要多个步骤，"
                     "请务重试或者继续调用下一个工具！如果所有任务均已完成，请直接做一两句话的简短总结，"
@@ -348,15 +353,11 @@ class LlmToolsMixin:
                 )
                 if plugin_images:
                     self._pending_vision_images.extend(plugin_images)
-                    text_part = (
-                        f"插件执行返回结果：\n{plugin_text}"
-                        if plugin_text
-                        else "插件执行完毕并返回了图片（见下方图片消息）"
-                    )
-                    tool_result = text_part + _PLUGIN_SYSTEM_HINT
-                elif plugin_text:
+                rendered_plugin_result = render_tool_result(plugin_result)
+                if rendered_plugin_result:
                     tool_result = (
-                        f"插件执行返回结果：\n{plugin_text}{_PLUGIN_SYSTEM_HINT}"
+                        f"插件执行返回结果：\n"
+                        f"{rendered_plugin_result}{_PLUGIN_SYSTEM_HINT}"
                     )
                 else:
                     tool_result = "插件已执行，但未返回有效文本。[系统提示]：如果有后续操作，请继续调用下一个工具。"

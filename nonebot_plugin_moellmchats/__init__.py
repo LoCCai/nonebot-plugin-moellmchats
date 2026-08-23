@@ -60,8 +60,11 @@ from .tool_contracts import (
     ToolEffect,
     ToolPolicy,
     ToolResult,
+    ToolResultCitation,
+    ToolResultFile,
     ToolSpec,
     register_tool,
+    render_tool_result,
 )
 from .tool_manager import ToolManagementView, ToolSnapshot, tool_manager
 from .tool_runtime import reload_tools_for_commands
@@ -88,8 +91,11 @@ __all__ = [
     "ToolEffect",
     "ToolPolicy",
     "ToolResult",
+    "ToolResultCitation",
+    "ToolResultFile",
     "ToolSpec",
     "register_tool",
+    "render_tool_result",
 ]
 
 __plugin_meta__ = PluginMetadata(

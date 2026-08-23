@@ -380,7 +380,24 @@ class GeneratedToolRunner:
             images = result.get("images") or []
             if not isinstance(images, list) or not all(isinstance(item, str) for item in images):
                 raise RuntimeError("工具 FD3 协议 images 非法")
-            return {"ok": True, "text": str(result.get("text") or ""), "images": images}
+            files = result.get("files", [])
+            citations = result.get("citations", [])
+            metadata = result.get("metadata", {})
+            if not isinstance(files, list):
+                raise RuntimeError("工具 FD3 协议 files 非法")
+            if not isinstance(citations, list):
+                raise RuntimeError("工具 FD3 协议 citations 非法")
+            if not isinstance(metadata, dict):
+                raise RuntimeError("工具 FD3 协议 metadata 非法")
+            return {
+                "ok": True,
+                "text": str(result.get("text") or ""),
+                "images": images,
+                "files": files,
+                "structured": result.get("structured"),
+                "citations": citations,
+                "metadata": metadata,
+            }
         error = response.get("error")
         if not isinstance(error, dict):
             raise RuntimeError("工具 FD3 失败响应缺少 error")
@@ -622,10 +639,26 @@ class GeneratedToolRunner:
             raise RuntimeError(
                 f"{response.get('error_type', 'ToolError')}: {response.get('error', '执行失败')}"
             )
-        return ToolResult(
-            text=str(response.get("text") or ""),
-            images=tuple(response.get("images") or ()),
-        )
+        images = response.get("images", ())
+        files = response.get("files", ())
+        citations = response.get("citations", ())
+        if not isinstance(images, (list, tuple)):
+            raise RuntimeError("工具结构化结果非法: images 不是数组")
+        if not isinstance(files, (list, tuple)):
+            raise RuntimeError("工具结构化结果非法: files 不是数组")
+        if not isinstance(citations, (list, tuple)):
+            raise RuntimeError("工具结构化结果非法: citations 不是数组")
+        try:
+            return ToolResult(
+                text=str(response.get("text") or ""),
+                images=tuple(images),
+                metadata=response.get("metadata", {}),
+                files=tuple(files),
+                structured=response.get("structured"),
+                citations=tuple(citations),
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"工具结构化结果非法: {error}") from None
 
     async def _execute_with_network_policy(
         self,

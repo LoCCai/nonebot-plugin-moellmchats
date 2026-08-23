@@ -21,6 +21,7 @@ from typing import Any
 
 _PROTOCOL_VERSION = 1
 _MAX_SOURCE_BYTES = 65_536
+_MAX_RESULT_BYTES = 49_152
 _SCMP_ACT_ALLOW = 0x7FFF0000
 _SCMP_ACT_ERRNO = 0x00050000
 _PROCESS_SYSCALLS = ("execve", "execveat", "fork", "vfork", "clone", "clone3")
@@ -467,19 +468,79 @@ async def _run_tests(
     return result
 
 
+def _validate_result_json_keys(
+    value: Any,
+    *,
+    active_containers: set[int] | None = None,
+) -> None:
+    """Reject JSON object keys that the wire encoder would silently coerce."""
+
+    if not isinstance(value, (dict, list, tuple)):
+        return
+    active = active_containers if active_containers is not None else set()
+    identity = id(value)
+    if identity in active:
+        raise ValueError("tool result contains a cyclic JSON container")
+    active.add(identity)
+    try:
+        if isinstance(value, dict):
+            if not all(isinstance(key, str) for key in value):
+                raise ValueError("tool result JSON object keys must be strings")
+            children = value.values()
+        else:
+            children = value
+        for child in children:
+            _validate_result_json_keys(
+                child,
+                active_containers=active,
+            )
+    finally:
+        active.remove(identity)
+
+
 def _normalize_result(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
         text = result.get("text") or result.get("content") or result.get("message") or ""
         images = result.get("images") or result.get("image_urls") or []
+        files = result.get("files", [])
+        structured = result.get("structured")
+        citations = result.get("citations", [])
+        metadata = result.get("metadata", {})
     else:
         text = str(result)
         images = []
+        files = []
+        structured = None
+        citations = []
+        metadata = {}
+    if images is None:
+        images = []
     if isinstance(images, str):
         images = [images]
-    return {
+    if not isinstance(images, (list, tuple)):
+        raise ValueError("tool result images must be a string array")
+    normalized = {
         "text": str(text),
-        "images": [str(item) for item in images if isinstance(item, str)],
+        "images": list(images),
+        "files": files,
+        "structured": structured,
+        "citations": citations,
+        "metadata": metadata,
     }
+    try:
+        _validate_result_json_keys(normalized)
+        payload = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (OverflowError, RecursionError, TypeError, UnicodeError, ValueError) as error:
+        raise ValueError("tool result is not bounded JSON") from error
+    if len(payload) > _MAX_RESULT_BYTES:
+        raise ValueError("tool result exceeds 48 KiB")
+    return normalized
 
 
 def _runtime_guard_for_request(

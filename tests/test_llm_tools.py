@@ -20,6 +20,8 @@ from nonebot_plugin_moellmchats.tool_contracts import (
     ToolEffect,
     ToolPolicy,
     ToolResult,
+    ToolResultCitation,
+    ToolResultFile,
     ToolSpec,
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
@@ -271,6 +273,60 @@ async def test_tool_result_and_images_are_bounded() -> None:
     assert "xxxxxxxxxx\n...[工具结果已截断]" in messages[-1]["content"]
     assert "x" * 11 not in messages[-1]["content"]
     assert len(harness._pending_vision_images) == 4
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_result_uses_one_model_and_history_rendering() -> None:
+    async def structured() -> ToolResult:
+        return ToolResult(
+            text="weather",
+            images=("private-image-reference",),
+            metadata={"provider": "demo"},
+            files=(
+                ToolResultFile(
+                    locator="attachment:forecast",
+                    name="forecast.json",
+                    media_type="application/json",
+                ),
+            ),
+            structured={"temperature": 26, "condition": "rain"},
+            citations=(
+                ToolResultCitation(
+                    title="Forecast source",
+                    url="https://example.com/forecast",
+                ),
+            ),
+        )
+
+    spec = ToolSpec(
+        name="structured",
+        description="structured result",
+        parameters={"type": "object", "properties": {}},
+        handler=structured,
+        result_limit=2_000,
+    )
+    harness = Harness({"structured": spec.as_legacy_schema()})
+
+    messages = await harness._execute_tools(
+        [_call(1, "structured")],
+        "",
+        [],
+        "",
+    )
+
+    content = messages[-1]["content"]
+    assert content.startswith("函数执行返回结果：\nweather")
+    assert "[结构化工具结果]" in content
+    assert '"structured":{"condition":"rain","temperature":26}' in content
+    assert '"locator":"attachment:forecast"' in content
+    assert '"url":"https://example.com/forecast"' in content
+    assert '"metadata":{"provider":"demo"}' in content
+    assert '"image_count":1' in content
+    assert "private-image-reference" not in content
+    assert harness._pending_vision_images == ["private-image-reference"]
+    assert harness.messages_handler.messages_entity.tool_messages[-1][
+        "content"
+    ] == content[:300]
 
 
 @pytest.mark.asyncio

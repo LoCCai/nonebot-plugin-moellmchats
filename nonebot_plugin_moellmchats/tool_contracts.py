@@ -3,9 +3,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
+import ipaddress
+import json
+import math
 import re
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeAlias
+from urllib.parse import urlsplit
 
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _JSON_TYPES = {"array", "boolean", "integer", "null", "number", "object", "string"}
@@ -24,6 +28,53 @@ _SECRET_NAME_RE = re.compile(r"^(?:\*|[A-Za-z_][A-Za-z0-9_]{0,127})$")
 
 CAPABILITY_SCHEMA_VERSION = 2
 CAPABILITY_DETECTOR_VERSION = 1
+
+TOOL_RESULT_SCHEMA_VERSION = 1
+TOOL_RESULT_MAX_PAYLOAD_BYTES = 16 * 1_024 * 1_024
+TOOL_RESULT_MAX_TEXT_CHARS = 64_000
+TOOL_RESULT_MAX_IMAGES = 32
+TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS = 4 * 1_024 * 1_024
+TOOL_RESULT_MAX_FILES = 32
+TOOL_RESULT_MAX_CITATIONS = 64
+TOOL_RESULT_MAX_JSON_DEPTH = 24
+TOOL_RESULT_MAX_JSON_NODES = 10_000
+TOOL_RESULT_MAX_JSON_STRING_CHARS = 32_768
+TOOL_RESULT_MAX_STRUCTURED_BYTES = 32_768
+TOOL_RESULT_MAX_METADATA_BYTES = 16_384
+
+_POSTGRES_BIGINT_MAX = (1 << 63) - 1
+_TOOL_RESULT_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_TOOL_RESULT_OPAQUE_LOCATOR_RE = re.compile(
+    r"^[a-z][a-z0-9+.-]{1,31}:[A-Za-z0-9][A-Za-z0-9._~:+/=@%-]{0,479}$"
+)
+_TOOL_RESULT_FILE_SCHEMES = frozenset(
+    {"artifact", "attachment", "blob", "object", "result", "urn"}
+)
+_TOOL_RESULT_MEDIA_TYPE_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/"
+    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$"
+)
+_TOOL_RESULT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_TOOL_RESULT_TRUNCATION_MARKER = "\n...[工具结果已截断]"
+_BLOCKED_CITATION_HOSTS = frozenset(
+    {
+        "instance-data",
+        "localhost",
+        "metadata.google",
+        "metadata.google.internal",
+    }
+)
+
+ToolResultJsonValue: TypeAlias = (
+    bool
+    | int
+    | float
+    | str
+    | Mapping[str, "ToolResultJsonValue"]
+    | list["ToolResultJsonValue"]
+    | tuple["ToolResultJsonValue", ...]
+    | None
+)
 
 
 class ToolEffect(str, Enum):
@@ -579,11 +630,494 @@ class ToolContext:
     confirmed: bool = False
 
 
+def _require_tool_result_text(
+    value: object,
+    *,
+    label: str,
+    maximum: int,
+    allow_empty: bool,
+    reject_controls: bool = False,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or (not allow_empty and not value)
+        or len(value) > maximum
+        or "\x00" in value
+        or (reject_controls and _TOOL_RESULT_CONTROL_RE.search(value))
+    ):
+        empty = "" if allow_empty else "非空"
+        raise ValueError(f"{label} 必须是有界{empty}安全字符串")
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        raise ValueError(f"{label} 必须是有效 UTF-8 文本") from None
+    return value
+
+
+def _freeze_tool_result_json(
+    value: ToolResultJsonValue,
+    *,
+    label: str,
+    depth: int = 0,
+    active_containers: set[int] | None = None,
+    node_budget: list[int] | None = None,
+) -> ToolResultJsonValue:
+    if depth > TOOL_RESULT_MAX_JSON_DEPTH:
+        raise ValueError(f"{label} JSON 嵌套超过安全上限")
+    budget = node_budget if node_budget is not None else [0]
+    budget[0] += 1
+    if budget[0] > TOOL_RESULT_MAX_JSON_NODES:
+        raise ValueError(f"{label} JSON 节点数超过安全上限")
+
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not -_POSTGRES_BIGINT_MAX <= value <= _POSTGRES_BIGINT_MAX:
+            raise ValueError(f"{label} JSON 整数超过有界 64-bit 范围")
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{label} JSON 浮点数必须有限")
+        return value
+    if isinstance(value, str):
+        return _require_tool_result_text(
+            value,
+            label=f"{label} JSON 字符串",
+            maximum=TOOL_RESULT_MAX_JSON_STRING_CHARS,
+            allow_empty=True,
+        )
+
+    if isinstance(value, Mapping):
+        active = active_containers if active_containers is not None else set()
+        identity = id(value)
+        if identity in active:
+            raise ValueError(f"{label} JSON 不得包含循环引用")
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError(f"{label} JSON 对象键必须是字符串")
+        active.add(identity)
+        try:
+            frozen: dict[str, ToolResultJsonValue] = {}
+            for key in sorted(value):
+                normalized_key = _require_tool_result_text(
+                    key,
+                    label=f"{label} JSON 对象键",
+                    maximum=256,
+                    allow_empty=False,
+                    reject_controls=True,
+                )
+                frozen[normalized_key] = _freeze_tool_result_json(
+                    value[key],
+                    label=label,
+                    depth=depth + 1,
+                    active_containers=active,
+                    node_budget=budget,
+                )
+        finally:
+            active.remove(identity)
+        return MappingProxyType(frozen)
+
+    if isinstance(value, (list, tuple)):
+        active = active_containers if active_containers is not None else set()
+        identity = id(value)
+        if identity in active:
+            raise ValueError(f"{label} JSON 不得包含循环引用")
+        active.add(identity)
+        try:
+            return tuple(
+                _freeze_tool_result_json(
+                    item,
+                    label=label,
+                    depth=depth + 1,
+                    active_containers=active,
+                    node_budget=budget,
+                )
+                for item in value
+            )
+        finally:
+            active.remove(identity)
+
+    raise ValueError(f"{label} 必须是 JSON 兼容值")
+
+
+def mutable_tool_result_json(value: ToolResultJsonValue) -> Any:
+    """Return a detached mutable JSON tree for transports and callers."""
+
+    if isinstance(value, Mapping):
+        return {
+            key: mutable_tool_result_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [mutable_tool_result_json(item) for item in value]
+    return value
+
+
+def _canonical_tool_result_json(value: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (OverflowError, TypeError, UnicodeError, ValueError):
+        raise ValueError("工具结果必须是 canonical JSON") from None
+
+
+def _tool_result_json_size(value: ToolResultJsonValue) -> int:
+    if not isinstance(value, Mapping):
+        wrapped: Mapping[str, Any] = {"value": mutable_tool_result_json(value)}
+    else:
+        wrapped = mutable_tool_result_json(value)
+    return len(_canonical_tool_result_json(wrapped).encode("utf-8"))
+
+
+def _require_opaque_file_locator(value: object) -> str:
+    locator = _require_tool_result_text(
+        value,
+        label="ToolResultFile.locator",
+        maximum=512,
+        allow_empty=False,
+        reject_controls=True,
+    )
+    if not _TOOL_RESULT_OPAQUE_LOCATOR_RE.fullmatch(locator):
+        raise ValueError("ToolResultFile.locator 必须是安全 opaque locator")
+    scheme, payload = locator.split(":", 1)
+    if scheme not in _TOOL_RESULT_FILE_SCHEMES:
+        raise ValueError("ToolResultFile.locator scheme 不在安全允许列表")
+    if payload.startswith(("/", "\\", "~", ".")) or "\\" in payload:
+        raise ValueError("ToolResultFile.locator 不得携带主机路径")
+    if any(part == ".." for part in re.split(r"[/:]", payload)):
+        raise ValueError("ToolResultFile.locator 不得包含路径穿越")
+    return locator
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultFile:
+    """A display-safe file reference; never a host filesystem path."""
+
+    locator: str
+    name: str = ""
+    media_type: str = ""
+    size_bytes: int | None = None
+    sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "locator", _require_opaque_file_locator(self.locator))
+        name = _require_tool_result_text(
+            self.name,
+            label="ToolResultFile.name",
+            maximum=255,
+            allow_empty=True,
+            reject_controls=True,
+        )
+        if "/" in name or "\\" in name or name in {".", ".."}:
+            raise ValueError("ToolResultFile.name 不得是主机路径")
+        if not isinstance(self.media_type, str) or (
+            self.media_type
+            and not _TOOL_RESULT_MEDIA_TYPE_RE.fullmatch(self.media_type)
+        ):
+            raise ValueError("ToolResultFile.media_type 必须是有界 MIME type")
+        if self.size_bytes is not None and (
+            not isinstance(self.size_bytes, int)
+            or isinstance(self.size_bytes, bool)
+            or not 0 <= self.size_bytes <= _POSTGRES_BIGINT_MAX
+        ):
+            raise ValueError("ToolResultFile.size_bytes 必须是非负有界整数")
+        if self.sha256 is not None and (
+            not isinstance(self.sha256, str)
+            or not _TOOL_RESULT_SHA256_RE.fullmatch(self.sha256)
+        ):
+            raise ValueError("ToolResultFile.sha256 必须是小写 SHA-256")
+
+    @classmethod
+    def from_value(cls, value: ToolResultFile | Mapping[str, Any]) -> ToolResultFile:
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise ValueError("ToolResult.files 只能包含 ToolResultFile 或映射")
+        allowed = {"locator", "media_type", "name", "sha256", "size_bytes"}
+        if set(value) - allowed or "locator" not in value:
+            raise ValueError("ToolResult.files 文件映射字段非法")
+        name = value.get("name", "")
+        media_type = value.get("media_type", "")
+        return cls(
+            locator=value["locator"],
+            name="" if name is None else name,
+            media_type="" if media_type is None else media_type,
+            size_bytes=value.get("size_bytes"),
+            sha256=value.get("sha256"),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "locator": self.locator,
+            "media_type": self.media_type or None,
+            "name": self.name or None,
+            "sha256": self.sha256,
+            "size_bytes": self.size_bytes,
+        }
+
+
+def _require_citation_url(value: object) -> str:
+    url = _require_tool_result_text(
+        value,
+        label="ToolResultCitation.url",
+        maximum=2_048,
+        allow_empty=False,
+        reject_controls=True,
+    )
+    if any(character.isspace() for character in url) or "\\" in url:
+        raise ValueError("ToolResultCitation.url 不得包含空白或反斜线")
+    try:
+        parsed = urlsplit(url)
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        raise ValueError("ToolResultCitation.url 不是安全 HTTPS URL") from None
+    if (
+        parsed.scheme.lower() != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.fragment
+        or hostname.endswith(".")
+        or hostname in _BLOCKED_CITATION_HOSTS
+        or hostname.endswith((".internal", ".local", ".localhost"))
+    ):
+        raise ValueError("ToolResultCitation.url 不是受信边界内的 HTTPS URL")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        if "." not in hostname:
+            raise ValueError("ToolResultCitation.url 必须使用完整公网主机名") from None
+    else:
+        if not address.is_global:
+            raise ValueError("ToolResultCitation.url 不得指向私网或保留地址")
+    return url
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultCitation:
+    """A bounded citation whose target is safe to expose, but never auto-fetched."""
+
+    title: str
+    url: str
+    excerpt: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "title",
+            _require_tool_result_text(
+                self.title,
+                label="ToolResultCitation.title",
+                maximum=512,
+                allow_empty=False,
+            ),
+        )
+        object.__setattr__(self, "url", _require_citation_url(self.url))
+        object.__setattr__(
+            self,
+            "excerpt",
+            _require_tool_result_text(
+                self.excerpt,
+                label="ToolResultCitation.excerpt",
+                maximum=2_000,
+                allow_empty=True,
+            ),
+        )
+
+    @classmethod
+    def from_value(
+        cls,
+        value: ToolResultCitation | Mapping[str, Any],
+    ) -> ToolResultCitation:
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise ValueError(
+                "ToolResult.citations 只能包含 ToolResultCitation 或映射"
+            )
+        allowed = {"excerpt", "title", "url"}
+        if set(value) - allowed or not {"title", "url"}.issubset(value):
+            raise ValueError("ToolResult.citations 引用映射字段非法")
+        excerpt = value.get("excerpt", "")
+        return cls(
+            title=value["title"],
+            url=value["url"],
+            excerpt="" if excerpt is None else excerpt,
+        )
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {
+            "excerpt": self.excerpt or None,
+            "title": self.title,
+            "url": self.url,
+        }
+
+
 @dataclass(frozen=True)
 class ToolResult:
+    """Detached, deeply immutable, bounded output shared by every tool path.
+
+    The first three fields intentionally retain their historical positional
+    order.  New structured fields should be supplied by keyword.
+    """
+
     text: str = ""
     images: tuple[str, ...] = ()
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, ToolResultJsonValue] = field(default_factory=dict)
+    files: tuple[ToolResultFile, ...] = ()
+    structured: ToolResultJsonValue = None
+    citations: tuple[ToolResultCitation, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "text",
+            _require_tool_result_text(
+                self.text,
+                label="ToolResult.text",
+                maximum=TOOL_RESULT_MAX_TEXT_CHARS,
+                allow_empty=True,
+            ),
+        )
+        if not isinstance(self.images, (list, tuple)):
+            raise ValueError("ToolResult.images 必须是字符串数组")
+        if len(self.images) > TOOL_RESULT_MAX_IMAGES:
+            raise ValueError("ToolResult.images 超过安全数量上限")
+        images = tuple(
+            _require_tool_result_text(
+                item,
+                label="ToolResult.images item",
+                maximum=TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,
+                allow_empty=False,
+                reject_controls=True,
+            )
+            for item in self.images
+        )
+        object.__setattr__(self, "images", images)
+
+        if not isinstance(self.files, (list, tuple)):
+            raise ValueError("ToolResult.files 必须是文件引用数组")
+        if len(self.files) > TOOL_RESULT_MAX_FILES:
+            raise ValueError("ToolResult.files 超过安全数量上限")
+        object.__setattr__(
+            self,
+            "files",
+            tuple(ToolResultFile.from_value(item) for item in self.files),
+        )
+
+        if not isinstance(self.citations, (list, tuple)):
+            raise ValueError("ToolResult.citations 必须是引用数组")
+        if len(self.citations) > TOOL_RESULT_MAX_CITATIONS:
+            raise ValueError("ToolResult.citations 超过安全数量上限")
+        object.__setattr__(
+            self,
+            "citations",
+            tuple(
+                ToolResultCitation.from_value(item) for item in self.citations
+            ),
+        )
+
+        if not isinstance(self.metadata, Mapping):
+            raise ValueError("ToolResult.metadata 必须是映射")
+        frozen_metadata = _freeze_tool_result_json(
+            self.metadata,
+            label="ToolResult.metadata",
+        )
+        assert isinstance(frozen_metadata, Mapping)
+        if _tool_result_json_size(frozen_metadata) > TOOL_RESULT_MAX_METADATA_BYTES:
+            raise ValueError("ToolResult.metadata 超过安全字节上限")
+        object.__setattr__(self, "metadata", frozen_metadata)
+
+        frozen_structured = _freeze_tool_result_json(
+            self.structured,
+            label="ToolResult.structured",
+        )
+        if (
+            frozen_structured is not None
+            and _tool_result_json_size(frozen_structured)
+            > TOOL_RESULT_MAX_STRUCTURED_BYTES
+        ):
+            raise ValueError("ToolResult.structured 超过安全字节上限")
+        object.__setattr__(self, "structured", frozen_structured)
+
+        if len(self.canonical_json().encode("utf-8")) > TOOL_RESULT_MAX_PAYLOAD_BYTES:
+            raise ValueError("ToolResult canonical payload 超过安全字节上限")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "citations": [item.as_dict() for item in self.citations],
+            "files": [item.as_dict() for item in self.files],
+            "images": list(self.images),
+            "metadata": mutable_tool_result_json(self.metadata),
+            "structured": mutable_tool_result_json(self.structured),
+            "text": self.text,
+        }
+
+    def canonical_json(self) -> str:
+        return _canonical_tool_result_json(
+            {
+                "result": self.as_dict(),
+                "schema_version": TOOL_RESULT_SCHEMA_VERSION,
+            }
+        )
+
+    def render(self, *, max_chars: int | None = None) -> str:
+        return render_tool_result(self, max_chars=max_chars)
+
+
+def render_tool_result(
+    result: ToolResult,
+    *,
+    max_chars: int | None = None,
+) -> str:
+    """Render one canonical model/history view without exposing image locators."""
+
+    if not isinstance(result, ToolResult):
+        raise TypeError("render_tool_result 只接受 ToolResult")
+    if max_chars is not None and (
+        not isinstance(max_chars, int)
+        or isinstance(max_chars, bool)
+        or max_chars <= 0
+    ):
+        raise ValueError("render_tool_result.max_chars 必须是正整数或 None")
+
+    supplemental: dict[str, Any] = {}
+    if result.images:
+        supplemental["image_count"] = len(result.images)
+    if result.files:
+        supplemental["files"] = [item.as_dict() for item in result.files]
+    if result.structured is not None:
+        supplemental["structured"] = mutable_tool_result_json(
+            result.structured
+        )
+    if result.citations:
+        supplemental["citations"] = [
+            item.as_dict() for item in result.citations
+        ]
+    if result.metadata:
+        supplemental["metadata"] = mutable_tool_result_json(result.metadata)
+
+    parts = [result.text] if result.text else []
+    if supplemental:
+        parts.append(
+            "[结构化工具结果]\n"
+            + _canonical_tool_result_json(
+                {
+                    "result": supplemental,
+                    "schema_version": TOOL_RESULT_SCHEMA_VERSION,
+                }
+            )
+        )
+    rendered = "\n\n".join(parts)
+    if max_chars is not None and len(rendered) > max_chars:
+        return rendered[:max_chars] + _TOOL_RESULT_TRUNCATION_MARKER
+    return rendered
 
 
 ToolHandler = Callable[..., Awaitable[Any] | Any]

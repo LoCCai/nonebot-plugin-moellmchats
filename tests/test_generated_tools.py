@@ -859,7 +859,10 @@ async def test_runner_rejects_fd3_protocol_result_flood(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     source.chmod(0o644)
-    with pytest.raises(RuntimeError, match="输出超过"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"ValueError: tool result exceeds 48 KiB",
+    ):
         await GeneratedToolRunner().execute_custom(
             source,
             "protocol_flood",

@@ -136,18 +136,14 @@ async def test_global_result_limits_apply_without_tool_override(monkeypatch) -> 
     assert result.text == "abcde\n...[工具结果已截断]"
     assert result.images == ("image:1",)
     assert result.metadata == {"source": "legacy"}
-    assert isinstance(result.metadata, dict)
+    with pytest.raises(TypeError):
+        result.metadata["source"] = "changed"  # type: ignore[index]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("result", "message"),
     [
-        (ToolResult(text=123), "text 必须是字符串"),
-        (ToolResult(images="image:1"), "images 必须是字符串数组"),
-        (ToolResult(images=("",)), "images 只能包含非空字符串"),
-        (ToolResult(metadata=[]), "metadata 必须是映射"),
-        (ToolResult(metadata={1: "value"}), "metadata 的键必须是字符串"),
         ({"text": 123}, "text 必须是字符串"),
         ({"images": "image:1"}, "images 必须是字符串数组"),
         ({"metadata": []}, "metadata 必须是映射"),

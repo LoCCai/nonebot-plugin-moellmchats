@@ -48,9 +48,16 @@ def is_tool_superuser(bot: Any, event: Any) -> bool:
 
 def _structured_result_fields(
     value: ToolResult | dict[str, Any],
-) -> tuple[Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any, Any, Any]:
     if isinstance(value, ToolResult):
-        return value.text, value.images, value.metadata
+        return (
+            value.text,
+            value.images,
+            value.files,
+            value.structured,
+            value.citations,
+            value.metadata,
+        )
 
     text_values: list[str] = []
     for key in ("text", "content", "message"):
@@ -79,7 +86,14 @@ def _structured_result_fields(
                 )
             image_values.append(item)
     images = next((item for item in image_values if item), ())
-    return text, images, value.get("metadata", {})
+    return (
+        text,
+        images,
+        value.get("files", ()),
+        value.get("structured"),
+        value.get("citations", ()),
+        value.get("metadata", {}),
+    )
 
 
 def _normalize_result(value: Any, *, spec: Any) -> ToolResult:
@@ -103,7 +117,9 @@ def _normalize_result(value: Any, *, spec: Any) -> ToolResult:
         raise ToolExecutionError("工具结果图片上限配置无效")
 
     if isinstance(value, (ToolResult, dict)):
-        text, images, metadata = _structured_result_fields(value)
+        text, images, files, structured, citations, metadata = (
+            _structured_result_fields(value)
+        )
         if not isinstance(text, str):
             raise ToolExecutionError("工具结构化结果 text 必须是字符串")
         if not isinstance(images, (list, tuple)):
@@ -115,19 +131,27 @@ def _normalize_result(value: Any, *, spec: Any) -> ToolResult:
         if not all(isinstance(key, str) for key in metadata):
             raise ToolExecutionError("工具结构化结果 metadata 的键必须是字符串")
         normalized_images = tuple(images[:image_limit])
-        normalized_metadata = dict(metadata)
     else:
         text = str(value)
         normalized_images = ()
-        normalized_metadata = {}
+        files = ()
+        structured = None
+        citations = ()
+        metadata = {}
 
     if len(text) > result_limit:
         text = text[:result_limit] + "\n...[工具结果已截断]"
-    return ToolResult(
-        text=text,
-        images=normalized_images,
-        metadata=normalized_metadata,
-    )
+    try:
+        return ToolResult(
+            text=text,
+            images=normalized_images,
+            metadata=metadata,
+            files=files,
+            structured=structured,
+            citations=citations,
+        )
+    except (TypeError, ValueError) as error:
+        raise ToolExecutionError(f"工具结构化结果无效: {error}") from None
 
 
 async def _prepare_custom_tool_call(

@@ -304,6 +304,38 @@ async def test_sandbox_artifact_fd3_and_uid_drop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sandbox_fd3_preserves_bounded_structured_tool_result() -> None:
+    result = await _execute(
+        b"async def sandbox_probe():\n"
+        b"    return {\n"
+        b"        'text': 'weather',\n"
+        b"        'images': ['image:one'],\n"
+        b"        'files': [{\n"
+        b"            'locator': 'result:forecast',\n"
+        b"            'name': 'forecast.json',\n"
+        b"            'media_type': 'application/json',\n"
+        b"        }],\n"
+        b"        'structured': {'temperature': 26, 'rain': True},\n"
+        b"        'citations': [{\n"
+        b"            'title': 'Forecast source',\n"
+        b"            'url': 'https://example.com/forecast',\n"
+        b"        }],\n"
+        b"        'metadata': {'worker': 'fd3'},\n"
+        b"    }\n"
+    )
+
+    assert result.text == "weather"
+    assert result.images == ("image:one",)
+    assert result.files[0].locator == "result:forecast"
+    assert result.structured == {"rain": True, "temperature": 26}
+    assert result.citations[0].url == "https://example.com/forecast"
+    assert result.metadata == {"worker": "fd3"}
+    assert "[结构化工具结果]" in result.render()
+    with pytest.raises(TypeError):
+        result.structured["rain"] = False  # type: ignore[index]
+
+
+@pytest.mark.asyncio
 async def test_sandbox_uses_private_fixed_uts_identity() -> None:
     parent_uts_namespace = os.readlink("/proc/self/ns/uts")
     source = (
