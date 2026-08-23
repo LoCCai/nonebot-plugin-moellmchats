@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T00:37:46+00:00
+lastmod: 2026-08-23T00:45:22+00:00
 ---
 
 # 04-implementation-backlog
@@ -26,7 +26,7 @@ lastmod: 2026-08-23T00:37:46+00:00
 - G-05 只提供完整 schema/toolset identity、canonical immutable record、backend-neutral Protocol、显式 parity-safe ToolSnapshot builder 与单 PID/loop Memory LRU；现有 `get_llm_payload_tools()` / `_build_payload()` 路径保持未接线，没有全局 cache、Redis backend、配置或生命周期，不读取 DSN/Redis URL，不连接真实服务。
 - G-05 最终闭环 HEAD `10cee6a7c0660865509acb7087835183bd5aa9ef` 的 push `32604302971` / PR `32604304677` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-06 实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 已完成四版本定向各 `110 passed`、相关联合各 `459 passed`、普通全量各 `1607 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/classification TTL roundtrip/reload/零 I/O smoke；本地证据 HEAD `6c4332e34cd6a2204b1e6ec9076cede177a054d0` 的 push `32606564939` / PR `32606566273` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-07 依赖已解除但尚未实现。
 - G-06 只提供显式 context-independent scope、规范化 prompt/catalog/model/capability/policy/TTL identity、仅 `MODEL_SUCCESS` 的 canonical immutable record、backend-neutral Protocol、async resolver 与单 PID/loop 短 TTL Memory LRU；现有 `Categorize` / `LlmPayloadMixin` 路径保持未接线，没有全局 cache、Redis backend、配置或生命周期，不读取 DSN/Redis URL，不连接真实服务。
-- G-06 最终闭环文档 HEAD `d773176c6fddebc2dcb92e05fc42ab633e29e77a` 的 push `32606826337` / PR `32606828225` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-07 实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 已完成四版本定向各 `94 passed`、数据库/Repository/历史缓存/摘要联合各 `552 passed`、普通全量各 `1670 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/离线 DDL/usage lease roundtrip/reload/零真实 I/O smoke；精确 HEAD 双 run gate 待完成，G-08 继续锁定。
+- G-06 最终闭环文档 HEAD `d773176c6fddebc2dcb92e05fc42ab633e29e77a` 的 push `32606826337` / PR `32606828225` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-07 实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 已完成四版本定向各 `94 passed`、数据库/Repository/历史缓存/摘要联合各 `552 passed`、普通全量各 `1670 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/离线 DDL/usage lease roundtrip/reload/零真实 I/O smoke；本地证据 HEAD `09cbbe2e170cf6404568e6e4c24018e16e1a2e74` 的 push `32608582316` / PR `32608585076` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-08 依赖已解除但尚未实现。
 - G-07 只提供 schema-aligned immutable Usage、兼容的可选 `BatchUsageRepository`、有界单 lease async queue 与显式 session 的 PostgreSQL batch Repository；未接 `llm_api`、50 条内存 `token_usage_history`、配置、生命周期、计价、spool 或生产 runtime，不创建全局 queue/repository，不读取 DSN，不连接真实 PostgreSQL/Redis。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
@@ -802,7 +802,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-06 精确 HEAD 双 run 远端 gate green；G-07 本地门禁完成、精确 HEAD 双 run 待完成；G-08 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-07 精确 HEAD 双 run 远端 gate green；G-08 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1116,11 +1116,15 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条 immutable dr
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `b7164d2a2fd13e46879acd461b1970f600c344c32482ab6ad729b38a798f3555` / `3a89382360adae7b33d807aeb60fcf5af7eb24be11c04a6e94006e68cf8d06f6`，各 87 个文件且包含三个 G-07 module，不含 `uv.lock`、cache 或 bytecode；sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload、Usage record/租约 release+ack roundtrip、兼容双 Protocol、显式 session→Repository 构造且无模块级 queue；engine create、asyncpg connect、Redis command 均为 0。制品目录 `/tmp/moellm-g07-dist.qjGpAB`，smoke 根目录 `/tmp/moellm-g07-smoke.EjMcly`。精确 HEAD 双 run 是 G-08 前置门禁；当前不接 `llm_api`、内存 token history、配置、startup/shutdown、计价、spool 或生产 runtime，不新增 migration，不读取连接信息、不连接真实服务，未合并、未发布、未部署。
 
-状态：G-07 本地门禁完成；精确 HEAD 双 run 远端门禁待完成，G-08 保持锁定。
+远端证据：G-07 本地证据 HEAD `09cbbe2e170cf6404568e6e4c24018e16e1a2e74` 对应 push run `32608582316` 与 PR run `32608585076`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-08 依赖已解除。本阶段未读取连接配置或 secret，不接 `llm_api`、配置、生命周期或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；D-09 保持锁定。未合并、未 promotion、未发布、未部署。
+
+状态：G-07 本地与精确 HEAD 双 run 远端门禁均已完成；G-08 前置依赖已解除。
 
 ---
 
 ## G-08 Batch Audit Write
+
+状态：G-07 前置门禁已完成，G-08 依赖已解除但尚未实现或接入运行时。
 
 ---
 
