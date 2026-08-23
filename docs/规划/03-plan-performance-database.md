@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T02:08:33+00:00
+lastmod: 2026-08-23T03:08:00+00:00
 ---
 
 # 03-plan-performance-database
@@ -43,6 +43,8 @@ lastmod: 2026-08-23T02:08:33+00:00
 > G-09 本地门禁（2026-08-23）：G-08 最终闭环 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已各 11/11 green。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增 `ReadOnlyParallelExecutionReport / ReadOnlyParallelToolExecutor`。executor 每次重新调用 E-07 Scheduler，只接受精确覆盖计划、调用方已完成信任与 capability 授权的 async invocation，并在启动前再次拒绝 mutating 与确认门禁；整个计划共享一个 `DeadlineContext`，工具只收到声明的传递依赖结果。串行与并行批次均使用显式子任务，`FIRST_COMPLETED` 首错即取消并 drain 同批任务且跳过后续批次；调用方取消原样传播，子任务自行取消与 handler 失败转为不泄漏原始文本的安全错误。四版本定向各 `55 passed`、联合各 `366 passed`、普通全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品及四组包外 11 表/8 revision/真实并发度 2/零数据库与 Redis I/O smoke 均通过。制品 SHA256 为 wheel `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922`、sdist `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`。精确 HEAD 双 run 待完成，G-10 锁定；未接现有 runtime，未新增模块级 executor、配置或生命周期，不迁移、不连接真实服务、不部署。
 
 > G-09 远端闭环（2026-08-23）：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 对应 push run `32612014895` / PR run `32612017136`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
+
+> G-10 本地门禁（2026-08-23）：G-09 最终闭环 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已各 11/11 green。在此前提下，实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增 generation-pinned `TrustedRunnerPool`。Pool 仅接受显式 allowlist 中可信 registered/builtin、in-process、强类型只读、无确认/capability/runtime 参数且结果非外部来源的 async handler；每次执行重新做 `EXECUTION` trust 决策。默认 4 worker/64 outstanding，显式生命周期绑定 PID/event loop，共享 deadline 覆盖排队与执行；有界背压、超时、取消和关闭均 cancel+drain，异常文本不泄漏。四版本定向各 `30 passed`、联合各 `397 passed`、普通全量及最低依赖全量各 `1790 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、重建与四组包外 11 表/8 revision/离线 DDL/reload/并发度 2/关闭零残留/零数据库与 Redis I/O smoke 均通过。制品 SHA256 为 wheel `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f`、sdist `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`。精确 HEAD 双 run 待完成，H-01 锁定；未接运行时、配置或生命周期，不迁移、不连接真实服务、不部署。
 
 ---
 
@@ -867,7 +869,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05～G-09 本地及精确 HEAD 双 run 远端门禁均已完成；G-10 依赖已解除但尚未实现；G-06/G-07/G-08/G-09 尚未接入运行时。
+状态：G-05～G-09 本地及精确 HEAD 双 run 远端门禁均已完成；G-10 本地门禁已完成但精确 HEAD 双 run 待验证，H-01 保持锁定；G-06～G-10 尚未接入运行时。
 
 对于高度相似的标准请求，可考虑：
 
@@ -972,6 +974,14 @@ worker 4
 ```
 
 不适用于 Generated Tool。
+
+G-10 实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 将这一优化收敛为独立、显式构造的 `TrustedRunnerPool`，不改变 Generated Tool 的 one-call-one-process。Pool 固定一个 `ProviderCatalogSnapshot` generation 和显式 allowlist，只允许 `TRUSTED`、`REGISTERED / BUILTIN`、`IN_PROCESS`、强类型 `READ_ONLY`、`UNVERIFIED` 结果、无需确认且无 capability policy 的可取消 async handler；需要 live Bot/Event/Tool Context/Tool Manager 参数、MCP/Generated 来源、Builtin 外部结果或 mutating 工具均在构造期 fail closed。每次入队还会重新执行 catalog 的 `EXECUTION` trust/permission 决策，不复用构造时授权。
+
+默认固定 4 个 async worker、最多 64 个 outstanding，范围分别限制为 1～64 与 worker_count～4096；满载直接拒绝，不创建无界队列或 task。Pool 仅能显式 start/close，绑定 PID 与 event loop，关闭后不可重启，也没有模块级实例。一个 `DeadlineContext` 同时覆盖排队和执行，worker 不重置预算；排队撤销、运行中 timeout、调用方 cancellation 与 close 都会取消并 drain invocation，确保释放 worker 后才返回。handler 自行取消和普通异常转为不泄漏原始文本的安全错误，frozen report/snapshot 保留 generation、worker identity、trust decision 与有界计数证据。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `30 passed`、Provider/Execution/Graph/Scheduler/Conflict/Parallel/Agent Runtime 联合各 `397 passed`、严格串行普通全量各 `1790 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1790 passed, 1 skipped`；Ruff 0.16.2、diff check 与 Pyright 1.1.407 为 `0 errors, 0 warnings`。
+
+fresh wheel/sdist SHA256 分别为 `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f` / `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`，各 92 个成员并包含 `trusted_runner_pool.py`，Twine 及 sdist 重建同哈希通过。Python 3.10/3.12 × wheel/sdist 四组仓库外 smoke 确认 site-packages 加载、11 表、8 revision、离线 DDL、generation 1、真实并发度 2、worker IDs 1/2、无模块级 Pool、close 后零残留 task，以及 engine create/asyncpg connect/Redis client/command 全为 0。精确 HEAD 双 run 仍是 H-01 前置门禁；当前未接 `_execute_tools`、G-09 executor、配置、startup/shutdown、Repository、PostgreSQL 或 Redis，未运行 migration，未合并、未发布、未部署。
 
 ---
 

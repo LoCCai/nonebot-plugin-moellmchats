@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T02:08:33+00:00
+lastmod: 2026-08-23T03:08:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -43,6 +43,8 @@ lastmod: 2026-08-23T02:08:33+00:00
 > G-09 本地门禁（2026-08-23）：G-08 最终闭环 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已完成最终 11/11 双 gate。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `ReadOnlyParallelToolExecutor`：内部重新生成 E-07 可信计划，只接受调用方已完成信任/capability 授权且精确覆盖计划的 async invocation，再次拒绝非强类型只读和确认门禁；整个计划共用一个 `DeadlineContext`，工具只看到声明的传递依赖结果。每批显式创建子任务并用 `FIRST_COMPLETED` fail fast，失败、超时或取消均先取消并 drain 同批任务，不启动后续批次；调用方取消原样传播，子任务自行取消与 handler 失败转为不泄漏异常文本的安全错误。四版本定向各 `55 passed`、联合各 `366 passed`、全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外真实并发/前置拒绝/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，G-10 锁定；现有 chat/tool runtime 未接线，未创建模块级 executor、配置或生命周期，未迁移、未连接服务、未部署。
 
 > G-09 远端闭环（2026-08-23）：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 的 push `32612014895` / PR `32612017136` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
+
+> G-10 本地门禁（2026-08-23）：G-09 最终闭环 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已完成最终 11/11 双 gate。在此前提下，实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增独立 `TrustedRunnerPool`：以 generation-bound Provider Catalog 和显式工具 allowlist 锁定范围，只允许可信 registered/builtin、in-process、强类型只读、无确认/capability/runtime 参数的 async handler，并在每次入队前重新执行权限与信任决策。默认 4 worker/64 outstanding，显式生命周期绑定 PID/event loop；共享 deadline 同时覆盖排队与执行，背压、排队撤销、运行中超时/调用方取消/close 均取消并 drain，异常文本脱敏。四版本定向各 `30 passed`、联合各 `397 passed`、全量各 `1790 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外真实并发/worker identity/关闭零残留/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-01 锁定；Generated Tool 隔离策略不变，未接 runtime、配置或生命周期，未迁移、未连接服务、未部署。
 
 ---
 
@@ -409,6 +411,20 @@ G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `paral
 本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `55 passed`、Scheduler/Graph/Conflict/Agent Runtime 联合各 `366 passed`、严格串行普通全量各 `1760 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过；Ruff 0.16.2、diff check及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。fresh wheel/sdist SHA256 分别为 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922` / `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`，各 91 个成员并包含 `parallel_execution.py`；sdist 重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组包外加载、11 表、8 revision、离线 DDL、generation 1、真实并发度 2、mutating 前置拒绝、无模块级 executor 与零 engine/asyncpg/Redis I/O smoke 均通过。
 
 G-09 远端证据：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 对应 push run `32612014895` 与 PR run `32612017136`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-10 Trusted Runner Pool 依赖已解除但尚未实现。当前 executor 仅为显式注入的脱离态 runtime port，未修改既有 `_execute_tools`，生产路径仍保持每轮最多一个工具；未接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、配置、startup/shutdown 或 D-09 sidecar，未运行 migration，未合并、未发布、未部署。
+
+## 6.4 Trusted Runner Pool
+
+G-10 实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增独立 `trusted_runner_pool.py`。Pool 构造时固定不可变 `ProviderCatalogSnapshot` generation 与非空、去重、排序的显式工具 allowlist；候选工具必须同时满足 `TRUSTED`、`REGISTERED / BUILTIN`、`IN_PROCESS`、`ToolEffect.READ_ONLY`、`ToolResultProvenance.UNVERIFIED`、无需确认、无 capability policy，canonical handler 必须是可取消 async callable 且不得声明 `_bot / _event / _tool_context / _tool_manager`。这套边界不会提升 MCP/Generated/外部结果工具的信任级别，Builtin `web_search` 等外部结果也不能入池；Generated Tool 继续 one-call-one-process。
+
+每次 `execute()` 都从 pinned catalog 重新请求 `ToolTrustOperation.EXECUTION` 决策，因此 superuser 权限与当前调用确认条件不会被构造期检查替代。调用方还必须注入只需依赖结果 mapping 的 async invocation、只读依赖快照及既有 `DeadlineContext`；Pool 不授权 capability、不注入 live Bot/Event，也不读取配置。默认 `worker_count=4 / max_outstanding=64`，边界分别限制为 1～64 与 worker_count～4096；满载立即 fail closed，不创建无界 task。
+
+Pool 只能显式 `start()` / `close()`，绑定创建时 PID 与 event loop，关闭或失败后不可重启，不存在模块级实例。一个调用方 deadline 从入队前开始同时覆盖排队和 handler 执行，不会在 worker 取件时续期；排队超时/调用方取消会原子撤销，运行中超时/取消/close 会先通知并取消 invocation，再 drain 到 handler `finally` 完成。子任务自行取消转为安全领域错误，handler 原始异常文本不会进入公共异常；frozen report 固定 tool/generation/worker/trust decision/result，snapshot 提供有界 pending/active/完成、失败、超时、取消与拒绝计数。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `30 passed`，Provider/Execution/Graph/Scheduler/Conflict/Parallel/Agent Runtime 联合各 `397 passed`，严格串行普通全量各 `1790 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1790 passed, 1 skipped`；全仓 Ruff 0.16.2、diff check 与 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
+
+fresh wheel/sdist SHA256 分别为 `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f` / `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`，各 92 个成员且包含 `trusted_runner_pool.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、plugin reload generation 1、真实最大并发度 2、worker IDs 1/2、无模块级 Pool及 close 后无残留 worker/invocation task；engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-g10-dist.iUUUDw`，重建目录 `/tmp/moellm-g10-rebuild.mhklUM`，最终 smoke 根目录 `/tmp/moellm-g10-smoke-final.mBXfzS`，Sandbox JUnit `/tmp/moellm-g10-sandbox-final.IUTMDm/junit.xml`。首轮 Python 3.10 wheel smoke 在导入 Schema 前直接检查 metadata，因此该 harness 结果作废；修正为先导入 `database_schema` 并启用 `set -euo pipefail` 后，四组均严格通过。
+
+精确 HEAD push/PR 双 run 是 H-01 前置门禁，目前仍待完成。当前没有修改 `_execute_tools` 或 G-09 executor，没有创建配置、startup/shutdown、Repository、数据库/Redis 接线或 D-09 sidecar 集成；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 

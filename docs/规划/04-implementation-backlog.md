@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T02:08:33+00:00
+lastmod: 2026-08-23T03:08:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -33,6 +33,8 @@ lastmod: 2026-08-23T02:08:33+00:00
 - G-08 最终闭环文档 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 已完成四版本定向各 `55 passed`、Graph/Scheduler/Conflict/Agent Runtime 联合各 `366 passed`、普通全量各 `1760 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/真实并发度 2/mutating 前置拒绝/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，G-10 继续锁定。
 - G-09 只提供显式注入、重新规划的只读并发执行端口；invocation 必须由调用方先完成 trust/capability 授权，整个计划共享一个 deadline，失败/超时/取消会取消并 drain 同批任务。未修改现有 `_execute_tools` 或每轮单工具生产路径，未新增模块级 executor、配置、生命周期、Repository、数据库或 Redis 接线，不读取连接信息，不连接真实服务。
 - G-09 本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 的 push `32612014895` / PR `32612017136` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现。
+- G-09 最终闭环文档 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-10 实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 已完成四版本定向各 `30 passed`、Provider/Execution/Graph/Scheduler/Conflict/Parallel/Agent Runtime 联合各 `397 passed`、普通全量各 `1790 passed, 1 skipped`、最低依赖全量、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/真实并发度 2/worker 1+2/close 零残留/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-01 继续锁定。
+- G-10 只提供 generation-pinned、显式 allowlist 与显式 start/close 的脱离态 trusted async worker pool；默认 4 worker/64 outstanding，共享 deadline 覆盖排队和执行，所有取消路径均 cancel+drain。Generated Tool 仍为 one-call-one-process；未接 `_execute_tools`、G-09 executor、配置、生命周期、Repository、数据库或 Redis，不读取连接信息，不连接真实服务。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -807,7 +809,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-09 精确 HEAD 双 run 远端 gate green；G-10 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-09 精确 HEAD 双 run 远端 gate green；G-10 本地 gate green、精确 HEAD 双 run 待验证，H-01 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1167,7 +1169,19 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条明确非关�
 
 ## G-10 Trusted Runner Pool
 
-状态：G-09 精确 HEAD 双 run 远端门禁已完成；G-10 依赖已解除但尚未实现或接入运行时。
+实现落点：G-09 最终闭环文档 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已各 11/11 green。在此前提下，实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增独立 `trusted_runner_pool.py`，定义安全执行/资格/生命周期/ownership/backpressure/关闭/timeout 错误、`TrustedRunnerPoolPolicy`、frozen `TrustedRunnerExecutionReport / TrustedRunnerPoolSnapshot` 与显式构造的 `TrustedRunnerPool`。Pool 固定不可变 `ProviderCatalogSnapshot` generation，并要求非空、去重、稳定排序的显式工具 allowlist；不从全局配置猜测可池化工具。
+
+信任与资格边界：工具必须同时满足 `ToolTrustLevel.TRUSTED`、`ToolSource.REGISTERED / BUILTIN`、`ToolExecutionBoundary.IN_PROCESS`、`ToolEffect.READ_ONLY`、`ToolResultProvenance.UNVERIFIED`、无需确认且 `ToolSpec.policy is None`。canonical handler 必须是可取消 async callable，并禁止 `_bot / _event / _tool_context / _tool_manager` 参数；MCP、Generated、NoneBot plugin、Builtin 外部结果、mutating、同步或需要 capability 的工具均 fail closed。每次 `execute()` 都会从 pinned catalog 重新请求 `ToolTrustOperation.EXECUTION` 决策，重新验证 superuser/确认条件；invocation 也必须是只需一个依赖结果 mapping 的 async callable。依赖在入队时复制并冻结，Pool 不授予 capability、不注入 live runtime object，也不执行 Generated Tool。
+
+并发与生命周期边界：默认 `worker_count=4 / max_outstanding=64`，硬边界为 1～64 worker、worker_count～4096 outstanding；满载立即抛出 `TrustedRunnerPoolBusy`。构造不创建 task，只有显式 `start()` 才创建固定 worker；Pool 绑定当前 PID/event loop，close 或 failed 后不可重启，不存在模块级 Pool。每次调用复用调用方的同一个 `DeadlineContext`，预算从入队前覆盖排队与执行，不在 worker 取件时重置。排队 timeout/caller cancellation 会撤销 work item；运行中 timeout/caller cancellation/close 会通知并取消 invocation，再 drain 到 handler `finally` 完成后释放 worker。子任务自行取消转为安全执行错误，handler 原始异常文本不外泄；close 拒绝 pending 且 drain active，frozen snapshot 记录 pending/active/completed/failed/timed_out/cancelled/rejected。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `30 passed`，Provider/Execution/Graph/Scheduler/Conflict/Parallel/Agent Runtime 联合各 `397 passed`，严格串行普通全量各 `1790 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped`，JUnit tests=40 且 failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量 `1790 passed, 1 skipped`。曾选择一个缺 FakeRedis 的旧 Python 3.10 环境，只在 collection 阶段产生 4 个 import error、执行 0 tests；依赖完整的正式最低环境已全量通过。全仓 Ruff 0.16.2、diff check 与 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f` / `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`，各 92 个成员且包含 `trusted_runner_pool.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload generation 1、真实最大并发度 2、worker IDs 1/2、无模块级 Pool、close 后无残留 runner/invocation task；engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-g10-dist.iUUUDw`，重建目录 `/tmp/moellm-g10-rebuild.mhklUM`，最终 smoke 根目录 `/tmp/moellm-g10-smoke-final.mBXfzS`，Sandbox JUnit `/tmp/moellm-g10-sandbox-final.IUTMDm/junit.xml`。首轮 Python 3.10 wheel smoke 在导入 `database_schema` 前直接检查 metadata 且外层 shell 未 fail hard，结果明确作废；全新根目录以 `set -euo pipefail`、先导入 Schema 后四组均严格通过。
+
+远端状态：实现已完成本地门禁，但精确 HEAD push/PR 双 run 尚未验证，因此 H-01 仍锁定。当前未修改现有 `_execute_tools`、G-09 executor 或每轮单工具生产路径，未新增配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+
+状态：G-10 本地门禁已完成；精确 HEAD 双 run 远端门禁待完成，H-01 前置依赖未解除。
 
 ---
 
@@ -1176,6 +1190,8 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条明确非关�
 ---
 
 ## H-01 Runtime API
+
+状态：等待 G-10 精确 HEAD push/PR 双 run 远端门禁关闭；当前锁定，尚未实现。
 
 ---
 
