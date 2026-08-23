@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T04:00:00+00:00
+lastmod: 2026-08-23T05:17:16+00:00
 ---
 
 # 04-implementation-backlog
@@ -38,7 +38,8 @@ lastmod: 2026-08-23T04:00:00+00:00
 - G-10 本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 的 push `32614767976` / PR `32614770194` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01 依赖已解除但尚未实现。
 - G-10 最终闭环文档 HEAD `b3d4a579acc9cf3e61d94737dd1e7192f317c009` 的 push `32615027467` / PR `32615029384` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-01 实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 已完成四版本定向各 `49 passed`、Runtime/Provider/Agent/G-09/G-10 联合各 `484 passed`、普通全量及最低依赖全量各 `1839 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/API 200/200/401/secret 不泄漏/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-02 继续锁定。
 - H-01 只提供显式注入、框架中立且未挂载的 `GET /runtime/status` 与 `GET /runtime/generation`；鉴权先于当前 snapshot 读取，identity 漂移 fail closed，响应不暴露 config、provider/model/tool、bundle/digest 或 token。没有模块级 API 对象、路由注册、listener、配置、生命周期、Repository、数据库或 Redis 接线。
-- H-01 本地证据 HEAD `fb475d144662821a527119212d9f94eca48bd844` 的 push `32616577017` / PR `32616579710` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-02 依赖已解除但尚未实现。
+- H-01 最终闭环文档 HEAD `67e03cdc930642ee8bc0faa1f9946953874f73c2` 的 push `32616804359` / PR `32616807144` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，H-02 实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 已完成四版本定向各 `101 passed`、Runtime/Lifecycle/Provider/Trust/Audit 联合各 `440 passed, 1 skipped`、普通全量及最低依赖全量各 `1891 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01+H-02 API/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-03 继续锁定。
+- H-02 只提供显式注入、未挂载的 Tool Catalog/Bundle/Draft API；读写 scope 分离，读取绑定当前 runtime/lifecycle identity，审批要求完整 `review_stamp`，危险审批/激活只通过调用方提供的双 CAS mutation port 并同步确认即时审计，结果未知不自动重放。无模块级 service/app/reader/mutator，未接入全局 store/reloader、路由/listener、配置、生命周期、Repository、PostgreSQL 或 Redis。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -813,7 +814,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-10、H-01 精确 HEAD 双 run 远端 gate green；H-02 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10、H-01 精确 HEAD 双 run 远端 gate green；H-02 本地 gate green 但精确 HEAD 远端双 run 待完成，H-03 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1213,7 +1214,17 @@ snapshot 与数据最小化边界：每次成功请求只调用一次显式 read
 
 ## H-02 Tool Bundle API
 
-状态：H-01 精确 HEAD push/PR 双 run 远端门禁已关闭；H-02 依赖已解除但尚未实现。
+实现落点：H-01 最终闭环文档 HEAD `67e03cdc930642ee8bc0faa1f9946953874f73c2` 的 push `32616804359` / PR `32616807144` 已各 11/11 green。在此前提下，实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 新增独立 `tool_bundle_api.py`，精确实现 `GET /tools`、`GET /tools/{name}`、`GET /tool-bundles`、`GET /tool-drafts`、`POST /tool-drafts/{id}/approve` 与 `POST /tool-bundles/{id}/activate`。实现只包含 frozen command/result/endpoint、显式 `ToolLifecycleStateReader / ToolBundleMutationPort` Protocol 与 `ToolBundleApiService`，复用 detached `RuntimeApiASGIApp`；不自动挂载路由或 listener。
+
+读取与传输边界：读/写端点分别要求 `tools:read / tools:write`，认证、path、method、query、content-type 与 body 校验全部早于 snapshot/lifecycle/mutation。`/tools` 只读当前 `ProviderCatalogSnapshot`，详情不包含 handler 或完整 parameters；Bundle/Draft 要求 lifecycle revision/state digest/active 与 runtime Generated stamp 完全一致。列表默认与上限均为 20，canonical base64url cursor 绑定 generation，Bundle/Draft 还绑定 lifecycle identity，陈旧游标固定 409。ASGI request body/header 与 response 嵌套深度、节点、集合、字符串、BIGINT 级整数均有上限；响应深度冻结、canonical JSON、`no-store`、`nosniff`。
+
+写操作边界：`draft_review_stamp()` 从既有完整 Generated Tool 审阅流程提升为 lifecycle 公共算法，旧审批页与 H-02 复用同一实现；stamp 绑定 draft digest、lifecycle revision/state digest 与 active digest，比较使用 `secrets.compare_digest`。审批/激活只通过调用方显式注入的 mutation port，command 携带已认证 actor、expected runtime generation 与 lifecycle revision/state digest。Result 必须精确返回下一 generation/revision、新 state digest 与 `audit_recorded=true`；identity 已耗尽时在 port 前 fail closed，取消原样传播，结果未知返回 `409 mutation_result_unknown, retryable=false` 且服务不重放。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 H-02 定向各 `101 passed`；Runtime API/Snapshot/Reload、lifecycle transaction、Generated lifecycle/tools、Provider/Tool Manager/Trust 与 Audit 联合各 `440 passed, 1 skipped`；严格串行普通全量各 `1891 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1891 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped`，JUnit tests=40 且 failures/errors/skipped 均为 0；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 均通过。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `ec50e738d43d96aa4cdf85f6687e0e5009b0ff4ac037a567d0537ccaf3b20734` / `bddb60b8d31304c45f5dad87de6da1328db24310f54f229c15910ede1e18e7f8`，各 94 个成员并包含 `tool_bundle_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 与 sdist 仓库外同哈希 wheel 重建通过。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02 读 API 200、错误 token 401、缺失写目标 404 且 mutation port 未调用；engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h02-dist-final.xGAQ7t`，重建目录 `/tmp/moellm-h02-rebuild-final.ueWGwI`，smoke 根目录 `/tmp/moellm-h02-smoke-final.DPotvL`，Sandbox JUnit `/tmp/moellm-h02-sandbox-final.jej6JE/junit.xml`。
+
+状态：H-02 本地门禁已完成；精确本地证据 HEAD 的 push/PR 双 `release-gate` 待完成，H-03 继续锁定。当前无模块级 service/app/reader/mutator，未注册路由或 listener，未接入全局 store/reloader、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 

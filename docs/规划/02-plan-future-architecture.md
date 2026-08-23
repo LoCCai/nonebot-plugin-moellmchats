@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T04:00:00+00:00
+lastmod: 2026-08-23T05:17:16+00:00
 ---
 
 # 02-plan-future-architecture
@@ -51,6 +51,8 @@ lastmod: 2026-08-23T04:00:00+00:00
 > H-01 本地门禁（2026-08-23）：G-10 最终闭环 HEAD `b3d4a579acc9cf3e61d94737dd1e7192f317c009` 的 push `32615027467` / PR `32615029384` 已完成最终 11/11 双 gate。在此前提下，实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增显式注入、框架中立的 `RuntimeApiService / RuntimeApiASGIApp`，H-01 只实现 `GET /runtime/status` 与 `GET /runtime/generation`。canonical bearer、常量时间比较与 `runtime:read` scope 鉴权先于当前 snapshot 读取；generation/Generated stamp 漂移、鉴权器或 snapshot 故障均固定错误且 fail closed，配置、模型/provider/tool 内容、bundle identity、digest 和 token 不进入响应或诊断。四版本定向各 `49 passed`、联合各 `484 passed`、全量及最低依赖全量各 `1839 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品、重建及四组包外 API/secret/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-02 锁定；未注册路由、未启动 listener、未接配置或生命周期，未迁移、未连接服务、未部署。
 
 > H-01 远端闭环（2026-08-23）：本地证据 HEAD `fb475d144662821a527119212d9f94eca48bd844` 的 push `32616577017` / PR `32616579710` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-02 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
+
+> H-02 本地门禁（2026-08-23）：H-01 最终闭环 HEAD `67e03cdc930642ee8bc0faa1f9946953874f73c2` 的 push `32616804359` / PR `32616807144` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 新增脱离态 Tool Bundle API：读取当前 Provider Catalog 与精确匹配 runtime stamp 的 lifecycle，以最多 20 条、绑定 generation/lifecycle identity 的 canonical 游标分页；`tools:read / tools:write` 分权与所有输入校验早于状态读取。审批复用完整审阅 `review_stamp`，审批/激活只通过显式 mutation port 传递 authenticated actor、runtime/lifecycle 双 CAS 与即时审计确认，结果未知不重放。四版本定向各 `101 passed`、联合各 `440 passed, 1 skipped`、全量及最低依赖全量各 `1891 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-03 锁定；API 未挂载，未接入全局 store/reloader、配置或生命周期，未迁移、未连接服务、未部署。
 
 ---
 
@@ -727,6 +729,20 @@ H-01 实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增独立 `runti
 fresh wheel/sdist SHA256 分别为 `f8a275e7456cfe5e08796f64e5b15de786c560f7b4cca047f9271d2a5b973eb1` / `653d9ea959477743d11b684ba4891e87838f4175814ce78166a68ed94ed56fb7`，各 93 个文件并包含 `runtime_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、两个合法 token GET 为 200、错误 token 为 401、config secret 不泄漏、无模块级 API 对象，engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-h01-dist.nPrA19`，重建目录 `/tmp/moellm-h01-rebuild.ObheE5`，最终 smoke 根目录 `/tmp/moellm-h01-smoke-final.P45TzV`，Sandbox JUnit `/tmp/moellm-h01-sandbox.oa0ohZ/junit.xml`。首轮 Python 3.10 wheel smoke 在 NoneBot 插件加载前直接导入子模块，被 LocalStore caller 检测拒绝且未进入 H-01 断言，结果明确作废；全新目录改为真实 `nonebot.load_plugin()` 后再导入 Schema，四组均严格通过。
 
 远端证据：H-01 本地证据 HEAD `fb475d144662821a527119212d9f94eca48bd844` 对应 push run `32616577017` 与 PR run `32616579710`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-02 依赖已解除但尚未实现。当前没有路由注册、listener、模块级 API 对象、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+
+## 14.2 H-02 Tool Catalog、Bundle 与 Draft
+
+H-02 实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 新增独立 `tool_bundle_api.py`，精确实现 `GET /tools`、`GET /tools/{name}`、`GET /tool-bundles`、`GET /tool-drafts`、`POST /tool-drafts/{id}/approve` 与 `POST /tool-bundles/{id}/activate`。该模块只提供显式注入的 `ToolBundleApiService`、lifecycle reader 与 mutation port Protocol，复用 detached `RuntimeApiASGIApp`；不创建模块级 service/app/reader/mutator，不自动挂载 NoneBot 路由或 listener。
+
+读写分别要求 `tools:read` 和 `tools:write`，canonical bearer 验证以及 path/method/query/content-type/body 校验全部在 snapshot/lifecycle 读取之前完成。`/tools` 只从当前 `ProviderCatalogSnapshot` 读取有界摘要/详情，不序列化 handler、完整 parameters、config 或 Generated digest。Bundle/Draft 只接受 revision、state digest、active 与 runtime snapshot 全部一致的 lifecycle；列表默认与上限均为 20，canonical base64url 游标绑定 generation，Bundle/Draft 还绑定 lifecycle identity，代际变化后拒绝继续分页。ASGI 正文/header、响应嵌套深度/节点/集合/字符串/整数均有安全上限，响应深度冻结且保持 canonical JSON。
+
+审批请求必须携带既有完整 Generated Tool 审阅页绑定 draft digest、lifecycle revision/state digest 与 active digest 的 `review_stamp`，比较使用 `secrets.compare_digest`。审批和激活不直接调用全局 store 或 reloader；只通过调用方显式注入的 mutation port 传递来自已认证 principal 的 actor、expected runtime generation 与 lifecycle revision/state digest。Port 返回必须确认新代际、新 lifecycle identity 与即时危险操作审计已记录；取消原样传播，结果未知固定返回 `409 mutation_result_unknown` 与 `retryable=false`，服务不自动重放。输入/输出 identity 限于 BIGINT 级安全范围，generation/revision 已耗尽时在调用 port 前 fail closed。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `101 passed`；Runtime API/Snapshot/Reload、lifecycle transaction、Generated lifecycle/tools、Provider/Tool Manager/Trust 与 Audit 联合各 `440 passed, 1 skipped`；严格串行普通全量各 `1891 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1891 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped`，JUnit `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 目标模块/测试均通过。
+
+fresh wheel/sdist SHA256 分别为 `ec50e738d43d96aa4cdf85f6687e0e5009b0ff4ac037a567d0537ccaf3b20734` / `bddb60b8d31304c45f5dad87de6da1328db24310f54f229c15910ede1e18e7f8`，各 94 个成员并包含 `tool_bundle_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02 读 API 200、错误 token 401、缺失写目标 404 且 mutation port 未被调用，engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h02-dist-final.xGAQ7t`，重建目录 `/tmp/moellm-h02-rebuild-final.ueWGwI`，smoke 根目录 `/tmp/moellm-h02-smoke-final.DPotvL`，Sandbox JUnit `/tmp/moellm-h02-sandbox-final.jej6JE/junit.xml`。
+
+当前状态：H-02 本地门禁已完成，尚需本地证据精确 HEAD 的 push/PR 双 `release-gate`；H-03 保持锁定。当前没有路由注册、listener、模块级 API 或 port 对象、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 

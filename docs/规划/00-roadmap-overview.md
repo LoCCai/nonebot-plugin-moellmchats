@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T04:00:00+00:00
+lastmod: 2026-08-23T05:17:16+00:00
 ---
 
 # 00-roadmap-overview
@@ -49,6 +49,8 @@ lastmod: 2026-08-23T04:00:00+00:00
 > H-01 本地门禁（2026-08-23）：G-10 最终闭环文档 HEAD `b3d4a579acc9cf3e61d94737dd1e7192f317c009` 的 push run `32615027467` / PR run `32615029384` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`。在此前提下，实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增框架中立、显式注入的只读 `RuntimeApiService / RuntimeApiASGIApp`，仅提供 `GET /runtime/status` 与 `GET /runtime/generation`；32～512 字节 canonical bearer token、常量时间比较和 `runtime:read` scope 在读取当前 snapshot 前完成鉴权，snapshot/tool generation 或 Generated stamp 不一致时 503 fail closed。响应只含有界 generation/readiness 元数据，采用 canonical JSON、`no-store`、`nosniff` 且不启用 CORS。四版本定向各 `49 passed`、相关联合各 `484 passed`、普通全量及 Python 3.10 最低依赖全量各 `1839 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、sdist 重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/API 200/200/401/secret 不泄漏/零真实 I/O smoke 均通过。wheel SHA256 `f8a275e7456cfe5e08796f64e5b15de786c560f7b4cca047f9271d2a5b973eb1`，sdist SHA256 `653d9ea959477743d11b684ba4891e87838f4175814ce78166a68ed94ed56fb7`。精确 HEAD 双 run 远端门禁待完成，H-02 保持锁定；没有模块级 service/authenticator/app，未注册 NoneBot 路由、未启动监听器、未接配置或生命周期，未迁移、未连接真实服务、未合并、未发布、未部署。
 
 > H-01 远端闭环（2026-08-23）：本地证据 HEAD `fb475d144662821a527119212d9f94eca48bd844` 对应 push run `32616577017` 与 PR run `32616579710`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01 依赖门禁已关闭，H-02 依赖已解除但尚未实现；Runtime API 仍未挂载，未触发 migration、合并、发布、部署或任何生产操作。
+
+> H-02 本地门禁（2026-08-23）：H-01 最终闭环 HEAD `67e03cdc930642ee8bc0faa1f9946953874f73c2` 的 push `32616804359` / PR `32616807144` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 新增脱离态 `ToolBundleApiService`，实现 `GET /tools`、`GET /tools/{name}`、`GET /tool-bundles`、`GET /tool-drafts`、`POST /tool-drafts/{id}/approve` 与 `POST /tool-bundles/{id}/activate`。`tools:read / tools:write` 分权、路径/方法/查询/正文校验都早于 snapshot/lifecycle 读取；目录只读当前 Provider snapshot，bundle/draft 要求 runtime 与 lifecycle revision/digest/active 完全一致，最多 20 条且游标绑定 generation/lifecycle identity。审批必须携带既有完整审阅流程生成的 `review_stamp`；危险写操作只通过显式 mutation port 传递 authenticated actor 与 runtime/lifecycle 双 CAS，必须同步确认即时审计，结果未知固定返回 `409 mutation_result_unknown, retryable=false` 且不自动重放。四版本定向各 `101 passed`、相关联合各 `440 passed, 1 skipped`、普通全量及 Python 3.10 最低依赖全量各 `1891 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、sdist 重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01+H-02 API/零真实 I/O smoke 均通过。wheel SHA256 `ec50e738d43d96aa4cdf85f6687e0e5009b0ff4ac037a567d0537ccaf3b20734`，sdist SHA256 `bddb60b8d31304c45f5dad87de6da1328db24310f54f229c15910ede1e18e7f8`。精确 HEAD 双 run 远端门禁待完成，H-03 继续锁定；无模块级 service/app/reader/mutator，未自动挂载路由或 listener，未接入全局 store/reloader、配置、生命周期、PostgreSQL 或 Redis，未迁移、合并、发布或部署。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -398,8 +400,8 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool 与 H-01 Runtime API 均已完成精确 HEAD 远端双 gate；H-02 依赖已解除但尚未实现
-- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01 只提供显式注入、未挂载的内部 ASGI 边界，尚未接既有 runtime 编排、配置或生命周期；Redis / PostgreSQL 的正式运行态编排仍未实现
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool 与 H-01 Runtime API 均已完成精确 HEAD 远端双 gate；H-02 Tool Bundle API 已完成本地门禁但精确 HEAD 远端双 gate 待完成，H-03 继续锁定
+- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01/H-02 只提供显式注入、未挂载的内部 ASGI/API 边界，H-02 写操作仍需调用方显式提供双 CAS mutation port；两者均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 
 过早数据库化会导致很快再做第二次 schema migration。
