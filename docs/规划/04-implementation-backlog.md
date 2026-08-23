@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T01:24:39+00:00
+lastmod: 2026-08-23T02:02:10+00:00
 ---
 
 # 04-implementation-backlog
@@ -30,6 +30,8 @@ lastmod: 2026-08-23T01:24:39+00:00
 - G-07 只提供 schema-aligned immutable Usage、兼容的可选 `BatchUsageRepository`、有界单 lease async queue 与显式 session 的 PostgreSQL batch Repository；未接 `llm_api`、50 条内存 `token_usage_history`、配置、生命周期、计价、spool 或生产 runtime，不创建全局 queue/repository，不读取 DSN，不连接真实 PostgreSQL/Redis。
 - G-07 最终闭环文档 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-08 实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 已完成四版本定向各 `105 passed`、数据库/Repository/History/Summary/Usage/Audit 联合各 `439 passed`、普通全量各 `1742 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/离线 DDL/audit lease roundtrip/reload/零真实 I/O smoke；本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 的 push `32610202772` / PR `32610204736` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖已解除但尚未实现。
 - G-08 只提供 schema-aligned deeply immutable Audit、显式非关键 allowlist、兼容的可选 `BatchAuditRepository`、有界单 lease async queue 与显式 session 的 PostgreSQL batch Repository；安全及未知事件强制即时 `append()`，未接现有日志、工具生命周期、mutating 路径、配置、生命周期、spool 或生产 runtime，不创建全局 queue/repository，不读取 DSN，不连接真实 PostgreSQL/Redis。
+- G-08 最终闭环文档 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 已完成四版本定向各 `55 passed`、Graph/Scheduler/Conflict/Agent Runtime 联合各 `366 passed`、普通全量各 `1760 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/真实并发度 2/mutating 前置拒绝/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，G-10 继续锁定。
+- G-09 只提供显式注入、重新规划的只读并发执行端口；invocation 必须由调用方先完成 trust/capability 授权，整个计划共享一个 deadline，失败/超时/取消会取消并 drain 同批任务。未修改现有 `_execute_tools` 或每轮单工具生产路径，未新增模块级 executor、配置、生命周期、Repository、数据库或 Redis 接线，不读取连接信息，不连接真实服务。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -804,7 +806,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-08 精确 HEAD 双 run 远端 gate green；G-09 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-08 精确 HEAD 双 run 远端 gate green；G-09 本地门禁完成、精确 HEAD 双 run 待验证；G-10 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1146,11 +1148,25 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条明确非关�
 
 ## G-09 Read-only Parallel Execution
 
-状态：G-08 精确 HEAD 双 run 远端门禁已完成；G-09 依赖已解除但尚未实现或接入运行时。
+实现落点：G-08 最终闭环文档 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已各 11/11 green。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `parallel_execution.py`，定义 `ReadOnlyToolInvocation`、安全执行错误、frozen `ReadOnlyParallelExecutionReport` 与显式构造的 `ReadOnlyParallelToolExecutor`。报告要求结果精确覆盖可信 schedule，按计划工具顺序冻结为只读 mapping，并提供观察到的最大批次并行度与并行批次数。
+
+授权与计划边界：executor 每次执行都重新调用 E-07 `ReadOnlyParallelToolScheduler`，不接受或复用调用方提供的现成 schedule；Tool Graph、选择集、强类型 effect 与完整传递依赖闭包仍由 Scheduler fail closed 验证。invocation 映射必须精确覆盖可信计划，值必须是只需一个依赖结果 mapping 的 async callable。executor 不授予 capability，调用方必须在构造 invocation 前完成 Provider 信任、用户/策略与 capability 授权；执行端再次要求所有工具均为强类型 `ToolEffect.READ_ONLY` 且无需确认，避免把 Scheduler 对 mutating/确认工具的串行退化当作授权。
+
+执行与故障边界：整个 schedule 只读取并消费一个共享 `DeadlineContext`，不按批次重置、续期或绕过预算。每个工具只收到 Tool Graph 声明的完整传递依赖结果只读映射，不暴露无关已完成结果；串行批次和并行批次都由显式 `asyncio.Task` 承载。每批使用 `asyncio.wait(..., FIRST_COMPLETED)`：任一 handler 失败或子任务自行取消即取消并 drain 所有 sibling，不启动后续批次；共享 deadline 超时同样由 timeout scope 取消并 drain；外层调用方取消在 drain 后原样传播。handler 原始异常消息可能含凭据或参数，因此公共错误只暴露安全工具标识，不复制原始文本。实现只依赖 Python 3.10～3.13 共同支持的 asyncio 行为。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `55 passed`、Graph/Scheduler/Conflict/Agent Runtime 联合各 `366 passed`、严格串行普通全量各 `1760 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量 `1760 passed, 1 skipped`；全仓 Ruff 0.16.2、diff check及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922` / `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`，各 91 个成员且包含 `parallel_execution.py`，不含 `uv.lock`、cache 或 bytecode；sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload generation 1、真实并发度 2、mutating 前置拒绝与无模块级 executor；engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-g09-dist.rJn2oU`，重建目录 `/tmp/moellm-g09-rebuild.pBYM3Z`，smoke 根目录 `/tmp/moellm-g09-smoke.RY9LpU`，Sandbox JUnit `/tmp/moellm-g09-sandbox.cTzjvV/junit.xml`。
+
+远端证据：G-09 精确 HEAD push/PR 双 `release-gate` 待验证；本地成功不替代远端证据，G-10 Trusted Runner Pool 继续锁定。当前未修改既有 `_execute_tools`，生产路径仍保持每轮最多一个工具；未接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、配置、startup/shutdown 或 D-09 sidecar，未运行 migration，未合并、未 promotion、未发布、未部署。
+
+状态：G-09 实现及本地门禁已完成；精确 HEAD 双 run 远端门禁待完成；G-10 前置依赖未解除。
 
 ---
 
 ## G-10 Trusted Runner Pool
+
+状态：等待 G-09 精确 HEAD push/PR 双 `release-gate` 闭环，当前锁定且未实现。
 
 ---
 

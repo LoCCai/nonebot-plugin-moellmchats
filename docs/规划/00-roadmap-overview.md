@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T01:24:39+00:00
+lastmod: 2026-08-23T02:02:10+00:00
 ---
 
 # 00-roadmap-overview
@@ -37,6 +37,8 @@ lastmod: 2026-08-23T01:24:39+00:00
 > G-08 本地门禁（2026-08-23）：G-07 最终闭环文档 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push run `32608750186` / PR run `32608751978` 已各 11/11 green、无非 success job且各恰好一个成功 `release-gate`。在此前提下，实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 新增严格对齐既有 `audit_events` Schema 的深度冻结 `AuditEventRecord`、保持原 `AuditRepository` 兼容的可选 `BatchAuditRepository`、只接受显式非关键事件的单 PID/event-loop `AuditBatchQueue`，以及显式注入调用方 `AsyncSession` 的 `PostgresAuditRepository`。metadata 只接受有界 UTF-8 JSON object，拒绝 NUL、非有限数值、循环、过深/过多节点，并按保守 `jsonb::text` 尺寸卡住 64 KiB；仅 `tool_draft_created / runtime_reload / runtime_reload_failed` 可 batch，审批、激活/停用/回滚、变更确认/执行及所有未知类型均 fail closed 到即时 `append()`。队列默认 100 条/1 秒/1000 outstanding，只有 durable commit 后可 ack，未写/明确 rollback 才可原序 release，未知结果进入终止态且禁止重放；Repository 单语句 multi-row INSERT 验证 `RETURNING id`，不拥有 commit/rollback/retry，并以绑定 run 的 canonical cursor 做稳定 keyset 查询。四版本定向各 `105 passed`、数据库/Repository/History/Summary/Usage/Audit 联合各 `439 passed`、普通全量各 `1742 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品及 Python 3.10/3.12 × wheel/sdist 四组 11 表/8 revision/离线 DDL/reload/audit lease roundtrip/零真实 I/O smoke 均通过。wheel SHA256 `1f7898a17589e33f90d0416514e6749b3d7d3319af1ec783153df02f658a75bb`，sdist SHA256 `1858d4d10cd36c02b562ce8c65f5f91e1c0398267632108d14840fa7c3809a8f`。精确 HEAD 双 run 远端门禁待完成，G-09 保持锁定；未接现有日志、工具生命周期或 mutating runtime，未新增全局 queue/repository、配置、生命周期、spool 或 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > G-08 远端闭环（2026-08-23）：本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 对应 push run `32610202772` 与 PR run `32610204736`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-08 依赖门禁已关闭，G-09 依赖已解除但尚未实现；未接生产 runtime，未触发 migration、合并、发布、部署或任何生产操作。
+
+> G-09 本地门禁（2026-08-23）：G-08 最终闭环文档 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push run `32610376129` / PR run `32610377991` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `parallel_execution.py` 与 `ReadOnlyParallelToolExecutor`：执行前重新调用 E-07 Scheduler，不接受外部伪造计划；只接受精确覆盖计划、已由调用方完成信任与 capability 授权的 async invocation，并再次拒绝非强类型 `READ_ONLY` 或需确认工具。整个计划只消费一个共享 `DeadlineContext`，每个工具只收到其声明的传递依赖结果只读映射；串行与并行批次都以显式子任务执行，并以 `asyncio.wait(FIRST_COMPLETED)` 在首个失败时取消并 drain 同批任务、阻止后续批次。调用方取消原样传播，子任务自行取消转为安全领域错误，handler 异常文本不进入公共错误。四版本定向各 `55 passed`、相关联合各 `366 passed`、普通全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖全量、Ruff/Pyright、fresh 制品及 Python 3.10/3.12 × wheel/sdist 四组 11 表/8 revision/离线 DDL/reload/真实并发度 2/零数据库与 Redis I/O smoke 均通过。wheel SHA256 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922`，sdist SHA256 `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`。精确 HEAD 双 run 远端门禁待完成，G-10 保持锁定；现有 `_execute_tools` 及每轮最多一个工具的生产路径保持不变，未新增模块级 executor、配置、生命周期、数据库或 Redis 接线，未运行 migration，未合并、未发布、未部署。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -386,7 +388,7 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write 与 G-08 Batch Audit Write 均已完成精确 HEAD 远端双 gate；G-09 依赖已解除但尚未实现
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write 与 G-08 Batch Audit Write 均已完成精确 HEAD 远端双 gate；G-09 Read-only Parallel Execution 已完成本地门禁，精确 HEAD 双 gate 待完成，G-10 保持锁定
 - G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，尚未接既有 runtime、事务编排、配置或生命周期；Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

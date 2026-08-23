@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T01:24:39+00:00
+lastmod: 2026-08-23T02:02:10+00:00
 ---
 
 # 03-plan-performance-database
@@ -39,6 +39,8 @@ lastmod: 2026-08-23T01:24:39+00:00
 > G-08 本地门禁（2026-08-23）：G-07 最终闭环 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已各 11/11 green。实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 新增 `AuditEventRecord / AuditWriteMode / AuditBatchPolicy / AuditBatchLease / AuditBatchQueue / BatchAuditRepository / PostgresAuditRepository`。metadata 深度冻结、保守对齐 64 KiB `jsonb::text`，只允许三个显式非关键事件 batch；安全及未知事件只能即时 `append()`。队列默认 100 条或最老事件等待 1 秒触发、outstanding 上限 1000，绑定 PID/event loop/单调时钟；只有 durable commit 可 ack，明确未写/rollback 可 release，未知结果终止且不重放。Repository 单次只执行一条 1～100 行 INSERT、验证 `RETURNING` identity，不拥有事务或 retry；查询使用 run 指纹 cursor 与 `(created_at DESC, id DESC)` keyset。四版本定向各 `105 passed`、联合各 `439 passed`、普通全量各 `1742 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品和四组包外 smoke 均通过。制品 SHA256 为 wheel `1f7898a17589e33f90d0416514e6749b3d7d3319af1ec783153df02f658a75bb`、sdist `1858d4d10cd36c02b562ce8c65f5f91e1c0398267632108d14840fa7c3809a8f`。精确 HEAD 双 run 待完成，G-09 锁定；未接运行时、配置、生命周期或 spool，不迁移、不连接真实服务、不部署。
 
 > G-08 远端闭环（2026-08-23）：本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 对应 push run `32610202772` / PR run `32610204736`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
+
+> G-09 本地门禁（2026-08-23）：G-08 最终闭环 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已各 11/11 green。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增 `ReadOnlyParallelExecutionReport / ReadOnlyParallelToolExecutor`。executor 每次重新调用 E-07 Scheduler，只接受精确覆盖计划、调用方已完成信任与 capability 授权的 async invocation，并在启动前再次拒绝 mutating 与确认门禁；整个计划共享一个 `DeadlineContext`，工具只收到声明的传递依赖结果。串行与并行批次均使用显式子任务，`FIRST_COMPLETED` 首错即取消并 drain 同批任务且跳过后续批次；调用方取消原样传播，子任务自行取消与 handler 失败转为不泄漏原始文本的安全错误。四版本定向各 `55 passed`、联合各 `366 passed`、普通全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品及四组包外 11 表/8 revision/真实并发度 2/零数据库与 Redis I/O smoke 均通过。制品 SHA256 为 wheel `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922`、sdist `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`。精确 HEAD 双 run 待完成，G-10 锁定；未接现有 runtime，未新增模块级 executor、配置或生命周期，不迁移、不连接真实服务、不部署。
 
 ---
 
@@ -863,7 +865,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05～G-08 本地及精确 HEAD 双 run 远端门禁均已完成；G-09 依赖已解除但尚未实现；G-06/G-07/G-08 尚未接入运行时。
+状态：G-05～G-08 本地及精确 HEAD 双 run 远端门禁均已完成；G-09 本地门禁已完成、精确 HEAD 双 run 待验证，G-10 保持锁定；G-06/G-07/G-08/G-09 尚未接入运行时。
 
 对于高度相似的标准请求，可考虑：
 
@@ -900,9 +902,17 @@ Memory backend：`MemoryClassificationCache` 使用条目/单 record/总字节�
 
 ```text
 effect = read_only
-dependencies = none
+dependencies = completed
 resource_conflict = false
 ```
+
+G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 将 E-07 的只读调度计划落为独立、显式注入的执行端口。executor 不信任外部 schedule，而是按本次 Tool Graph、选择集与强类型 effect 重新计划；invocation 映射必须精确覆盖计划、为只需依赖结果 mapping 的 async callable，并由调用方预先完成 trust/capability 授权。执行前再次要求所有工具为 `ToolEffect.READ_ONLY` 且无需确认，避免把 Scheduler 对不安全工具的串行退化误当作执行授权。
+
+执行只消费一个共享 `DeadlineContext`，不会为后续批次重置预算。每个工具只拿到声明的完整传递依赖结果只读映射，因此有依赖的只读工具可以在前置批次成功后继续执行，而不是把“可并行”错误收窄为完全无依赖。串行与并行批次都创建显式 task；每批以 `FIRST_COMPLETED` 观察，首个失败、超时或子任务自行取消都会取消并 drain sibling，且不启动后续批次。调用方取消在 drain 后原样传播；公共错误隐藏 handler 原始异常消息。
+
+本地门禁：四个 Python 版本定向各 `55 passed`、Graph/Scheduler/Conflict/Agent Runtime 联合各 `366 passed`、严格串行普通全量各 `1760 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。最低依赖全量、Ruff 0.16.2 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist SHA256 分别为 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922` / `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`，各 91 个成员，sdist 重建 wheel 哈希一致；Python 3.10/3.12 × wheel/sdist 四组包外 smoke 验证真实并发度 2、mutating 前置拒绝、无模块级 executor，以及 engine/asyncpg/Redis I/O 全为 0。
+
+G-09 精确 HEAD push/PR 双 gate 尚待完成，G-10 保持锁定。当前未修改既有 `_execute_tools`，生产路径仍每轮最多执行一个工具；未接 ToolCall/AgentStep、chat runtime、Repository、数据库/Redis、配置或生命周期，未运行 migration，未合并、未发布、未部署。
 
 ---
 

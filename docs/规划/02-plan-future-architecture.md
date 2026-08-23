@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T01:24:39+00:00
+lastmod: 2026-08-23T02:02:10+00:00
 ---
 
 # 02-plan-future-architecture
@@ -39,6 +39,8 @@ lastmod: 2026-08-23T01:24:39+00:00
 > G-08 本地门禁（2026-08-23）：G-07 最终闭环 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已完成最终 11/11 双 gate。在此前提下，实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 将 Audit 写入冻结为 schema-aligned deeply immutable record、显式非关键 allowlist、兼容的可选 batch Repository、100 条/1 秒有界租约队列、单语句 PostgreSQL multi-row INSERT 与绑定 run 的稳定 keyset 查询。审批、激活/停用/回滚、mutating 确认/执行和未知类型均强制即时 `append()`，只有明确非关键事件可入队；租约只在 durable commit 后 ack，未写/明确 rollback 才可 release，未知结果终止队列且不重放。四版本定向各 `105 passed`、联合各 `439 passed`、全量各 `1742 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外 11 表/8 revision/离线 DDL/reload/租约 roundtrip/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，G-09 锁定；未接现有日志/工具生命周期/mutating runtime、配置、生命周期或 spool，未迁移、未连接服务、未部署。
 
 > G-08 远端闭环（2026-08-23）：本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 的 push `32610202772` / PR `32610204736` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
+
+> G-09 本地门禁（2026-08-23）：G-08 最终闭环 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已完成最终 11/11 双 gate。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `ReadOnlyParallelToolExecutor`：内部重新生成 E-07 可信计划，只接受调用方已完成信任/capability 授权且精确覆盖计划的 async invocation，再次拒绝非强类型只读和确认门禁；整个计划共用一个 `DeadlineContext`，工具只看到声明的传递依赖结果。每批显式创建子任务并用 `FIRST_COMPLETED` fail fast，失败、超时或取消均先取消并 drain 同批任务，不启动后续批次；调用方取消原样传播，子任务自行取消与 handler 失败转为不泄漏异常文本的安全错误。四版本定向各 `55 passed`、联合各 `366 passed`、全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外真实并发/前置拒绝/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，G-10 锁定；现有 chat/tool runtime 未接线，未创建模块级 executor、配置或生命周期，未迁移、未连接服务、未部署。
 
 ---
 
@@ -395,6 +397,16 @@ E-08 实现提交 `4892e57757dab124d2739183b6a91d6a67420073` 新增独立 `tool_
 `ToolConflictPolicy` 默认拒绝所有未配置 prefer 的选中 conflict；规则必须引用图中节点并精确匹配真实 `conflicts_with` 边，陈旧或伪造规则 fail closed。所有选中冲突对按规范顺序同时决议，任一 missing/explicit reject 即拒绝整次选择；全部 prefer 后再统一移除 loser，若循环偏好移除全部工具、或 survivor 的传递依赖被移除/原本缺失，也整体拒绝。Policy 不按输入顺序、effect、权限或 capability 猜 winner，不读取配置或生产状态，不执行工具、不创建 task、不修改 E-07 Scheduler；允许结果可显式交给 Scheduler，仍由 Scheduler 再验证 conflict-free 与 effect/并行约束。本任务不接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、迁移、生产配置或 D-09 sidecar。
 
 本地门禁：Graph/Scheduler/Conflict 定向 `125 passed`，与 Agent Runtime 联合定向 `310 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `864 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failure/error/skip 均为 0；Ruff 0.16.2、diff check 与 Pyright 1.1.407 目标文件 `0 errors, 0 warnings` 均通过。fresh wheel/sdist 与 Twine/checksum 通过，wheel SHA256 `f33107c781b2eefac8e95577e891b4b58795f1979e6a0313d8418c7819cd644c`、sdist SHA256 `7a1ca883584d30d41edc5c7bad58c41b9c88f065886fbddbb0fc1658e3f5790b`；Python 3.10/3.12 × wheel/sdist 四组仓库外加载、generation 1、完整六 Provider registration、packaged 默认拒绝/显式赢家/依赖破坏拒绝/安全交接 Scheduler 均通过。最终文档闭环 HEAD `11a7ca10c5400d4b776efa4824ffa11b9ad0de00` 对应 push run `32454187768` / PR run `32454191418`；两者各 11 个 job 全绿、各恰好一个 `completed/success` 的 `release-gate`，远端分支与 PR head 均精确指向该 SHA，PR #2 为 `OPEN / CLEAN`。F-01 依赖已解除；未合并、未发布、未部署。
+
+## 6.3 Read-only Parallel Execution
+
+G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `parallel_execution.py`。`ReadOnlyParallelToolExecutor` 不接受调用方提供的现成 schedule，而是在每次执行时以 E-07 `ReadOnlyParallelToolScheduler` 重新验证 Tool Graph、选择集、effect 与完整依赖闭包；invocation 映射必须精确覆盖可信计划、值必须是只需依赖结果映射的 async callable。executor 不授予 capability，调用方必须先完成 Provider/trust/capability 授权；即使 Scheduler 会把 mutating 或确认工具保守排成串行，executor 仍在任何调用前再次要求所有工具为强类型 `ToolEffect.READ_ONLY` 且无需确认。
+
+整个 schedule 只在入口读取一次共享 `DeadlineContext.remaining()`，不按批次重置或延长预算。每个 invocation 只收到其 Tool Graph 声明的完整传递依赖结果，容器为只读 mapping，不暴露其他已完成工具。串行批次也使用显式子任务，使取消、失败与并行批次共享同一协议；每批以 `asyncio.wait(..., FIRST_COMPLETED)` 观察任务，任一失败或自行取消即取消并 drain 全部 sibling，跳过后续批次。外层调用方取消在子任务 drain 后原样传播；共享预算耗尽转为专用 timeout；handler 原始异常消息不进入公共错误，避免把凭据或参数内容带出执行边界。完成报告冻结计划顺序下的精确结果映射。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `55 passed`、Scheduler/Graph/Conflict/Agent Runtime 联合各 `366 passed`、严格串行普通全量各 `1760 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过；Ruff 0.16.2、diff check及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。fresh wheel/sdist SHA256 分别为 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922` / `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`，各 91 个成员并包含 `parallel_execution.py`；sdist 重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组包外加载、11 表、8 revision、离线 DDL、generation 1、真实并发度 2、mutating 前置拒绝、无模块级 executor 与零 engine/asyncpg/Redis I/O smoke 均通过。
+
+G-09 精确 HEAD push/PR 双 `release-gate` 尚待完成，G-10 Trusted Runner Pool 保持锁定。当前 executor 仅为显式注入的脱离态 runtime port，未修改既有 `_execute_tools`，生产路径仍保持每轮最多一个工具；未接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、配置、startup/shutdown 或 D-09 sidecar，未运行 migration，未合并、未发布、未部署。
 
 ---
 
