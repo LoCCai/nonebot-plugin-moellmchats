@@ -1,20 +1,22 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T13:02:32+00:00
+lastmod: 2026-08-23T13:10:10+00:00
 ---
 
 # 02-plan-future-architecture
 
 # Plan 2：后续功能与架构优化
 
-> 最终验收口径复核（2026-08-23）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单现统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。当前 Provider/Capability/Trust consumer 已由 D-08 接入真实路径；Agent runtime、模型能力路由、structured ToolResult、并行执行与平台能力仍需 Milestone I。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
+> 最终验收口径复核（2026-08-23）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单现统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。当前 Provider/Capability/Trust consumer 已由 D-08 接入真实路径；Agent runtime、模型能力路由的受信 catalog/runtime 接线、structured ToolResult、并行执行与平台能力仍需 Milestone I。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
 
 > I-01 本地门禁（2026-08-23）：规划基线 `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已严格关闭。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增独立 `model_capabilities.py`，固定 text/vision/tools/json-schema/reasoning/streaming 六能力、context/output limits、精确 Decimal 每百万 token 成本、四态 availability 与 generation-bound descriptor；三类摘要分别绑定 raw identity、capability+limits 和完整 descriptor，未知成本与零成本严格区分，repr 不暴露 raw identity。四版本定向各 `98 passed`、联合各 `492 passed`、普通全量及最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 锁定；本阶段不读取/改写模型配置，不接 `ModelSelector`，不发网络请求。
 
 > I-01 远端闭环（2026-08-23）：本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 对应 push `32638844775` / PR `32638846637`；两者均精确命中目标 SHA、各 11/11 success、`non_success=[]`，并各恰好一个成功 `release-gate`。本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-02 依赖已解除、待实现；未合并、未发布、未部署，未迁移或连接真实服务。
 
 > I-02 本地门禁（2026-08-23）：I-01 最终文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已严格关闭。在此前提下，实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 新增独立 `model_routing.py`：有界 frozen catalog/candidate/requirements/policy/request/decision 以 canonical SHA-256 绑定 generation、目录、策略、六能力与 limits；只选择明确 available（或策略显式允许的 degraded）、已知精确 Decimal 成本且满足质量/延迟/单价上限的候选。动态次序固定为 availability、quality、latency、estimated cost、identity；七个固定角色通过三态 policy 保留现有模型 pin 与 fail-closed 回滚。四版本定向各 `88 passed`、联合各 `591 passed`、全量及最低依赖全量各 `2616 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-03 锁定；本阶段未接现有 `ModelSelector`、`LlmPayloadMixin` 或聊天 runtime，不读取 provider 配置/credential，不发网络请求。
+
+> I-02 远端闭环（2026-08-23）：本地证据 HEAD `0452bdd0696b8efd257e68c9b9a50d38b0de2f07` 的 push `32641447820` / PR `32641450374` 已严格关闭：各 11/11 success、`non_success=[]`、各唯一 `release-gate` 为 `completed/success`，四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 依赖已解除；仍未接现有 selector/payload/chat runtime，未合并、未发布、未部署，未迁移或连接真实服务。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -685,7 +687,7 @@ ModelCost:
     output_per_million
 ```
 
-I-01 实现状态：本地与精确 HEAD push/PR 双 `release-gate` 均已完成。`ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability` 已在 `model_capabilities.py` 固化为无凭据、深度不可变、canonical 且有界的领域对象；I-02 已本地实现独立 catalog/policy/request/decision 路由 primitive，精确 HEAD 双 run 待关闭。受信 catalog builder 与现有 selector/chat runtime 仍未接线，因此 Plan 2 最终验收保持未勾选。
+I-01 实现状态：本地与精确 HEAD push/PR 双 `release-gate` 均已完成。`ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability` 已在 `model_capabilities.py` 固化为无凭据、深度不可变、canonical 且有界的领域对象；I-02 的独立 catalog/policy/request/decision 路由 primitive 也已完成本地与精确 HEAD 双 run 门禁。受信 catalog builder 与现有 selector/chat runtime 仍未接线，因此 Plan 2 最终验收保持未勾选。
 
 ---
 
@@ -1149,7 +1151,7 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [ ] Tool Graph（E-06～E-08 primitive 已绿；I-07 负责真实工具路径接线）
 - [ ] read_only 并行工具（G-09/G-10 primitive 已绿；`_execute_tools()` 仍每轮单工具，待 I-07）
 - [ ] ModelCapability（I-01 primitive 双 gate 已绿；待后续 runtime 实际消费）
-- [ ] capability based routing（I-02 本地 primitive 已完成、精确 HEAD 双 run 待关闭；尚未接现有 selector/chat runtime）
+- [ ] capability based routing（I-02 primitive 双 gate 已绿；尚未接现有 selector/chat runtime）
 - [ ] Runtime API（H-01～H-05 脱离态门禁已绿；待 I-05/I-08 组合和挂载）
 - [ ] structured audit（G-08/H-06 primitive 已绿；待 I-06/I-08 写入真实生命周期）
 - [ ] structured metrics（H-07 primitive 已绿；待 I-06/I-08 观测并接 H-04）
