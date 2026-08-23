@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-22T23:58:29+00:00
+lastmod: 2026-08-23T00:37:46+00:00
 ---
 
 # 03-plan-performance-database
@@ -31,6 +31,8 @@ lastmod: 2026-08-22T23:58:29+00:00
 > G-06 本地门禁（2026-08-22）：G-05 最终闭环 HEAD `10cee6a7c0660865509acb7087835183bd5aa9ef` 的 push `32604302971` / PR `32604304677` 已各 11/11 green。实现提交 `5b9d1123f05048a5c1a23f099f6f1d7ed3de7282` 新增 `ClassificationRequestScope / ClassificationModelIdentity / ClassificationRenderContext / ClassificationCacheKey / ClassificationCacheRecord`、`ClassificationCacheProtocol`、`resolve_classification()` 与短 TTL Memory LRU；key 的 identity digest 绑定规范化 prompt、目录代际/权限/开关/黑名单/content digest、模型、capability、policy version 与 TTL。任何用户上下文绑定、非 `MODEL_SUCCESS`、错误 identity/ack、同 key 异值、超限、跨 owner 或时钟回退均 fail closed。本地四版本定向各 `110 passed`、联合各 `459 passed`、普通全量各 `1607 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 classification TTL roundtrip/reload/零 I/O smoke 均通过。制品 SHA256 为 wheel `d5c87bdd720081b7d1e6a4b706ece173b96ac595e58591bba2254dfbfe291abd`、sdist `6f2651a89f74c5ba3d9fe042d4a8020a50341f2a67728e60f3c0bfaef92c32b4`。精确 HEAD 双 run 待完成，G-07 锁定；现有 Categorize/payload 路径保持未接线，不创建全局 cache、不连接真实服务、不迁移、不部署。
 
 > G-06 远端闭环（2026-08-22）：本地证据 HEAD `6c4332e34cd6a2204b1e6ec9076cede177a054d0` 对应 push run `32606564939` / PR run `32606566273`；两者各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-07 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
+
+> G-07 本地门禁（2026-08-23）：G-06 最终闭环 HEAD `d773176c6fddebc2dcb92e05fc42ab633e29e77a` 的 push `32606826337` / PR `32606828225` 已各 11/11 green。实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 新增 `ModelUsageRecord / UsageBatchPolicy / UsageBatchLease / UsageBatchQueue / BatchUsageRepository / PostgresUsageRepository`。batch 默认 100 条或最老事件等待 1 秒触发，outstanding 上限 1000；队列绑定 PID/event loop 与单调时钟，取消不消费/插入事件，只有 durable commit 可 ack，明确未写/rollback 可 release，未知结果进入终止态且不可重放。Repository 单次只执行一条 1～100 行 INSERT，验证 `RETURNING` identity，不拥有事务或 retry；查询使用 run 指纹 cursor 与 `(created_at DESC, id DESC)` keyset。四版本定向各 `94 passed`、联合各 `552 passed`、普通全量各 `1670 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 smoke 均通过。制品 SHA256 为 wheel `b7164d2a2fd13e46879acd461b1970f600c344c32482ab6ad729b38a798f3555`、sdist `3a89382360adae7b33d807aeb60fcf5af7eb24be11c04a6e94006e68cf8d06f6`。精确 HEAD 双 run 待完成，G-08 锁定；未接 `llm_api`/内存 history、配置、生命周期、计价、spool 或生产 runtime，不迁移、不连接真实服务、不部署。
 
 ---
 
@@ -855,7 +857,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05 与 G-06 本地及精确 HEAD 双 run 远端门禁均已完成；G-07 前置依赖已解除但尚未实现；G-06 尚未接入运行时。
+状态：G-05 与 G-06 本地及精确 HEAD 双 run 远端门禁均已完成；G-07 本地门禁完成、精确 HEAD 双 run 待完成，G-08 保持锁定；G-06 尚未接入运行时。
 
 对于高度相似的标准请求，可考虑：
 
@@ -986,6 +988,10 @@ or
    ↓
 COPY / Batch INSERT
 ```
+
+G-07 实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 先完成 Usage 边界：`UsageBatchQueue` 只管理有界 backpressure、100 条/1 秒 readiness 与单一 in-flight lease，不创建后台 task 或连接；租约必须在调用方确认 durable commit 后 ack。未发出写入或事务明确 rollback 才能原序 release，任何 commit/result unknown 都冻结该队列实例，避免在缺少幂等键的 `model_usage` 上自动重放造成重复计量。
+
+`PostgresUsageRepository` 保留调用方事务所有权，以一条 multi-row `INSERT ... RETURNING id` 写 1～100 条 draft，并验证返回数量、正 BIGINT 与唯一性；不 commit、rollback、flush、close 或 retry。`BatchUsageRepository` 是对既有 `UsageRepository` 的可选兼容扩展，不使旧实现失效。G-07 尚未接现有 `llm_api`、50 条内存 `token_usage_history`、配置、startup/shutdown、计价或本地 spool；G-08 Audit batch 仍未实现。
 
 ---
 
@@ -1218,11 +1224,11 @@ runner_start_duration
 - [ ] AgentRun 持久化
 - [ ] AgentStep 持久化
 - [ ] ToolCall 持久化
-- [ ] Token Usage 持久化
+- [ ] Token Usage 持久化（G-07 本地门禁完成、精确 HEAD 双 run 待完成；Repository/租约 primitive 尚未接生产 runtime）
 - [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
 - [x] History Hot Cache（G-02 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [x] Session Summary（G-03 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [ ] Batch Insert
+- [ ] Batch Insert（G-07 Usage 本地门禁完成；G-08 Audit 尚未实现）
 - [ ] DB Failure Spool
 - [ ] Redis Failure Policy
 - [x] Tool Catalog Cache（G-04 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
