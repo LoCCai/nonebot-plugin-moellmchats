@@ -1,7 +1,7 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-23T12:17:15+00:00
+lastmod: 2026-08-23T13:02:32+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
@@ -23,6 +23,8 @@ lastmod: 2026-08-23T12:17:15+00:00
 - 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均为 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
 - I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成纯 stdlib Model Capability Domain、本地四版本/最低依赖/Sandbox/静态/制品/包外零 I/O 门禁；本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`；I-02 依赖已解除。
 - I-01 不读取或改变现有模型配置，不包含 endpoint/key/proxy/credential，不接 selector/runtime，也不发送模型请求。
+- I-01 最终闭环文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功。I-02 实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 已完成 generation/digest-bound capability routing、本地四版本/最低依赖/Sandbox/静态/制品/包外零 I/O 门禁；精确 HEAD 双 run 待关闭，I-03 仍锁定。
+- I-02 不读取 provider 配置或凭据，不修改现有 `ModelSelector`/payload/chat runtime，也不发送模型请求；因此 Plan 2 最终 runtime 验收仍未勾选。
 
 ## 2. 状态口径
 
@@ -40,7 +42,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 | --- | --- | --- |
 | Provider / Capability / Trust | D-08 已将 categorize、payload、tool execution、pending action、search 与管理 consumer 切到 generation-bound Provider 视图，并保留 parity rollback | D-09 legacy 删除仍受生产发布周期门禁锁定 |
 | AgentRun / AgentStep / ToolCall / Deadline | `agent_runtime.py` 已有不可变对象、状态机与共享 deadline；F 阶段已有 Schema | `__init__.py`、`chat_runtime.py`、`llm_tools.py` 不构造这些对象；领域字段与 Schema 仍不完全对齐 |
-| Model Capability / Routing | 现有 `ModelSelector` 支持固定 selected/vision/category/summary 与难度映射 | 全仓没有 `ModelCapability / ModelLimits / ModelCost`，没有 capability/cost/limits 路由 |
+| Model Capability / Routing | I-01 已实现无凭据 descriptor；I-02 本地门禁已实现 generation/catalog/policy/capability-bound 路由及固定模型兼容/回滚 | 尚未从受信 catalog 构造路由 snapshot，也未接现有 `ModelSelector`、payload 或真实聊天 runtime；I-02 精确 HEAD 双 run 待关闭 |
 | Structured ToolResult | 当前 `ToolResult` 仅有 `text / images / metadata` | 缺 `files / structured / citations`，现有 adapter 与模型消息没有统一结构化消费契约 |
 | Agent persistence | 已有 `AgentRunRepository / AgentStepRepository / ToolCallRepository` Protocol 与三张表 | 没有对应 PostgreSQL Repository；Agent 领域字段缺少部分 Schema identity、时间、成本和错误边界 |
 | History / Summary / Long-Term Memory | G-01/G-02/G-03/H-08 各自具备脱离态实现 | 真实 `MessagesHandler` / prompt 编排未消费，未定义组合失败策略 |
@@ -61,14 +63,13 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - AgentRun / AgentStep / ToolCall
 - DeadlineContext
 - Tool Graph / read-only scheduler / parallel executor / trusted runner pool
+- Model Capability descriptor / capability-based routing（I-01 双 gate 已绿；I-02 本地门禁完成）
 - Runtime API / Web Admin
 - structured audit / structured logging / Full Metrics
 - Long-Term Memory retrieval boundary
 
 ### 尚缺核心实现
 
-- ModelCapability / ModelLimits / ModelCost
-- capability-based model routing
 - 完整 structured ToolResult
 - Agent runtime 对上述能力的真实消费
 
@@ -121,6 +122,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 用显式 request requirements 选择满足 text/vision/tools/json-schema/reasoning/streaming 和 context/output limits 的候选。
 - 决策稳定绑定 generation、policy version 与 capability digest；按 capability、availability、质量、延迟、成本的明确顺序选择。
 - 缺能力、目录漂移或未知可用性 fail closed；保留现有固定模型选择的显式兼容策略和回滚边界。
+- 本地实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 已满足上述 primitive 契约并完成四版本、最低依赖、Sandbox、静态、制品和包外零 I/O 门禁；精确 HEAD push/PR 双 `release-gate` 待关闭，I-03 继续锁定。
 
 ### I-03 Structured ToolResult
 
@@ -188,4 +190,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线与 I-01 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-02 前置依赖已解除，下一步按本节约束实现 capability-based model routing。
+当前精确恢复点：规划审计基线与 I-01 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-02 实现及本地证据已冻结，先关闭 I-02 精确 HEAD push/PR 双 `release-gate`，再开始 I-03。

@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T12:17:15+00:00
+lastmod: 2026-08-23T13:02:32+00:00
 ---
 
 # 03-plan-performance-database
@@ -13,6 +13,8 @@ lastmod: 2026-08-23T12:17:15+00:00
 > I-01 本地门禁（2026-08-23）：实现提交 `4a643e062b83055722351df12d402e518dc51b51` 固化无凭据的模型 capability/limits/cost/availability descriptor，并将 Decimal 成本精确对齐现有 `NUMERIC(24,12)`、provider/model 长度对齐既有 Schema。四版本定向各 `98 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `492 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。I-01 精确 HEAD 双 run 待完成，I-02 锁定；G-06 Classification Cache 尚未接真实分类路径，未读取连接信息、未迁移、未连接服务。
 
 > I-01 远端闭环（2026-08-23）：证据 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 均为目标 SHA，各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 已完成，I-02 前置依赖已解除；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
+
+> I-02 本地门禁（2026-08-23）：实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 以有界整数 quality/latency、精确 `NUMERIC(24,12)` 单价 atoms 与 input/output token 预算形成不受 ambient Decimal context 影响的成本分子，分母固定 `10^18`；所有候选、目录、策略、request 与 decision 都 generation/digest-bound，目录或 policy 漂移整体拒绝。四版本定向各 `88 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `591 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2616 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，I-03 锁定；未新增表或 migration，未连接真实服务，G-06 Classification Cache 仍未接真实分类路径。
 
 > 推荐目标版本：`0.28 → 0.30`
 

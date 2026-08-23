@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T12:17:15+00:00
+lastmod: 2026-08-23T13:02:32+00:00
 ---
 
 # 04-implementation-backlog
@@ -16,6 +16,7 @@ lastmod: 2026-08-23T12:17:15+00:00
 - A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。完成度审计确认真实聊天路径仍未构造 AgentRun/Step/ToolCall，模型能力路由、structured ToolResult、Agent PostgreSQL Repository、runtime 资源组合、并行接线、spool/Redis failure policy/database metrics 等仍未完成。
 - 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 依赖据此解除。
 - I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建与四组包外零真实 I/O smoke；本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 已完成，I-02 依赖已解除。
+- I-01 最终闭环文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。I-02 实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建及四组包外零真实 I/O smoke；精确 HEAD 双 run gate 待完成，I-03 继续锁定。
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
 - G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
@@ -1361,7 +1362,7 @@ prompt 与预算：service 依次尝试相关完整 record，单条加入后超�
 
 # Milestone I：Plan 2 / Plan 3 Completion
 
-**状态：规划审计基线与 I-01 精确 HEAD 双 run gate 均已关闭；I-02 依赖已解除、待实现**
+**状态：规划审计基线与 I-01 精确 HEAD 双 run gate 均已关闭；I-02 本地门禁完成、精确 HEAD 双 run gate 待关闭；I-03 锁定**
 
 Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
 
@@ -1397,7 +1398,19 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 验证：缺能力、未知 availability、目录漂移、成本/限制超界均 fail closed；不发送真实模型请求、不读取 credential。
 
-状态：前置依赖已解除，待实现。
+实现落点：I-01 最终闭环文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。在此前提下，实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 新增独立 `model_routing.py` 与 `tests/test_model_routing.py`，不修改现有 `ModelSelector`、配置 Schema、`LlmPayloadMixin` 或网络请求路径。
+
+领域与 identity 边界：`ModelRouteCandidate` 只组合 I-01 无凭据 descriptor、0～1,000,000 quality 与 0～86,400,000 ms latency；`ModelRoutingCatalog` 最多 1,024 项、所有 descriptor 必须同 generation，按 identity 稳定排序并以 candidate digest 固化质量/延迟/完整 descriptor。`ModelRouteRequirements` 绑定至少一种六能力、1～100,000,000 context、input/output token 预算、minimum quality、maximum latency 与可选精确单价 ceiling；request 绑定 catalog generation/digest、policy version/digest、capability/requirements digest、固定 role/bindings digest，任何目录或策略漂移整体拒绝。
+
+选择与兼容边界：未知/unavailable 永不合格，degraded 只有 policy 显式允许才参与且排序晚于 available；未知成本不当作免费，成本以 12 位 atoms × token 的有界整数分子比较，分母固定 `10^18`，不受 ambient Decimal context 影响。动态排序固定为 availability 升序、quality 降序、latency 升序、estimated cost 升序、identity digest 升序。`FixedModelBindings.from_model_config()` 只脱离 selected/vision/category/summary/MoE 0～2 七个模型 ID并忽略其余配置；`FIXED_ONLY` 为完整能力/limits/availability/cost 复核后的 fail-closed 回滚，`FIXED_PREFERRED` 允许 pin 不可用时进入动态选择，`CAPABILITY_ONLY` 拒绝歧义 fixed snapshot。所有 repr/decision 只暴露 digest，不含 endpoint/key/proxy/header/credential。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 I-02 定向各 `88 passed`；Model Capability/Selector、Classification Cache、LLM Payload、Model Usage、Full Metrics、Metrics API、Runtime Snapshot/Reload/Lifecycle 联合各 `591 passed`；严格串行普通全量各 `2616 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `2616 passed, 1 skipped`。mandatory root Sandbox fresh JUnit 为 `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 目标模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `bc1af847c250253d6009beb780059ae4ab5a8cf29a846e7534b76cef0cbc872b` / `353356fd025b527b4546925d81f7fec504a58691efff009f6c7aee4b916b4cfa`，各 102 个成员并包含 `model_routing.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh target 均从包外 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、精确 route/digest 与 engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-i02-dist.zzpjEh`，重建目录 `/tmp/moellm-i02-rebuild.QtCEqd`，最终 smoke 根目录 `/tmp/moellm-i02-smoke-final.6y6xR7`，Sandbox JUnit `/tmp/moellm-i02-sandbox.AYIRr6/junit.xml`。
+
+作废证据：首个成本排序单测使用的数值实际使另一候选更便宜，得到 `193 passed / 1 failed`，修正测试价格和精确分子预期后未改产品排序；首个普通全量解释器缺少 FakeRedis，收集期 4 error、尚未执行产品测试，随后使用满足项目 `<7` 约束的全新临时依赖目录通过。一次通用临时依赖解析得到越界 Redis 8.1.0 后立即作废且未用于测试。首轮 Python 3.12 包外 smoke 的执行环境没有 pip，目标目录为空并误加载旧包；最终全新 smoke 根目录以独立安装器、`set -e` 和目标模块存在断言重跑四组全部通过。上述作废目录均不计入门禁。
+
+状态：I-02 本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待关闭；I-03 继续锁定。未读取 provider 配置或 credential，未发模型请求，未接现有 selector/payload/chat runtime，未迁移、未连接真实 PostgreSQL/Redis，未合并、未 promotion、未发布、未部署。
 
 ---
 
