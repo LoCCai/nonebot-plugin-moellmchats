@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T03:54:00+00:00
+lastmod: 2026-08-23T04:00:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -49,6 +49,8 @@ lastmod: 2026-08-23T03:54:00+00:00
 > G-10 远端闭环（2026-08-23）：本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 的 push `32614767976` / PR `32614770194` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 > H-01 本地门禁（2026-08-23）：G-10 最终闭环 HEAD `b3d4a579acc9cf3e61d94737dd1e7192f317c009` 的 push `32615027467` / PR `32615029384` 已完成最终 11/11 双 gate。在此前提下，实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增显式注入、框架中立的 `RuntimeApiService / RuntimeApiASGIApp`，H-01 只实现 `GET /runtime/status` 与 `GET /runtime/generation`。canonical bearer、常量时间比较与 `runtime:read` scope 鉴权先于当前 snapshot 读取；generation/Generated stamp 漂移、鉴权器或 snapshot 故障均固定错误且 fail closed，配置、模型/provider/tool 内容、bundle identity、digest 和 token 不进入响应或诊断。四版本定向各 `49 passed`、联合各 `484 passed`、全量及最低依赖全量各 `1839 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品、重建及四组包外 API/secret/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-02 锁定；未注册路由、未启动 listener、未接配置或生命周期，未迁移、未连接服务、未部署。
+
+> H-01 远端闭环（2026-08-23）：本地证据 HEAD `fb475d144662821a527119212d9f94eca48bd844` 的 push `32616577017` / PR `32616579710` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-02 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
 
 ---
 
@@ -724,7 +726,7 @@ H-01 实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增独立 `runti
 
 fresh wheel/sdist SHA256 分别为 `f8a275e7456cfe5e08796f64e5b15de786c560f7b4cca047f9271d2a5b973eb1` / `653d9ea959477743d11b684ba4891e87838f4175814ce78166a68ed94ed56fb7`，各 93 个文件并包含 `runtime_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、两个合法 token GET 为 200、错误 token 为 401、config secret 不泄漏、无模块级 API 对象，engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-h01-dist.nPrA19`，重建目录 `/tmp/moellm-h01-rebuild.ObheE5`，最终 smoke 根目录 `/tmp/moellm-h01-smoke-final.P45TzV`，Sandbox JUnit `/tmp/moellm-h01-sandbox.oa0ohZ/junit.xml`。首轮 Python 3.10 wheel smoke 在 NoneBot 插件加载前直接导入子模块，被 LocalStore caller 检测拒绝且未进入 H-01 断言，结果明确作废；全新目录改为真实 `nonebot.load_plugin()` 后再导入 Schema，四组均严格通过。
 
-精确 HEAD push/PR 双 run 是 H-02 前置门禁，目前仍待完成。当前没有路由注册、listener、模块级 API 对象、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-01 本地证据 HEAD `fb475d144662821a527119212d9f94eca48bd844` 对应 push run `32616577017` 与 PR run `32616579710`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-02 依赖已解除但尚未实现。当前没有路由注册、listener、模块级 API 对象、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -1002,7 +1004,7 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [ ] read_only 并行工具
 - [ ] ModelCapability
 - [ ] capability based routing
-- [ ] Runtime API
+- [x] Runtime API（H-01 本地与精确 HEAD 双 run 远端门禁完成；尚未挂载）
 - [ ] structured audit
 - [ ] structured metrics
 - [ ] ToolResult structured output
