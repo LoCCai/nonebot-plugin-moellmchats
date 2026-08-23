@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T03:08:00+00:00
+lastmod: 2026-08-23T03:15:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -35,6 +35,7 @@ lastmod: 2026-08-23T03:08:00+00:00
 - G-09 本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 的 push `32612014895` / PR `32612017136` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现。
 - G-09 最终闭环文档 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-10 实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 已完成四版本定向各 `30 passed`、Provider/Execution/Graph/Scheduler/Conflict/Parallel/Agent Runtime 联合各 `397 passed`、普通全量各 `1790 passed, 1 skipped`、最低依赖全量、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/真实并发度 2/worker 1+2/close 零残留/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-01 继续锁定。
 - G-10 只提供 generation-pinned、显式 allowlist 与显式 start/close 的脱离态 trusted async worker pool；默认 4 worker/64 outstanding，共享 deadline 覆盖排队和执行，所有取消路径均 cancel+drain。Generated Tool 仍为 one-call-one-process；未接 `_execute_tools`、G-09 executor、配置、生命周期、Repository、数据库或 Redis，不读取连接信息，不连接真实服务。
+- G-10 本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 的 push `32614767976` / PR `32614770194` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01 依赖已解除但尚未实现。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -809,7 +810,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-09 精确 HEAD 双 run 远端 gate green；G-10 本地 gate green、精确 HEAD 双 run 待验证，H-01 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10 精确 HEAD 双 run 远端 gate green；H-01 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1179,9 +1180,9 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条明确非关�
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f` / `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`，各 92 个成员且包含 `trusted_runner_pool.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload generation 1、真实最大并发度 2、worker IDs 1/2、无模块级 Pool、close 后无残留 runner/invocation task；engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-g10-dist.iUUUDw`，重建目录 `/tmp/moellm-g10-rebuild.mhklUM`，最终 smoke 根目录 `/tmp/moellm-g10-smoke-final.mBXfzS`，Sandbox JUnit `/tmp/moellm-g10-sandbox-final.IUTMDm/junit.xml`。首轮 Python 3.10 wheel smoke 在导入 `database_schema` 前直接检查 metadata 且外层 shell 未 fail hard，结果明确作废；全新根目录以 `set -euo pipefail`、先导入 Schema 后四组均严格通过。
 
-远端状态：实现已完成本地门禁，但精确 HEAD push/PR 双 run 尚未验证，因此 H-01 仍锁定。当前未修改现有 `_execute_tools`、G-09 executor 或每轮单工具生产路径，未新增配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：G-10 本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 对应 push run `32614767976` 与 PR run `32614770194`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-01 依赖已解除但尚未实现。当前未修改现有 `_execute_tools`、G-09 executor 或每轮单工具生产路径，未新增配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
-状态：G-10 本地门禁已完成；精确 HEAD 双 run 远端门禁待完成，H-01 前置依赖未解除。
+状态：G-10 本地与精确 HEAD 双 run 远端门禁均已完成；H-01 前置依赖已解除。
 
 ---
 
@@ -1191,7 +1192,7 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条明确非关�
 
 ## H-01 Runtime API
 
-状态：等待 G-10 精确 HEAD push/PR 双 run 远端门禁关闭；当前锁定，尚未实现。
+状态：G-10 精确 HEAD push/PR 双 run 远端门禁已关闭；H-01 依赖已解除但尚未实现。
 
 ---
 

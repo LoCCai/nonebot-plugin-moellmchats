@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T03:08:00+00:00
+lastmod: 2026-08-23T03:15:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -45,6 +45,8 @@ lastmod: 2026-08-23T03:08:00+00:00
 > G-09 远端闭环（2026-08-23）：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 的 push `32612014895` / PR `32612017136` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 > G-10 本地门禁（2026-08-23）：G-09 最终闭环 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已完成最终 11/11 双 gate。在此前提下，实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增独立 `TrustedRunnerPool`：以 generation-bound Provider Catalog 和显式工具 allowlist 锁定范围，只允许可信 registered/builtin、in-process、强类型只读、无确认/capability/runtime 参数的 async handler，并在每次入队前重新执行权限与信任决策。默认 4 worker/64 outstanding，显式生命周期绑定 PID/event loop；共享 deadline 同时覆盖排队与执行，背压、排队撤销、运行中超时/调用方取消/close 均取消并 drain，异常文本脱敏。四版本定向各 `30 passed`、联合各 `397 passed`、全量各 `1790 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外真实并发/worker identity/关闭零残留/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-01 锁定；Generated Tool 隔离策略不变，未接 runtime、配置或生命周期，未迁移、未连接服务、未部署。
+
+> G-10 远端闭环（2026-08-23）：本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 的 push `32614767976` / PR `32614770194` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 ---
 
@@ -424,7 +426,7 @@ Pool 只能显式 `start()` / `close()`，绑定创建时 PID 与 event loop，�
 
 fresh wheel/sdist SHA256 分别为 `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f` / `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`，各 92 个成员且包含 `trusted_runner_pool.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、plugin reload generation 1、真实最大并发度 2、worker IDs 1/2、无模块级 Pool及 close 后无残留 worker/invocation task；engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-g10-dist.iUUUDw`，重建目录 `/tmp/moellm-g10-rebuild.mhklUM`，最终 smoke 根目录 `/tmp/moellm-g10-smoke-final.mBXfzS`，Sandbox JUnit `/tmp/moellm-g10-sandbox-final.IUTMDm/junit.xml`。首轮 Python 3.10 wheel smoke 在导入 Schema 前直接检查 metadata，因此该 harness 结果作废；修正为先导入 `database_schema` 并启用 `set -euo pipefail` 后，四组均严格通过。
 
-精确 HEAD push/PR 双 run 是 H-01 前置门禁，目前仍待完成。当前没有修改 `_execute_tools` 或 G-09 executor，没有创建配置、startup/shutdown、Repository、数据库/Redis 接线或 D-09 sidecar 集成；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：G-10 本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 对应 push run `32614767976` 与 PR run `32614770194`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-01 依赖已解除但尚未实现。当前没有修改 `_execute_tools` 或 G-09 executor，没有创建配置、startup/shutdown、Repository、数据库/Redis 接线或 D-09 sidecar 集成；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 

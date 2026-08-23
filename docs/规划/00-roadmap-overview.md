@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T03:08:00+00:00
+lastmod: 2026-08-23T03:15:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -43,6 +43,8 @@ lastmod: 2026-08-23T03:08:00+00:00
 > G-09 远端闭环（2026-08-23）：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 对应 push run `32612014895` 与 PR run `32612017136`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖门禁已关闭，G-10 依赖已解除但尚未实现；未接生产 runtime，未触发 migration、合并、发布、部署或任何生产操作。
 
 > G-10 本地门禁（2026-08-23）：G-09 最终闭环文档 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push run `32612221598` / PR run `32612224989` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`。在此前提下，实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增 generation-bound `TrustedRunnerPool`：只接受显式 allowlist 中 `TRUSTED`、`REGISTERED / BUILTIN`、`IN_PROCESS`、强类型 `READ_ONLY`、`UNVERIFIED` 结果且无确认/capability policy/runtime 参数的可取消 async handler，并在每次执行前以 pinned Provider Catalog 重做 `EXECUTION` 信任决策。默认 4 个固定 worker、64 outstanding，显式 start/close，绑定 PID/event loop且关闭后不可重启；一个共享 `DeadlineContext` 覆盖排队和执行，有界背压、超时、调用方取消与关闭都会取消并 drain，handler 异常文本不外泄。四版本定向各 `30 passed`、相关联合各 `397 passed`、普通全量各 `1790 passed, 1 skipped`，最低依赖全量同样通过，mandatory Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、sdist 重建及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/真实并发度 2/worker 1+2/关闭零残留/零数据库与 Redis I/O smoke 均通过。wheel SHA256 `54b1999d2e58338be3c2cf19c3f8e58f0f3ccff9d46738232aca0f08e59a9f6f`，sdist SHA256 `af64c3eacfff694c5e6a86c8642139f45cb81f9c7edc3b1ee2c1be8a70032dac`。精确 HEAD 双 run 远端门禁待完成，H-01 保持锁定；Generated Tool 仍为 one-call-one-process，未接现有 runtime、配置、生命周期、数据库或 Redis，未运行 migration，未合并、未发布、未部署。
+
+> G-10 远端闭环（2026-08-23）：本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 对应 push run `32614767976` 与 PR run `32614770194`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖门禁已关闭，H-01 依赖已解除但尚未实现；未接生产 runtime，未触发 migration、合并、发布、部署或任何生产操作。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -392,7 +394,7 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write 与 G-09 Read-only Parallel Execution 均已完成精确 HEAD 远端双 gate；G-10 Trusted Runner Pool 已完成本地门禁但精确 HEAD 双 run 待验证，H-01 继续锁定
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution 与 G-10 Trusted Runner Pool 均已完成精确 HEAD 远端双 gate；H-01 依赖已解除但尚未实现
 - G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive，尚未接既有 runtime、事务编排、配置或生命周期；Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 
