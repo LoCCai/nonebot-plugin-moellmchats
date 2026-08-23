@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T09:36:00+00:00
+lastmod: 2026-08-23T09:45:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -67,6 +67,8 @@ lastmod: 2026-08-23T09:36:00+00:00
 > H-05 远端闭环（2026-08-23）：本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 对应 push run `32628961718` 与 PR run `32628964171`；两者均命中目标 SHA、各 11 个 job 全部 success、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-05 依赖门禁已关闭，H-06 依赖已解除但尚未实现；Web Admin 与 H-01～H-04 API 仍未挂载，未触发 migration、合并、发布、部署或任何生产操作。
 
 > H-06 本地门禁（2026-08-23）：H-05 最终闭环文档 HEAD `6b848a24823d1c8fbc2ce79c9ef21070db423ea8` 的 push `32629223160` / PR `32629224566` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `8c6b45e42f596adcdef366eb5840f6d2be896fcb` 新增显式构造、脱离态的 canonical JSONL `StructuredLogContext / StructuredLogRecord / StructuredLogEmitter`。线协议固定 `version / timestamp / level / event` 与规划要求的九个关联字段，采用 UTC 微秒时间、canonical event 和 4096 字节上限；接口不接受任意 message、metadata、异常原文、参数、结果、prompt 或配置。AgentRun→AgentStep→ToolCall 绑定会校验跨对象 identity/model/tool，一切字段校验早于显式同步 clock/sink；clock/sink 异常以无异常链的固定错误 fail closed，动态 coroutine 会关闭且不执行。四版本 H-06 定向各 `64 passed`、H-01～H-06/Runtime/Provider/Agent/Repository 相关联合各 `776 passed`、普通全量及 Python 3.10 最低依赖全量各 `2265 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff、目标 format/diff check 与 Pyright 均通过。fresh wheel/sdist SHA256 分别为 `9a509d4c343a9ec54704e2fa81048422ff33ff19f8ae2d0ba1c302957d052962` / `6d85f67e1c6063b36f209e29733c254bc35d27d4d919ff24c1ac11c292bd8113`，各 98 个成员，Twine、sdist 仓库外字节一致重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-06/零真实 I/O smoke 均通过。精确 HEAD 双 run 远端门禁待完成，H-07 继续锁定；无全局 logger/emitter/sink/ContextVar，未迁移既有日志，未接配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime，未迁移、合并、发布或部署。
+
+> H-06 远端闭环（2026-08-23）：本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 对应 push run `32631694854` 与 PR run `32631696066`；两者均命中目标 SHA、各 11 个 job 全部 success、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖门禁已关闭，H-07 依赖已解除但尚未实现；Structured Logging 仍未接线，未触发 migration、合并、发布、部署或任何生产操作。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -416,7 +418,7 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API、H-04 Metrics API 与 H-05 Web Admin 均已完成精确 HEAD 远端双 gate；H-06 已完成本地门禁但仍待精确 HEAD 远端双 gate，H-07 继续锁定
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API、H-04 Metrics API、H-05 Web Admin 与 H-06 Structured Logging 均已完成精确 HEAD 远端双 gate；H-07 依赖已解除但尚未实现
 - G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01～H-04 只提供显式注入、未挂载的内部 ASGI/API 边界，H-05 也只提供显式构造、未挂载的只读 Web Admin，H-06 只提供显式构造、未接线的 canonical JSONL primitive；H-02 写操作仍需调用方显式提供双 CAS mutation port，H-03 取消仍需调用方显式提供 state/generation 双 CAS cancellation port，H-05 不暴露这些写操作；H-01～H-06 均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

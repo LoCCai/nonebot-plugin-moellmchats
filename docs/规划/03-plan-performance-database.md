@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T09:36:00+00:00
+lastmod: 2026-08-23T09:45:00+00:00
 ---
 
 # 03-plan-performance-database
@@ -69,6 +69,8 @@ lastmod: 2026-08-23T09:36:00+00:00
 > H-05 远端闭环（2026-08-23）：本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 的 push `32628961718` / PR `32628964171` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖已解除但尚未实现；未挂载 API，未迁移、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > H-06 本地门禁（2026-08-23）：H-05 最终闭环文档 HEAD `6b848a24823d1c8fbc2ce79c9ef21070db423ea8` 的 push `32629223160` / PR `32629224566` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`。实现提交 `8c6b45e42f596adcdef366eb5840f6d2be896fcb` 仅新增显式构造、脱离态的 canonical JSONL 日志 primitive；固定九个关联字段，不接受任意 payload，不创建或连接数据库/Redis。四版本定向各 `64 passed`、联合各 `776 passed`、普通全量与最低依赖全量各 `2265 passed, 1 skipped`，fresh Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-06/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，H-07 锁定；未迁移既有日志，未运行 migration、未连接真实服务、未部署。
+
+> H-06 远端闭环（2026-08-23）：本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 的 push `32631694854` / PR `32631696066` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-07 依赖已解除但尚未实现；未迁移既有日志，未运行 migration、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 ---
 
@@ -893,7 +895,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05～G-10、H-01～H-05 本地及精确 HEAD 双 run 远端门禁均已完成；H-06 已完成本地门禁但精确 HEAD 双 run 待完成，H-07 继续锁定；G-06～G-10 尚未接入运行时，H-01～H-06 也未挂载或接线。
+状态：G-05～G-10、H-01～H-06 本地及精确 HEAD 双 run 远端门禁均已完成；H-07 依赖已解除但尚未实现；G-06～G-10 尚未接入运行时，H-01～H-06 也未挂载或接线。
 
 对于高度相似的标准请求，可考虑：
 
@@ -1026,6 +1028,8 @@ H-05 本地证据：H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a5151
 H-05 远端证据：本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 的 push `32628961718` / PR `32628964171` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖已解除但尚未实现；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 H-06 本地证据：H-05 最终闭环文档 HEAD `6b848a24823d1c8fbc2ce79c9ef21070db423ea8` 的 push `32629223160` / PR `32629224566` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`。实现提交 `8c6b45e42f596adcdef366eb5840f6d2be896fcb` 仅新增显式构造、未接线的 immutable context/record 与同步 emitter；canonical JSONL 线协议固定九个关联字段且禁止任意 message/metadata/异常/参数/结果进入，跨 AgentRun/Step/ToolCall identity 漂移和异常/异步 clock/sink 均 fail closed。四版本定向各 `64 passed`、相关联合各 `776 passed`、普通全量与最低依赖全量各 `2265 passed, 1 skipped`，fresh Sandbox `40 passed, 0 skipped`。fresh wheel/sdist SHA256 为 `9a509d4c343a9ec54704e2fa81048422ff33ff19f8ae2d0ba1c302957d052962` / `6d85f67e1c6063b36f209e29733c254bc35d27d4d919ff24c1ac11c292bd8113`，sdist 重建 wheel 同哈希，四组包外 smoke 确认 engine create、asyncpg connect 与 Redis client 均为 0。尚需本地证据精确 HEAD 的 push/PR 双 `release-gate`，因此 H-07 继续锁定；未迁移既有日志，未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
+
+H-06 远端证据：本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 的 push `32631694854` / PR `32631696066` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-07 依赖已解除但尚未实现；未迁移既有日志，未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 ---
 

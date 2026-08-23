@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T09:36:00+00:00
+lastmod: 2026-08-23T09:45:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -69,6 +69,8 @@ lastmod: 2026-08-23T09:36:00+00:00
 > H-05 远端闭环（2026-08-23）：本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 的 push `32628961718` / PR `32628964171` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖已解除但尚未实现；Web Admin 与 API 仍未挂载，未迁移、未合并、未发布、未部署。
 
 > H-06 本地门禁（2026-08-23）：H-05 最终闭环文档 HEAD `6b848a24823d1c8fbc2ce79c9ef21070db423ea8` 的 push `32629223160` / PR `32629224566` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `8c6b45e42f596adcdef366eb5840f6d2be896fcb` 新增显式构造、未接线的 canonical JSONL 结构化日志 primitive：固定 schema 覆盖规划的九个关联字段，拒绝任意 payload/异常原文，跨 AgentRun/Step/ToolCall identity 漂移及异步/异常 clock/sink 均 fail closed。四版本定向各 `64 passed`、联合各 `776 passed`、全量及最低依赖全量各 `2265 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-07 锁定；未迁移既有日志，未接配置、生命周期或真实服务，未迁移、未部署。
+
+> H-06 远端闭环（2026-08-23）：本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 的 push `32631694854` / PR `32631696066` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-07 依赖已解除但尚未实现；Structured Logging 仍未接线，未迁移、未合并、未发布、未部署。
 
 ---
 
@@ -788,7 +790,7 @@ fresh wheel/sdist SHA256 分别为 `dccd6b1f9086a73d1c7d315bb619dd41fd5c7bc8633c
 
 远端证据：H-04 本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 对应 push run `32625289294` 与 PR run `32625291083`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-05 依赖已解除但尚未实现。
 
-状态：H-04～H-05 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-06 已完成本地门禁，精确 HEAD 双 run 待完成，H-07 保持锁定。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+状态：H-04～H-06 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-07 前置依赖已解除但尚未实现。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -826,7 +828,7 @@ fresh wheel/sdist SHA256 分别为 `0ee2b5779124b32ef20b1248004269819decbe969f59
 
 远端证据：H-05 本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 对应 push run `32628961718` 与 PR run `32628964171`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-06 依赖已解除但尚未实现。
 
-状态：H-05 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-06 已完成本地门禁，精确 HEAD 双 run 待完成，H-07 保持锁定。当前无模块级 service/app/reader/logger/emitter，未挂载 Web Admin 或 H-01～H-04 API，未迁移既有日志，未接配置、生命周期、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+状态：H-05～H-06 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-07 前置依赖已解除但尚未实现。当前无模块级 service/app/reader/logger/emitter，未挂载 Web Admin 或 H-01～H-04 API，未迁移既有日志，未接配置、生命周期、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -858,13 +860,15 @@ tool
 
 fresh wheel/sdist SHA256 分别为 `9a509d4c343a9ec54704e2fa81048422ff33ff19f8ae2d0ba1c302957d052962` / `6d85f67e1c6063b36f209e29733c254bc35d27d4d919ff24c1ac11c292bd8113`，各 98 个成员并包含 `structured_logging.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-05 与 H-06 canonical record 正常，engine create、asyncpg connect 与 Redis client 均为 0；Python 3.12 固定 NoneBot 2.4.4 / OneBot adapter 2.4.6。制品目录 `/tmp/moellm-h06-dist.y20oc3`，重建目录 `/tmp/moellm-h06-rebuild.FVXj7d`，smoke 根目录 `/tmp/moellm-h06-smoke.byecIX`，最终 Sandbox JUnit `/tmp/moellm-h06-final-sandbox.XaPjS1/junit.xml`。
 
-状态：H-06 实现和本地门禁完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-07 继续锁定。当前模块无全局 logger/emitter/sink/ContextVar，不配置 Python logging，不迁移现有日志，不接 NoneBot listener、配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-06 本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 对应 push run `32631694854` 与 PR run `32631696066`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-07 依赖已解除但尚未实现。
+
+状态：H-06 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-07 前置依赖已解除。当前模块无全局 logger/emitter/sink/ContextVar，不配置 Python logging，不迁移现有日志，不接 NoneBot listener、配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
 ## 16.2 H-07 Full Metrics
 
-状态：等待 H-06 精确 HEAD push/PR 双 `release-gate` 关闭后再实施。
+状态：H-06 精确 HEAD 双门禁已关闭，前置依赖已解除；尚未实现。
 
 建议：
 
