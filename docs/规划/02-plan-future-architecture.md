@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T03:15:00+00:00
+lastmod: 2026-08-23T03:54:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -47,6 +47,8 @@ lastmod: 2026-08-23T03:15:00+00:00
 > G-10 本地门禁（2026-08-23）：G-09 最终闭环 HEAD `5b1e95d7f5dde1f0c0d60405c4f3d831e578148c` 的 push `32612221598` / PR `32612224989` 已完成最终 11/11 双 gate。在此前提下，实现提交 `449f6ab003a4bfc19ddfa8634956c62c7343b3ee` 新增独立 `TrustedRunnerPool`：以 generation-bound Provider Catalog 和显式工具 allowlist 锁定范围，只允许可信 registered/builtin、in-process、强类型只读、无确认/capability/runtime 参数的 async handler，并在每次入队前重新执行权限与信任决策。默认 4 worker/64 outstanding，显式生命周期绑定 PID/event loop；共享 deadline 同时覆盖排队与执行，背压、排队撤销、运行中超时/调用方取消/close 均取消并 drain，异常文本脱敏。四版本定向各 `30 passed`、联合各 `397 passed`、全量各 `1790 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外真实并发/worker identity/关闭零残留/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-01 锁定；Generated Tool 隔离策略不变，未接 runtime、配置或生命周期，未迁移、未连接服务、未部署。
 
 > G-10 远端闭环（2026-08-23）：本地证据 HEAD `663a141b6d03dd2798811808882411b1ce9496e1` 的 push `32614767976` / PR `32614770194` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
+
+> H-01 本地门禁（2026-08-23）：G-10 最终闭环 HEAD `b3d4a579acc9cf3e61d94737dd1e7192f317c009` 的 push `32615027467` / PR `32615029384` 已完成最终 11/11 双 gate。在此前提下，实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增显式注入、框架中立的 `RuntimeApiService / RuntimeApiASGIApp`，H-01 只实现 `GET /runtime/status` 与 `GET /runtime/generation`。canonical bearer、常量时间比较与 `runtime:read` scope 鉴权先于当前 snapshot 读取；generation/Generated stamp 漂移、鉴权器或 snapshot 故障均固定错误且 fail closed，配置、模型/provider/tool 内容、bundle identity、digest 和 token 不进入响应或诊断。四版本定向各 `49 passed`、联合各 `484 passed`、全量及最低依赖全量各 `1839 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品、重建及四组包外 API/secret/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-02 锁定；未注册路由、未启动 listener、未接配置或生命周期，未迁移、未连接服务、未部署。
 
 ---
 
@@ -709,6 +711,20 @@ POST /agent-runs/{id}/cancel
 ```
 
 必须鉴权。
+
+## 14.1 H-01 Runtime Status 与 Generation
+
+H-01 实现提交 `e1f1546b4e33d21ee43bed894da95eb362565776` 新增独立 `runtime_api.py`，只落地本节最小只读切片：`GET /runtime/status` 与 `GET /runtime/generation`。Tool Bundle、Agent Run 与 Metrics API 仍分别由 H-02、H-03、H-04 负责；本阶段不提供写端点，也不把 ASGI app 自动挂到 NoneBot 或任何 Web server。
+
+服务必须显式注入实现 `current()` 的 snapshot reader 与异步 authenticator。内置静态 bearer authenticator 只接受 32～512 字节 canonical ASCII token，credential/request/authenticator 的诊断均脱敏并使用常量时间比较；`runtime:read` scope、路径、方法与空 query 校验全部先于 snapshot 读取。API 始终读取 `RuntimeSnapshotStore.current()`，不读取请求上下文可能绑定的旧 generation；snapshot 缺失、identity 非法，或 runtime/tool snapshot 的 generation、Generated revision/digest/active stamp 不一致时统一返回固定 503，不带内部异常文本。
+
+成功响应只包含 API version、runtime generation、reload 时间、Generated revision/count 以及模型/工具目录是否加载等有限 readiness 元数据，不序列化 config、模型/provider/tool 内容、bundle ID、digest 或 secret。所有响应使用有界 canonical JSON，并固定 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff` 和准确 `Content-Length`；不产生 CORS header。ASGI transport 限制 method/path/query/header 数量与字节数，重复 Authorization 或畸形 scope fail closed；模块内没有 service、authenticator 或 ASGI app 实例。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 H-01 定向各 `49 passed`；Runtime Snapshot/Reload、生命周期事务、Provider、Agent Runtime、G-09/G-10 联合各 `484 passed`；严格串行普通全量各 `1839 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1839 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped`，JUnit `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标文件 format check、diff check 与 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。
+
+fresh wheel/sdist SHA256 分别为 `f8a275e7456cfe5e08796f64e5b15de786c560f7b4cca047f9271d2a5b973eb1` / `653d9ea959477743d11b684ba4891e87838f4175814ce78166a68ed94ed56fb7`，各 93 个文件并包含 `runtime_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、两个合法 token GET 为 200、错误 token 为 401、config secret 不泄漏、无模块级 API 对象，engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-h01-dist.nPrA19`，重建目录 `/tmp/moellm-h01-rebuild.ObheE5`，最终 smoke 根目录 `/tmp/moellm-h01-smoke-final.P45TzV`，Sandbox JUnit `/tmp/moellm-h01-sandbox.oa0ohZ/junit.xml`。首轮 Python 3.10 wheel smoke 在 NoneBot 插件加载前直接导入子模块，被 LocalStore caller 检测拒绝且未进入 H-01 断言，结果明确作废；全新目录改为真实 `nonebot.load_plugin()` 后再导入 Schema，四组均严格通过。
+
+精确 HEAD push/PR 双 run 是 H-02 前置门禁，目前仍待完成。当前没有路由注册、listener、模块级 API 对象、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
