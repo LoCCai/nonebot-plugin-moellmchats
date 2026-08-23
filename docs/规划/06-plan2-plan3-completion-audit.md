@@ -1,7 +1,7 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-23T11:38:16+00:00
+lastmod: 2026-08-23T12:09:24+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
@@ -17,6 +17,12 @@ lastmod: 2026-08-23T11:38:16+00:00
 - D-09 仍要求至少一个真实发布周期的 Provider/legacy parity 观察。本任务禁止生产操作，因此 D-09 必须继续锁定；本地测试或 CI 不能替代发布观察。
 
 因此，H-08 是“已规划 primitive gate”的终点，不是总体目标终点。后续以 Milestone I 完成开发仓库内的运行态集成；生产迁移、发布、部署和 D-09 观察仍属于独立的生产门禁。
+
+### Milestone I 进展（2026-08-23）
+
+- 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均为 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
+- I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成纯 stdlib Model Capability Domain、本地四版本/最低依赖/Sandbox/静态/制品/包外零 I/O 门禁；精确 HEAD 双 run 待关闭，I-02 仍锁定。
+- I-01 不读取或改变现有模型配置，不包含 endpoint/key/proxy/credential，不接 selector/runtime，也不发送模型请求。
 
 ## 2. 状态口径
 
@@ -182,4 +188,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：H-08 最终证据已复核，先关闭本审计规划基线的精确 HEAD 双 run gate，再开始 I-01。
+当前精确恢复点：规划审计基线双 run gate 已关闭；I-01 本地证据已冻结，先关闭 I-01 精确 HEAD push/PR 双 `release-gate`，再开始 I-02。

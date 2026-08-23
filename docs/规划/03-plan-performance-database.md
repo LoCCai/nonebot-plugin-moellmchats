@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:38:16+00:00
+lastmod: 2026-08-23T12:09:24+00:00
 ---
 
 # 03-plan-performance-database
@@ -9,6 +9,8 @@ lastmod: 2026-08-23T11:38:16+00:00
 # Plan 3：处理效率与数据库接入优化
 
 > 最终验收口径复核（2026-08-23）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数仍是显式注入的脱离态 primitive。Plan 3 验收清单现统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。Milestone I 将依次完成领域/Schema/Repository 对齐、资源生命周期、聊天上下文与并行接线、spool/Redis failure policy/database metrics；详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+
+> I-01 本地门禁（2026-08-23）：实现提交 `4a643e062b83055722351df12d402e518dc51b51` 固化无凭据的模型 capability/limits/cost/availability descriptor，并将 Decimal 成本精确对齐现有 `NUMERIC(24,12)`、provider/model 长度对齐既有 Schema。四版本定向各 `98 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `492 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。I-01 精确 HEAD 双 run 待完成，I-02 锁定；G-06 Classification Cache 尚未接真实分类路径，未读取连接信息、未迁移、未连接服务。
 
 > 推荐目标版本：`0.28 → 0.30`
 
