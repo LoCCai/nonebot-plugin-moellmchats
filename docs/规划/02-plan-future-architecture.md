@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T07:25:00+00:00
+lastmod: 2026-08-23T08:34:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -63,6 +63,8 @@ lastmod: 2026-08-23T07:25:00+00:00
 > H-04 本地门禁（2026-08-23）：H-03 最终闭环文档 HEAD `528f2f6186e1da60441d2d4104c1b4b503f73d9c` 的 push `32622856559` / PR `32622857963` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增脱离态 `GET /models` 与 `GET /metrics`：分离 read scope，全部传输校验早于 reader，模型目录使用绑定 generation 的稳定 canonical 游标并仅暴露最小 identity，metrics 只返回与当前 generation 一致的低基数聚合。四版本定向各 `124 passed`、联合各 `641 passed`、全量及最低依赖全量各 `2115 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-05 锁定；API 未挂载，未接配置或生命周期，未迁移、未连接真实服务、未部署。
 
 > H-04 远端闭环（2026-08-23）：本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 的 push `32625289294` / PR `32625291083` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-05 依赖已解除但尚未实现；API 仍未挂载，未迁移、未合并、未发布、未部署。
+
+> H-05 本地门禁（2026-08-23）：H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a51515a099e1bd2` 的 push `32625567979` / PR `32625569546` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 新增显式构造、未挂载的只读 Web Admin，只以同源 GET 读取 H-01～H-04 API；token 仅驻留页面内存，安全 header、响应/JSON 上限与跨资源 generation 校验均 fail closed，MCP/Token 明细没有安全 API 时不展示。四版本定向各 `86 passed`、联合各 `712 passed`、全量及最低依赖全量各 `2201 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、localhost Chromium、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-06 锁定；未接路由、配置、生命周期或真实服务，未迁移、未部署。
 
 ---
 
@@ -782,7 +784,7 @@ fresh wheel/sdist SHA256 分别为 `dccd6b1f9086a73d1c7d315bb619dd41fd5c7bc8633c
 
 远端证据：H-04 本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 对应 push run `32625289294` 与 PR run `32625291083`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-05 依赖已解除但尚未实现。
 
-状态：H-04 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-05 前置依赖已解除。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+状态：H-04 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-05 已完成本地门禁，精确 HEAD 双 run 待完成，H-06 保持锁定。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -805,6 +807,20 @@ Token
 Latency
 Failure Rate
 ```
+
+## 15.1 H-05 只读、脱离态 Web Admin
+
+实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 新增独立 `web_admin.py`。`WebAdminService` 默认构造 UTF-8 `/admin`、`/admin/app.js` 与 `/admin/styles.css` 三项不可变资产，`WebAdminASGIApp` 只接受有界 canonical HTTP scope；模块不创建 service/app/reader，不注册 NoneBot 路由、listener 或 Web server，也不读取配置、数据库、Redis 或生产 runtime。
+
+页面只调用已经鉴权的 H-01～H-04 同源 API，所有请求固定为 GET、`credentials: omit` 与 `cache: no-store`，不提供 draft approve、bundle activate 或 run cancel 控件。Bearer token 输入后立即清空表单，只保存在闭包内存，断开与 `pagehide` 都会 abort 在途请求并清除 token/视图；token 不进入 URL、Cookie、Web Storage、日志或错误文本，连接后不留在 DOM。响应必须是 `application/json`、`no-store`、`nosniff`，并通过 64 KiB、深度 16、8192 节点、512 项集合、8192 字节字符串、安全整数与安全 key shape 校验。runtime 先固定 generation，tools/bundles/drafts/models/metrics 必须精确匹配；历史 Agent Run 允许携带旧 generation。MCP 与 Token 明细尚无安全 API，因此页面明确不读取配置或从日志/邻近状态推断。
+
+所有 HTML/JS/CSS 响应都带固定严格 CSP、COOP/CORP、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`no-referrer`、permissions policy 与 `no-store`，拒绝 Cookie、CORS header、未知响应 header、query/body、非 GET/HEAD、编码/非 canonical path、畸形/超限 header 和 body。最终 localhost Chromium smoke 观测 14 次 API 请求全部为同源 GET，token 仅出现在 Authorization header，URL/Cookie/localStorage/sessionStorage 均无 token；generation 漂移被拒绝、disconnect 清空页面，page/console error 均为 0。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 H-05 定向各 `86 passed`；H-01～H-05 API、Runtime Snapshot/Reload、Provider、Agent 与 Repository 相关联合各 `712 passed`；严格串行普通全量各 `2201 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `2201 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped`，JUnit `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check、Pyright 1.1.407 目标模块/测试与 Node 24 JavaScript syntax 均通过。全仓 Pyright 的既有基线错误不计入 H-05，也未在本任务中修改。
+
+fresh wheel/sdist SHA256 分别为 `0ee2b5779124b32ef20b1248004269819decbe969f59e9046f7d73fe19260645` / `8a5740fe27d2ff9ac31adcbc901447bf328b59c249dd20ce04b6045a3c02f76a`，各 97 个成员并包含 `web_admin.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-04 API、H-05 三资产/ASGI 正常，engine create、asyncpg connect 与 Redis client 均为 0；Python 3.12 固定 NoneBot 2.4.4 / OneBot adapter 2.4.6。制品目录 `/tmp/moellm-h05-dist.lR9rNr`，重建目录 `/tmp/moellm-h05-rebuild.ZytkV0`，smoke 根目录 `/tmp/moellm-h05-smoke-final.Rzseq9`，Sandbox JUnit `/tmp/moellm-h05-final-sandbox.dNY6Uk/junit.xml`。
+
+状态：H-05 实现和本地门禁完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-06 继续锁定。当前无模块级 service/app/reader，未挂载 Web Admin 或 H-01～H-04 API，未接配置、生命周期、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 

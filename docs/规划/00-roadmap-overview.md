@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T07:25:00+00:00
+lastmod: 2026-08-23T08:34:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -61,6 +61,8 @@ lastmod: 2026-08-23T07:25:00+00:00
 > H-04 本地门禁（2026-08-23）：H-03 最终闭环文档 HEAD `528f2f6186e1da60441d2d4104c1b4b503f73d9c` 的 push `32622856559` / PR `32622857963` 已各 11/11 success、无非 success job 且各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增脱离态 `MetricsApiService`，精确实现 `GET /models` 与 `GET /metrics`。`models:read / metrics:read` 分权及 method/query/body 校验均早于 snapshot/metrics reader；模型目录最多 4096 项、每页最多 20 条，以 `(provider, model, identity)` 稳定排序并使用绑定 runtime generation 的 canonical UTF-8 base64url 游标，只返回 `id/model/provider`。Metrics reader 必须与当前 runtime generation 一致，仅返回低基数聚合指标，不暴露 `last_reload_error`、异常文本、配置、secret 或 user/group 标签。四版本定向各 `124 passed`、相关联合各 `641 passed`、普通全量及 Python 3.10 最低依赖全量各 `2115 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、sdist 重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-04 API/零真实 I/O smoke 均通过。wheel SHA256 `dccd6b1f9086a73d1c7d315bb619dd41fd5c7bc8633cb1a299242df827481760`，sdist SHA256 `1eed21681c6b5dd72941a7368f6061fd8b530fa1ca6b8d2b7a4b99f9e0a73b29`。精确 HEAD 双 run 远端门禁待完成，H-05 继续锁定；无模块级 service/app/reader，未挂载路由/listener，未接配置、生命周期、PostgreSQL 或 Redis，未迁移、合并、发布或部署。
 
 > H-04 远端闭环（2026-08-23）：本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 对应 push run `32625289294` 与 PR run `32625291083`；两者均命中目标 SHA、各 11 个 job 全部 success、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-04 依赖门禁已关闭，H-05 依赖已解除但尚未实现；Metrics API 仍未挂载，未触发 migration、合并、发布、部署或任何生产操作。
+
+> H-05 本地门禁（2026-08-23）：H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a51515a099e1bd2` 的 push `32625567979` / PR `32625569546` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 新增只读、脱离态、同源 `WebAdminService / WebAdminASGIApp`，默认仅提供 `/admin`、`/admin/app.js` 与 `/admin/styles.css`。页面只以 GET 调用 H-01～H-04 鉴权 API，不提供审批、激活或取消入口；token 只驻留页面内存，不进入 URL、Cookie、Web Storage 或日志，连接后不留在 DOM，并以严格 CSP、`no-store`、`nosniff`、禁止嵌入/跨源、响应字节与 JSON shape 上限收窄浏览器边界。当前 runtime/tools/models/metrics generation 必须一致，历史 Agent Run 可保留旧 generation；MCP 与 Token 明细在没有安全 API 前明确不展示、不读取配置也不推断。四版本定向各 `86 passed`、相关联合各 `712 passed`、普通全量及 Python 3.10 最低依赖全量各 `2201 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff、目标 Pyright/format、Node 语法、localhost Chromium、fresh 制品、sdist 重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-05/零真实 I/O smoke 均通过。wheel SHA256 `0ee2b5779124b32ef20b1248004269819decbe969f59e9046f7d73fe19260645`，sdist SHA256 `8a5740fe27d2ff9ac31adcbc901447bf328b59c249dd20ce04b6045a3c02f76a`。精确 HEAD 双 run 远端门禁待完成，H-06 继续锁定；无模块级 service/app/reader，未注册路由或 listener，未接配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime，未迁移、合并、发布或部署。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -410,8 +412,8 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API 与 H-04 Metrics API 均已完成精确 HEAD 远端双 gate；H-05 依赖已解除但尚未实现
-- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01～H-04 只提供显式注入、未挂载的内部 ASGI/API 边界，H-02 写操作仍需调用方显式提供双 CAS mutation port，H-03 取消仍需调用方显式提供 state/generation 双 CAS cancellation port；四者均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API 与 H-04 Metrics API 均已完成精确 HEAD 远端双 gate；H-05 已完成本地门禁但仍待精确 HEAD 远端双 gate，H-06 继续锁定
+- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01～H-04 只提供显式注入、未挂载的内部 ASGI/API 边界，H-05 也只提供显式构造、未挂载的只读 Web Admin；H-02 写操作仍需调用方显式提供双 CAS mutation port，H-03 取消仍需调用方显式提供 state/generation 双 CAS cancellation port，H-05 不暴露这些写操作；H-01～H-05 均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 
 过早数据库化会导致很快再做第二次 schema migration。

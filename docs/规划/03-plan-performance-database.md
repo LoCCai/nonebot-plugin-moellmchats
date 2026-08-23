@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T07:25:00+00:00
+lastmod: 2026-08-23T08:34:00+00:00
 ---
 
 # 03-plan-performance-database
@@ -63,6 +63,8 @@ lastmod: 2026-08-23T07:25:00+00:00
 > H-04 本地门禁（2026-08-23）：H-03 最终闭环文档 HEAD `528f2f6186e1da60441d2d4104c1b4b503f73d9c` 的 push `32622856559` / PR `32622857963` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`。实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增显式注入、未挂载的 Model Catalog/Metrics API；目录最多 4096 项、每页 20 条，稳定游标绑定 runtime generation，metrics 只接受与当前 generation 一致的低基数聚合，不暴露 config/secret/user/group 或异常原文。四版本定向各 `124 passed`、联合各 `641 passed`、普通全量与最低依赖全量各 `2115 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/API/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，H-05 锁定；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > H-04 远端闭环（2026-08-23）：本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 的 push `32625289294` / PR `32625291083` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-05 依赖已解除但尚未实现；未挂载 API，未迁移、未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
+
+> H-05 本地门禁（2026-08-23）：H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a51515a099e1bd2` 的 push `32625567979` / PR `32625569546` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`。实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 新增只读、脱离态 Web Admin，只消费 H-01～H-04 有界鉴权响应，不创建或连接数据库/Redis。四版本定向各 `86 passed`、联合各 `712 passed`、普通全量与最低依赖全量各 `2201 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、localhost Chromium、fresh 制品/重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-05/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成，H-06 锁定；未迁移、未连接真实服务、未部署。
 
 ---
 
@@ -887,7 +889,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05～G-10、H-01～H-04 本地及精确 HEAD 双 run 远端门禁均已完成；H-05 依赖已解除但尚未实现；G-06～G-10 尚未接入运行时，H-01～H-04 也未挂载。
+状态：G-05～G-10、H-01～H-04 本地及精确 HEAD 双 run 远端门禁均已完成；H-05 已完成本地门禁但精确 HEAD 双 run 待完成，H-06 继续锁定；G-06～G-10 尚未接入运行时，H-01～H-05 也未挂载。
 
 对于高度相似的标准请求，可考虑：
 
@@ -1014,6 +1016,8 @@ H-03 远端证据：本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e`
 H-04 本地证据：H-03 最终闭环文档 HEAD `528f2f6186e1da60441d2d4104c1b4b503f73d9c` 的 push `32622856559` / PR `32622857963` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`。实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 仅新增显式注入、未挂载的 Model Catalog/Metrics 读边界；模型目录最多 4096 项、每页 20 条且游标绑定 generation，metrics generation 不一致 fail closed，只输出低基数聚合。四版本定向各 `124 passed`、相关联合各 `641 passed`、普通全量与最低依赖全量各 `2115 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`。fresh wheel/sdist SHA256 为 `dccd6b1f9086a73d1c7d315bb619dd41fd5c7bc8633cb1a299242df827481760` / `1eed21681c6b5dd72941a7368f6061fd8b530fa1ca6b8d2b7a4b99f9e0a73b29`，sdist 重建 wheel 同哈希，四组包外 smoke 确认 engine create、asyncpg connect 与 Redis client 均为 0。尚需本地证据精确 HEAD 的 push/PR 双 `release-gate`，因此 H-05 继续锁定；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 H-04 远端证据：本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 的 push `32625289294` / PR `32625291083` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-05 依赖已解除但尚未实现；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
+
+H-05 本地证据：H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a51515a099e1bd2` 的 push `32625567979` / PR `32625569546` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`。实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 仅新增显式构造、未挂载的只读 Web Admin；同源页面只使用 H-01～H-04 鉴权 API，不读取配置、数据库或 Redis，token 仅驻留页面内存，响应大小/shape 与 generation 一致性 fail closed。四版本定向各 `86 passed`、相关联合各 `712 passed`、普通全量与最低依赖全量各 `2201 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`。fresh wheel/sdist SHA256 为 `0ee2b5779124b32ef20b1248004269819decbe969f59e9046f7d73fe19260645` / `8a5740fe27d2ff9ac31adcbc901447bf328b59c249dd20ce04b6045a3c02f76a`，sdist 重建 wheel 同哈希，四组包外 smoke 确认 engine create、asyncpg connect 与 Redis client 均为 0。尚需本地证据精确 HEAD 的 push/PR 双 `release-gate`，因此 H-06 继续锁定；未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 ---
 
