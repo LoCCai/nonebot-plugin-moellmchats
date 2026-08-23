@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T01:18:30+00:00
+lastmod: 2026-08-23T01:24:39+00:00
 ---
 
 # 02-plan-future-architecture
@@ -37,6 +37,8 @@ lastmod: 2026-08-23T01:18:30+00:00
 > G-07 远端闭环（2026-08-23）：本地证据 HEAD `09cbbe2e170cf6404568e6e4c24018e16e1a2e74` 的 push `32608582316` / PR `32608585076` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-08 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 > G-08 本地门禁（2026-08-23）：G-07 最终闭环 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已完成最终 11/11 双 gate。在此前提下，实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 将 Audit 写入冻结为 schema-aligned deeply immutable record、显式非关键 allowlist、兼容的可选 batch Repository、100 条/1 秒有界租约队列、单语句 PostgreSQL multi-row INSERT 与绑定 run 的稳定 keyset 查询。审批、激活/停用/回滚、mutating 确认/执行和未知类型均强制即时 `append()`，只有明确非关键事件可入队；租约只在 durable commit 后 ack，未写/明确 rollback 才可 release，未知结果终止队列且不重放。四版本定向各 `105 passed`、联合各 `439 passed`、全量各 `1742 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外 11 表/8 revision/离线 DDL/reload/租约 roundtrip/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，G-09 锁定；未接现有日志/工具生命周期/mutating runtime、配置、生命周期或 spool，未迁移、未连接服务、未部署。
+
+> G-08 远端闭环（2026-08-23）：本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 的 push `32610202772` / PR `32610204736` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 ---
 
