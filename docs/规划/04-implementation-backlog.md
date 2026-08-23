@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T08:44:00+00:00
+lastmod: 2026-08-23T09:36:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -50,6 +50,8 @@ lastmod: 2026-08-23T08:44:00+00:00
 - H-04 最终闭环文档 HEAD `d5c92a1288f3514ccaf4fec43a51515a099e1bd2` 的 push `32625567979` / PR `32625569546` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-05 实现提交 `5158bd0142d4b0978efc5c4ad6f399f8191e8295` 已完成四版本定向各 `86 passed`、H-01～H-05/Runtime/Provider/Agent/Repository 相关联合各 `712 passed`、普通全量及最低依赖全量各 `2201 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/目标 Pyright、localhost Chromium、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-05/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-06 继续锁定。
 - H-05 只提供显式构造、未挂载的只读同源 Web Admin 与三项静态资产；token 只驻留页面内存，页面不暴露审批、激活或取消写操作，MCP/Token 明细没有安全 API 时不展示。无模块级 service/app/reader，未接路由/listener、配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime。
 - H-05 本地证据 HEAD `4ad810bf4f2d0c4b7d180c71306894a3233ea9d5` 的 push `32628961718` / PR `32628964171` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖已解除但尚未实现。
+- H-05 最终闭环文档 HEAD `6b848a24823d1c8fbc2ce79c9ef21070db423ea8` 的 push `32629223160` / PR `32629224566` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-06 实现提交 `8c6b45e42f596adcdef366eb5840f6d2be896fcb` 已完成四版本定向各 `64 passed`、H-01～H-06/Runtime/Provider/Agent/Repository 相关联合各 `776 passed`、普通全量及最低依赖全量各 `2265 passed, 1 skipped`、fresh Sandbox `40 passed, 0 skipped`、Ruff/目标 Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-06/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-07 继续锁定。
+- H-06 只提供显式构造、脱离态的 canonical JSONL context/record/emitter；固定 schema 不接受任意 payload，跨 AgentRun/Step/ToolCall identity 漂移与异常/异步 clock/sink 均 fail closed。无全局 logger/emitter/sink/ContextVar，未迁移既有日志，未接配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -824,7 +826,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-10、H-01～H-05 精确 HEAD 双 run 远端 gate green；H-06 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10、H-01～H-05 精确 HEAD 双 run 远端 gate green；H-06 本地门禁完成、精确 HEAD 双 run 待完成，H-07 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1292,9 +1294,23 @@ Metrics 数据最小化：`/metrics` 先固定当前 `RuntimeSnapshot`，再读�
 
 ## H-06 Structured Logging
 
+实现落点：H-05 最终闭环文档 HEAD `6b848a24823d1c8fbc2ce79c9ef21070db423ea8` 的 push `32629223160` / PR `32629224566` 已各 11/11 green。在此前提下，实现提交 `8c6b45e42f596adcdef366eb5840f6d2be896fcb` 新增独立 `structured_logging.py`。`StructuredLogContext / StructuredLogRecord` 是 frozen value object，`StructuredLogEmitter` 只负责显式同步 clock、canonical 编码和显式同步 sink 的一次交接；模块不创建 logger/emitter/sink/ContextVar，不配置 Python logging，也不注册 NoneBot listener。
+
+线协议与数据最小化：固定字段为 `version / timestamp / level / event / request_id / run_id / step_id / tool_call_id / generation / user_id / group_id / model / tool`，所有关联字段稳定存在。事件使用最多 128 字符 canonical token，时间规范化为 UTC 微秒 RFC 3339，整条 UTF-8 canonical JSONL 最多 4096 字节。对象不开放 message、metadata、exception、arguments、result、prompt、config 或任意扩展 mapping；从 AgentRun 构造并绑定 AgentStep/ToolCall 时只复制安全 identity，拒绝跨 run/step、model/tool 漂移且不保留 step input/output、tool arguments/result 或 bundle digest。
+
+依赖失败边界：event/level/context 的全部验证早于 clock 或 sink 调用。构造期拒绝 async function，运行期返回 awaitable 时会关闭 coroutine 并 fail closed；clock/sink 的原异常、返回值和日志正文不进入公共错误或异常链，sink 只调用一次且失败后不自动重放。默认 clock 仅在显式构造 emitter 后按次读取 UTC wall clock；没有模块级 live state、隐式 context 传播、配置读取、文件/网络/database/Redis I/O 或生命周期任务。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 H-06 定向各 `64 passed`；H-01～H-06 API/Logging、Runtime Snapshot/Reload、Provider、Agent 与 Repository 相关联合各 `776 passed`；严格串行普通全量各 `2265 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `2265 passed, 1 skipped`；首轮一个既有 watcher 用例达到 3 秒边界，单测及有界全量复跑均通过，未修改相关代码。mandatory root Sandbox fresh JUnit 为 `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 新模块/测试 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `9a509d4c343a9ec54704e2fa81048422ff33ff19f8ae2d0ba1c302957d052962` / `6d85f67e1c6063b36f209e29733c254bc35d27d4d919ff24c1ac11c292bd8113`，各 98 个成员并包含 `structured_logging.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-05 与 H-06 canonical record 正常，engine create、asyncpg connect 与 Redis client 均为 0。制品目录 `/tmp/moellm-h06-dist.y20oc3`，重建目录 `/tmp/moellm-h06-rebuild.FVXj7d`，smoke 根目录 `/tmp/moellm-h06-smoke.byecIX`，最终 Sandbox JUnit `/tmp/moellm-h06-final-sandbox.XaPjS1/junit.xml`。
+
+状态：H-06 实现与本地门禁完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-07 继续锁定。当前未迁移既有日志，未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+
 ---
 
 ## H-07 Full Metrics
+
+状态：等待 H-06 精确 HEAD push/PR 双 `release-gate` 关闭后再实施。
 
 ---
 
