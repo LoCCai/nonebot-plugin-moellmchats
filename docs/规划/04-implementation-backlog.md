@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T06:13:27+00:00
+lastmod: 2026-08-23T06:22:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -43,6 +43,7 @@ lastmod: 2026-08-23T06:13:27+00:00
 - H-02 本地证据 HEAD `16b2356e424722b50ed805604244aa72dceebac3` 的 push `32620435547` / PR `32620437166` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-03 依赖已解除但尚未实现。
 - H-02 最终闭环文档 HEAD `90bedb7d38bab5aae75b07fe4d418ebcbfb6e52f` 的 push `32620635396` / PR `32620638250` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-03 实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 已完成四版本定向各 `100 passed`、Agent Run/Repository/H-01/H-02/Audit 联合各 `465 passed`、普通全量及最低依赖全量各 `1991 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-03 API/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-04 继续锁定。
 - H-03 只提供显式注入、未挂载的 Agent Run 查询/取消 API；读写 scope 分离，列表使用稳定 keyset 且不暴露 user/group，详情不返回 step/tool payload，取消只通过 state/generation 双 CAS port 并同步确认执行已停止与即时审计，结果未知不自动重放。无模块级 service/app/reader/cancellation port，未接运行时 task registry、路由/listener、配置、生命周期、Repository、PostgreSQL 或 Redis。
+- H-03 本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 的 push `32622651928` / PR `32622656140` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-04 依赖已解除但尚未实现。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -817,7 +818,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-10、H-01～H-02 精确 HEAD 双 run 远端 gate green；H-03 本地 gate green 但精确 HEAD 远端双 run 待完成，H-04 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10、H-01～H-03 精确 HEAD 双 run 远端 gate green；H-04 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1243,13 +1244,13 @@ snapshot 与数据最小化边界：每次成功请求只调用一次显式 read
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `5a8188c05489519a2e06c5304ae733e173eee9d6dce0d5fd12050d802ae3d6a7` / `3bda50937b767bf6334ec517ced441dfb2e0b44a0e84374210f9dc47695a465f`，各 95 个成员并包含 `agent_run_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 与 sdist 仓库外同哈希 wheel 重建通过。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，Python 3.12 固定 NoneBot 2.4.4；确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02/H-03 读 API 200、错误 token 401、缺失取消目标 404 且 cancellation port 未调用；engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h03-dist.us7OLh`，重建目录 `/tmp/moellm-h03-rebuild.njbFhB`，smoke 根目录 `/tmp/moellm-h03-smoke.YWstuS`，Sandbox JUnit `/tmp/moellm-h03-sandbox.aww1mC/junit.xml`。
 
-状态：H-03 本地门禁已完成；精确本地证据 HEAD 的 push/PR 双 `release-gate` 待完成，H-04 继续锁定。当前无模块级 service/app/reader/cancellation port，未注册路由或 listener，未接运行时 task registry、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端门禁：本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 对应 push run `32622651928` 与 PR run `32622656140`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-04 依赖已解除但尚未实现。当前无模块级 service/app/reader/cancellation port，未注册路由或 listener，未接运行时 task registry、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
 ## H-04 Metrics API
 
-状态：等待 H-03 依赖门禁；当前锁定，尚未实现。
+状态：H-03 依赖门禁已关闭；H-04 依赖已解除，尚未实现。
 
 ---
 

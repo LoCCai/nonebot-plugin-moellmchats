@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T06:13:27+00:00
+lastmod: 2026-08-23T06:22:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -57,6 +57,8 @@ lastmod: 2026-08-23T06:13:27+00:00
 > H-02 远端闭环（2026-08-23）：本地证据 HEAD `16b2356e424722b50ed805604244aa72dceebac3` 的 push `32620435547` / PR `32620437166` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-03 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
 
 > H-03 本地门禁（2026-08-23）：H-02 最终闭环文档 HEAD `90bedb7d38bab5aae75b07fe4d418ebcbfb6e52f` 的 push `32620635396` / PR `32620638250` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增脱离态 Agent Run API：读取通过显式 newest-first keyset reader，列表最多 20 条且不暴露 user/group，详情不返回 step/tool payload；`agent-runs:read / agent-runs:write` 分权与全部输入校验早于状态读取。取消只通过显式 port 携带 authenticated actor 与 state/generation 双 CAS，必须确认 cancelled identity、执行已停止及即时审计，结果未知不重放。四版本定向各 `100 passed`、联合各 `465 passed`、全量及最低依赖全量各 `1991 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-04 锁定；API 未挂载，未接运行时任务、Repository、配置或生命周期，未迁移、未连接服务、未部署。
+
+> H-03 远端闭环（2026-08-23）：本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 的 push `32622651928` / PR `32622656140` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-04 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
 
 ---
 
@@ -760,7 +762,7 @@ H-03 实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增独立 `agent
 
 fresh wheel/sdist SHA256 分别为 `5a8188c05489519a2e06c5304ae733e173eee9d6dce0d5fd12050d802ae3d6a7` / `3bda50937b767bf6334ec517ced441dfb2e0b44a0e84374210f9dc47695a465f`，各 95 个成员并包含 `agent_run_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，Python 3.12 固定 NoneBot 2.4.4；确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02/H-03 读 API 200、错误 token 401、缺失取消目标 404 且 cancellation port 未调用，engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h03-dist.us7OLh`，重建目录 `/tmp/moellm-h03-rebuild.njbFhB`，smoke 根目录 `/tmp/moellm-h03-smoke.YWstuS`，Sandbox JUnit `/tmp/moellm-h03-sandbox.aww1mC/junit.xml`。
 
-当前状态：H-03 本地门禁已完成，尚需本地证据精确 HEAD 的 push/PR 双 `release-gate`；H-04 保持锁定。当前没有路由注册、listener、模块级 API 或 port 对象、运行时任务 registry、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-03 本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 对应 push run `32622651928` 与 PR run `32622656140`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-04 依赖已解除但尚未实现。当前没有路由注册、listener、模块级 API 或 port 对象、运行时任务 registry、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
