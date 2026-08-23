@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T12:09:24+00:00
+lastmod: 2026-08-23T12:17:15+00:00
 ---
 
 # 04-implementation-backlog
@@ -15,7 +15,7 @@ lastmod: 2026-08-23T12:09:24+00:00
 - H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push `32636423646` / PR `32636425880` 已重新核验为各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
 - A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。完成度审计确认真实聊天路径仍未构造 AgentRun/Step/ToolCall，模型能力路由、structured ToolResult、Agent PostgreSQL Repository、runtime 资源组合、并行接线、spool/Redis failure policy/database metrics 等仍未完成。
 - 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 依赖据此解除。
-- I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建与四组包外零真实 I/O smoke；精确 HEAD 双 run gate 待完成，I-02 继续锁定。
+- I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建与四组包外零真实 I/O smoke；本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 已完成，I-02 依赖已解除。
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
 - G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
@@ -1361,7 +1361,7 @@ prompt 与预算：service 依次尝试相关完整 record，单条加入后超�
 
 # Milestone I：Plan 2 / Plan 3 Completion
 
-**状态：规划审计基线双 run gate 已关闭；I-01 本地门禁完成、精确 HEAD 双 run gate 待关闭；I-02 锁定**
+**状态：规划审计基线与 I-01 精确 HEAD 双 run gate 均已关闭；I-02 依赖已解除、待实现**
 
 Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
 
@@ -1383,7 +1383,9 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 作废证据：首个 Python 3.10 wheel smoke 未显式导入 `database_schema` 就断言 metadata 表数，得到预期惰性 metadata 的 0 表并失败；诊断确认制品、8 revision 与离线 DDL 正常，未修改产品代码。随后在全新 smoke 根目录显式加载 Schema 后，四组均通过，失败目录未计入门禁。
 
-状态：I-01 本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待关闭；I-02 继续锁定。未读取或修改现有模型配置/credential，未发模型请求，未接 selector/runtime，未迁移、未连接真实 PostgreSQL/Redis，未合并、未 promotion、未发布、未部署。
+远端证据：I-01 本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 对应 push run `32638844775` 与 PR run `32638846637`；两者均命中目标 SHA、各 11 个 job 全绿、`non_success=[]`，各恰好一个 `completed/success release-gate`。本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
+
+状态：I-01 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；I-02 前置依赖已解除。未读取或修改现有模型配置/credential，未发模型请求，未接 selector/runtime，未迁移、未连接真实 PostgreSQL/Redis，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -1395,7 +1397,7 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 验证：缺能力、未知 availability、目录漂移、成本/限制超界均 fail closed；不发送真实模型请求、不读取 credential。
 
-状态：🔒 等待 I-01。
+状态：前置依赖已解除，待实现。
 
 ---
 

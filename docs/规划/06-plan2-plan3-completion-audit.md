@@ -1,7 +1,7 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-23T12:09:24+00:00
+lastmod: 2026-08-23T12:17:15+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
@@ -21,7 +21,7 @@ lastmod: 2026-08-23T12:09:24+00:00
 ### Milestone I 进展（2026-08-23）
 
 - 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均为 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
-- I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成纯 stdlib Model Capability Domain、本地四版本/最低依赖/Sandbox/静态/制品/包外零 I/O 门禁；精确 HEAD 双 run 待关闭，I-02 仍锁定。
+- I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成纯 stdlib Model Capability Domain、本地四版本/最低依赖/Sandbox/静态/制品/包外零 I/O 门禁；本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`；I-02 依赖已解除。
 - I-01 不读取或改变现有模型配置，不包含 endpoint/key/proxy/credential，不接 selector/runtime，也不发送模型请求。
 
 ## 2. 状态口径
@@ -188,4 +188,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线双 run gate 已关闭；I-01 本地证据已冻结，先关闭 I-01 精确 HEAD push/PR 双 `release-gate`，再开始 I-02。
+当前精确恢复点：规划审计基线与 I-01 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-02 前置依赖已解除，下一步按本节约束实现 capability-based model routing。

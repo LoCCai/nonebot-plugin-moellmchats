@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T12:09:24+00:00
+lastmod: 2026-08-23T12:17:15+00:00
 ---
 
 # 02-plan-future-architecture
@@ -11,6 +11,8 @@ lastmod: 2026-08-23T12:09:24+00:00
 > 最终验收口径复核（2026-08-23）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单现统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。当前 Provider/Capability/Trust consumer 已由 D-08 接入真实路径；Agent runtime、模型能力路由、structured ToolResult、并行执行与平台能力仍需 Milestone I。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
 
 > I-01 本地门禁（2026-08-23）：规划基线 `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已严格关闭。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增独立 `model_capabilities.py`，固定 text/vision/tools/json-schema/reasoning/streaming 六能力、context/output limits、精确 Decimal 每百万 token 成本、四态 availability 与 generation-bound descriptor；三类摘要分别绑定 raw identity、capability+limits 和完整 descriptor，未知成本与零成本严格区分，repr 不暴露 raw identity。四版本定向各 `98 passed`、联合各 `492 passed`、普通全量及最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 锁定；本阶段不读取/改写模型配置，不接 `ModelSelector`，不发网络请求。
+
+> I-01 远端闭环（2026-08-23）：本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 对应 push `32638844775` / PR `32638846637`；两者均精确命中目标 SHA、各 11/11 success、`non_success=[]`，并各恰好一个成功 `release-gate`。本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-02 依赖已解除、待实现；未合并、未发布、未部署，未迁移或连接真实服务。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -681,7 +683,7 @@ ModelCost:
     output_per_million
 ```
 
-I-01 实现状态：本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待关闭。`ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability` 已在 `model_capabilities.py` 固化为无凭据、深度不可变、canonical 且有界的领域对象；当前没有目录 builder 或 selector 接线，Plan 2 最终验收仍保持未勾选，待 I-02 路由及后续 runtime 集成。
+I-01 实现状态：本地与精确 HEAD push/PR 双 `release-gate` 均已完成，I-02 前置依赖已解除。`ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability` 已在 `model_capabilities.py` 固化为无凭据、深度不可变、canonical 且有界的领域对象；当前没有目录 builder 或 selector 接线，Plan 2 最终验收仍保持未勾选，待 I-02 路由及后续 runtime 集成。
 
 ---
 
