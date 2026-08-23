@@ -616,6 +616,7 @@ class AgentRunApiService:
             and run.request_id == current.request_id
             and run.user_id == current.user_id
             and run.group_id == current.group_id
+            and run.conversation_id == current.conversation_id
             and run.generation == current.generation
             and run.started_at == current.started_at
             and run.state is AgentRunState.CANCELLED

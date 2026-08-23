@@ -45,6 +45,7 @@ def _run(**overrides: object) -> AgentRun:
         "request_id": 17,
         "user_id": "sensitive-user:10001",
         "group_id": "sensitive-group:20002",
+        "conversation_id": "conversation_0001",
         "generation": 7,
         "state": AgentRunState.EXECUTING,
         "started_at": 100.25,
@@ -69,6 +70,14 @@ def _run(**overrides: object) -> AgentRun:
         assert not isinstance(started_at, bool)
         values["finished_at"] = float(started_at) + 1.0
     return AgentRun(**values)  # type: ignore[arg-type]
+
+
+def _corrupt_run(field: str, value: object) -> AgentRun:
+    """Build an impossible backend value without weakening the domain type."""
+
+    run = _run()
+    object.__setattr__(run, field, value)
+    return run
 
 
 def _records(count: int) -> tuple[AgentRun, ...]:
@@ -546,16 +555,8 @@ async def test_invalid_list_query_fails_before_reader(query: bytes) -> None:
             _run(run_id="run_old", request_id=1, started_at=10.0),
             _run(run_id="run_new", request_id=2, started_at=11.0),
         ),
-        (
-            _run(
-                request_id=_MAX_BIGINT + 1,
-            ),
-        ),
-        (
-            _run(
-                generation=_MAX_BIGINT + 1,
-            ),
-        ),
+        (_corrupt_run("request_id", _MAX_BIGINT + 1),),
+        (_corrupt_run("generation", _MAX_BIGINT + 1),),
     ],
 )
 @pytest.mark.asyncio
@@ -587,8 +588,8 @@ async def test_reader_must_honor_cursor_anchor() -> None:
     [
         object(),
         _run(run_id="run_other"),
-        _run(request_id=_MAX_BIGINT + 1),
-        _run(generation=_MAX_BIGINT + 1),
+        _corrupt_run("request_id", _MAX_BIGINT + 1),
+        _corrupt_run("generation", _MAX_BIGINT + 1),
     ],
 )
 @pytest.mark.asyncio
@@ -948,10 +949,17 @@ def _cancelled_from(current: AgentRun, **overrides: object) -> AgentRun:
         "request_id": current.request_id,
         "user_id": current.user_id,
         "group_id": current.group_id,
+        "conversation_id": current.conversation_id,
         "generation": current.generation,
         "state": AgentRunState.CANCELLED,
         "started_at": current.started_at,
         "finished_at": current.started_at + 1.0,
+        "model": current.model,
+        "input_tokens": current.input_tokens,
+        "output_tokens": current.output_tokens,
+        "cost": current.cost,
+        "error_type": current.error_type,
+        "error_message": current.error_message,
     }
     values.update(overrides)
     return AgentRun(**values)  # type: ignore[arg-type]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
+from decimal import Decimal
 import math
 
 import pytest
@@ -17,6 +18,7 @@ from nonebot_plugin_moellmchats.agent_runtime import (
     ToolCall,
     ToolCallStatus,
 )
+from nonebot_plugin_moellmchats.tool_providers import ToolSource
 
 _NONTERMINAL_AGENT_RUN_STATES = (
     AgentRunState.CREATED,
@@ -39,12 +41,8 @@ _NORMAL_AGENT_RUN_TARGETS = {
     AgentRunState.ADMITTED: frozenset({AgentRunState.CLASSIFYING}),
     AgentRunState.CLASSIFYING: frozenset({AgentRunState.PLANNING}),
     AgentRunState.PLANNING: frozenset({AgentRunState.EXECUTING}),
-    AgentRunState.EXECUTING: frozenset(
-        {AgentRunState.WAITING_CONFIRMATION, AgentRunState.SUMMARIZING}
-    ),
-    AgentRunState.WAITING_CONFIRMATION: frozenset(
-        {AgentRunState.EXECUTING, AgentRunState.SUMMARIZING}
-    ),
+    AgentRunState.EXECUTING: frozenset({AgentRunState.WAITING_CONFIRMATION, AgentRunState.SUMMARIZING}),
+    AgentRunState.WAITING_CONFIRMATION: frozenset({AgentRunState.EXECUTING, AgentRunState.SUMMARIZING}),
     AgentRunState.SUMMARIZING: frozenset({AgentRunState.COMPLETED}),
     AgentRunState.COMPLETED: frozenset(),
     AgentRunState.FAILED: frozenset(),
@@ -60,10 +58,17 @@ def _run(**overrides: object) -> AgentRun:
         "request_id": 17,
         "user_id": "qq:10001",
         "group_id": "qq-group:20002",
+        "conversation_id": "conversation_0001",
         "generation": 9,
         "state": AgentRunState.CREATED,
         "started_at": 100.25,
         "finished_at": None,
+        "model": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cost": None,
+        "error_type": None,
+        "error_message": None,
     }
     values.update(overrides)
     return AgentRun(**values)  # type: ignore[arg-type]
@@ -80,10 +85,26 @@ def _step(**overrides: object) -> AgentStep:
         "tool": None,
         "input": None,
         "output": None,
+        "input_preview": None,
+        "output_preview": None,
+        "error": None,
         "started_at": None,
         "finished_at": None,
+        "duration_ms": None,
     }
     values.update(overrides)
+    if (
+        values["status"]
+        in {
+            AgentStepStatus.COMPLETED,
+            AgentStepStatus.FAILED,
+            AgentStepStatus.CANCELLED,
+            AgentStepStatus.TIMED_OUT,
+            AgentStepStatus.SKIPPED,
+        }
+        and "duration_ms" not in overrides
+    ):
+        values["duration_ms"] = 0
     return AgentStep(**values)  # type: ignore[arg-type]
 
 
@@ -93,14 +114,40 @@ def _tool_call(**overrides: object) -> ToolCall:
         "run_id": "run_01HZX7Y95Z8QW8D4WTV4VCZZY2",
         "step_id": "step_0001",
         "tool_name": "weather_lookup",
+        "tool_source": ToolSource.REGISTERED,
+        "bundle_id": None,
         "bundle_digest": None,
         "arguments": {"city": "Shanghai"},
         "status": ToolCallStatus.PENDING,
         "confirmed": False,
+        "confirmation_id": None,
+        "created_at": 30.0,
         "result": None,
-        "elapsed": None,
+        "result_preview": None,
+        "duration_ms": None,
+        "finished_at": None,
     }
     values.update(overrides)
+    if values["status"] is ToolCallStatus.WAITING_CONFIRMATION and "confirmation_id" not in overrides:
+        values["confirmation_id"] = "confirmation_0001"
+    if values["status"] in {
+        ToolCallStatus.COMPLETED,
+        ToolCallStatus.FAILED,
+        ToolCallStatus.CANCELLED,
+        ToolCallStatus.TIMED_OUT,
+        ToolCallStatus.REJECTED,
+    }:
+        if "duration_ms" not in overrides:
+            values["duration_ms"] = 0
+        if "finished_at" not in overrides:
+            duration_ms = values["duration_ms"]
+            values["finished_at"] = (
+                30.0 + duration_ms / 1000
+                if (isinstance(duration_ms, int) and not isinstance(duration_ms, bool) and 0 <= duration_ms < (1 << 63))
+                else 31.0
+            )
+        if values["status"] is ToolCallStatus.COMPLETED and "result_preview" not in overrides:
+            values["result_preview"] = "completed result"
     return ToolCall(**values)  # type: ignore[arg-type]
 
 
@@ -116,10 +163,17 @@ def test_agent_run_is_frozen_generation_bound_and_serializable() -> None:
         "request_id": 17,
         "user_id": "qq:10001",
         "group_id": "qq-group:20002",
+        "conversation_id": "conversation_0001",
         "generation": 9,
         "state": "created",
         "started_at": 100.25,
         "finished_at": None,
+        "model": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cost": None,
+        "error_type": None,
+        "error_message": None,
     }
     with pytest.raises(FrozenInstanceError):
         run.generation = 10  # type: ignore[misc]
@@ -131,6 +185,49 @@ def test_agent_run_supports_private_requests_and_normalizes_timestamps() -> None
     assert run.group_id is None
     assert run.started_at == 100.0
     assert isinstance(run.started_at, float)
+
+
+def test_agent_run_aligns_durable_conversation_model_usage_cost_and_error() -> None:
+    run = _run(
+        state=AgentRunState.FAILED,
+        finished_at=101.25,
+        model="provider/model-1",
+        input_tokens=120,
+        output_tokens=30,
+        cost=Decimal("0.001250000000"),
+        error_type="ProviderError",
+        error_message="sanitized failure",
+    )
+
+    assert run.conversation_id == "conversation_0001"
+    assert run.model == "provider/model-1"
+    assert run.input_tokens == 120
+    assert run.output_tokens == 30
+    assert run.cost == Decimal("0.00125")
+    assert run.error_type == "ProviderError"
+    assert run.error_message == "sanitized failure"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"model": "x" * 256}, "model"),
+        ({"input_tokens": -1}, "input_tokens"),
+        ({"output_tokens": True}, "output_tokens"),
+        ({"input_tokens": 1 << 63}, "input_tokens"),
+        ({"cost": 0.1}, "cost"),
+        ({"cost": Decimal("-0.1")}, "cost"),
+        ({"cost": Decimal("0.0000000000001")}, "cost"),
+        ({"error_type": "OnlyType"}, "同时"),
+        ({"error_message": "only message"}, "同时"),
+    ],
+)
+def test_agent_run_rejects_invalid_durable_fields(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _run(**changes)
 
 
 @pytest.mark.parametrize(
@@ -200,10 +297,14 @@ def test_agent_run_terminal_states_reject_missing_finish_timestamp(
         ("user_id", "", "user_id"),
         ("user_id", " user", "user_id"),
         ("user_id", "user\nname", "user_id"),
+        ("user_id", "user\ud800", "user_id"),
         ("group_id", "", "group_id"),
         ("group_id", 123, "group_id"),
+        ("conversation_id", "", "conversation_id"),
+        ("conversation_id", " conversation", "conversation_id"),
         ("generation", -1, "generation"),
         ("generation", True, "generation"),
+        ("generation", 1 << 63, "generation"),
         ("state", "created", "state"),
     ],
 )
@@ -258,9 +359,7 @@ def test_agent_state_machine_exposes_the_exact_fail_closed_transition_table() ->
         assert isinstance(allowed, frozenset)
         assert allowed == expected
         for target in AgentRunState:
-            assert AgentStateMachine.can_transition(source, target) is (
-                target in expected
-            )
+            assert AgentStateMachine.can_transition(source, target) is (target in expected)
 
 
 def test_agent_state_machine_runs_the_normal_path_without_mutating_prior_runs() -> None:
@@ -528,8 +627,12 @@ def test_agent_step_is_frozen_and_serializes_detached_structured_data() -> None:
             "weights": [1, 2.5],
         },
         "output": None,
+        "input_preview": None,
+        "output_preview": None,
+        "error": None,
         "started_at": None,
         "finished_at": None,
+        "duration_ms": None,
     }
     serialized["input"]["messages"][0]["content"] = "changed"
     assert messages[0]["content"] == "hello"
@@ -564,6 +667,36 @@ def test_agent_step_running_state_requires_only_start_timestamp() -> None:
     assert step.is_terminal is False
 
 
+def test_agent_step_persistence_preview_error_and_duration_are_explicit() -> None:
+    step = _step(
+        status=AgentStepStatus.FAILED,
+        input_preview="safe input",
+        output_preview="safe partial output",
+        error="sanitized failure",
+        started_at=20.0,
+        finished_at=20.25,
+        duration_ms=250,
+    )
+
+    assert step.input_preview == "safe input"
+    assert step.output_preview == "safe partial output"
+    assert step.error == "sanitized failure"
+    assert step.elapsed == 0.25
+
+    with pytest.raises(ValueError, match="error"):
+        _step(
+            status=AgentStepStatus.COMPLETED,
+            error="must not persist",
+            started_at=20.0,
+            finished_at=20.25,
+            duration_ms=250,
+        )
+    with pytest.raises(ValueError, match="input_preview"):
+        _step(input_preview="x" * 6_001)
+    with pytest.raises(ValueError, match="input_preview"):
+        _step(input_preview="bad\ud800preview")
+
+
 @pytest.mark.parametrize(
     "status",
     [
@@ -584,6 +717,7 @@ def test_agent_step_terminal_states_require_complete_timestamps(
         output={"ok": status is AgentStepStatus.COMPLETED},
         started_at=20.0,
         finished_at=21.25,
+        duration_ms=1_250,
     )
 
     assert step.is_terminal is True
@@ -665,7 +799,7 @@ def test_agent_step_rejects_finish_before_start() -> None:
         ("type", "model", "type"),
         ("status", "pending", "status"),
         ("model", " model", "model"),
-        ("model", "x" * 129, "model"),
+        ("model", "x" * 256, "model"),
         ("tool", "tool\nname", "tool"),
         ("tool", 1, "tool"),
     ],
@@ -756,6 +890,8 @@ def test_tool_call_is_frozen_and_detaches_arguments() -> None:
         "run_id": "run_01HZX7Y95Z8QW8D4WTV4VCZZY2",
         "step_id": "step_0001",
         "tool_name": "weather_lookup",
+        "tool_source": "registered",
+        "bundle_id": None,
         "bundle_digest": None,
         "arguments": {
             "city": "Shanghai",
@@ -763,7 +899,12 @@ def test_tool_call_is_frozen_and_detaches_arguments() -> None:
         },
         "status": "pending",
         "confirmed": False,
+        "confirmation_id": None,
         "result": None,
+        "result_preview": None,
+        "created_at": 30.0,
+        "finished_at": None,
+        "duration_ms": None,
         "elapsed": None,
     }
 
@@ -775,11 +916,15 @@ def test_completed_tool_call_requires_and_detaches_result() -> None:
         "metadata": {"source": "provider"},
     }
     call = _tool_call(
+        tool_source=ToolSource.GENERATED,
+        bundle_id="weather_bundle",
         bundle_digest="a" * 64,
         status=ToolCallStatus.COMPLETED,
         confirmed=True,
+        confirmation_id="confirmation_0001",
         result=result,
-        elapsed=0.75,
+        result_preview="sunny",
+        duration_ms=750,
     )
 
     result["metadata"]["source"] = "tampered"
@@ -804,7 +949,7 @@ def test_completed_tool_call_requires_and_detaches_result() -> None:
 def test_noncompleted_tool_call_terminal_states_allow_empty_result(
     status: ToolCallStatus,
 ) -> None:
-    call = _tool_call(status=status, elapsed=0)
+    call = _tool_call(status=status, duration_ms=0)
 
     assert call.is_terminal is True
     assert call.elapsed == 0.0
@@ -819,17 +964,20 @@ def test_noncompleted_tool_call_terminal_states_allow_empty_result(
         ToolCallStatus.RUNNING,
     ],
 )
-def test_tool_call_nonterminal_states_reject_result_and_elapsed(
+def test_tool_call_nonterminal_states_reject_result_and_duration(
     status: ToolCallStatus,
 ) -> None:
     with pytest.raises(ValueError, match="非终态"):
         _tool_call(status=status, result={"text": "early"})
     with pytest.raises(ValueError, match="非终态"):
-        _tool_call(status=status, elapsed=0.1)
+        _tool_call(status=status, duration_ms=100)
 
 
 def test_tool_call_confirmation_state_is_fail_closed() -> None:
-    waiting = _tool_call(status=ToolCallStatus.WAITING_CONFIRMATION)
+    waiting = _tool_call(
+        status=ToolCallStatus.WAITING_CONFIRMATION,
+        confirmation_id="confirmation_0001",
+    )
 
     assert waiting.confirmed is False
     assert waiting.is_terminal is False
@@ -837,14 +985,47 @@ def test_tool_call_confirmation_state_is_fail_closed() -> None:
         _tool_call(
             status=ToolCallStatus.WAITING_CONFIRMATION,
             confirmed=True,
+            confirmation_id="confirmation_0001",
         )
 
 
-def test_completed_tool_call_requires_result_and_all_terminals_require_elapsed() -> None:
-    with pytest.raises(ValueError, match="result"):
-        _tool_call(status=ToolCallStatus.COMPLETED, elapsed=1.0)
-    with pytest.raises(ValueError, match="elapsed"):
-        _tool_call(status=ToolCallStatus.FAILED)
+def test_tool_call_source_bundle_confirmation_and_time_identity_align_schema() -> None:
+    generated = _tool_call(
+        tool_source=ToolSource.GENERATED,
+        bundle_id="weather_bundle",
+        bundle_digest="b" * 64,
+        status=ToolCallStatus.WAITING_CONFIRMATION,
+        confirmation_id="confirmation_0002",
+    )
+
+    assert generated.tool_source is ToolSource.GENERATED
+    assert generated.bundle_id == "weather_bundle"
+    assert generated.bundle_digest == "b" * 64
+    assert generated.created_at == 30.0
+
+    with pytest.raises(ValueError, match="generated"):
+        _tool_call(tool_source=ToolSource.GENERATED)
+    with pytest.raises(ValueError, match="非 generated"):
+        _tool_call(bundle_id="forged", bundle_digest="c" * 64)
+    with pytest.raises(ValueError, match="confirmation_id"):
+        _tool_call(confirmed=True)
+    with pytest.raises(ValueError, match="不能早于"):
+        _tool_call(
+            status=ToolCallStatus.FAILED,
+            duration_ms=1,
+            finished_at=29.0,
+        )
+
+
+def test_completed_tool_call_requires_preview_and_all_terminals_require_time() -> None:
+    with pytest.raises(ValueError, match="result_preview"):
+        _tool_call(
+            status=ToolCallStatus.COMPLETED,
+            result={"ok": True},
+            result_preview=None,
+        )
+    with pytest.raises(ValueError, match="duration_ms"):
+        _tool_call(status=ToolCallStatus.FAILED, duration_ms=None)
 
 
 @pytest.mark.parametrize(
@@ -855,6 +1036,8 @@ def test_completed_tool_call_requires_result_and_all_terminals_require_elapsed()
         ("step_id", "bad step", "step_id"),
         ("tool_name", "bad tool", "tool_name"),
         ("tool_name", "x" * 65, "tool_name"),
+        ("tool_source", "registered", "tool_source"),
+        ("bundle_id", "bad bundle", "bundle_id"),
         ("bundle_digest", "A" * 64, "bundle_digest"),
         ("bundle_digest", "a" * 63, "bundle_digest"),
         ("status", "pending", "status"),
@@ -870,19 +1053,10 @@ def test_tool_call_rejects_invalid_identity_and_state_fields(
         _tool_call(**{field: value})
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        -1.0,
-        math.inf,
-        math.nan,
-        True,
-        "1.0",
-    ],
-)
-def test_tool_call_rejects_invalid_elapsed(value: object) -> None:
-    with pytest.raises(ValueError, match="elapsed"):
-        _tool_call(status=ToolCallStatus.FAILED, elapsed=value)
+@pytest.mark.parametrize("value", [-1, math.inf, math.nan, True, "1", 1 << 63])
+def test_tool_call_rejects_invalid_duration(value: object) -> None:
+    with pytest.raises(ValueError, match="duration_ms"):
+        _tool_call(status=ToolCallStatus.FAILED, duration_ms=value)
 
 
 @pytest.mark.parametrize(
@@ -907,5 +1081,5 @@ def test_tool_call_rejects_cyclic_result() -> None:
         _tool_call(
             status=ToolCallStatus.COMPLETED,
             result=cyclic,
-            elapsed=0.1,
+            duration_ms=100,
         )

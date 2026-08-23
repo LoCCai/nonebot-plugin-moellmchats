@@ -30,6 +30,7 @@ from nonebot_plugin_moellmchats.structured_logging import (
     StructuredLogSinkError,
     structured_log_field_names,
 )
+from nonebot_plugin_moellmchats.tool_providers import ToolSource
 
 _UTC_NOW = datetime(2026, 8, 23, 9, 0, 1, 234567, tzinfo=timezone.utc)
 
@@ -40,6 +41,7 @@ def _run(**overrides: object) -> AgentRun:
         "request_id": 42,
         "user_id": "qq:10001",
         "group_id": "qq-group:20001",
+        "conversation_id": "conversation-structured-1",
         "generation": 7,
         "state": AgentRunState.EXECUTING,
         "started_at": 10.0,
@@ -69,12 +71,18 @@ def _call(**overrides: object) -> ToolCall:
         "run_id": "run-structured-1",
         "step_id": "step-structured-1",
         "tool_name": "safe_lookup",
+        "tool_source": ToolSource.GENERATED,
+        "bundle_id": "structured_bundle",
         "bundle_digest": "a" * 64,
         "arguments": {"token": "tool-argument-must-not-leak"},
         "status": ToolCallStatus.COMPLETED,
         "confirmed": True,
+        "confirmation_id": "confirmation-structured-1",
+        "created_at": 11.0,
         "result": {"secret": "tool-result-must-not-leak"},
-        "elapsed": 0.25,
+        "result_preview": "safe result preview",
+        "duration_ms": 250,
+        "finished_at": 11.25,
     }
     values.update(overrides)
     return ToolCall(**values)  # type: ignore[arg-type]

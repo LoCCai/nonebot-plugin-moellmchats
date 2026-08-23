@@ -211,6 +211,7 @@ def _run(*, state: AgentRunState = AgentRunState.CREATED) -> AgentRun:
         request_id=17,
         user_id="qq:10001",
         group_id="qq-group:20002",
+        conversation_id="conversation_0001",
         generation=9,
         state=state,
         started_at=100.25,
