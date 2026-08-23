@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T00:45:22+00:00
+lastmod: 2026-08-23T01:18:30+00:00
 ---
 
 # 04-implementation-backlog
@@ -28,6 +28,8 @@ lastmod: 2026-08-23T00:45:22+00:00
 - G-06 只提供显式 context-independent scope、规范化 prompt/catalog/model/capability/policy/TTL identity、仅 `MODEL_SUCCESS` 的 canonical immutable record、backend-neutral Protocol、async resolver 与单 PID/loop 短 TTL Memory LRU；现有 `Categorize` / `LlmPayloadMixin` 路径保持未接线，没有全局 cache、Redis backend、配置或生命周期，不读取 DSN/Redis URL，不连接真实服务。
 - G-06 最终闭环文档 HEAD `d773176c6fddebc2dcb92e05fc42ab633e29e77a` 的 push `32606826337` / PR `32606828225` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-07 实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 已完成四版本定向各 `94 passed`、数据库/Repository/历史缓存/摘要联合各 `552 passed`、普通全量各 `1670 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/离线 DDL/usage lease roundtrip/reload/零真实 I/O smoke；本地证据 HEAD `09cbbe2e170cf6404568e6e4c24018e16e1a2e74` 的 push `32608582316` / PR `32608585076` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-08 依赖已解除但尚未实现。
 - G-07 只提供 schema-aligned immutable Usage、兼容的可选 `BatchUsageRepository`、有界单 lease async queue 与显式 session 的 PostgreSQL batch Repository；未接 `llm_api`、50 条内存 `token_usage_history`、配置、生命周期、计价、spool 或生产 runtime，不创建全局 queue/repository，不读取 DSN，不连接真实 PostgreSQL/Redis。
+- G-07 最终闭环文档 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，G-08 实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 已完成四版本定向各 `105 passed`、数据库/Repository/History/Summary/Usage/Audit 联合各 `439 passed`、普通全量各 `1742 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、最低依赖、静态、fresh 制品及四组包外 11 表/8 revision/离线 DDL/audit lease roundtrip/reload/零真实 I/O smoke；精确 HEAD 双 run gate 待完成，G-09 继续锁定。
+- G-08 只提供 schema-aligned deeply immutable Audit、显式非关键 allowlist、兼容的可选 `BatchAuditRepository`、有界单 lease async queue 与显式 session 的 PostgreSQL batch Repository；安全及未知事件强制即时 `append()`，未接现有日志、工具生命周期、mutating 路径、配置、生命周期、spool 或生产 runtime，不创建全局 queue/repository，不读取 DSN，不连接真实 PostgreSQL/Redis。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -802,7 +804,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-07 精确 HEAD 双 run 远端 gate green；G-08 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-07 精确 HEAD 双 run 远端 gate green；G-08 本地门禁完成、精确 HEAD 双 run 待完成；G-09 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1124,11 +1126,25 @@ Repository 与查询边界：`append_batch()` 只接受 1～100 条 immutable dr
 
 ## G-08 Batch Audit Write
 
-状态：G-07 前置门禁已完成，G-08 依赖已解除但尚未实现或接入运行时。
+实现落点：G-07 最终闭环文档 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已各 11/11 green。在此前提下，实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 新增 frozen `AuditEventRecord`、显式 `AuditWriteMode` 与非关键 allowlist、`AuditBatchPolicy / AuditBatchLease / AuditBatchQueue`、保持原 `AuditRepository` 兼容的 runtime-checkable `BatchAuditRepository`，以及显式注入调用方 `AsyncSession` 的 `PostgresAuditRepository`。
+
+事件与即时写边界：record 对齐已门禁的 `audit_events`，验证 canonical event/actor/target token、有界 actor/target/run/tool-call identity、tool call 必须绑定 run、正 BIGINT identity 与 UTC event time。metadata 必须是 JSON object，递归冻结为 immutable mapping/tuple，拒绝 NUL、非法 UTF-8、非有限 float、循环、超过 32 层/100000 节点，并以展开 exponent 后的保守 `jsonb::text` 尺寸保证不越过 64 KiB。只有 `tool_draft_created / runtime_reload / runtime_reload_failed` 三类明确非关键事件可 batch；所有审批、激活/停用/回滚、mutating 确认/执行和未知类型一律 `IMMEDIATE`，队列和 `append_batch()` 均在 SQL 前拒绝，调用方必须在安全操作的显式事务中同步调用 `append()`。
+
+队列与结果边界：默认最多 100 条成批、最老事件 1 秒触发、outstanding 上限 1000，并绑定首次使用的 PID、event loop 与不可回退 monotonic clock；有且只有一个 in-flight lease，容量直到 ack 才释放。只有调用方确认 durable commit 后可 `acknowledge_committed()`；未发出写入或事务已明确 rollback 才可 `release_unwritten()` 并保持原序/原年龄。任何写入或 commit 结果未知都进入终止 `result_unknown`，保留 active lease、拒绝新事件/新租约/ack，绝不在没有 producer idempotency key 的 `audit_events` 上自动重放。取消不丢失或幽灵插入记录；队列不创建后台 task、不读取配置、不拥有 session/transaction。
+
+Repository 与查询边界：`append_batch()` 只接受 1～100 条明确非关键 immutable draft，用一次 `session.execute()` 发出一条 multi-row `INSERT ... RETURNING id`，验证返回数量、正 PostgreSQL BIGINT 与唯一性；即时 `append()` 复用相同 statement 机制但不经过 batch allowlist。Repository 不 commit、rollback、flush、close 或 retry，`RETURNING` 不能作为 durable ack。run 时间线只选择十个显式列，以 run ID 过滤、`created_at DESC, id DESC` 排序和 `limit + 1` 读取；canonical opaque cursor 绑定 run SHA-256、UTC microsecond 时间与 audit ID，拒绝跨 run/篡改/非 canonical/乱序/重复/损坏结果。Integrity conflict、unknown/unavailable 与取消保持明确且错误不泄漏 SQL 参数、endpoint、凭据、actor、target 或 metadata。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `105 passed`、数据库/Repository/History/Summary/Usage/Audit 联合各 `439 passed`、严格串行普通全量各 `1742 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过；Ruff 0.16.2、目标 format、diff check及 Pyright 1.1.407 新模块/测试 `0 errors, 0 warnings` 均通过。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `1f7898a17589e33f90d0416514e6749b3d7d3319af1ec783153df02f658a75bb` / `1858d4d10cd36c02b562ce8c65f5f91e1c0398267632108d14840fa7c3809a8f`，各 90 个成员且包含三个 G-08 module，不含 `uv.lock`、cache 或 bytecode；sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组安装均确认从 site-packages 加载、11 表、8 revision、离线 DDL、plugin reload、Audit deep-freeze/即时拒绝/租约 release+ack roundtrip、兼容双 Protocol、显式 session→Repository 构造且无模块级 queue/repository；engine create、asyncpg connect、Redis client/command 均为 0。制品目录 `/tmp/moellm-g08-dist.CTiBgn`，smoke 根目录 `/tmp/moellm-g08-smoke.YQqaBg`，Sandbox JUnit `/tmp/moellm-g08-sandbox.66dMex/junit.xml`。精确 HEAD 双 run 是 G-09 前置门禁；当前不接现有日志、工具生命周期、mutating 路径、配置、startup/shutdown 或本地 spool，不新增 migration，不读取连接信息、不连接真实服务，未合并、未发布、未部署。
+
+状态：G-08 本地门禁完成；精确 HEAD 双 run 远端门禁待完成，G-09 保持锁定。
 
 ---
 
 ## G-09 Read-only Parallel Execution
+
+状态：G-08 精确 HEAD 双 run 远端门禁完成前保持锁定。
 
 ---
 

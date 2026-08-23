@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T00:45:22+00:00
+lastmod: 2026-08-23T01:18:30+00:00
 ---
 
 # 03-plan-performance-database
@@ -35,6 +35,8 @@ lastmod: 2026-08-23T00:45:22+00:00
 > G-07 本地门禁（2026-08-23）：G-06 最终闭环 HEAD `d773176c6fddebc2dcb92e05fc42ab633e29e77a` 的 push `32606826337` / PR `32606828225` 已各 11/11 green。实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 新增 `ModelUsageRecord / UsageBatchPolicy / UsageBatchLease / UsageBatchQueue / BatchUsageRepository / PostgresUsageRepository`。batch 默认 100 条或最老事件等待 1 秒触发，outstanding 上限 1000；队列绑定 PID/event loop 与单调时钟，取消不消费/插入事件，只有 durable commit 可 ack，明确未写/rollback 可 release，未知结果进入终止态且不可重放。Repository 单次只执行一条 1～100 行 INSERT，验证 `RETURNING` identity，不拥有事务或 retry；查询使用 run 指纹 cursor 与 `(created_at DESC, id DESC)` keyset。四版本定向各 `94 passed`、联合各 `552 passed`、普通全量各 `1670 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0、Ruff/Pyright、fresh 制品和四组包外 smoke 均通过。制品 SHA256 为 wheel `b7164d2a2fd13e46879acd461b1970f600c344c32482ab6ad729b38a798f3555`、sdist `3a89382360adae7b33d807aeb60fcf5af7eb24be11c04a6e94006e68cf8d06f6`。精确 HEAD 双 run 待完成，G-08 锁定；未接 `llm_api`/内存 history、配置、生命周期、计价、spool 或生产 runtime，不迁移、不连接真实服务、不部署。
 
 > G-07 远端闭环（2026-08-23）：本地证据 HEAD `09cbbe2e170cf6404568e6e4c24018e16e1a2e74` 对应 push run `32608582316` / PR run `32608585076`；两者各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-08 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
+
+> G-08 本地门禁（2026-08-23）：G-07 最终闭环 HEAD `b39a00203a23c27a8f8af36919d4db9d8a814cf1` 的 push `32608750186` / PR `32608751978` 已各 11/11 green。实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 新增 `AuditEventRecord / AuditWriteMode / AuditBatchPolicy / AuditBatchLease / AuditBatchQueue / BatchAuditRepository / PostgresAuditRepository`。metadata 深度冻结、保守对齐 64 KiB `jsonb::text`，只允许三个显式非关键事件 batch；安全及未知事件只能即时 `append()`。队列默认 100 条或最老事件等待 1 秒触发、outstanding 上限 1000，绑定 PID/event loop/单调时钟；只有 durable commit 可 ack，明确未写/rollback 可 release，未知结果终止且不重放。Repository 单次只执行一条 1～100 行 INSERT、验证 `RETURNING` identity，不拥有事务或 retry；查询使用 run 指纹 cursor 与 `(created_at DESC, id DESC)` keyset。四版本定向各 `105 passed`、联合各 `439 passed`、普通全量各 `1742 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品和四组包外 smoke 均通过。制品 SHA256 为 wheel `1f7898a17589e33f90d0416514e6749b3d7d3319af1ec783153df02f658a75bb`、sdist `1858d4d10cd36c02b562ce8c65f5f91e1c0398267632108d14840fa7c3809a8f`。精确 HEAD 双 run 待完成，G-09 锁定；未接运行时、配置、生命周期或 spool，不迁移、不连接真实服务、不部署。
 
 ---
 
@@ -859,7 +861,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05、G-06 与 G-07 本地及精确 HEAD 双 run 远端门禁均已完成；G-08 前置依赖已解除但尚未实现；G-06/G-07 尚未接入运行时。
+状态：G-05、G-06 与 G-07 本地及精确 HEAD 双 run 远端门禁均已完成；G-08 本地门禁完成、精确 HEAD 双 run 待完成，G-09 保持锁定；G-06/G-07/G-08 尚未接入运行时。
 
 对于高度相似的标准请求，可考虑：
 
@@ -996,6 +998,10 @@ G-07 实现提交 `90f0fc8c78c18e95a8325fbd0fafe7335d95f59e` 先完成 Usage 边
 `PostgresUsageRepository` 保留调用方事务所有权，以一条 multi-row `INSERT ... RETURNING id` 写 1～100 条 draft，并验证返回数量、正 BIGINT 与唯一性；不 commit、rollback、flush、close 或 retry。`BatchUsageRepository` 是对既有 `UsageRepository` 的可选兼容扩展，不使旧实现失效。G-07 尚未接现有 `llm_api`、50 条内存 `token_usage_history`、配置、startup/shutdown、计价或本地 spool；G-08 Audit batch 仍未实现。
 
 G-07 远端证据：本地证据 HEAD `09cbbe2e170cf6404568e6e4c24018e16e1a2e74` 对应 push run `32608582316` 与 PR run `32608585076`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-08 依赖已解除。本阶段未读取连接配置或 secret，不接 `llm_api`、配置、生命周期或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。
+
+G-08 实现提交 `07947584a6a7994a236055f8f790a80227daf3ed` 完成非关键 Audit batch 边界：`AuditEventRecord` 对齐既有 `audit_events`，将 JSON object 深度冻结为 mapping/tuple，并在 UTF-8、NUL、有限数值、循环、深度/节点与保守 PostgreSQL `jsonb::text` 尺寸上 fail closed。只有 `tool_draft_created / runtime_reload / runtime_reload_failed` 可进入 `AuditBatchQueue`；审批、激活/停用/回滚、mutating 确认/执行和未知事件必须由调用方在安全操作的显式事务中即时 `append()`，不能排队。
+
+`AuditBatchQueue` 使用与 Usage 分离的有界单 lease 队列，保持 100 条/1 秒/1000 outstanding、durable commit 后 ack、明确未写/rollback 后原序 release 与 unknown-result 终止语义。`PostgresAuditRepository.append_batch()` 只接受 1～100 条明确非关键 draft，以一条 multi-row `INSERT ... RETURNING id` 验证结果；`append()` 接受即时事件但同样不拥有 commit/rollback。run 查询只选显式列，使用绑定 run 的 canonical cursor 和 `(created_at DESC, id DESC)` keyset。当前没有全局 queue/repository、后台 task、配置或 startup/shutdown，也未把现有日志、工具生命周期或 mutating 路径接入持久化。
 
 ---
 
@@ -1232,7 +1238,7 @@ runner_start_duration
 - [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
 - [x] History Hot Cache（G-02 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
 - [x] Session Summary（G-03 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [ ] Batch Insert（G-07 Usage 双 run 门禁完成；G-08 Audit 尚未实现）
+- [ ] Batch Insert（G-07 Usage 双 run 门禁完成；G-08 Audit 本地门禁完成、精确 HEAD 双 run 待完成）
 - [ ] DB Failure Spool
 - [ ] Redis Failure Policy
 - [x] Tool Catalog Cache（G-04 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
