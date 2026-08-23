@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:12:37+00:00
+lastmod: 2026-08-23T11:18:00+00:00
 ---
 
 # 03-plan-performance-database
@@ -79,6 +79,8 @@ lastmod: 2026-08-23T11:12:37+00:00
 > H-07 最终精确 HEAD 闭环（2026-08-23）：闭环文档 HEAD `d6e5d5f834300732b43f7afa022781622ae45a7b` 的 push `32633691438` / PR `32633694838` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-08 实现依赖据此关闭；未迁移、未连接真实服务、未操作生产。
 
 > H-08 本地门禁（2026-08-23）：实现提交 `0760818b90d17783cc4e093e306a77fc787a78e5` 新增显式注入、未接线的 Long-Term Memory retrieval boundary；单一 user/group scope、固定 data kind、record digest/revision/时效、generation/query digest、整数相关度、canonical 排序及条数/完整记录字节预算全部 fail closed。canonical model context 只传相关完整 memories，并固定标为不可信历史数据；原始 query、subject 与 memory ID 不进入 prompt。四版本定向各 `92 passed`、相关联合各 `1058 passed`、普通全量与最低依赖全量各 `2430 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-08/零数据库与 Redis I/O smoke 均通过。精确 HEAD 双 run 待完成；不自动抽取/写入，不新增 migration，不接 Repository、PostgreSQL、Redis、pgvector、配置、生命周期或生产 runtime，未合并、未发布、未部署。
+
+> H-08 远端闭环（2026-08-23）：本地证据 HEAD `f1c6db24d0b41abdd19c823fa02e3991e88a8b40` 的 push `32636051955` / PR `32636054437` 均精确命中该 SHA、各 11/11 `completed/success`、`non_success=[]`，各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01～H-08 规划内门禁闭环；未新增或运行 migration，未连接真实 PostgreSQL/Redis，D-09 仍锁定，未合并、未发布、未部署或操作生产。
 
 ---
 
@@ -836,7 +838,9 @@ H-08 实现落点：实现提交 `0760818b90d17783cc4e093e306a77fc787a78e5` 新�
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `b9983d7b52eb021d0ac0f73c69f3a40820f1cb6fcf0e1c5c5389ecdd87eaaf2b` / `d780c8936e8e63a993fbc8f8a9d48fb1ee978c4bc3a62d24c02a490b8e3f0eda`，各 100 个成员并包含 `long_term_memory.py`；Twine、禁止成员审计和 sdist 仓库外同哈希 wheel 重建通过。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，Python 3.12 固定 NoneBot 2.4.4 / OneBot adapter 2.4.6；确认 11 表、8 revision、离线 DDL、reload generation 1 与 scope/digest/policy/context 正常，且 engine create、asyncpg connect、Redis client 全为 0。制品目录 `/tmp/moellm-h08-dist.1ysiWl`，重建目录 `/tmp/moellm-h08-rebuild.B2WRdG`，smoke 根目录 `/tmp/moellm-h08-smoke.oYm6dD`，Sandbox JUnit `/tmp/moellm-h08-sandbox.9ShXDJ/junit.xml`。
 
-状态：H-08 本地门禁完成，精确 HEAD push/PR 双 `release-gate` 待完成。未接现有聊天 prompt、G-01/G-02/G-03 编排、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 pgvector；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-08 本地证据 HEAD `f1c6db24d0b41abdd19c823fa02e3991e88a8b40` 对应 push run `32636051955` 与 PR run `32636054437`；两者各恰好 11 个 job 全部 success、`non_success=[]`，并各恰好一个 `completed/success release-gate`。本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
+
+状态：H-08 本地与精确 HEAD push/PR 双 `release-gate` 均已完成。未接现有聊天 prompt、G-01/G-02/G-03 编排、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 pgvector；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -915,7 +919,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05～G-10、H-01～H-07 本地及精确 HEAD 双 run 远端门禁均已完成；H-08 已完成本地门禁、精确 HEAD 双 run 待完成；G-06～G-10 尚未接入运行时，H-01～H-08 也未挂载或接线。
+状态：G-05～G-10、H-01～H-08 本地及精确 HEAD 双 run 远端门禁均已完成；G-06～G-10 尚未接入运行时，H-01～H-08 也未挂载或接线。
 
 对于高度相似的标准请求，可考虑：
 
@@ -1056,6 +1060,8 @@ H-07 本地证据：H-06 最终闭环文档 HEAD `7ce29b034dd8bf006b2dabfc3eb2ae
 H-07 远端证据：本地证据 HEAD `b85ed4eea1390f69ce301d2bd956f89b9ddf1430` 的 push `32633462454` / PR `32633466138` 已各 11/11 success、无非 success job、各恰好一个成功 `release-gate`，最终闭环文档 HEAD `d6e5d5f834300732b43f7afa022781622ae45a7b` 的 push `32633691438` / PR `32633694838` 也已完成同等严格 JSON 收口；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-08 依赖已解除并完成本地门禁；Full Metrics 与 Long-Term Memory 均未接线，未运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 H-08 本地证据：实现提交 `0760818b90d17783cc4e093e306a77fc787a78e5` 仅新增显式注入、未接线的 typed record/query/match/context、async retriever port 与完整记录预算选择 service；固定 scope/kind/排序/相关度/时效/digest/prompt policy，不自动抽取或写入。四版本定向各 `92 passed`、相关联合各 `1058 passed`、普通全量与最低依赖全量各 `2430 passed, 1 skipped`、fresh Sandbox `40 passed, 0 skipped`。fresh wheel/sdist SHA256 为 `b9983d7b52eb021d0ac0f73c69f3a40820f1cb6fcf0e1c5c5389ecdd87eaaf2b` / `d780c8936e8e63a993fbc8f8a9d48fb1ee978c4bc3a62d24c02a490b8e3f0eda`，sdist 重建 wheel 同哈希，四组包外 smoke 确认 engine create、asyncpg connect 与 Redis client 均为 0。精确 HEAD push/PR 双 `release-gate` 待完成；未新增 migration，未接 Repository/PostgreSQL/Redis/pgvector，未合并、未发布、未部署。
+
+H-08 远端证据：本地证据 HEAD `f1c6db24d0b41abdd19c823fa02e3991e88a8b40` 的 push `32636051955` / PR `32636054437` 已各 11/11 success、`non_success=[]`、各恰好一个 `completed/success release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-08 规划门禁已关闭；Long-Term Memory 仍未接线，未新增或运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 ---
 

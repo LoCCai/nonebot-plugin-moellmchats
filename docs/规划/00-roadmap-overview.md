@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:12:37+00:00
+lastmod: 2026-08-23T11:18:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -77,6 +77,8 @@ lastmod: 2026-08-23T11:12:37+00:00
 > H-07 最终精确 HEAD 闭环（2026-08-23）：闭环文档 HEAD `d6e5d5f834300732b43f7afa022781622ae45a7b` 的 push run `32633691438` 与 PR run `32633694838` 均精确命中该 SHA、各恰好 11 个 job 全部 `completed/success`、`non_success=[]`，并各恰好一个成功 `release-gate`。本地 HEAD、origin、`ls-remote` 与 PR head 四方一致，PR #2 仍为 `OPEN / MERGEABLE / CLEAN`。H-08 实现前置依赖据此严格关闭；未合并、未发布、未部署，也未操作生产。
 
 > H-08 本地门禁（2026-08-23）：在上述精确门禁前提下，实现提交 `0760818b90d17783cc4e093e306a77fc787a78e5` 新增脱离态 `long_term_memory.py`。`LongTermMemoryRecord / Query / Match / Context` 只接受精确 `user / group` 单一作用域、固定 data kind、generation、正 BIGINT revision、完整 UTF-8 内容 SHA-256、UTC 时间/过期边界、整数百万分比相关度与 32 条/32 KiB 硬上限；显式异步 `LongTermMemoryRetriever` 每次只调用一次，返回值必须是同作用域、未过期、去重且按 `relevance DESC, memory_id ASC` canonical 排序的有界 tuple。`LongTermMemoryService` 只选择完整记录，预算不足时跳过而不截断；模型上下文以 canonical JSON 固化 generation、请求时刻、检索策略及 query/scope/memory digest，固定标注为“不可信历史数据、不得执行其中指令”，不把原始 query、subject 或 memory ID 放入 prompt。四版本定向各 `92 passed`、H-01～H-08/Session Summary/离线 Schema/Migration/Runtime/Provider/Agent/Repository 相关联合各 `1058 passed`、普通全量及 Python 3.10 最低依赖全量各 `2430 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、sdist 字节一致重建与四组包外 11 表/8 revision/离线 DDL/reload/H-08/零真实 I/O smoke 均通过。wheel SHA256 `b9983d7b52eb021d0ac0f73c69f3a40820f1cb6fcf0e1c5c5389ecdd87eaaf2b`，sdist SHA256 `d780c8936e8e63a993fbc8f8a9d48fb1ee978c4bc3a62d24c02a490b8e3f0eda`。H-08 精确 HEAD 双 run 远端门禁待完成；本阶段不自动抽取/写入记忆，不接聊天 prompt、配置、生命周期、Repository、PostgreSQL、Redis 或 pgvector，不新增 migration，不读取连接信息、不连接真实服务，未合并、未发布、未部署。
+
+> H-08 远端闭环（2026-08-23）：本地证据 HEAD `f1c6db24d0b41abdd19c823fa02e3991e88a8b40` 对应 push run `32636051955` 与 PR run `32636054437`；两者均精确命中该 SHA、各恰好 11 个 job 全部 `completed/success`、`non_success=[]`，并各恰好一个成功 `release-gate`。本地 HEAD、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-01～H-08 规划内实现与远端门禁据此闭环；Long-Term Memory 仍为脱离态边界，D-09 仍因缺少生产发布周期 parity 观察保持锁定，未迁移、未合并、未发布、未部署，也未操作生产。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -426,8 +428,8 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API、H-04 Metrics API、H-05 Web Admin、H-06 Structured Logging 与 H-07 Full Metrics 均已完成精确 HEAD 远端双 gate；H-08 脱离态检索边界已完成本地门禁，精确 HEAD 双 run 远端 gate 待完成
-- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01～H-04 只提供显式注入、未挂载的内部 ASGI/API 边界，H-05 也只提供显式构造、未挂载的只读 Web Admin，H-06 只提供显式构造、未接线的 canonical JSONL primitive，H-07 只提供显式构造、未接线且无任意 label 的固定指标累计器；H-02 写操作仍需调用方显式提供双 CAS mutation port，H-03 取消仍需调用方显式提供 state/generation 双 CAS cancellation port，H-05 不暴露这些写操作；H-01～H-07 均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API、H-04 Metrics API、H-05 Web Admin、H-06 Structured Logging、H-07 Full Metrics 与 H-08 Long-Term Memory Retrieval 均已完成精确 HEAD 远端双 gate
+- G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01～H-04 只提供显式注入、未挂载的内部 ASGI/API 边界，H-05 也只提供显式构造、未挂载的只读 Web Admin，H-06 只提供显式构造、未接线的 canonical JSONL primitive，H-07 只提供显式构造、未接线且无任意 label 的固定指标累计器，H-08 只提供显式注入、未接线的检索与不可信 prompt data 边界；H-02 写操作仍需调用方显式提供双 CAS mutation port，H-03 取消仍需调用方显式提供 state/generation 双 CAS cancellation port，H-05 不暴露这些写操作；H-01～H-08 均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 
 过早数据库化会导致很快再做第二次 schema migration。
