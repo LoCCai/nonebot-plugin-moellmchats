@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T10:16:00+00:00
+lastmod: 2026-08-23T10:22:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -71,6 +71,8 @@ lastmod: 2026-08-23T10:16:00+00:00
 > H-06 远端闭环（2026-08-23）：本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 对应 push run `32631694854` 与 PR run `32631696066`；两者均命中目标 SHA、各 11 个 job 全部 success、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-06 依赖门禁已关闭，H-07 依赖已解除但尚未实现；Structured Logging 仍未接线，未触发 migration、合并、发布、部署或任何生产操作。
 
 > H-07 本地门禁（2026-08-23）：H-06 最终闭环文档 HEAD `7ce29b034dd8bf006b2dabfc3eb2ae82fbca10da` 的 push `32631949810` / PR `32631951519` 已各 11/11 success、无非 success job且各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `d68a21d1a4219bb5e0e51eb386c01f44185a4f43` 新增显式构造、generation-bound、单进程归属且线程安全的脱离态 `FullMetricsRegistry`。固定五个累计时长直方图、七个 BIGINT 计数器与精确 `NUMERIC(24,12)` 成本累计，不接受任意指标名或 label，不保留 run/provider/model/user/group/tool identity；`ModelUsageRecord` 的 token/cost 原子累计，固定边界、溢出、跨进程与异常/异步 PID getter 均 fail closed。四版本 H-07 定向各 `73 passed`、H-01～H-07/Runtime/Provider/Agent/Repository 相关联合各 `849 passed`、普通全量及 Python 3.10 最低依赖全量各 `2338 passed, 1 skipped`，mandatory Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品、sdist 字节一致重建与四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-07/零真实 I/O smoke 均通过。wheel SHA256 `3758eb214669d2665c098e9206fb97ee2932e379ef15f6c73000ac5a9b1049cd`，sdist SHA256 `ef8a8d2cdaa0d8554e4abb70b1da620b7ecc201c7c8a69b36c91ee59c3f96f5b`。精确 HEAD 双 run 远端门禁待完成，H-08 继续锁定；未替换现有全局 `runtime_metrics`，未挂载 H-04 `/metrics`，未接配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime，未迁移、合并、发布或部署。
+
+> H-07 远端闭环（2026-08-23）：本地证据 HEAD `b85ed4eea1390f69ce301d2bd956f89b9ddf1430` 对应 push run `32633462454` 与 PR run `32633466138`；两者均命中目标 SHA、各 11 个 job 全部 success、无非 success job，并各恰好一个 `completed/success release-gate`。本地、远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-07 依赖门禁已关闭，H-08 依赖已解除但尚未实现；Full Metrics 仍未接线，未触发 migration、合并、发布、部署或任何生产操作。
 
 > 适用仓库：`LoCCai/nonebot-plugin-moellmchats`
 > 重点分支：`feat/generated-tool-bundles`
@@ -420,7 +422,7 @@ mcp/external
 原因：
 
 - AgentRun / AgentStep 等领域对象与持久化 Schema 已固化，但除 G-01 聊天历史、G-03 Session Summary、G-07 Usage 与 G-08 Audit 外的具体 Repository 和运行时持久化仍未实现；上述四项也都尚未接生产 runtime
-- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API、H-04 Metrics API、H-05 Web Admin 与 H-06 Structured Logging 均已完成精确 HEAD 远端双 gate；H-07 Full Metrics 已完成本地门禁但仍待精确 HEAD 远端双 gate，H-08 继续锁定
+- ToolProvider、Repository 接口、engine、离线迁移、Schema、G-01 Chat History Repository、G-02 Memory/Redis History Hot Cache primitive、G-03 Session Summary、G-04 Tool Catalog Cache、G-05 Tool Schema Cache、G-06 Classification Cache、G-07 Batch Usage Write、G-08 Batch Audit Write、G-09 Read-only Parallel Execution、G-10 Trusted Runner Pool、H-01 Runtime API、H-02 Tool Bundle API、H-03 Agent Run API、H-04 Metrics API、H-05 Web Admin、H-06 Structured Logging 与 H-07 Full Metrics 均已完成精确 HEAD 远端双 gate；H-08 依赖已解除但尚未实现
 - G-01/G-02/G-03 均未接现有内存聊天路径、配置或生命周期，G-04/G-05/G-06 也未接现有 Categorize/LLM payload、配置或生命周期；G-07/G-08 仅提供脱离态 immutable record、租约队列与显式 session Repository，G-09/G-10 也仅提供显式构造的脱离态执行 primitive；H-01～H-04 只提供显式注入、未挂载的内部 ASGI/API 边界，H-05 也只提供显式构造、未挂载的只读 Web Admin，H-06 只提供显式构造、未接线的 canonical JSONL primitive，H-07 只提供显式构造、未接线且无任意 label 的固定指标累计器；H-02 写操作仍需调用方显式提供双 CAS mutation port，H-03 取消仍需调用方显式提供 state/generation 双 CAS cancellation port，H-05 不暴露这些写操作；H-01～H-07 均尚未接既有 runtime 编排、配置或生命周期，Redis / PostgreSQL 的正式运行态编排仍未实现
 - 跨进程只提供 canonical CAS 与 watcher 最终收敛，尚无分布式运行时事务
 

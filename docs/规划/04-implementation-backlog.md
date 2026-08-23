@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T10:16:00+00:00
+lastmod: 2026-08-23T10:22:00+00:00
 ---
 
 # 04-implementation-backlog
@@ -55,6 +55,7 @@ lastmod: 2026-08-23T10:16:00+00:00
 - H-06 本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 的 push `32631694854` / PR `32631696066` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-07 依赖已解除但尚未实现。
 - H-06 最终闭环文档 HEAD `7ce29b034dd8bf006b2dabfc3eb2ae82fbca10da` 的 push `32631949810` / PR `32631951519` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-07 实现提交 `d68a21d1a4219bb5e0e51eb386c01f44185a4f43` 已完成四版本定向各 `73 passed`、H-01～H-07/Runtime/Provider/Agent/Repository 相关联合各 `849 passed`、普通全量及最低依赖全量各 `2338 passed, 1 skipped`、fresh Sandbox `40 passed, 0 skipped`、Ruff/目标 Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-07/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-08 继续锁定。
 - H-07 只提供显式构造、generation-bound、单进程归属且线程安全的固定指标累计器与 frozen snapshot；不接受任意指标名/label，不保留高基数 identity，不替换 `runtime_metrics`，不挂载 H-04 API。无全局 registry/task，未接配置、生命周期、Repository、PostgreSQL、Redis 或生产 runtime。
+- H-07 本地证据 HEAD `b85ed4eea1390f69ce301d2bd956f89b9ddf1430` 的 push `32633462454` / PR `32633466138` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-08 依赖已解除但尚未实现。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -829,7 +830,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-10、H-01～H-06 精确 HEAD 双 run 远端 gate green；H-07 本地门禁完成、精确 HEAD 双 run 待完成，H-08 锁定；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10、H-01～H-07 精确 HEAD 双 run 远端 gate green；H-08 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1309,7 +1310,7 @@ Metrics 数据最小化：`/metrics` 先固定当前 `RuntimeSnapshot`，再读�
 
 远端证据：H-06 本地证据 HEAD `cc16cb079a7eed7fb08ade8f4b7c9dccbb1259d8` 对应 push run `32631694854` 与 PR run `32631696066`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-07 依赖已解除但尚未实现。
 
-状态：H-06 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-07 已完成本地门禁，精确 HEAD 双 run 待完成，H-08 保持锁定。当前无模块级 Full Metrics registry，未迁移既有日志，未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+状态：H-06～H-07 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-08 前置依赖已解除但尚未实现。当前无模块级 Full Metrics registry，未迁移既有日志，未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
@@ -1325,13 +1326,15 @@ Metrics 数据最小化：`/metrics` 先固定当前 `RuntimeSnapshot`，再读�
 
 制品门禁：fresh wheel/sdist SHA256 分别为 `3758eb214669d2665c098e9206fb97ee2932e379ef15f6c73000ac5a9b1049cd` / `ef8a8d2cdaa0d8554e4abb70b1da620b7ecc201c7c8a69b36c91ee59c3f96f5b`，各 99 个成员并包含 `full_metrics.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-07 Full Metrics snapshot 正常，engine create、asyncpg connect 与 Redis client 均为 0。制品目录 `/tmp/moellm-h07-dist.V8rGun`，重建目录 `/tmp/moellm-h07-rebuild.8Gmj6b`，smoke 根目录 `/tmp/moellm-h07-smoke.RxIeIM`，最终 Sandbox JUnit `/tmp/moellm-h07-final-sandbox.0oLGNp/junit.xml`。
 
-状态：H-07 实现与本地门禁完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-08 继续锁定。当前未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-07 本地证据 HEAD `b85ed4eea1390f69ce301d2bd956f89b9ddf1430` 对应 push run `32633462454` 与 PR run `32633466138`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-08 依赖已解除但尚未实现。
+
+状态：H-07 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-08 前置依赖已解除。当前 Full Metrics 未接配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
 ## H-08 Long-Term Memory
 
-状态：等待 H-07 精确 HEAD push/PR 双 `release-gate` 关闭后再实施。
+状态：H-07 精确 HEAD 双门禁已关闭，前置依赖已解除；尚未实现。
 
 ---
 
