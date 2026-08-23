@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T14:34:56+00:00
+lastmod: 2026-08-23T16:02:05+00:00
 ---
 
 # 02-plan-future-architecture
@@ -19,6 +19,8 @@ lastmod: 2026-08-23T14:34:56+00:00
 > I-02 远端闭环（2026-08-23）：本地证据 HEAD `0452bdd0696b8efd257e68c9b9a50d38b0de2f07` 的 push `32641447820` / PR `32641450374` 已严格关闭：各 11/11 success、`non_success=[]`、各唯一 `release-gate` 为 `completed/success`，四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 依赖已解除；仍未接现有 selector/payload/chat runtime，未合并、未发布、未部署，未迁移或连接真实服务。
 
 > I-03 远端闭环（2026-08-23）：I-02 最终文档 HEAD `06166cc62639e8b0642f3e5ee96d083033fc2631` 双 run 已严格关闭。实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 保留旧 `text/images/metadata` 构造顺序，新增递归脱离、冻结、有界的 `files/structured/citations`，safe opaque locator/HTTPS citation 与单一 canonical rendering，并接入 Custom/NoneBot Provider、Generated worker/runner、history preview 与模型消息。本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 已完成，I-04 依赖已解除；未发模型/citation 请求，未合并、发布、部署、迁移或连接真实服务。
+
+> I-04 本地门禁（2026-08-23）：实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已对齐 AgentRun/AgentStep/ToolCall 的完整持久化领域字段，并新增三类 caller-owned `AsyncSession` PostgreSQL Repository；现有 11 表/8 revision 足够，不新增空 migration。Run state+generation CAS、ToolCall status CAS、绑定 run 的 Step/ToolCall keyset、复合 run/step identity、未知结果不重放及事务所有权边界均已验证。四版本与最低依赖全量各 `2704 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 通过。I-04 精确 HEAD 双 run 待完成，I-05 继续锁定；真实聊天/runtime 尚未构造或持久化这些对象，未迁移、未连接真实服务、未发布或部署。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -1146,9 +1148,9 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [x] ToolProvider 接口（D-01/D-08 generation-bound Provider consumer 已接真实路径；D-09 仅为发布观察后的 legacy 清理）
 - [x] Tool Capability（D-07 versioned merge 与 D-08 selection/execution enforcement 已接线）
 - [x] Tool Trust Level（D-06/D-08 selection、execution、confirmation 与 management enforcement 已接线）
-- [ ] AgentRun（E-01 primitive 与 F-05 Schema 已绿；I-04/I-06 负责字段对齐、Repository 与运行态创建）
-- [ ] AgentStep（E-02 primitive 与 F-06 Schema 已绿；I-04/I-06 负责持久化对齐与运行态创建）
-- [ ] ToolCall（E-03 primitive 与 F-07 Schema 已绿；I-04/I-06 负责完整 identity、Repository 与运行态创建）
+- [ ] AgentRun（I-04 字段/Schema/PostgreSQL Repository 本地门禁已绿；待 I-05/I-06 组合并由真实 runtime 创建）
+- [ ] AgentStep（I-04 持久化映射/PostgreSQL Repository 本地门禁已绿；待 I-05/I-06 组合并由真实 runtime 创建）
+- [ ] ToolCall（I-04 完整 identity/PostgreSQL Repository 本地门禁已绿；待 I-05/I-06 组合并由真实 runtime 创建）
 - [ ] DeadlineContext（E-05 primitive 已绿；I-06/I-07 负责真实请求预算接线）
 - [ ] Tool Graph（E-06～E-08 primitive 已绿；I-07 负责真实工具路径接线）
 - [ ] read_only 并行工具（G-09/G-10 primitive 已绿；`_execute_tools()` 仍每轮单工具，待 I-07）

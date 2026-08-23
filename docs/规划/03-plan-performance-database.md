@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T14:34:56+00:00
+lastmod: 2026-08-23T16:02:05+00:00
 ---
 
 # 03-plan-performance-database
@@ -19,6 +19,8 @@ lastmod: 2026-08-23T14:34:56+00:00
 > I-02 远端闭环（2026-08-23）：证据 HEAD `0452bdd0696b8efd257e68c9b9a50d38b0de2f07` 的 push `32641447820` / PR `32641450374` 均为目标 SHA，各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 前置依赖已解除；本阶段未新增或运行 migration，未连接真实 PostgreSQL/Redis，未合并、未发布、未部署。
 
 > I-03 远端闭环（2026-08-23）：I-02 最终文档 HEAD `06166cc62639e8b0642f3e5ee96d083033fc2631` 双 run 已关闭。实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 完成六字段 structured ToolResult 及 adapter/runner/history/model 接线；四版本全量和 Python 3.10 最低数据库/Redis 依赖全量各 `2663 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，四组包外 11 表/8 revision/离线 DDL/reload/structured contract/零真实 I/O smoke 通过。本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 依赖已解除；I-03 未新增或运行 migration，未连接真实 PostgreSQL/Redis，未合并、发布或部署。
+
+> I-04 本地门禁（2026-08-23）：实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 新增 `PostgresAgentRunRepository / PostgresAgentStepRepository / PostgresToolCallRepository`，严格复用现有 11 表/8 revision，Schema 审计确认全部列、约束、索引和 `(run_id, step_id)` 复合外键已覆盖，故不新增空 `0009`。Repository 仅接受调用方 `AsyncSession`，不拥有事务或重试；Run/ToolCall 使用 CAS，Step/ToolCall 使用绑定 run 的稳定 keyset，未知结果禁止自动重放。本地四版本与 Python 3.10 最低数据库/Redis 依赖全量各 `2704 passed, 1 skipped`，数据库相关联合 `588 passed`，Sandbox `41 passed, 0 skipped`，静态、可复现制品与 Python 3.10/3.12 × wheel/sdist 四组包外零 engine/asyncpg/Redis/socket I/O smoke 均通过。精确 HEAD 双 run 待完成，I-05 锁定；未运行 migration、未连接真实服务，真实 runtime 事务编排仍待 I-05/I-06。
 
 > 推荐目标版本：`0.28 → 0.30`
 
@@ -1343,15 +1345,15 @@ runner_start_duration
 
 # 31. Plan 3 验收标准
 
-- [ ] Repository Layer（F-01 Protocol 与部分具体 Repository 已绿；待 I-04～I-06 完整组合）
-- [ ] PostgreSQL 基础 Schema（F 阶段离线 Schema 已绿；待 I-04 领域映射/具体 Repository 验证）
-- [ ] Alembic Migration（8 个 append-only revision 离线门禁已绿；待 I-04 验证最终映射，本轮不在线执行）
+- [ ] Repository Layer（I-04 已补齐 Agent 三类具体 Repository 本地门禁；待 I-05/I-06 资源与真实事务编排）
+- [ ] PostgreSQL 基础 Schema（F 阶段离线 Schema 与 I-04 最终领域映射验证已绿；待真实 runtime 消费）
+- [ ] Alembic Migration（I-04 确认 8 个 append-only revision 已完整覆盖且不制造空 revision；本轮不在线执行）
 - [ ] Redis Client（F-11 primitive 已绿；待 I-05 资源生命周期接线）
 - [ ] cooldown Redis（F-13 primitive 已绿；待 I-05/I-08 组合故障策略）
 - [ ] PendingAction Redis（F-12 primitive 已绿；待 I-05/I-08 接线且故障时危险操作 fail closed）
-- [ ] AgentRun 持久化（待 I-04/I-06）
-- [ ] AgentStep 持久化（待 I-04/I-06）
-- [ ] ToolCall 持久化（待 I-04/I-06）
+- [ ] AgentRun 持久化（I-04 具体 Repository 本地门禁已绿；待 I-05/I-06 真实 runtime 事务编排）
+- [ ] AgentStep 持久化（I-04 具体 Repository 本地门禁已绿；待 I-05/I-06 真实 runtime 事务编排）
+- [ ] ToolCall 持久化（I-04 具体 Repository 本地门禁已绿；待 I-05/I-06 真实 runtime 事务编排）
 - [ ] Token Usage 持久化（G-07 Repository/租约 primitive 已绿；待 I-06/I-08 接 LLM lifecycle 与 spool）
 - [ ] Chat History 持久化（G-01 Repository 已绿；待 I-06 接真实 MessagesHandler）
 - [ ] History Hot Cache（G-02 primitive 已绿；待 I-05/I-06 接 committed load/invalidate）

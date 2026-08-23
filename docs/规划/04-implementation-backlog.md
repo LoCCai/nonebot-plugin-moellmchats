@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T14:34:56+00:00
+lastmod: 2026-08-23T16:02:05+00:00
 ---
 
 # 04-implementation-backlog
@@ -13,11 +13,12 @@ lastmod: 2026-08-23T14:34:56+00:00
 ## 当前实施状态（2026-08-23）
 
 - H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push `32636423646` / PR `32636425880` 已重新核验为各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
-- A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。完成度审计确认真实聊天路径仍未构造 AgentRun/Step/ToolCall，模型能力路由的受信 catalog/runtime 接线、Agent PostgreSQL Repository、runtime 资源组合、并行接线、spool/Redis failure policy/database metrics 等仍未完成；I-03 structured ToolResult 已完成真实 adapter/runner/history/model 接线与精确 HEAD 双门禁。
+- A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。完成度审计确认真实聊天路径仍未构造 AgentRun/Step/ToolCall，模型能力路由的受信 catalog/runtime 接线、runtime 资源组合、并行接线、spool/Redis failure policy/database metrics 等仍未完成；I-03 structured ToolResult 已完成真实 adapter/runner/history/model 接线与精确 HEAD 双门禁，I-04 Agent PostgreSQL Repository 已完成本地 primitive 门禁但尚待远端闭环。
 - 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 依赖据此解除。
 - I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建与四组包外零真实 I/O smoke；本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 已完成，I-02 依赖已解除。
 - I-01 最终闭环文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。I-02 实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建及四组包外零真实 I/O smoke；本地证据 HEAD `0452bdd0696b8efd257e68c9b9a50d38b0de2f07` 的 push `32641447820` / PR `32641450374` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-02 已完成，I-03 依赖已解除。
 - I-02 最终闭环文档 HEAD `06166cc62639e8b0642f3e5ee96d083033fc2631` 的 push `32641935631` / PR `32641937830` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。在此前提下，I-03 实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 已完成四版本定向/全量、最低依赖、Sandbox、静态、fresh 制品/重建及四组包外零真实 I/O smoke；本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 已完成，I-04 依赖已解除。
+- I-04 实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已完成领域/Schema/三类 PostgreSQL Repository 对齐、四版本定向/联合/全量、Python 3.10 最低依赖、Sandbox、静态、fresh 制品/重建及四组包外零真实 I/O smoke。现有 11 表/8 revision 完整覆盖，不新增或运行 migration；精确 HEAD 双 run 待完成，I-05 继续锁定。
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
 - G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
@@ -1363,7 +1364,7 @@ prompt 与预算：service 依次尝试相关完整 record，单条加入后超�
 
 # Milestone I：Plan 2 / Plan 3 Completion
 
-**状态：规划审计基线与 I-01～I-03 精确 HEAD 双 run gate 均已关闭；I-04 前置依赖已解除、待实现**
+**状态：规划审计基线与 I-01～I-03 精确 HEAD 双 run gate 均已关闭；I-04 本地门禁已完成、精确 HEAD 双 run 待关闭；I-05 保持锁定**
 
 Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
 
@@ -1447,7 +1448,19 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 验证：Repository 不拥有 commit/rollback/close/retry，未知结果不重放；复合 identity 防跨 run/step 错挂。仅在 Schema 真有缺口时追加 migration，不制造空 revision，不运行在线 migration。
 
-状态：前置依赖已解除，待实现。
+实现落点：I-03 本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。在此前提下，实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 更新 `agent_runtime.py` 并新增 `postgres_agent_repository.py`；现有 `agent_runs / agent_steps / tool_calls` 已覆盖全部列、约束、索引和 `(run_id, step_id)` 复合外键，保持 11 张表与 8 个 revision，不新增空 `0009`。
+
+领域与持久化边界：AgentRun 补齐 conversation/model/token/cost/error，并对 PostgreSQL BIGINT、`NUMERIC(24,12)`、UTC timestamp 与 UTF-8 做有界映射；AgentStep 显式持久化 preview/error/duration，完整 input/output 只留在内存；ToolCall 补齐 source/bundle/confirmation/created/finished/duration，完整 result 不持久化，只保存有界 `result_preview`。三类 Repository 只接受调用方显式持有的 `AsyncSession`，不创建 engine/session，不 commit、rollback、flush、close 或 retry；数据库取消原样传播，未知结果只映射一次并禁止自动重放。
+
+一致性与分页边界：AgentRun replace 使用 state+generation CAS；ToolCall replace 使用 status CAS，并固定 run/step/tool/source/bundle/arguments/created identity。AgentStep 以 `(step_index ASC, id ASC)` keyset，ToolCall 以 `(created_at DESC, id DESC)` keyset；两类 canonical opaque cursor 均绑定 run SHA-256 指纹，拒绝跨 run、非 canonical、乱序、重复或越界结果。复合外键与 Repository 结果验证共同拒绝跨 run/step 错挂。
+
+本地门禁：I-04 定向 `425 passed`，数据库相关联合 `588 passed`；Python 3.10.20、3.11.15、3.12.13 与 3.13.13 严格串行普通全量各 `2704 passed, 1 skipped`。Python 3.10 最低 SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / Redis 5.2.0 / FakeRedis 2.31.0 全量同为 `2704 passed, 1 skipped`。mandatory root Sandbox fresh JUnit 为 `tests=41 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 目标模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `a80c7526257c4c99451903f0333c3f285d9a03ece51a98d721ede1f714302ec7` / `1b5081baa9ed28ed87f33c2aa27bf6a93ef9478b9082b10e427c8d917278a5ed`，各 103 个成员并包含新 Repository，不含 `uv.lock`、cache 或 bytecode；Twine 通过，最终 sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组 fresh venv 均从包外 site-packages 加载，验证 11 表、8 revision、离线 DDL、三类 Repository 构造零 execute/事务操作、reload generation 1，以及 engine/asyncpg/Redis/socket 真实 I/O 计数均为 0。制品目录 `/tmp/moellm-i04-final-dist.kroYiI`，重建目录 `/tmp/moellm-i04-final-rebuild.Bp35yj`，最终 smoke 根目录 `/tmp/moellm-i04-final-smoke.EuGEDi`，Sandbox JUnit `/tmp/moellm-i04-final-sandbox.nEkuxY/junit.xml`。
+
+作废证据：`/tmp/moellm-i04-smoke.uzjJy5` 的四组包外 smoke 使用最终 UTF-8 加固前制品，不计入最终门禁。最终 Python 3.10 wheel 的首两次 clean-env smoke 分别因 NoneBot 2.5 默认 FastAPI driver 未安装、`~none` driver 未提供 nickname 而在测试脚本初始化阶段失败；显式使用内置 `~none` driver 与隔离 nickname 后，未修改产品代码，最终四组全通过。
+
+状态：I-04 本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待关闭；I-05 保持锁定。未读取 DSN、Redis URL 或 credential，未连接真实 PostgreSQL/Redis/模型，未运行 migration，未合并、promotion、发布、部署或重启。
 
 ---
 
@@ -1459,7 +1472,7 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 验证：默认 Memory 兼容模式零 PostgreSQL/Redis I/O；只有显式有效配置才能惰性构造后端，测试只使用 fake/recording ports。
 
-状态：🔒 等待 I-04。
+状态：🔒 等待 I-04 精确 HEAD 双 run 门禁。
 
 ---
 
