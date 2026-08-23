@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T07:20:00+00:00
+lastmod: 2026-08-23T07:25:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -61,6 +61,8 @@ lastmod: 2026-08-23T07:20:00+00:00
 > H-03 远端闭环（2026-08-23）：本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 的 push `32622651928` / PR `32622656140` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-04 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
 
 > H-04 本地门禁（2026-08-23）：H-03 最终闭环文档 HEAD `528f2f6186e1da60441d2d4104c1b4b503f73d9c` 的 push `32622856559` / PR `32622857963` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增脱离态 `GET /models` 与 `GET /metrics`：分离 read scope，全部传输校验早于 reader，模型目录使用绑定 generation 的稳定 canonical 游标并仅暴露最小 identity，metrics 只返回与当前 generation 一致的低基数聚合。四版本定向各 `124 passed`、联合各 `641 passed`、全量及最低依赖全量各 `2115 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-05 锁定；API 未挂载，未接配置或生命周期，未迁移、未连接真实服务、未部署。
+
+> H-04 远端闭环（2026-08-23）：本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 的 push `32625289294` / PR `32625291083` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-05 依赖已解除但尚未实现；API 仍未挂载，未迁移、未合并、未发布、未部署。
 
 ---
 
@@ -778,7 +780,9 @@ H-04 实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增独立 `metri
 
 fresh wheel/sdist SHA256 分别为 `dccd6b1f9086a73d1c7d315bb619dd41fd5c7bc8633cb1a299242df827481760` / `1eed21681c6b5dd72941a7368f6061fd8b530fa1ca6b8d2b7a4b99f9e0a73b29`，各 96 个成员并包含 `metrics_api.py`，不含 `uv.lock`、cache 或 bytecode；sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-04 API 正常，engine create、asyncpg connect 与 Redis client 均为 0；Python 3.12 固定 NoneBot 2.4.4 / OneBot adapter 2.4.6。最终制品目录 `/tmp/moellm-h04-dist-final.GauhxC`，重建目录 `/tmp/moellm-h04-rebuild-final.iCawAG`，smoke 根目录 `/tmp/moellm-h04-smoke.PY9XQL`，Sandbox JUnit `/tmp/moellm-h04-sandbox-final.QkPOOf/junit.xml`。
 
-状态：H-04 本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-05 继续锁定。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+远端证据：H-04 本地证据 HEAD `360aed58085cb4435b5cec4c10a1e392afa74c6e` 对应 push run `32625289294` 与 PR run `32625291083`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-05 依赖已解除但尚未实现。
+
+状态：H-04 本地与精确 HEAD push/PR 双 `release-gate` 均已完成；H-05 前置依赖已解除。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
