@@ -226,3 +226,13 @@ class AuditRepository(Protocol[AuditRecordT]):
         run_id: str,
         page: RepositoryPageRequest,
     ) -> RepositoryPage[AuditRecordT]: ...
+
+
+@runtime_checkable
+class BatchAuditRepository(
+    AuditRepository[AuditRecordT],
+    Protocol[AuditRecordT],
+):
+    """Optional non-critical batch extension preserving the base audit contract."""
+
+    async def append_batch(self, events: tuple[AuditRecordT, ...]) -> None: ...

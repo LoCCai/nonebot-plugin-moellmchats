@@ -16,6 +16,7 @@ from nonebot_plugin_moellmchats.repositories import (
     AgentRunRepository,
     AgentStepRepository,
     AuditRepository,
+    BatchAuditRepository,
     BatchUsageRepository,
     ConversationRepository,
     MessageRepository,
@@ -179,6 +180,22 @@ class _AuditRepository:
     async def append(self, event: str) -> None:
         del event
 
+    async def append_batch(self, events: tuple[str, ...]) -> None:
+        del events
+
+    async def list_for_run(
+        self,
+        run_id: str,
+        page: RepositoryPageRequest,
+    ) -> RepositoryPage[str]:
+        del run_id, page
+        return RepositoryPage(())
+
+
+class _LegacyAuditRepository:
+    async def append(self, event: str) -> None:
+        del event
+
     async def list_for_run(
         self,
         run_id: str,
@@ -295,6 +312,7 @@ def test_repository_protocols_are_runtime_checkable() -> None:
     usage: UsageRepository[str] = _UsageRepository()
     batch_usage: BatchUsageRepository[str] = _UsageRepository()
     audit: AuditRepository[str] = _AuditRepository()
+    batch_audit: BatchAuditRepository[str] = _AuditRepository()
     transaction: RepositoryTransaction = _Transaction()
 
     assert isinstance(conversation, ConversationRepository)
@@ -306,6 +324,7 @@ def test_repository_protocols_are_runtime_checkable() -> None:
     assert isinstance(usage, UsageRepository)
     assert isinstance(batch_usage, BatchUsageRepository)
     assert isinstance(audit, AuditRepository)
+    assert isinstance(batch_audit, BatchAuditRepository)
     assert isinstance(transaction, RepositoryTransaction)
     assert not isinstance(object(), AgentRunRepository)
     assert not isinstance(object(), RepositoryTransaction)
@@ -316,6 +335,13 @@ def test_batch_usage_extension_preserves_legacy_usage_implementations() -> None:
 
     assert isinstance(legacy, UsageRepository)
     assert not isinstance(legacy, BatchUsageRepository)
+
+
+def test_batch_audit_extension_preserves_legacy_audit_implementations() -> None:
+    legacy = _LegacyAuditRepository()
+
+    assert isinstance(legacy, AuditRepository)
+    assert not isinstance(legacy, BatchAuditRepository)
 
 
 @pytest.mark.parametrize(
@@ -331,6 +357,7 @@ def test_batch_usage_extension_preserves_legacy_usage_implementations() -> None:
         (UsageRepository, ("append", "list_for_run")),
         (BatchUsageRepository, ("append", "append_batch", "list_for_run")),
         (AuditRepository, ("append", "list_for_run")),
+        (BatchAuditRepository, ("append", "append_batch", "list_for_run")),
     ],
 )
 def test_repository_protocol_methods_are_async(
