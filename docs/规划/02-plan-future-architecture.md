@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T06:22:00+00:00
+lastmod: 2026-08-23T07:20:00+00:00
 ---
 
 # 02-plan-future-architecture
@@ -59,6 +59,8 @@ lastmod: 2026-08-23T06:22:00+00:00
 > H-03 本地门禁（2026-08-23）：H-02 最终闭环文档 HEAD `90bedb7d38bab5aae75b07fe4d418ebcbfb6e52f` 的 push `32620635396` / PR `32620638250` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增脱离态 Agent Run API：读取通过显式 newest-first keyset reader，列表最多 20 条且不暴露 user/group，详情不返回 step/tool payload；`agent-runs:read / agent-runs:write` 分权与全部输入校验早于状态读取。取消只通过显式 port 携带 authenticated actor 与 state/generation 双 CAS，必须确认 cancelled identity、执行已停止及即时审计，结果未知不重放。四版本定向各 `100 passed`、联合各 `465 passed`、全量及最低依赖全量各 `1991 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-04 锁定；API 未挂载，未接运行时任务、Repository、配置或生命周期，未迁移、未连接服务、未部署。
 
 > H-03 远端闭环（2026-08-23）：本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 的 push `32622651928` / PR `32622656140` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-04 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
+
+> H-04 本地门禁（2026-08-23）：H-03 最终闭环文档 HEAD `528f2f6186e1da60441d2d4104c1b4b503f73d9c` 的 push `32622856559` / PR `32622857963` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增脱离态 `GET /models` 与 `GET /metrics`：分离 read scope，全部传输校验早于 reader，模型目录使用绑定 generation 的稳定 canonical 游标并仅暴露最小 identity，metrics 只返回与当前 generation 一致的低基数聚合。四版本定向各 `124 passed`、联合各 `641 passed`、全量及最低依赖全量各 `2115 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-05 锁定；API 未挂载，未接配置或生命周期，未迁移、未连接真实服务、未部署。
 
 ---
 
@@ -763,6 +765,20 @@ H-03 实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增独立 `agent
 fresh wheel/sdist SHA256 分别为 `5a8188c05489519a2e06c5304ae733e173eee9d6dce0d5fd12050d802ae3d6a7` / `3bda50937b767bf6334ec517ced441dfb2e0b44a0e84374210f9dc47695a465f`，各 95 个成员并包含 `agent_run_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，Python 3.12 固定 NoneBot 2.4.4；确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02/H-03 读 API 200、错误 token 401、缺失取消目标 404 且 cancellation port 未调用，engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h03-dist.us7OLh`，重建目录 `/tmp/moellm-h03-rebuild.njbFhB`，smoke 根目录 `/tmp/moellm-h03-smoke.YWstuS`，Sandbox JUnit `/tmp/moellm-h03-sandbox.aww1mC/junit.xml`。
 
 远端证据：H-03 本地证据 HEAD `35ebdeb50005d2c7fc9b5a4759babb69819cd79e` 对应 push run `32622651928` 与 PR run `32622656140`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-04 依赖已解除但尚未实现。当前没有路由注册、listener、模块级 API 或 port 对象、运行时任务 registry、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+
+## 14.4 H-04 Model Catalog 与 Metrics
+
+H-04 实现提交 `767910659076f3a85faed573a6ebac0208f42b53` 新增独立 `metrics_api.py`，精确实现 `GET /models` 与 `GET /metrics`。该模块只提供 frozen endpoint、显式 `RuntimeMetricsReader` Protocol 与 `MetricsApiService`，复用 detached `RuntimeApiASGIApp`；不创建模块级 service/app/reader，不自动挂载 NoneBot 路由或 listener。
+
+两个端点分别要求 `models:read` 与 `metrics:read`，认证、scope、path/method/query 与空 body 校验全部早于 snapshot/metrics reader。`/models` 仅读当前 immutable runtime snapshot；目录最多 4096 项，单项 identity/model/provider 均有 UTF-8 字节与 JSON 响应上限，按 `(provider, model, identity)` 稳定排序。列表每页最多 20 条，canonical UTF-8 base64url 游标同时绑定 generation 与完整 anchor，代际变化、anchor 消失、非 canonical 或损坏游标均 fail closed。成功响应只包含 `id/model/provider`，不序列化 key、URL、proxy、provider/model config 或 secret。
+
+`/metrics` 先验证当前 `RuntimeSnapshot`，再读取一次显式 metrics snapshot；`reload_generation` 必须与 runtime generation 精确一致。响应只包含 generation、启动/reload 时间以及 classification、dispatch、Generated runner、LLM、member cache、reload 与 tool 的低基数聚合；dispatch mode 名称受严格字符集和数量限制。`last_reload_error`、异常文本、config、credential、模型/工具细节与 user/group 标签不进入响应或公共错误。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 H-04 定向各 `124 passed`；H-01～H-04 API、Runtime Snapshot/Reload、Provider、Agent 与 Repository 相关联合各 `641 passed`；严格串行普通全量各 `2115 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `2115 passed, 1 skipped`。mandatory root Sandbox `40 passed, 0 skipped`，JUnit `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 均通过。
+
+fresh wheel/sdist SHA256 分别为 `dccd6b1f9086a73d1c7d315bb619dd41fd5c7bc8633cb1a299242df827481760` / `1eed21681c6b5dd72941a7368f6061fd8b530fa1ca6b8d2b7a4b99f9e0a73b29`，各 96 个成员并包含 `metrics_api.py`，不含 `uv.lock`、cache 或 bytecode；sdist 仓库外重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01～H-04 API 正常，engine create、asyncpg connect 与 Redis client 均为 0；Python 3.12 固定 NoneBot 2.4.4 / OneBot adapter 2.4.6。最终制品目录 `/tmp/moellm-h04-dist-final.GauhxC`，重建目录 `/tmp/moellm-h04-rebuild-final.iCawAG`，smoke 根目录 `/tmp/moellm-h04-smoke.PY9XQL`，Sandbox JUnit `/tmp/moellm-h04-sandbox-final.QkPOOf/junit.xml`。
+
+状态：H-04 本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待完成，H-05 继续锁定。当前未接路由/listener、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
