@@ -1,7 +1,7 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-23T13:10:10+00:00
+lastmod: 2026-08-23T14:27:25+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
@@ -25,6 +25,7 @@ lastmod: 2026-08-23T13:10:10+00:00
 - I-01 不读取或改变现有模型配置，不包含 endpoint/key/proxy/credential，不接 selector/runtime，也不发送模型请求。
 - I-01 最终闭环文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功。I-02 实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 已完成 generation/digest-bound capability routing、本地四版本/最低依赖/Sandbox/静态/制品/包外零 I/O 门禁；本地证据 HEAD `0452bdd0696b8efd257e68c9b9a50d38b0de2f07` 的 push `32641447820` / PR `32641450374` 已各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 依赖已解除。
 - I-02 不读取 provider 配置或凭据，不修改现有 `ModelSelector`/payload/chat runtime，也不发送模型请求；因此 Plan 2 最终 runtime 验收仍未勾选。
+- I-02 最终闭环文档 HEAD `06166cc62639e8b0642f3e5ee96d083033fc2631` 的 push `32641935631` / PR `32641937830` 已各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功。I-03 实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 已完成六字段 deeply immutable/bounded ToolResult、safe file/citation 边界、worker/runner/adapter/history/model canonical 接线及全部本地门禁；精确文档 HEAD 双 `release-gate` 待关闭，I-04 继续锁定。
 
 ## 2. 状态口径
 
@@ -43,7 +44,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 | Provider / Capability / Trust | D-08 已将 categorize、payload、tool execution、pending action、search 与管理 consumer 切到 generation-bound Provider 视图，并保留 parity rollback | D-09 legacy 删除仍受生产发布周期门禁锁定 |
 | AgentRun / AgentStep / ToolCall / Deadline | `agent_runtime.py` 已有不可变对象、状态机与共享 deadline；F 阶段已有 Schema | `__init__.py`、`chat_runtime.py`、`llm_tools.py` 不构造这些对象；领域字段与 Schema 仍不完全对齐 |
 | Model Capability / Routing | I-01 已实现无凭据 descriptor；I-02 双 gate 已实现 generation/catalog/policy/capability-bound 路由及固定模型兼容/回滚 | 尚未从受信 catalog 构造路由 snapshot，也未接现有 `ModelSelector`、payload 或真实聊天 runtime |
-| Structured ToolResult | 当前 `ToolResult` 仅有 `text / images / metadata` | 缺 `files / structured / citations`，现有 adapter 与模型消息没有统一结构化消费契约 |
+| Structured ToolResult | I-03 实现提交已将六字段领域契约接入 Custom/NoneBot Provider、Generated runner、history preview 与模型消息，本地全门禁已通过 | 精确文档 HEAD push/PR 双 `release-gate` 尚未关闭；不把本地成功当作远端证据 |
 | Agent persistence | 已有 `AgentRunRepository / AgentStepRepository / ToolCallRepository` Protocol 与三张表 | 没有对应 PostgreSQL Repository；Agent 领域字段缺少部分 Schema identity、时间、成本和错误边界 |
 | History / Summary / Long-Term Memory | G-01/G-02/G-03/H-08 各自具备脱离态实现 | 真实 `MessagesHandler` / prompt 编排未消费，未定义组合失败策略 |
 | Parallel execution / Runner pool | G-09/G-10 已有脱离态 executor/pool | `_execute_tools()` 仍固定 `max_tool_calls_per_round = 1` 并逐个执行 |
@@ -57,6 +58,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - ToolProvider consumer cutover
 - Tool Capability versioning / merge / enforcement
 - Tool Trust Level enforcement
+- Structured ToolResult canonical adapter/runner/history/model 路径（I-03 本地门禁已完成，远端双 gate 待关闭）
 
 ### Primitive 已完成、最终集成未完成
 
@@ -70,8 +72,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 
 ### 尚缺核心实现
 
-- 完整 structured ToolResult
-- Agent runtime 对上述能力的真实消费
+- Agent runtime 对上述其余能力的真实消费
 
 ## 5. Plan 3 当前状态
 
@@ -129,6 +130,9 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 扩展为 `text / images / files / structured / citations / metadata`，所有集合和 JSON 递归脱离、冻结并有界。
 - 文件只允许 opaque、安全 locator，不允许把任意主机路径变成模型数据。
 - adapter、runner、历史 preview 与模型 payload 使用同一 canonical rendering；旧 `text/images/metadata` 构造保持兼容。
+- 实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 已完成上述真实路径接线，四版本定向各 `115 passed`、联合 `711 passed, 1 skipped`、四版本及 Python 3.10 最低依赖全量各 `2663 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`。
+- Ruff/Pyright/diff/format、fresh wheel/sdist/Twine、sdist 重建一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/structured contract/零真实 I/O smoke 全部通过；详细哈希和证据目录见 `04-implementation-backlog.md`。
+- 精确文档 HEAD push/PR 双 `release-gate` 待关闭，闭环前 I-04 继续锁定。
 
 ### I-04 Agent Domain / Schema / PostgreSQL Repository Alignment
 
@@ -190,4 +194,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线、I-01 与 I-02 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-03 前置依赖已解除，下一步按本节契约实现 Structured ToolResult。
+当前精确恢复点：规划审计基线、I-01 与 I-02 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-03 实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 及全部本地门禁已完成。下一步是提交本地证据、推送并关闭该精确 HEAD 的 push/PR 双 `release-gate`；闭环前不得进入 I-04。
