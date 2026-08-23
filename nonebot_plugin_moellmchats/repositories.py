@@ -208,6 +208,16 @@ class UsageRepository(Protocol[UsageRecordT]):
 
 
 @runtime_checkable
+class BatchUsageRepository(
+    UsageRepository[UsageRecordT],
+    Protocol[UsageRecordT],
+):
+    """Optional batch extension that preserves the base usage contract."""
+
+    async def append_batch(self, usages: tuple[UsageRecordT, ...]) -> None: ...
+
+
+@runtime_checkable
 class AuditRepository(Protocol[AuditRecordT]):
     async def append(self, event: AuditRecordT) -> None: ...
 

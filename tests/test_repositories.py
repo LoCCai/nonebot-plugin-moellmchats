@@ -16,6 +16,7 @@ from nonebot_plugin_moellmchats.repositories import (
     AgentRunRepository,
     AgentStepRepository,
     AuditRepository,
+    BatchUsageRepository,
     ConversationRepository,
     MessageRepository,
     RepositoryConflictError,
@@ -149,6 +150,22 @@ class _UsageRepository:
     async def append(self, usage: str) -> None:
         del usage
 
+    async def append_batch(self, usages: tuple[str, ...]) -> None:
+        del usages
+
+    async def list_for_run(
+        self,
+        run_id: str,
+        page: RepositoryPageRequest,
+    ) -> RepositoryPage[str]:
+        del run_id, page
+        return RepositoryPage(())
+
+
+class _LegacyUsageRepository:
+    async def append(self, usage: str) -> None:
+        del usage
+
     async def list_for_run(
         self,
         run_id: str,
@@ -276,6 +293,7 @@ def test_repository_protocols_are_runtime_checkable() -> None:
     calls: ToolCallRepository = _ToolCallRepository()
     tools: ToolRepository[str] = _ToolRepository()
     usage: UsageRepository[str] = _UsageRepository()
+    batch_usage: BatchUsageRepository[str] = _UsageRepository()
     audit: AuditRepository[str] = _AuditRepository()
     transaction: RepositoryTransaction = _Transaction()
 
@@ -286,10 +304,18 @@ def test_repository_protocols_are_runtime_checkable() -> None:
     assert isinstance(calls, ToolCallRepository)
     assert isinstance(tools, ToolRepository)
     assert isinstance(usage, UsageRepository)
+    assert isinstance(batch_usage, BatchUsageRepository)
     assert isinstance(audit, AuditRepository)
     assert isinstance(transaction, RepositoryTransaction)
     assert not isinstance(object(), AgentRunRepository)
     assert not isinstance(object(), RepositoryTransaction)
+
+
+def test_batch_usage_extension_preserves_legacy_usage_implementations() -> None:
+    legacy = _LegacyUsageRepository()
+
+    assert isinstance(legacy, UsageRepository)
+    assert not isinstance(legacy, BatchUsageRepository)
 
 
 @pytest.mark.parametrize(
@@ -303,6 +329,7 @@ def test_repository_protocols_are_runtime_checkable() -> None:
         (ToolCallRepository, ("create", "get", "replace", "list_for_run")),
         (ToolRepository, ("create", "get", "replace")),
         (UsageRepository, ("append", "list_for_run")),
+        (BatchUsageRepository, ("append", "append_batch", "list_for_run")),
         (AuditRepository, ("append", "list_for_run")),
     ],
 )
