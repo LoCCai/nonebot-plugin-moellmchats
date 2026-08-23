@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T02:02:10+00:00
+lastmod: 2026-08-23T02:08:33+00:00
 ---
 
 # 02-plan-future-architecture
@@ -41,6 +41,8 @@ lastmod: 2026-08-23T02:02:10+00:00
 > G-08 远端闭环（2026-08-23）：本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 的 push `32610202772` / PR `32610204736` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 > G-09 本地门禁（2026-08-23）：G-08 最终闭环 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已完成最终 11/11 双 gate。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `ReadOnlyParallelToolExecutor`：内部重新生成 E-07 可信计划，只接受调用方已完成信任/capability 授权且精确覆盖计划的 async invocation，再次拒绝非强类型只读和确认门禁；整个计划共用一个 `DeadlineContext`，工具只看到声明的传递依赖结果。每批显式创建子任务并用 `FIRST_COMPLETED` fail fast，失败、超时或取消均先取消并 drain 同批任务，不启动后续批次；调用方取消原样传播，子任务自行取消与 handler 失败转为不泄漏异常文本的安全错误。四版本定向各 `55 passed`、联合各 `366 passed`、全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、静态、fresh 制品与四组包外真实并发/前置拒绝/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，G-10 锁定；现有 chat/tool runtime 未接线，未创建模块级 executor、配置或生命周期，未迁移、未连接服务、未部署。
+
+> G-09 远端闭环（2026-08-23）：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 的 push `32612014895` / PR `32612017136` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现；未接运行时，未迁移、未合并、未发布、未部署。
 
 ---
 
@@ -406,7 +408,7 @@ G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增独立 `paral
 
 本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `55 passed`、Scheduler/Graph/Conflict/Agent Runtime 联合各 `366 passed`、严格串行普通全量各 `1760 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量通过；Ruff 0.16.2、diff check及 Pyright 1.1.407 新模块/测试均为 `0 errors, 0 warnings`。fresh wheel/sdist SHA256 分别为 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922` / `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`，各 91 个成员并包含 `parallel_execution.py`；sdist 重建 wheel 哈希一致。Python 3.10/3.12 × wheel/sdist 四组包外加载、11 表、8 revision、离线 DDL、generation 1、真实并发度 2、mutating 前置拒绝、无模块级 executor 与零 engine/asyncpg/Redis I/O smoke 均通过。
 
-G-09 精确 HEAD push/PR 双 `release-gate` 尚待完成，G-10 Trusted Runner Pool 保持锁定。当前 executor 仅为显式注入的脱离态 runtime port，未修改既有 `_execute_tools`，生产路径仍保持每轮最多一个工具；未接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、配置、startup/shutdown 或 D-09 sidecar，未运行 migration，未合并、未发布、未部署。
+G-09 远端证据：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 对应 push run `32612014895` 与 PR run `32612017136`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-10 Trusted Runner Pool 依赖已解除但尚未实现。当前 executor 仅为显式注入的脱离态 runtime port，未修改既有 `_execute_tools`，生产路径仍保持每轮最多一个工具；未接真实 ToolCall/AgentStep、request manager/chat runtime、Repository、PostgreSQL、Redis、配置、startup/shutdown 或 D-09 sidecar，未运行 migration，未合并、未发布、未部署。
 
 ---
 

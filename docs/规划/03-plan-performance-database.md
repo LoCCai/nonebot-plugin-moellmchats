@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T02:02:10+00:00
+lastmod: 2026-08-23T02:08:33+00:00
 ---
 
 # 03-plan-performance-database
@@ -41,6 +41,8 @@ lastmod: 2026-08-23T02:02:10+00:00
 > G-08 远端闭环（2026-08-23）：本地证据 HEAD `8987fb054c6663cb4a161ffecb8136b4ed7ab5fc` 对应 push run `32610202772` / PR run `32610204736`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-09 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
 
 > G-09 本地门禁（2026-08-23）：G-08 最终闭环 HEAD `c6a49bce928b94901758e951537aae7963ce0605` 的 push `32610376129` / PR `32610377991` 已各 11/11 green。在此前提下，实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 新增 `ReadOnlyParallelExecutionReport / ReadOnlyParallelToolExecutor`。executor 每次重新调用 E-07 Scheduler，只接受精确覆盖计划、调用方已完成信任与 capability 授权的 async invocation，并在启动前再次拒绝 mutating 与确认门禁；整个计划共享一个 `DeadlineContext`，工具只收到声明的传递依赖结果。串行与并行批次均使用显式子任务，`FIRST_COMPLETED` 首错即取消并 drain 同批任务且跳过后续批次；调用方取消原样传播，子任务自行取消与 handler 失败转为不泄漏原始文本的安全错误。四版本定向各 `55 passed`、联合各 `366 passed`、普通全量各 `1760 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低依赖、Ruff/Pyright、fresh 制品及四组包外 11 表/8 revision/真实并发度 2/零数据库与 Redis I/O smoke 均通过。制品 SHA256 为 wheel `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922`、sdist `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`。精确 HEAD 双 run 待完成，G-10 锁定；未接现有 runtime，未新增模块级 executor、配置或生命周期，不迁移、不连接真实服务、不部署。
+
+> G-09 远端闭环（2026-08-23）：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 对应 push run `32612014895` / PR run `32612017136`；两者均命中目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`，远端分支与 PR head 精确一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。G-10 依赖已解除但尚未实现；未运行 migration，未连接真实数据库/Redis，未合并、未发布、未部署。
 
 ---
 
@@ -865,7 +867,7 @@ last-known-good
 
 ## 17.4 Classification Cache
 
-状态：G-05～G-08 本地及精确 HEAD 双 run 远端门禁均已完成；G-09 本地门禁已完成、精确 HEAD 双 run 待验证，G-10 保持锁定；G-06/G-07/G-08/G-09 尚未接入运行时。
+状态：G-05～G-09 本地及精确 HEAD 双 run 远端门禁均已完成；G-10 依赖已解除但尚未实现；G-06/G-07/G-08/G-09 尚未接入运行时。
 
 对于高度相似的标准请求，可考虑：
 
@@ -912,7 +914,7 @@ G-09 实现提交 `f864a2dd69f9d5fbe99242473563bb3b2d980823` 将 E-07 的只读�
 
 本地门禁：四个 Python 版本定向各 `55 passed`、Graph/Scheduler/Conflict/Agent Runtime 联合各 `366 passed`、严格串行普通全量各 `1760 passed, 1 skipped`；mandatory root Sandbox `40 passed, 0 skipped` 且 JUnit failures/errors/skipped 均为 0。最低依赖全量、Ruff 0.16.2 与 Pyright 1.1.407 `0 errors, 0 warnings` 均通过。fresh wheel/sdist SHA256 分别为 `105300de18d94acf7debb85e3c40f5d33788a3aaec944cc749110bd6921d8922` / `c615d73663cf521dbd4862918dff3d308f6895b9be6bfb3c768d47fe19af5391`，各 91 个成员，sdist 重建 wheel 哈希一致；Python 3.10/3.12 × wheel/sdist 四组包外 smoke 验证真实并发度 2、mutating 前置拒绝、无模块级 executor，以及 engine/asyncpg/Redis I/O 全为 0。
 
-G-09 精确 HEAD push/PR 双 gate 尚待完成，G-10 保持锁定。当前未修改既有 `_execute_tools`，生产路径仍每轮最多执行一个工具；未接 ToolCall/AgentStep、chat runtime、Repository、数据库/Redis、配置或生命周期，未运行 migration，未合并、未发布、未部署。
+G-09 远端证据：本地证据 HEAD `980b6a63b569a8500d257fab9e6b2807a8b0d62c` 对应 push run `32612014895` 与 PR run `32612017136`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，G-10 依赖已解除但尚未实现。当前未修改既有 `_execute_tools`，生产路径仍每轮最多执行一个工具；未接 ToolCall/AgentStep、chat runtime、Repository、数据库/Redis、配置或生命周期，未运行 migration，未合并、未发布、未部署。
 
 ---
 
