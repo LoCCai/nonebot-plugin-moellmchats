@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T05:30:49+00:00
+lastmod: 2026-08-23T06:13:27+00:00
 ---
 
 # 02-plan-future-architecture
@@ -55,6 +55,8 @@ lastmod: 2026-08-23T05:30:49+00:00
 > H-02 本地门禁（2026-08-23）：H-01 最终闭环 HEAD `67e03cdc930642ee8bc0faa1f9946953874f73c2` 的 push `32616804359` / PR `32616807144` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 新增脱离态 Tool Bundle API：读取当前 Provider Catalog 与精确匹配 runtime stamp 的 lifecycle，以最多 20 条、绑定 generation/lifecycle identity 的 canonical 游标分页；`tools:read / tools:write` 分权与所有输入校验早于状态读取。审批复用完整审阅 `review_stamp`，审批/激活只通过显式 mutation port 传递 authenticated actor、runtime/lifecycle 双 CAS 与即时审计确认，结果未知不重放。四版本定向各 `101 passed`、联合各 `440 passed, 1 skipped`、全量及最低依赖全量各 `1891 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-03 锁定；API 未挂载，未接入全局 store/reloader、配置或生命周期，未迁移、未连接服务、未部署。
 
 > H-02 远端闭环（2026-08-23）：本地证据 HEAD `16b2356e424722b50ed805604244aa72dceebac3` 的 push `32620435547` / PR `32620437166` 均 11/11 success、无非 success job，各恰好一个 `completed/success release-gate`；本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-03 依赖已解除但尚未实现；API 未挂载，未迁移、未合并、未发布、未部署。
+
+> H-03 本地门禁（2026-08-23）：H-02 最终闭环文档 HEAD `90bedb7d38bab5aae75b07fe4d418ebcbfb6e52f` 的 push `32620635396` / PR `32620638250` 均 11/11 success、无非 success job，各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增脱离态 Agent Run API：读取通过显式 newest-first keyset reader，列表最多 20 条且不暴露 user/group，详情不返回 step/tool payload；`agent-runs:read / agent-runs:write` 分权与全部输入校验早于状态读取。取消只通过显式 port 携带 authenticated actor 与 state/generation 双 CAS，必须确认 cancelled identity、执行已停止及即时审计，结果未知不重放。四版本定向各 `100 passed`、联合各 `465 passed`、全量及最低依赖全量各 `1991 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建与四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，H-04 锁定；API 未挂载，未接运行时任务、Repository、配置或生命周期，未迁移、未连接服务、未部署。
 
 ---
 
@@ -745,6 +747,20 @@ H-02 实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 新增独立 `tool_
 fresh wheel/sdist SHA256 分别为 `ec50e738d43d96aa4cdf85f6687e0e5009b0ff4ac037a567d0537ccaf3b20734` / `bddb60b8d31304c45f5dad87de6da1328db24310f54f229c15910ede1e18e7f8`，各 94 个成员并包含 `tool_bundle_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02 读 API 200、错误 token 401、缺失写目标 404 且 mutation port 未被调用，engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h02-dist-final.xGAQ7t`，重建目录 `/tmp/moellm-h02-rebuild-final.ueWGwI`，smoke 根目录 `/tmp/moellm-h02-smoke-final.DPotvL`，Sandbox JUnit `/tmp/moellm-h02-sandbox-final.jej6JE/junit.xml`。
 
 远端证据：H-02 本地证据 HEAD `16b2356e424722b50ed805604244aa72dceebac3` 对应 push run `32620435547` 与 PR run `32620437166`；两者均为目标 SHA、各 11 个 job 全绿、无非 success job，各恰好一个 `completed/success release-gate`。本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`，H-03 依赖已解除但尚未实现。当前没有路由注册、listener、模块级 API 或 port 对象、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
+
+## 14.3 H-03 Agent Run 查询与取消
+
+H-03 实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增独立 `agent_run_api.py`，精确实现 `GET /agent-runs`、`GET /agent-runs/{id}` 与 `POST /agent-runs/{id}/cancel`。该模块只提供 frozen endpoint/read request/cancel command/result、显式 `AgentRunStateReader / AgentRunCancellationPort` Protocol 与 `AgentRunApiService`，复用 detached `RuntimeApiASGIApp`；不创建模块级 service/app/reader/cancellation port，不自动挂载 NoneBot 路由或 listener。
+
+读写分别要求 `agent-runs:read` 与 `agent-runs:write`，认证、path、method、query、content-type 与严格 JSON body 校验全部在 reader/cancellation port 之前完成。列表默认与上限均为 20，reader 每次最多读取 21 条，必须严格遵守 `(started_at DESC, run_id DESC)` keyset；API 自行生成和 canonical 校验 base64url 游标，游标以精确 `float.hex()` 保存不可丢失的时间 anchor，不接受 OFFSET、乱序、重复、越过 anchor、非 canonical 或超限 reader 结果。列表只返回 run/request/generation/state/time/cancellable 元数据，不暴露 user/group；详情只增加有界 user/group identity，均不返回 AgentStep input/output、ToolCall arguments/result、live task、Bot/Event 或异常原文。
+
+取消正文必须精确携带可取消非终态 `expected_state` 与非负 BIGINT `expected_generation`。服务先读取当前 immutable `AgentRun` 并检查 state/generation，再只通过调用方显式注入的 cancellation port 传递已认证 principal 的 actor 与相同双 CAS；port 负责协调 live task 与 durable state。Result 必须保持 run/request/user/group/generation/started_at identity，进入合法 `CANCELLED` 终态，同时满足 `cancellation_settled=true` 与 `audit_recorded=true`。取消原样传播；not-found/conflict/unavailable 均固定映射，未知结果返回 `409 mutation_result_unknown, retryable=false`，服务不自动重放。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 定向各 `100 passed`；Agent Run API/Agent Runtime/Repository/H-01 Runtime API/H-02 Tool Bundle API/Audit 联合各 `465 passed`；严格串行普通全量各 `1991 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1991 passed, 1 skipped`。首次 Python 3.10 全量只有既有 Runtime watcher 的 3 秒重试时序测试发生一次超时；该测试隔离复现 `1 passed`，未改 Runtime 代码后依赖完整环境原样全量重跑通过。mandatory root Sandbox `40 passed, 0 skipped`，JUnit `tests=40 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format、diff check与 Pyright 1.1.407 目标模块/测试均通过。
+
+fresh wheel/sdist SHA256 分别为 `5a8188c05489519a2e06c5304ae733e173eee9d6dce0d5fd12050d802ae3d6a7` / `3bda50937b767bf6334ec517ced441dfb2e0b44a0e84374210f9dc47695a465f`，各 95 个成员并包含 `agent_run_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建得到相同 wheel hash。Python 3.10/3.12 × wheel/sdist 四组 fresh smoke 均从 site-packages 加载，Python 3.12 固定 NoneBot 2.4.4；确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02/H-03 读 API 200、错误 token 401、缺失取消目标 404 且 cancellation port 未调用，engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h03-dist.us7OLh`，重建目录 `/tmp/moellm-h03-rebuild.njbFhB`，smoke 根目录 `/tmp/moellm-h03-smoke.YWstuS`，Sandbox JUnit `/tmp/moellm-h03-sandbox.aww1mC/junit.xml`。
+
+当前状态：H-03 本地门禁已完成，尚需本地证据精确 HEAD 的 push/PR 双 `release-gate`；H-04 保持锁定。当前没有路由注册、listener、模块级 API 或 port 对象、运行时任务 registry、配置、startup/shutdown、Repository、PostgreSQL 或 Redis 接线；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 

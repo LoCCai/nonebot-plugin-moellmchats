@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T05:30:49+00:00
+lastmod: 2026-08-23T06:13:27+00:00
 ---
 
 # 04-implementation-backlog
@@ -41,6 +41,8 @@ lastmod: 2026-08-23T05:30:49+00:00
 - H-01 最终闭环文档 HEAD `67e03cdc930642ee8bc0faa1f9946953874f73c2` 的 push `32616804359` / PR `32616807144` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，H-02 实现提交 `cc22513848125197b9e8e25362b53ce87d2fa4df` 已完成四版本定向各 `101 passed`、Runtime/Lifecycle/Provider/Trust/Audit 联合各 `440 passed, 1 skipped`、普通全量及最低依赖全量各 `1891 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01+H-02 API/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-03 继续锁定。
 - H-02 只提供显式注入、未挂载的 Tool Catalog/Bundle/Draft API；读写 scope 分离，读取绑定当前 runtime/lifecycle identity，审批要求完整 `review_stamp`，危险审批/激活只通过调用方提供的双 CAS mutation port 并同步确认即时审计，结果未知不自动重放。无模块级 service/app/reader/mutator，未接入全局 store/reloader、路由/listener、配置、生命周期、Repository、PostgreSQL 或 Redis。
 - H-02 本地证据 HEAD `16b2356e424722b50ed805604244aa72dceebac3` 的 push `32620435547` / PR `32620437166` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`，本地、远端与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。H-03 依赖已解除但尚未实现。
+- H-02 最终闭环文档 HEAD `90bedb7d38bab5aae75b07fe4d418ebcbfb6e52f` 的 push `32620635396` / PR `32620638250` 已各 11/11 green、无非 success job、各恰好一个成功 `release-gate`。在此前提下，H-03 实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 已完成四版本定向各 `100 passed`、Agent Run/Repository/H-01/H-02/Audit 联合各 `465 passed`、普通全量及最低依赖全量各 `1991 passed, 1 skipped`、Sandbox `40 passed, 0 skipped`、Ruff/Pyright、fresh 制品/重建及四组包外 11 表/8 revision/离线 DDL/reload/H-01～H-03 API/零真实 I/O smoke。精确 HEAD 双 run gate 待完成，H-04 继续锁定。
+- H-03 只提供显式注入、未挂载的 Agent Run 查询/取消 API；读写 scope 分离，列表使用稳定 keyset 且不暴露 user/group，详情不返回 step/tool payload，取消只通过 state/generation 双 CAS port 并同步确认执行已停止与即时审计，结果未知不自动重放。无模块级 service/app/reader/cancellation port，未接运行时 task registry、路由/listener、配置、生命周期、Repository、PostgreSQL 或 Redis。
 - CI 继续要求一次构建、四组 package smoke、零 skip Sandbox 与 fail-closed 聚合 `release-gate`；本地成功不替代远端精确 HEAD 证据，也未触发 promotion、合并、发布或部署。
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
@@ -815,7 +817,7 @@ D-08f 远端 gate 已关闭，Provider/capability/consumer 前置条件已满足
 
 # Milestone F：0.28 PostgreSQL + Redis
 
-**状态：✅ F-01～F-14、G-01～G-10、H-01～H-02 精确 HEAD 双 run 远端 gate green；H-03 依赖已解除但尚未实现；未连接真实数据库/Redis；未部署**
+**状态：✅ F-01～F-14、G-01～G-10、H-01～H-02 精确 HEAD 双 run 远端 gate green；H-03 本地 gate green 但精确 HEAD 远端双 run 待完成，H-04 锁定；未连接真实数据库/Redis；未部署**
 
 ---
 
@@ -1231,7 +1233,17 @@ snapshot 与数据最小化边界：每次成功请求只调用一次显式 read
 
 ## H-03 Agent Run API
 
-状态：H-02 本地与精确 HEAD 双 run 远端门禁均已完成；H-03 前置依赖已解除，尚未实现。
+实现落点：H-02 最终闭环文档 HEAD `90bedb7d38bab5aae75b07fe4d418ebcbfb6e52f` 的 push `32620635396` / PR `32620638250` 已各 11/11 green。在此前提下，实现提交 `1352ec238c6354122ecd056c2561881a932dad95` 新增独立 `agent_run_api.py`，精确实现 `GET /agent-runs`、`GET /agent-runs/{id}` 与 `POST /agent-runs/{id}/cancel`。实现只包含 frozen endpoint/read request/cancel command/result、显式 `AgentRunStateReader / AgentRunCancellationPort` Protocol 与 `AgentRunApiService`，复用 detached `RuntimeApiASGIApp`；不自动挂载路由或 listener。
+
+读取与传输边界：读/写端点分别要求 `agent-runs:read / agent-runs:write`，认证、path、method、query、content-type 与严格 JSON body 校验全部早于 reader/cancellation port。列表默认与上限均为 20，reader 最多读取 `limit + 1` 条并必须严格遵守 `(started_at DESC, run_id DESC)` keyset；API 自行生成 canonical base64url cursor，以 `float.hex()` 无损绑定时间与 run ID anchor，拒绝 OFFSET、乱序、重复、越过 anchor、非 canonical、非 AgentRun 或 BIGINT 超限结果。列表不暴露 user/group，详情只增加有界 user/group identity；两者均不序列化 step input/output、tool arguments/result、live Bot/Event/task 或异常原文。
+
+写操作边界：取消正文必须精确携带可取消非终态 `expected_state` 与非负 BIGINT `expected_generation`。服务读取当前 immutable run 并验证相同双 CAS 后，只通过显式 cancellation port 传递 authenticated actor；port 负责协调 live task 和 durable state。Result 必须保持 run/request/user/group/generation/started_at identity、进入 `CANCELLED`，并同时确认 `cancellation_settled=true / audit_recorded=true`。取消原样传播，not-found/conflict/unavailable 固定映射，结果未知返回 `409 mutation_result_unknown, retryable=false` 且服务不重放。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 H-03 定向各 `100 passed`；Agent Run API/Agent Runtime/Repository/H-01 Runtime API/H-02 Tool Bundle API/Audit 联合各 `465 passed`；严格串行普通全量各 `1991 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `1991 passed, 1 skipped`。首次 Python 3.10 全量的既有 Runtime watcher 3 秒重试测试发生一次时序超时，隔离复现 `1 passed`，未改 Runtime 代码后依赖完整环境原样全量重跑通过。mandatory root Sandbox `40 passed, 0 skipped`，JUnit tests=40 且 failures/errors/skipped 均为 0；全仓 Ruff 0.16.2、目标 format、diff check 与 Pyright 1.1.407 均通过。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `5a8188c05489519a2e06c5304ae733e173eee9d6dce0d5fd12050d802ae3d6a7` / `3bda50937b767bf6334ec517ced441dfb2e0b44a0e84374210f9dc47695a465f`，各 95 个成员并包含 `agent_run_api.py`，不含 `uv.lock`、cache 或 bytecode；Twine 与 sdist 仓库外同哈希 wheel 重建通过。Python 3.10/3.12 × wheel/sdist 四组 fresh 安装均从 site-packages 加载，Python 3.12 固定 NoneBot 2.4.4；确认 11 表、8 revision、离线 DDL、reload generation 1、H-01/H-02/H-03 读 API 200、错误 token 401、缺失取消目标 404 且 cancellation port 未调用；engine create、asyncpg connect、Redis client 均为 0。制品目录 `/tmp/moellm-h03-dist.us7OLh`，重建目录 `/tmp/moellm-h03-rebuild.njbFhB`，smoke 根目录 `/tmp/moellm-h03-smoke.YWstuS`，Sandbox JUnit `/tmp/moellm-h03-sandbox.aww1mC/junit.xml`。
+
+状态：H-03 本地门禁已完成；精确本地证据 HEAD 的 push/PR 双 `release-gate` 待完成，H-04 继续锁定。当前无模块级 service/app/reader/cancellation port，未注册路由或 listener，未接运行时 task registry、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 D-09 sidecar；未读取连接信息、未运行 migration、未连接真实服务，未合并、未 promotion、未发布、未部署。
 
 ---
 
