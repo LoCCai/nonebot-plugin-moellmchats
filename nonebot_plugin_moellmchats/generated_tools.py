@@ -40,6 +40,7 @@ from .generated_tool_lifecycle import (
     LifecycleStore,
     LifecycleTransitionError,
     VersionState,
+    draft_review_stamp,
     plan_activate_from_draft,
     plan_deactivate,
     plan_permission,
@@ -176,17 +177,13 @@ def _draft_review_stamp(
     lifecycle_state_digest: str,
     active_digest: str | None,
 ) -> str:
-    payload = _canonical_review_json(
-        {
-            "version": 1,
-            "draft_id": draft_id,
-            "draft_digest": digest,
-            "lifecycle_revision": lifecycle_revision,
-            "lifecycle_state_digest": lifecycle_state_digest,
-            "active_digest": active_digest,
-        }
+    return draft_review_stamp(
+        draft_id=draft_id,
+        digest=digest,
+        lifecycle_revision=lifecycle_revision,
+        lifecycle_state_digest=lifecycle_state_digest,
+        active_digest=active_digest,
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _draft_review_page_header(

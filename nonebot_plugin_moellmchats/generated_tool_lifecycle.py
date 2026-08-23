@@ -633,6 +633,42 @@ def _canonical_json_bytes(value: Any) -> bytes:
         raise LifecycleCorruptionError("lifecycle state 必须是规范 JSON") from error
 
 
+def draft_review_stamp(
+    *,
+    draft_id: str,
+    digest: str,
+    lifecycle_revision: int,
+    lifecycle_state_digest: str,
+    active_digest: str | None,
+) -> str:
+    """Bind a full-draft review confirmation to one lifecycle/active identity."""
+
+    _require_identifier(draft_id, _DRAFT_ID_RE, "review draft_id")
+    _require_identifier(digest, _DIGEST_RE, "review draft digest")
+    if (
+        not isinstance(lifecycle_revision, int)
+        or isinstance(lifecycle_revision, bool)
+        or lifecycle_revision < 0
+    ):
+        raise LifecycleCorruptionError("review lifecycle revision 必须是非负整数")
+    _require_identifier(
+        lifecycle_state_digest,
+        _DIGEST_RE,
+        "review lifecycle state digest",
+    )
+    if active_digest is not None:
+        _require_identifier(active_digest, _DIGEST_RE, "review active digest")
+    payload = {
+        "active_digest": active_digest,
+        "draft_digest": digest,
+        "draft_id": draft_id,
+        "lifecycle_revision": lifecycle_revision,
+        "lifecycle_state_digest": lifecycle_state_digest,
+        "version": 1,
+    }
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -2335,6 +2371,7 @@ __all__ = [
     "VersionRecord",
     "VersionState",
     "decode_lifecycle_state",
+    "draft_review_stamp",
     "encode_lifecycle_state",
     "permission_key",
     "plan_activate_from_draft",

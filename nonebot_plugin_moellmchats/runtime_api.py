@@ -24,7 +24,14 @@ _PAYLOAD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MAX_QUERY_BYTES = 8_192
 _MAX_HEADER_COUNT = 128
 _MAX_HEADER_BYTES = 65_536
+_MAX_REQUEST_BODY_BYTES = 16_384
+_MAX_REQUEST_BODY_MESSAGES = 32
 _MAX_RESPONSE_BYTES = 16_384
+_MAX_RESPONSE_DEPTH = 16
+_MAX_RESPONSE_NODES = 8_192
+_MAX_RESPONSE_COLLECTION_ITEMS = 512
+_MAX_RESPONSE_STRING_BYTES = 8_192
+_MAX_JSON_INTEGER = (1 << 63) - 1
 _RUNTIME_PATHS = frozenset({"/runtime/generation", "/runtime/status"})
 
 RuntimeApiJsonScalar: TypeAlias = bool | int | float | str | None
@@ -105,6 +112,8 @@ class RuntimeApiRequest:
     path: str
     query_string: bytes = b""
     credential: RuntimeApiCredential | None = None
+    content_type: str | None = None
+    body: bytes = b""
 
     def __post_init__(self) -> None:
         if not isinstance(self.method, str) or not _METHOD_RE.fullmatch(self.method):
@@ -115,45 +124,139 @@ class RuntimeApiRequest:
             raise RuntimeApiProtocolError("Runtime API query string 非法或超限")
         if self.credential is not None and not isinstance(self.credential, RuntimeApiCredential):
             raise RuntimeApiProtocolError("Runtime API credential 类型非法")
+        if self.content_type is not None and (
+            not isinstance(self.content_type, str)
+            or self.content_type != self.content_type.lower()
+            or not re.fullmatch(r"[a-z0-9!#$&^_.+/-]{1,127}", self.content_type)
+        ):
+            raise RuntimeApiProtocolError("Runtime API content type 非法")
+        if not isinstance(self.body, bytes) or len(self.body) > _MAX_REQUEST_BODY_BYTES:
+            raise RuntimeApiProtocolError("Runtime API body 非法或超限")
 
     def __repr__(self) -> str:
         credential = "present" if self.credential is not None else "missing"
         return (
             "RuntimeApiRequest("
             f"method={self.method!r}, path={self.path!r}, "
-            f"query_bytes={len(self.query_string)}, credential=<{credential}>"
+            f"query_bytes={len(self.query_string)}, body_bytes={len(self.body)}, "
+            f"content_type={self.content_type!r}, credential=<{credential}>"
             ")"
         )
 
 
-def _freeze_payload(
-    payload: Mapping[str, RuntimeApiJsonScalar],
-) -> Mapping[str, RuntimeApiJsonScalar]:
+def _freeze_json_value(
+    value: Any,
+    *,
+    depth: int,
+    node_budget: list[int],
+    active_containers: set[int],
+) -> Any:
+    if depth > _MAX_RESPONSE_DEPTH:
+        raise RuntimeApiConfigurationError("Runtime API response JSON 嵌套超过安全上限")
+    node_budget[0] += 1
+    if node_budget[0] > _MAX_RESPONSE_NODES:
+        raise RuntimeApiConfigurationError("Runtime API response JSON 节点数超过安全上限")
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not -_MAX_JSON_INTEGER <= value <= _MAX_JSON_INTEGER:
+            raise RuntimeApiConfigurationError("Runtime API response integer 超过安全上限")
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise RuntimeApiConfigurationError("Runtime API response 浮点值必须有限")
+        return value
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise RuntimeApiConfigurationError("Runtime API response 字符串不得包含 NUL")
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise RuntimeApiConfigurationError("Runtime API response 字符串必须是 UTF-8") from None
+        if len(encoded) > _MAX_RESPONSE_STRING_BYTES:
+            raise RuntimeApiConfigurationError("Runtime API response 字符串超过安全上限")
+        return value
+
+    if isinstance(value, Mapping):
+        if len(value) > _MAX_RESPONSE_COLLECTION_ITEMS:
+            raise RuntimeApiConfigurationError("Runtime API response object 字段数超过安全上限")
+        identity = id(value)
+        if identity in active_containers:
+            raise RuntimeApiConfigurationError("Runtime API response JSON 不得包含循环引用")
+        active_containers.add(identity)
+        try:
+            frozen: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str) or not _PAYLOAD_KEY_RE.fullmatch(key):
+                    raise RuntimeApiConfigurationError("Runtime API response 字段名非法")
+                if key in frozen:
+                    raise RuntimeApiConfigurationError("Runtime API response 字段重复")
+                frozen[key] = _freeze_json_value(
+                    item,
+                    depth=depth + 1,
+                    node_budget=node_budget,
+                    active_containers=active_containers,
+                )
+        finally:
+            active_containers.remove(identity)
+        return MappingProxyType(dict(sorted(frozen.items())))
+
+    if isinstance(value, (list, tuple)):
+        if len(value) > _MAX_RESPONSE_COLLECTION_ITEMS:
+            raise RuntimeApiConfigurationError("Runtime API response array 项数超过安全上限")
+        identity = id(value)
+        if identity in active_containers:
+            raise RuntimeApiConfigurationError("Runtime API response JSON 不得包含循环引用")
+        active_containers.add(identity)
+        try:
+            return tuple(
+                _freeze_json_value(
+                    item,
+                    depth=depth + 1,
+                    node_budget=node_budget,
+                    active_containers=active_containers,
+                )
+                for item in value
+            )
+        finally:
+            active_containers.remove(identity)
+
+    raise RuntimeApiConfigurationError("Runtime API response 只允许有界 JSON value")
+
+
+def _freeze_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping) or not payload:
         raise RuntimeApiConfigurationError("Runtime API response payload 必须是非空映射")
-    frozen: dict[str, RuntimeApiJsonScalar] = {}
-    for key, value in payload.items():
-        if not isinstance(key, str) or not _PAYLOAD_KEY_RE.fullmatch(key):
-            raise RuntimeApiConfigurationError("Runtime API response 字段名非法")
-        if value is not None and not isinstance(value, (bool, int, float, str)):
-            raise RuntimeApiConfigurationError("Runtime API response 只允许 JSON scalar")
-        if isinstance(value, float) and not math.isfinite(value):
-            raise RuntimeApiConfigurationError("Runtime API response 浮点值必须有限")
-        frozen[key] = value
-    return MappingProxyType(dict(sorted(frozen.items())))
+    frozen = _freeze_json_value(
+        payload,
+        depth=0,
+        node_budget=[0],
+        active_containers=set(),
+    )
+    if not isinstance(frozen, Mapping):  # pragma: no cover - guarded above
+        raise RuntimeApiConfigurationError("Runtime API response payload 必须是 object")
+    return frozen
+
+
+def _mutable_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _mutable_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_mutable_json_value(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
 class RuntimeApiResponse:
     status_code: int
-    payload: Mapping[str, RuntimeApiJsonScalar]
+    payload: Mapping[str, Any]
     extra_headers: tuple[tuple[bytes, bytes], ...] = ()
 
     def __post_init__(self) -> None:
         if (
             not isinstance(self.status_code, int)
             or isinstance(self.status_code, bool)
-            or self.status_code not in {200, 400, 401, 403, 404, 405, 503}
+            or self.status_code not in {200, 400, 401, 403, 404, 405, 409, 413, 415, 503}
         ):
             raise RuntimeApiConfigurationError("Runtime API response status 非法")
         object.__setattr__(self, "payload", _freeze_payload(self.payload))
@@ -188,7 +291,7 @@ class RuntimeApiResponse:
     @property
     def body(self) -> bytes:
         return json.dumps(
-            dict(self.payload),
+            _mutable_json_value(self.payload),
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
@@ -218,6 +321,11 @@ class RuntimeApiAuthenticator(Protocol):
 @runtime_checkable
 class RuntimeSnapshotReader(Protocol):
     def current(self) -> RuntimeSnapshot | None: ...
+
+
+@runtime_checkable
+class RuntimeApiHandler(Protocol):
+    async def handle(self, request: RuntimeApiRequest) -> RuntimeApiResponse: ...
 
 
 class StaticBearerRuntimeApiAuthenticator:
@@ -313,6 +421,8 @@ def _validated_snapshot(reader: RuntimeSnapshotReader) -> RuntimeSnapshot | None
         not isinstance(snapshot.generation, int)
         or isinstance(snapshot.generation, bool)
         or snapshot.generation <= 0
+        or snapshot.generation > _MAX_JSON_INTEGER
+        or snapshot.generated_state_revision > _MAX_JSON_INTEGER
         or not isinstance(snapshot.reloaded_at, (int, float))
         or isinstance(snapshot.reloaded_at, bool)
         or not math.isfinite(snapshot.reloaded_at)
@@ -381,6 +491,8 @@ class RuntimeApiService:
             )
         if request.query_string:
             return _error_response(400, "query_not_supported")
+        if request.content_type is not None or request.body:
+            return _error_response(400, "body_not_supported")
 
         try:
             snapshot = _validated_snapshot(self._snapshots)
@@ -415,68 +527,141 @@ class RuntimeApiService:
         )
 
 
-def _authorization_from_headers(
-    headers: object,
-) -> tuple[RuntimeApiCredential | None, bool]:
+@dataclass(frozen=True)
+class _RuntimeApiRequestHeaders:
+    credential: RuntimeApiCredential | None
+    content_type: str | None
+    content_length: int | None
+    malformed: bool = False
+
+
+def _request_headers(headers: object) -> _RuntimeApiRequestHeaders:
     if not isinstance(headers, Sequence) or isinstance(headers, (bytes, bytearray, str)):
-        return None, True
+        return _RuntimeApiRequestHeaders(None, None, None, True)
     if len(headers) > _MAX_HEADER_COUNT:
-        return None, True
+        return _RuntimeApiRequestHeaders(None, None, None, True)
     total_bytes = 0
     authorization_values: list[bytes] = []
+    content_type_values: list[bytes] = []
+    content_length_values: list[bytes] = []
     for header in headers:
         if not isinstance(header, Sequence) or isinstance(header, (bytes, bytearray, str)) or len(header) != 2:
-            return None, True
+            return _RuntimeApiRequestHeaders(None, None, None, True)
         name, value = header
         if not isinstance(name, bytes) or not isinstance(value, bytes):
-            return None, True
+            return _RuntimeApiRequestHeaders(None, None, None, True)
         total_bytes += len(name) + len(value)
         if total_bytes > _MAX_HEADER_BYTES:
-            return None, True
-        if name.lower() == b"authorization":
+            return _RuntimeApiRequestHeaders(None, None, None, True)
+        normalized_name = name.lower()
+        if normalized_name == b"authorization":
             authorization_values.append(value)
-    if len(authorization_values) > 1:
-        return None, True
+        elif normalized_name == b"content-type":
+            content_type_values.append(value)
+        elif normalized_name == b"content-length":
+            content_length_values.append(value)
+        elif normalized_name == b"content-encoding" and value.lower() != b"identity":
+            return _RuntimeApiRequestHeaders(None, None, None, True)
+    if len(authorization_values) > 1 or len(content_type_values) > 1 or len(content_length_values) > 1:
+        return _RuntimeApiRequestHeaders(None, None, None, True)
     header = authorization_values[0] if authorization_values else None
-    return RuntimeApiCredential.from_authorization_header(header), False
+    content_type: str | None = None
+    if content_type_values:
+        try:
+            content_type = content_type_values[0].decode("ascii").lower()
+        except UnicodeDecodeError:
+            return _RuntimeApiRequestHeaders(None, None, None, True)
+        if not re.fullmatch(r"[a-z0-9!#$&^_.+/-]{1,127}", content_type):
+            return _RuntimeApiRequestHeaders(None, None, None, True)
+    content_length: int | None = None
+    if content_length_values:
+        raw_length = content_length_values[0]
+        if not re.fullmatch(rb"(?:0|[1-9][0-9]{0,5})", raw_length):
+            return _RuntimeApiRequestHeaders(None, None, None, True)
+        content_length = int(raw_length)
+    return _RuntimeApiRequestHeaders(
+        RuntimeApiCredential.from_authorization_header(header),
+        content_type,
+        content_length,
+    )
+
+
+async def _receive_request_body(
+    receive: RuntimeApiReceive,
+) -> tuple[bytes, int | None]:
+    chunks: list[bytes] = []
+    size = 0
+    for _ in range(_MAX_REQUEST_BODY_MESSAGES):
+        try:
+            message = await receive()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return b"", 400
+        if not isinstance(message, Mapping) or message.get("type") != "http.request":
+            return b"", 400
+        chunk = message.get("body", b"")
+        more_body = message.get("more_body", False)
+        if not isinstance(chunk, bytes) or type(more_body) is not bool:
+            return b"", 400
+        size += len(chunk)
+        if size > _MAX_REQUEST_BODY_BYTES:
+            return b"", 413
+        chunks.append(chunk)
+        if not more_body:
+            return b"".join(chunks), None
+    return b"", 413
 
 
 class RuntimeApiASGIApp:
     """A detached ASGI adapter; callers must explicitly mount this object."""
 
-    def __init__(self, *, service: RuntimeApiService) -> None:
-        if not isinstance(service, RuntimeApiService):
+    def __init__(self, *, service: RuntimeApiHandler) -> None:
+        if not isinstance(service, RuntimeApiHandler):
             raise RuntimeApiConfigurationError("Runtime API ASGI service 非法")
         self._service = service
 
     async def __call__(
         self,
         scope: Mapping[str, Any],
-        _receive: RuntimeApiReceive,
+        receive: RuntimeApiReceive,
         send: RuntimeApiSend,
     ) -> None:
         if not isinstance(scope, Mapping) or scope.get("type") != "http":
             raise RuntimeApiProtocolError("Runtime API ASGI adapter 只接受 HTTP scope")
-        credential, malformed_headers = _authorization_from_headers(scope.get("headers", ()))
-        if malformed_headers:
+        request_headers = _request_headers(scope.get("headers", ()))
+        if request_headers.malformed:
             response = _error_response(400, "invalid_request")
+        elif request_headers.content_length is not None and request_headers.content_length > _MAX_REQUEST_BODY_BYTES:
+            response = _error_response(413, "request_too_large")
         else:
             method = scope.get("method")
             path = scope.get("path")
             if not isinstance(method, str) or not isinstance(path, str):
                 response = _error_response(400, "invalid_request")
             else:
-                try:
-                    request = RuntimeApiRequest(
-                        method=method,
-                        path=path,
-                        query_string=scope.get("query_string", b""),
-                        credential=credential,
+                body, body_error = await _receive_request_body(receive)
+                if body_error is not None:
+                    response = _error_response(
+                        body_error,
+                        "request_too_large" if body_error == 413 else "invalid_request",
                     )
-                except RuntimeApiProtocolError:
+                elif request_headers.content_length is not None and request_headers.content_length != len(body):
                     response = _error_response(400, "invalid_request")
                 else:
-                    response = await self._service.handle(request)
+                    try:
+                        request = RuntimeApiRequest(
+                            method=method,
+                            path=path,
+                            query_string=scope.get("query_string", b""),
+                            credential=request_headers.credential,
+                            content_type=request_headers.content_type,
+                            body=body,
+                        )
+                    except RuntimeApiProtocolError:
+                        response = _error_response(400, "invalid_request")
+                    else:
+                        response = await self._service.handle(request)
         await send(
             {
                 "type": "http.response.start",
