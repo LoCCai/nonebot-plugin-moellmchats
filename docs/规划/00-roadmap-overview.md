@@ -1,12 +1,14 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:18:00+00:00
+lastmod: 2026-08-23T11:38:16+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
+
+> 完成度复核（2026-08-23）：H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push `32636423646` / PR `32636425880` 已重新核验为各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。该结论只关闭 A～H 已定义 primitive 的门禁，不代表 Plan 2 / Plan 3 最终运行态完成。源码仍未在真实聊天路径构造 AgentRun/Step/ToolCall 或消费 Deadline、并行 executor、Long-Term Memory、Full Metrics 与未挂载 API；ModelCapability、capability routing、完整 structured ToolResult、Agent PostgreSQL Repository、DB spool、Redis 组合故障策略和 database metrics 仍缺失。后续严格按 Milestone I 的 I-01～I-09 推进，详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 因无生产发布周期观察继续锁定；本轮不迁移、不连接真实服务、不合并、不发布、不部署。
 
 > 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07、Plan 2 的 D-01a～D-08f、Milestone E 的 E-01～E-08、F-01～F-14 与 G-01 已按依赖顺序完成精确 HEAD 双 run 门禁；D-09 因缺少发布周期 parity 观察且禁止生产操作而继续锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变 `ConversationRecord / MessageRecord` 与显式 `AsyncSession` 注入的 PostgreSQL Conversation/Message Repository；最近历史只查询显式列，以 `(conversation_id, id DESC, LIMIT+1)` 做绑定会话指纹的稳定 keyset 分页，并在应用层恢复时间正序。Repository 不创建、提交、回滚、关闭 session，不隐式重试；`RETURNING` 只确认当前事务内 statement 结果，durable commit 仍由调用方负责。Integrity 冲突、缺失 replace、未知写入/读取结果与后端不可用分开处理，错误不泄漏 endpoint、凭据或消息内容，取消原样传播。本地四版本 G-01 定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低 SQLAlchemy/Alembic/asyncpg 兼容、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
 
@@ -484,3 +486,5 @@ AST 只能作为：
   可直接转换为 GitHub Issue / Milestone 的实施任务清单。
 - `05-plan1-completion-audit.md`
   A-01～C-07 的源码、pytest node、门禁状态与最终关闭条件。
+- `06-plan2-plan3-completion-audit.md`
+  H-08 后的 Plan 2 / Plan 3 运行态缺口、Milestone I 依赖顺序与非生产门禁。

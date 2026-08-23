@@ -16,6 +16,7 @@
 | [性格系统](./personality.md) | `temperaments.json` 性格预设配置与用户切换管理 |
 | [完整指令表](./commands.md) | 所有 Bot 指令的参数与权限说明，包括二阶段确认、生成工具权限与请求管理 |
 | [Plan 1 完成审计](./规划/05-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
+| [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
 
 ---
 

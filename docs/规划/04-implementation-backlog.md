@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:18:00+00:00
+lastmod: 2026-08-23T11:38:16+00:00
 ---
 
 # 04-implementation-backlog
@@ -12,6 +12,9 @@ lastmod: 2026-08-23T11:18:00+00:00
 
 ## 当前实施状态（2026-08-23）
 
+- H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push `32636423646` / PR `32636425880` 已重新核验为各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
+- A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。完成度审计确认真实聊天路径仍未构造 AgentRun/Step/ToolCall，模型能力路由、structured ToolResult、Agent PostgreSQL Repository、runtime 资源组合、并行接线、spool/Redis failure policy/database metrics 等仍未完成。
+- 新增 Milestone I，严格按 I-01～I-09 推进。当前先关闭 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md) 的规划基线精确 HEAD 双 run gate，随后只解锁 I-01；不得跳项。
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
 - G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
@@ -1352,6 +1355,122 @@ prompt 与预算：service 依次尝试相关完整 record，单条加入后超�
 远端证据：H-08 本地证据 HEAD `f1c6db24d0b41abdd19c823fa02e3991e88a8b40` 对应 push run `32636051955` 与 PR run `32636054437`；两者均精确命中该 SHA、各恰好 11 个 job 全部 success、`non_success=[]`，并各恰好一个 `completed/success release-gate`。本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
 
 状态：H-08 本地与精确 HEAD push/PR 双 `release-gate` 均已完成。当前无模块级 service/retriever/task，不接现有聊天 prompt、G-01/G-02/G-03 编排、配置、startup/shutdown、Repository、PostgreSQL、Redis 或 pgvector，不新增或运行 migration，不读取连接信息、不连接真实服务，未合并、未 promotion、未发布、未部署。
+
+---
+
+# Milestone I：Plan 2 / Plan 3 Completion
+
+**状态：规划审计基线本地完成，精确 HEAD 双 run gate 待关闭；I-01 在该门禁前锁定**
+
+Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
+
+---
+
+## I-01 Model Capability Domain
+
+**依赖：规划审计基线精确 HEAD push/PR 双 `release-gate`**
+
+交付：独立、深度不可变且无凭据的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor`；canonical primitive/digest，精确十进制成本，有界 context/output limits 与显式 availability identity。
+
+验证：非法/漂移/超限/浮点成本 fail closed，构造不读取配置、不联网、不改变现有 `ModelSelector` 结果；四版本定向/联合/串行全量、Sandbox、静态、fresh 制品及包外零 I/O smoke。
+
+状态：🔒 前置规划 gate 待关闭。
+
+---
+
+## I-02 Capability-based Model Routing
+
+**依赖：I-01 最终精确 HEAD 双 run gate**
+
+交付：generation/policy/capability digest 绑定的 request requirements 与稳定 selector；按 capability、limits、availability、quality、latency、cost 的显式规则选择，并保留固定 selected/vision/category/summary/MoE 的有界兼容与回滚策略。
+
+验证：缺能力、未知 availability、目录漂移、成本/限制超界均 fail closed；不发送真实模型请求、不读取 credential。
+
+状态：🔒 等待 I-01。
+
+---
+
+## I-03 Structured ToolResult
+
+**依赖：I-02 最终精确 HEAD 双 run gate**
+
+交付：向后兼容扩展 `ToolResult` 为 `text / images / files / structured / citations / metadata`；全部数据递归脱离、冻结、有界，文件只保存安全 opaque locator；runner/adapter/history preview/model payload 共用 canonical rendering。
+
+验证：旧三字段构造与执行兼容；主机路径、循环 JSON、非有限值、超限 payload 与不可信 citation fail closed。
+
+状态：🔒 等待 I-02。
+
+---
+
+## I-04 Agent Domain / Schema / PostgreSQL Repository Alignment
+
+**依赖：I-03 最终精确 HEAD 双 run gate**
+
+交付：对齐 AgentRun 的 conversation/model/token/cost/error，AgentStep 的 preview/error，ToolCall 的 source/bundle/confirmation/time；实现三类显式 `AsyncSession` PostgreSQL Repository、稳定 keyset 与 CAS。
+
+验证：Repository 不拥有 commit/rollback/close/retry，未知结果不重放；复合 identity 防跨 run/step 错挂。仅在 Schema 真有缺口时追加 migration，不制造空 revision，不运行在线 migration。
+
+状态：🔒 等待 I-03。
+
+---
+
+## I-05 Runtime Resource Composition and Lifecycle
+
+**依赖：I-04 最终精确 HEAD 双 run gate**
+
+交付：显式 resource container 组合 snapshot、Repository、cache、queue、metrics、logger、API 与 runner ports；确定 startup/shutdown、部分初始化回滚、取消、重复关闭和 reload generation 交接次序。
+
+验证：默认 Memory 兼容模式零 PostgreSQL/Redis I/O；只有显式有效配置才能惰性构造后端，测试只使用 fake/recording ports。
+
+状态：🔒 等待 I-04。
+
+---
+
+## I-06 Agent / Context Runtime Wiring
+
+**依赖：I-05 最终精确 HEAD 双 run gate**
+
+交付：真实聊天入口创建 AgentRun/Step/ToolCall 并用单一 DeadlineContext/状态机驱动；组合 committed history、hot cache、summary、long-memory prompt、usage 与 audit。
+
+验证：Memory 默认行为兼容；durable commit、cache invalidate、summary watermark 与 prompt data 边界可证明；各后端失败有显式继续/降级/拒绝语义。
+
+状态：🔒 等待 I-05。
+
+---
+
+## I-07 Read-only Parallel Runtime Wiring
+
+**依赖：I-06 最终精确 HEAD 双 run gate**
+
+交付：在真实 `_execute_tools()` 路径只对已通过 trust/capability/confirmation 的强类型 read-only DAG 使用 G-09/G-10；共享 deadline、首错取消并 drain。
+
+验证：mutating、未知 effect、冲突、需确认和非 allowlist 工具不得并行；重复调用、结果上限、PendingAction、审计及 generation 边界保持有效。
+
+状态：🔒 等待 I-06。
+
+---
+
+## I-08 Platform / Spool / Failure Policy Wiring
+
+**依赖：I-07 最终精确 HEAD 双 run gate**
+
+交付：真实生命周期接 structured audit/logging/Full Metrics，挂载 H-01～H-05；实现有界私有 Usage/Audit spool、Redis 组合故障策略与低基数 database/pool/spool metrics。
+
+验证：未知 durable 结果不自动重放；PendingAction Redis 不可用时 mutating fail closed；Admin 只读、API scope/双 CAS、secret 与高基数数据不泄漏。
+
+状态：🔒 等待 I-07。
+
+---
+
+## I-09 Final Matrix and Remote Closure
+
+**依赖：I-08 最终精确 HEAD 双 run gate**
+
+交付：刷新 Plan 2/Plan 3 验收清单与最终恢复点，给出开发完成、生产未观察和 D-09 锁定的分层结论。
+
+验证：四版本普通矩阵严格串行；mandatory root Sandbox 独立且 `tests > 0 / skipped = 0`；最低依赖、静态、fresh 制品、Twine、包外零真实 I/O smoke 全绿；最终 push/PR 各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致，PR 保持 `OPEN / MERGEABLE / CLEAN`。
+
+状态：🔒 等待 I-08。
 
 ---
 

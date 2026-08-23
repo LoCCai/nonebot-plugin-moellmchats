@@ -1,12 +1,14 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:18:00+00:00
+lastmod: 2026-08-23T11:38:16+00:00
 ---
 
 # 03-plan-performance-database
 
 # Plan 3：处理效率与数据库接入优化
+
+> 最终验收口径复核（2026-08-23）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数仍是显式注入的脱离态 primitive。Plan 3 验收清单现统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。Milestone I 将依次完成领域/Schema/Repository 对齐、资源生命周期、聊天上下文与并行接线、spool/Redis failure policy/database metrics；详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
 
 > 推荐目标版本：`0.28 → 0.30`
 
@@ -1331,27 +1333,27 @@ runner_start_duration
 
 # 31. Plan 3 验收标准
 
-- [ ] Repository Layer
-- [ ] PostgreSQL 基础 Schema
-- [ ] Alembic Migration
-- [ ] Redis Client
-- [ ] cooldown Redis
-- [ ] PendingAction Redis
-- [ ] AgentRun 持久化
-- [ ] AgentStep 持久化
-- [ ] ToolCall 持久化
-- [x] Token Usage 持久化（G-07 本地与精确 HEAD 双 run 远端门禁完成；Repository/租约 primitive 尚未接生产 runtime）
-- [x] Chat History 持久化（G-01 Repository 与远端门禁；尚未接生产 runtime）
-- [x] History Hot Cache（G-02 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [x] Session Summary（G-03 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [x] Batch Insert（G-07 Usage 与 G-08 Audit 本地及精确 HEAD 双 run 门禁均完成；尚未接生产 runtime）
-- [ ] DB Failure Spool
-- [ ] Redis Failure Policy
-- [x] Tool Catalog Cache（G-04 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [x] Tool Schema Cache（G-05 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [x] Classification Cache（G-06 本地与精确 HEAD 双 run 远端门禁完成；尚未接生产 runtime）
-- [ ] read_only tool parallelism
-- [ ] database metrics
+- [ ] Repository Layer（F-01 Protocol 与部分具体 Repository 已绿；待 I-04～I-06 完整组合）
+- [ ] PostgreSQL 基础 Schema（F 阶段离线 Schema 已绿；待 I-04 领域映射/具体 Repository 验证）
+- [ ] Alembic Migration（8 个 append-only revision 离线门禁已绿；待 I-04 验证最终映射，本轮不在线执行）
+- [ ] Redis Client（F-11 primitive 已绿；待 I-05 资源生命周期接线）
+- [ ] cooldown Redis（F-13 primitive 已绿；待 I-05/I-08 组合故障策略）
+- [ ] PendingAction Redis（F-12 primitive 已绿；待 I-05/I-08 接线且故障时危险操作 fail closed）
+- [ ] AgentRun 持久化（待 I-04/I-06）
+- [ ] AgentStep 持久化（待 I-04/I-06）
+- [ ] ToolCall 持久化（待 I-04/I-06）
+- [ ] Token Usage 持久化（G-07 Repository/租约 primitive 已绿；待 I-06/I-08 接 LLM lifecycle 与 spool）
+- [ ] Chat History 持久化（G-01 Repository 已绿；待 I-06 接真实 MessagesHandler）
+- [ ] History Hot Cache（G-02 primitive 已绿；待 I-05/I-06 接 committed load/invalidate）
+- [ ] Session Summary（G-03 primitive 已绿；待 I-06 接真实 summary/prompt）
+- [ ] Batch Insert（G-07/G-08 primitive 已绿；待 I-06/I-08 接 lifecycle 与 durable commit）
+- [ ] DB Failure Spool（待 I-08）
+- [ ] Redis Failure Policy（待 I-05/I-08）
+- [ ] Tool Catalog Cache（G-04 primitive 已绿；待 I-05/I-06 接真实 catalog consumer）
+- [ ] Tool Schema Cache（G-05 primitive 已绿；待 I-05/I-06 接真实 payload consumer）
+- [ ] Classification Cache（G-06 primitive 已绿；待 I-02/I-05/I-06 接真实 classify path）
+- [ ] read_only tool parallelism（G-09/G-10 primitive 已绿；待 I-07）
+- [ ] database metrics（待 I-08）
 
 ---
 

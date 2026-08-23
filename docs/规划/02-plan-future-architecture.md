@@ -1,12 +1,14 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T11:18:00+00:00
+lastmod: 2026-08-23T11:38:16+00:00
 ---
 
 # 02-plan-future-architecture
 
 # Plan 2：后续功能与架构优化
+
+> 最终验收口径复核（2026-08-23）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单现统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。当前 Provider/Capability/Trust consumer 已由 D-08 接入真实路径；Agent runtime、模型能力路由、structured ToolResult、并行执行与平台能力仍需 Milestone I。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -1129,21 +1131,21 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 
 # 23. 计划二验收标准
 
-- [ ] ToolProvider 接口
-- [ ] Tool Capability
-- [ ] Tool Trust Level
-- [ ] AgentRun
-- [ ] AgentStep
-- [ ] ToolCall
-- [ ] DeadlineContext
-- [ ] Tool Graph
-- [ ] read_only 并行工具
-- [ ] ModelCapability
-- [ ] capability based routing
-- [x] Runtime API（H-01 本地与精确 HEAD 双 run 远端门禁完成；尚未挂载）
-- [ ] structured audit
-- [ ] structured metrics
-- [ ] ToolResult structured output
+- [x] ToolProvider 接口（D-01/D-08 generation-bound Provider consumer 已接真实路径；D-09 仅为发布观察后的 legacy 清理）
+- [x] Tool Capability（D-07 versioned merge 与 D-08 selection/execution enforcement 已接线）
+- [x] Tool Trust Level（D-06/D-08 selection、execution、confirmation 与 management enforcement 已接线）
+- [ ] AgentRun（E-01 primitive 与 F-05 Schema 已绿；I-04/I-06 负责字段对齐、Repository 与运行态创建）
+- [ ] AgentStep（E-02 primitive 与 F-06 Schema 已绿；I-04/I-06 负责持久化对齐与运行态创建）
+- [ ] ToolCall（E-03 primitive 与 F-07 Schema 已绿；I-04/I-06 负责完整 identity、Repository 与运行态创建）
+- [ ] DeadlineContext（E-05 primitive 已绿；I-06/I-07 负责真实请求预算接线）
+- [ ] Tool Graph（E-06～E-08 primitive 已绿；I-07 负责真实工具路径接线）
+- [ ] read_only 并行工具（G-09/G-10 primitive 已绿；`_execute_tools()` 仍每轮单工具，待 I-07）
+- [ ] ModelCapability（待 I-01）
+- [ ] capability based routing（待 I-02）
+- [ ] Runtime API（H-01～H-05 脱离态门禁已绿；待 I-05/I-08 组合和挂载）
+- [ ] structured audit（G-08/H-06 primitive 已绿；待 I-06/I-08 写入真实生命周期）
+- [ ] structured metrics（H-07 primitive 已绿；待 I-06/I-08 观测并接 H-04）
+- [ ] ToolResult structured output（待 I-03 与真实 adapter/payload 接线）
 
 ---
 
