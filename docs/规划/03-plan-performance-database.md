@@ -1,14 +1,14 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T09:32:45+00:00
+lastmod: 2026-08-24T09:37:07+00:00
 ---
 
 # 03-plan-performance-database
 
 # Plan 3：处理效率与数据库接入优化
 
-> 最终验收口径复核（2026-08-24）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数是显式注入的脱离态 primitive。Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。I-06 最终文档双门禁已关闭；I-07 已完成只读并行真实 runtime 接线与本地门禁，待精确 HEAD 双 run 后勾选验收。Milestone I 后续仍需收口 spool/Redis failure policy/database metrics；详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+> 最终验收口径复核（2026-08-24）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数是显式注入的脱离态 primitive。Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。I-06 最终文档双门禁已关闭；I-07 只读并行真实 runtime 接线的本地证据 HEAD 双 run 也已关闭，read_only tool parallelism 据此勾选。I-08 仍须等待 I-07 最终闭环文档 HEAD 自身双 run；Milestone I 后续仍需收口 spool/Redis failure policy/database metrics。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
 
 > I-01 本地门禁（2026-08-23）：实现提交 `4a643e062b83055722351df12d402e518dc51b51` 固化无凭据的模型 capability/limits/cost/availability descriptor，并将 Decimal 成本精确对齐现有 `NUMERIC(24,12)`、provider/model 长度对齐既有 Schema。四版本定向各 `98 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `492 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。I-01 精确 HEAD 双 run 待完成，I-02 锁定；G-06 Classification Cache 尚未接真实分类路径，未读取连接信息、未迁移、未连接服务。
 
@@ -35,6 +35,8 @@ lastmod: 2026-08-24T09:32:45+00:00
 > I-06 最终闭环（2026-08-24）：最终文档 HEAD `caf6e2c0f7d603835964042d7fae124e7c83a12f` 的 push `32704551636` / PR `32704555524` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一成功 `release-gate`；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 实现依赖已完全关闭；未运行 migration、连接真实服务、合并、发布或部署。
 
 > I-07 本地门禁（2026-08-24）：实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 仅在 generation-local `ToolGraph` + `TrustedRunnerPool` 双重显式 opt-in、信任/强类型只读/无 capability 与确认/allowlist/依赖闭包/显式 `parallel_with` 全部满足时接入 G-09/G-10；其余调用回退既有串行/拒绝语义。共享 Deadline、首错取消并 drain；trace await 以请求局部锁串行化，保证 PostgreSQL 短事务路径 step index 唯一，关键持久化失败则 fail closed 且不重放未知结果。四版本定向各 `68 passed`、联合 `471 passed`、四版本及 Python 3.10 最低 Redis/SQLAlchemy/Alembic/asyncpg/FakeRedis 全量各 `2799 passed, 1 skipped`、Sandbox `41 passed, 0 skipped`；静态、fresh 制品/重建及四组包外 11 表/8 revision/零 engine/asyncpg/Redis/socket I/O smoke 全绿。精确 HEAD 双 run 待关闭，I-08 继续锁定；未运行 migration、未连接真实 PostgreSQL/Redis/模型。
+
+> I-07 远端闭环（2026-08-24）：本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 均为目标 SHA、各 11/11 success、`non_success=[]`、各唯一成功 `release-gate`；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 已完成，I-08 依赖解除；进入实现前仍需本最终闭环文档 HEAD 的双门禁。未运行 migration、连接真实服务、合并、发布或部署。
 
 > 推荐目标版本：`0.28 → 0.30`
 
@@ -1378,7 +1380,7 @@ runner_start_duration
 - [ ] Tool Catalog Cache（G-04 primitive 已由 I-05 container 组合；真实 consumer 留待后续工具 runtime 阶段）
 - [ ] Tool Schema Cache（G-05 primitive 已由 I-05 container 组合；真实 payload consumer 留待后续工具 runtime 阶段）
 - [ ] Classification Cache（G-06 primitive 已由 I-05 container 组合；真实 classify consumer 留待后续 runtime 阶段）
-- [ ] read_only tool parallelism（I-07 真实 runtime 接线与本地门禁已绿；待精确 HEAD 双 run 关闭后勾选）
+- [x] read_only tool parallelism（I-07 真实 runtime 接线已关闭本地证据 HEAD 双 run）
 - [ ] database metrics（待 I-08）
 
 ---
