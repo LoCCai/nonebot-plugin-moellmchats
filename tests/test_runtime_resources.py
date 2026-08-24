@@ -62,6 +62,7 @@ from nonebot_plugin_moellmchats.structured_logging import (
 from nonebot_plugin_moellmchats.tool_catalog_cache import (
     MemoryToolCatalogCache,
 )
+from nonebot_plugin_moellmchats.tool_graph import ToolGraph
 from nonebot_plugin_moellmchats.tool_schema_cache import MemoryToolSchemaCache
 from nonebot_plugin_moellmchats.usage_batch import UsageBatchQueueState
 
@@ -239,6 +240,7 @@ def test_default_settings_are_memory_only_and_safe() -> None:
         "redis_configured": False,
         "history_backend": "memory",
         "trusted_runner_tool_count": 0,
+        "parallel_tool_graph_configured": False,
     }
     assert "url" not in repr(settings).lower()
 
@@ -263,6 +265,26 @@ def test_settings_sort_and_reject_duplicate_runner_tools() -> None:
         RuntimeResourceSettings(
             trusted_runner_tools=("a_tool", "a_tool"),
         )
+
+
+def test_parallel_graph_requires_an_explicit_covering_runner_allowlist() -> None:
+    graph = ToolGraph(tools=("safe_tool",))
+
+    with pytest.raises(RuntimeResourceConfigurationError, match="trusted_runner"):
+        RuntimeResourceSettings(parallel_tool_graph=graph)
+
+    with pytest.raises(RuntimeResourceConfigurationError, match="缺少"):
+        RuntimeResourceSettings(
+            trusted_runner_tools=("other_tool",),
+            parallel_tool_graph=graph,
+        )
+
+    settings = RuntimeResourceSettings(
+        trusted_runner_tools=("safe_tool",),
+        parallel_tool_graph=graph,
+    )
+    assert settings.parallel_tool_graph is graph
+    assert settings.safe_diagnostics()["parallel_tool_graph_configured"] is True
 
 
 @pytest.mark.asyncio
@@ -295,6 +317,7 @@ async def test_default_builder_composes_memory_primitives_with_zero_backend_io(
     assert resources.structured_logger is None
     assert resources.api_ports == RuntimeApiPorts()
     assert resources.trusted_runner is None
+    assert resources.parallel_tool_graph is None
     assert resources.state is RuntimeGenerationResourceState.CREATED
 
     await resources.start()

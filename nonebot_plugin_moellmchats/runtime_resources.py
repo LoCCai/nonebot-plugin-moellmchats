@@ -60,6 +60,7 @@ from .tool_catalog_cache import (
     MemoryToolCatalogCacheSettings,
     ToolCatalogCacheProtocol,
 )
+from .tool_graph import ToolGraph
 from .tool_schema_cache import (
     MemoryToolSchemaCache,
     MemoryToolSchemaCacheSettings,
@@ -167,6 +168,7 @@ class RuntimeResourceSettings:
     audit_batch: AuditBatchPolicy = field(default_factory=AuditBatchPolicy)
     trusted_runner_tools: tuple[str, ...] = ()
     trusted_runner_policy: TrustedRunnerPoolPolicy = field(default_factory=TrustedRunnerPoolPolicy)
+    parallel_tool_graph: ToolGraph | None = None
 
     def __post_init__(self) -> None:
         if self.database is not None and not isinstance(
@@ -232,6 +234,19 @@ class RuntimeResourceSettings:
             "trusted_runner_tools",
             tuple(sorted(self.trusted_runner_tools)),
         )
+        if self.parallel_tool_graph is not None and not isinstance(
+            self.parallel_tool_graph,
+            ToolGraph,
+        ):
+            raise TypeError("parallel_tool_graph 必须是 ToolGraph 或 None")
+        if self.parallel_tool_graph is not None:
+            if not self.trusted_runner_tools:
+                raise RuntimeResourceConfigurationError("parallel_tool_graph 必须显式配置 trusted_runner_tools")
+            missing_tools = set(self.trusted_runner_tools) - set(self.parallel_tool_graph.tools)
+            if missing_tools:
+                raise RuntimeResourceConfigurationError(
+                    "parallel_tool_graph 缺少 trusted runner 工具: " + ", ".join(sorted(missing_tools))
+                )
 
     def __repr__(self) -> str:
         return (
@@ -248,6 +263,7 @@ class RuntimeResourceSettings:
             "redis_configured": self.redis is not None,
             "history_backend": self.history_backend.value,
             "trusted_runner_tool_count": len(self.trusted_runner_tools),
+            "parallel_tool_graph_configured": self.parallel_tool_graph is not None,
         }
 
 
@@ -510,6 +526,7 @@ class RuntimeGenerationResources:
         structured_logger: StructuredLogEmitter | None,
         api_ports: RuntimeApiPorts,
         trusted_runner: TrustedRunnerPool | None,
+        parallel_tool_graph: ToolGraph | None,
         managed_ports: tuple[RuntimeLifecyclePort, ...],
     ) -> None:
         if not isinstance(snapshot, RuntimeSnapshot):
@@ -524,6 +541,13 @@ class RuntimeGenerationResources:
             raise RuntimeResourceGenerationError("FullMetrics generation 与 RuntimeSnapshot 不一致")
         if not isinstance(api_ports, RuntimeApiPorts):
             raise TypeError("api_ports 必须是 RuntimeApiPorts")
+        if parallel_tool_graph is not None and not isinstance(
+            parallel_tool_graph,
+            ToolGraph,
+        ):
+            raise TypeError("parallel_tool_graph 必须是 ToolGraph 或 None")
+        if parallel_tool_graph is not settings.parallel_tool_graph:
+            raise RuntimeResourceConfigurationError("parallel_tool_graph 必须与 generation settings 绑定同一快照")
         if not isinstance(managed_ports, tuple):
             raise TypeError("managed_ports 必须是元组")
         normalized_ports = tuple(_validate_lifecycle_port(port) for port in managed_ports)
@@ -546,6 +570,7 @@ class RuntimeGenerationResources:
         self._structured_logger = structured_logger
         self._api_ports = api_ports
         self._trusted_runner = trusted_runner
+        self._parallel_tool_graph = parallel_tool_graph
         self._managed_ports = normalized_ports
         self._started_ports: tuple[RuntimeLifecyclePort, ...] = ()
         self._state = RuntimeGenerationResourceState.CREATED
@@ -627,6 +652,10 @@ class RuntimeGenerationResources:
     def trusted_runner(self) -> TrustedRunnerPool | None:
         return self._trusted_runner
 
+    @property
+    def parallel_tool_graph(self) -> ToolGraph | None:
+        return self._parallel_tool_graph
+
     def safe_diagnostics(self) -> dict[str, bool | int | str]:
         return {
             "generation": self.generation,
@@ -638,6 +667,7 @@ class RuntimeGenerationResources:
             "history_backend": self._settings.history_backend.value,
             "api_handler_count": len(self._api_ports.handlers),
             "trusted_runner_configured": self._trusted_runner is not None,
+            "parallel_tool_graph_configured": self._parallel_tool_graph is not None,
         }
 
     async def start(self) -> RuntimeGenerationResources:
@@ -928,6 +958,7 @@ class RuntimeResourceBuilder:
             structured_logger=structured_logger,
             api_ports=api_ports,
             trusted_runner=trusted_runner,
+            parallel_tool_graph=self._settings.parallel_tool_graph,
             managed_ports=tuple(managed),
         )
 

@@ -1,9 +1,10 @@
 import asyncio
 from collections import Counter
 from collections.abc import Mapping
+from dataclasses import dataclass
 import math
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nonebot.log import logger
 import ujson as json
@@ -12,6 +13,11 @@ from .agent_runtime import AgentRunState, ToolCallStatus
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .event_simulator import event_simulator
+from .parallel_execution import (
+    ReadOnlyParallelExecutionError,
+    ReadOnlyParallelExecutionTimeout,
+    ReadOnlyParallelToolExecutor,
+)
 from .pending_actions import PendingActionError, pending_action_store
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
@@ -26,11 +32,69 @@ from .tool_execution import (
     execute_custom_tool,
     validate_pending_custom_tool,
 )
-from .tool_manager import LlmToolExecutionRoute
+from .tool_graph import ToolGraph
+from .tool_manager import LlmToolExecutionRoute, LlmToolExecutionView
+from .tool_scheduler import ReadOnlyParallelToolScheduler, ToolSchedulingError
+from .trusted_runner_pool import (
+    TrustedRunnerEligibilityError,
+    TrustedRunnerExecutionTimeout,
+    TrustedRunnerPool,
+    TrustedRunnerPoolError,
+    TrustedRunnerPoolState,
+)
 from .utils import parse_emotion
+
+if TYPE_CHECKING:
+    from .agent_context_runtime import AgentRequestRuntime
+    from .tool_manager import ToolSnapshot
+
+
+@dataclass(frozen=True)
+class _PreparedParallelToolCall:
+    call: Mapping[str, Any]
+    tool_name: str
+    arguments: dict[str, Any]
+    view: LlmToolExecutionView
+
+
+@dataclass(frozen=True)
+class _PreparedParallelToolBatch:
+    calls: tuple[_PreparedParallelToolCall, ...]
+    graph: ToolGraph
+    runner: TrustedRunnerPool
+    executor: ReadOnlyParallelToolExecutor
+
+
+@dataclass(frozen=True)
+class _ParallelToolOutcome:
+    content: str
+    images: tuple[str, ...] = ()
+
+
+class _ParallelTracePersistenceError(RuntimeError):
+    """A critical Agent tool trace could not be durably recorded."""
 
 
 class LlmToolsMixin:
+    if TYPE_CHECKING:
+        bot: Any
+        event: Any
+        format_message_dict: dict[str, Any]
+        tool_snapshot: ToolSnapshot
+        messages_handler: Any
+        agent_runtime: AgentRequestRuntime | None
+        model_info: dict[str, Any]
+        emotion_flag: bool
+        is_superuser: bool
+        _current_tool_usage: Counter[str]
+        _pending_vision_images: list[str]
+
+        async def send_emotion_message(self, content: str) -> str: ...
+
+        def _sanitize_tool_calls_for_history(self, tool_calls: list) -> list: ...
+
+        async def none_stream_llm_chat(self, *args: Any, **kwargs: Any) -> Any: ...
+
     @staticmethod
     def _validate_tool_arguments(
         arguments: object,
@@ -92,6 +156,447 @@ class LlmToolsMixin:
             error_type=error_type,
         )
 
+    def _prepare_read_only_parallel_batch(
+        self,
+        tool_calls: list,
+    ) -> _PreparedParallelToolBatch | None:
+        runtime = getattr(self, "agent_runtime", None)
+        if runtime is None or not 2 <= len(tool_calls):
+            return None
+        resources = runtime.coordinator.resources
+        runner = resources.trusted_runner
+        graph = resources.parallel_tool_graph
+        if runner is None or graph is None:
+            return None
+        if runner.state is not TrustedRunnerPoolState.RUNNING:
+            return None
+        if (
+            runtime.run.generation != resources.generation
+            or runner.generation != resources.generation
+            or getattr(self.tool_snapshot, "generation", None) != resources.generation
+        ):
+            return None
+
+        runner_snapshot = runner.snapshot()
+        if len(tool_calls) > runner_snapshot.worker_count:
+            return None
+
+        is_superuser = bool(getattr(self, "is_superuser", False))
+        repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
+        if not isinstance(repeated_limit, int) or isinstance(repeated_limit, bool) or repeated_limit <= 0:
+            return None
+
+        prepared: list[_PreparedParallelToolCall] = []
+        tool_names: list[str] = []
+        call_ids: list[str] = []
+        effects: dict[str, ToolEffect] = {}
+        for call in tool_calls:
+            if not isinstance(call, Mapping):
+                return None
+            call_id = call.get("id")
+            function = call.get("function")
+            if not isinstance(call_id, str) or not call_id or not isinstance(function, Mapping):
+                return None
+            tool_name = function.get("name")
+            arguments_text = function.get("arguments")
+            if not isinstance(tool_name, str) or not tool_name or not isinstance(arguments_text, str):
+                return None
+            if tool_name not in runner.eligible_tools or tool_name not in graph.tools:
+                return None
+            try:
+                view = self.tool_snapshot.resolve_llm_tool_execution(
+                    tool_name,
+                    is_superuser=is_superuser,
+                )
+            except Exception:
+                return None
+            if (
+                view is None
+                or not view.provider_authoritative
+                or view.generation != resources.generation
+                or view.route is not LlmToolExecutionRoute.CUSTOM_TOOL
+                or view.spec is None
+                or view.legacy_entry is None
+                or view.spec.effect is not ToolEffect.READ_ONLY
+                or view.spec.policy is not None
+            ):
+                return None
+            decision = view.trust_decision
+            if (
+                decision is None
+                or not decision.allowed
+                or decision.confirmation_required
+                or graph.confirmation_required_for(tool_name)
+                or graph.capabilities_required_for(tool_name)
+            ):
+                return None
+            if set(view.spec.dependencies) != set(graph.dependencies_for(tool_name)):
+                return None
+            try:
+                arguments = json.loads(arguments_text)
+            except Exception:
+                return None
+            if not isinstance(arguments, dict):
+                return None
+            if self._validate_tool_arguments(arguments, view.spec.parameters):
+                return None
+            if self._current_tool_usage[tool_name] + 1 > repeated_limit:
+                return None
+            prepared.append(
+                _PreparedParallelToolCall(
+                    call=call,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    view=view,
+                )
+            )
+            tool_names.append(tool_name)
+            call_ids.append(call_id)
+            effects[tool_name] = view.spec.effect
+
+        if len(set(tool_names)) != len(tool_names) or len(set(call_ids)) != len(call_ids):
+            return None
+        max_parallelism = runner_snapshot.worker_count
+        try:
+            schedule = ReadOnlyParallelToolScheduler(max_parallelism=max_parallelism).plan(
+                graph=graph,
+                selected_tools=tuple(tool_names),
+                effects=effects,
+            )
+        except (ToolSchedulingError, ValueError):
+            return None
+        if not schedule.has_parallel_batches:
+            return None
+        return _PreparedParallelToolBatch(
+            calls=tuple(prepared),
+            graph=graph,
+            runner=runner,
+            executor=ReadOnlyParallelToolExecutor(max_parallelism=max_parallelism),
+        )
+
+    @staticmethod
+    def _render_parallel_tool_outcome(
+        prepared: _PreparedParallelToolCall,
+        result: ToolResult,
+    ) -> _ParallelToolOutcome:
+        spec = prepared.view.spec
+        assert spec is not None
+        render_limit = (
+            spec.result_limit if spec.result_limit is not None else config_parser.get_config("max_tool_result_chars", 6000)
+        )
+        rendered = render_tool_result(result, max_chars=render_limit)
+        content = f"函数执行返回结果：\n{rendered}" if rendered else "函数执行成功，但未返回有效结果。"
+        return _ParallelToolOutcome(content=content, images=tuple(result.images))
+
+    def _append_tool_round_history(
+        self,
+        *,
+        assistant_msg: Mapping[str, Any],
+        tool_calls: list,
+        send_message_list: list,
+    ) -> None:
+        history_tool_result_limit = 300
+        history_tool_calls = self._sanitize_tool_calls_for_history(tool_calls)
+        history_msgs = [
+            {
+                "role": "assistant",
+                "content": assistant_msg["content"],
+                "tool_calls": history_tool_calls,
+            }
+        ]
+        for call in tool_calls:
+            tool_result_content = next(
+                (
+                    message["content"]
+                    for message in reversed(send_message_list)
+                    if message.get("role") == "tool" and message.get("tool_call_id") == call["id"]
+                ),
+                "",
+            )
+            history_msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": tool_result_content[:history_tool_result_limit],
+                }
+            )
+        self.messages_handler.messages_entity.tool_messages.extend(history_msgs)
+
+    async def _try_execute_read_only_parallel_tools(
+        self,
+        tool_calls: list,
+        result_text: str,
+        send_message_list: list,
+        reasoning_content: str,
+    ) -> list | None:
+        batch = self._prepare_read_only_parallel_batch(tool_calls)
+        if batch is None:
+            return None
+        runtime = self.agent_runtime
+        assert runtime is not None
+
+        content_for_history = str(result_text) if result_text else ""
+        if self.emotion_flag and content_for_history:
+            content_for_history, _ = parse_emotion(content_for_history)
+        tool_names = tuple(prepared.tool_name for prepared in batch.calls)
+        assistant_msg = {
+            "role": "assistant",
+            "content": content_for_history.strip() or f"（正在调用工具: {', '.join(tool_names)}）",
+            "tool_calls": tool_calls,
+        }
+        if reasoning_content:
+            assistant_msg["reasoning_content"] = reasoning_content
+        send_message_list.append(assistant_msg)
+
+        if result_text:
+            await self.send_emotion_message(result_text)
+        else:
+            await self.bot.send(
+                self.event,
+                f"正在并行调用函数: {', '.join(tool_names)}...",
+            )
+
+        for prepared in batch.calls:
+            decision = prepared.view.trust_decision
+            if decision is not None and decision.audit_required:
+                logger.info(f"工具 trust decision: {decision.audit_metadata()}")
+            self._current_tool_usage[prepared.tool_name] += 1
+            runtime_metrics.tool_steps += 1
+            self.messages_handler.messages_entity.add_used_plugins({prepared.tool_name})
+
+        outcomes: dict[str, _ParallelToolOutcome] = {}
+        recorded: set[str] = set()
+        trace_attempted: set[str] = set()
+        trace_failures: set[str] = set()
+        traces: dict[str, tuple[float, float]] = {}
+        trace_lock = asyncio.Lock()
+
+        async def record_once(
+            prepared: _PreparedParallelToolCall,
+            *,
+            status: ToolCallStatus,
+            result_preview: str | None = None,
+            error_type: str | None = None,
+        ) -> None:
+            async with trace_lock:
+                if prepared.tool_name in recorded:
+                    return
+                if prepared.tool_name in trace_attempted:
+                    raise _ParallelTracePersistenceError("并行工具 trace 已尝试持久化，禁止未知结果重放") from None
+                trace_attempted.add(prepared.tool_name)
+                created_at, started_monotonic = traces.setdefault(
+                    prepared.tool_name,
+                    (time.time(), time.monotonic()),
+                )
+                try:
+                    await self._record_agent_tool_outcome(
+                        call=prepared.call,
+                        tool_view=prepared.view,
+                        arguments=prepared.arguments,
+                        status=status,
+                        created_at=created_at,
+                        started_monotonic=started_monotonic,
+                        result_preview=result_preview,
+                        error_type=error_type,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    trace_failures.add(prepared.tool_name)
+                    raise
+                recorded.add(prepared.tool_name)
+
+        def build_invocation(prepared: _PreparedParallelToolCall):
+            async def handler(_dependencies: Mapping[str, Any]) -> _ParallelToolOutcome:
+                legacy_entry = prepared.view.legacy_entry
+                assert legacy_entry is not None
+                try:
+                    result = await execute_custom_tool(
+                        prepared.tool_name,
+                        legacy_entry,
+                        prepared.arguments,
+                        bot=self.bot,
+                        event=self.event,
+                    )
+                    outcome = self._render_parallel_tool_outcome(
+                        prepared,
+                        result,
+                    )
+                except asyncio.CancelledError:
+                    outcome = _ParallelToolOutcome("并行工具调用已安全取消")
+                    await record_once(
+                        prepared,
+                        status=ToolCallStatus.CANCELLED,
+                        error_type="CancelledError",
+                    )
+                    outcomes[prepared.tool_name] = outcome
+                    raise
+                except ToolExecutionTimeoutError:
+                    outcome = _ParallelToolOutcome("函数执行超时，已安全终止")
+                    await record_once(
+                        prepared,
+                        status=ToolCallStatus.TIMED_OUT,
+                        error_type="TimeoutError",
+                    )
+                    outcomes[prepared.tool_name] = outcome
+                    raise
+                except ToolExecutionError:
+                    outcome = _ParallelToolOutcome("函数执行被安全拒绝")
+                    await record_once(
+                        prepared,
+                        status=ToolCallStatus.REJECTED,
+                        error_type="ToolExecutionRejected",
+                    )
+                    outcomes[prepared.tool_name] = outcome
+                    raise
+                except Exception:
+                    logger.error("并行自定义工具执行失败，异常详情已安全省略")
+                    outcome = _ParallelToolOutcome("函数执行出错，异常详情已安全省略")
+                    await record_once(
+                        prepared,
+                        status=ToolCallStatus.FAILED,
+                        error_type="ToolExecutionError",
+                    )
+                    outcomes[prepared.tool_name] = outcome
+                    raise
+                await record_once(
+                    prepared,
+                    status=ToolCallStatus.COMPLETED,
+                    result_preview=outcome.content,
+                )
+                outcomes[prepared.tool_name] = outcome
+                return outcome
+
+            async def invocation(
+                dependencies: Mapping[str, Any],
+            ) -> _ParallelToolOutcome:
+                traces.setdefault(
+                    prepared.tool_name,
+                    (time.time(), time.monotonic()),
+                )
+                try:
+                    report = await batch.runner.execute(
+                        tool_name=prepared.tool_name,
+                        invocation=handler,
+                        dependencies=dependencies,
+                        deadline=runtime.deadline,
+                        is_superuser=bool(getattr(self, "is_superuser", False)),
+                    )
+                except asyncio.CancelledError:
+                    if prepared.tool_name not in trace_attempted:
+                        outcome = _ParallelToolOutcome("并行工具调用已安全取消")
+                        await record_once(
+                            prepared,
+                            status=ToolCallStatus.CANCELLED,
+                            error_type="CancelledError",
+                        )
+                        outcomes[prepared.tool_name] = outcome
+                    raise
+                except TrustedRunnerExecutionTimeout:
+                    if prepared.tool_name not in trace_attempted:
+                        runtime_metrics.tool_timeouts += 1
+                        outcome = _ParallelToolOutcome("函数执行超时，已安全终止")
+                        await record_once(
+                            prepared,
+                            status=ToolCallStatus.TIMED_OUT,
+                            error_type="TimeoutError",
+                        )
+                        outcomes[prepared.tool_name] = outcome
+                    raise
+                except TrustedRunnerEligibilityError:
+                    if prepared.tool_name not in trace_attempted:
+                        outcome = _ParallelToolOutcome("函数执行被安全拒绝")
+                        await record_once(
+                            prepared,
+                            status=ToolCallStatus.REJECTED,
+                            error_type="TrustedRunnerRejected",
+                        )
+                        outcomes[prepared.tool_name] = outcome
+                    raise
+                except TrustedRunnerPoolError:
+                    if prepared.tool_name not in trace_attempted:
+                        outcome = _ParallelToolOutcome("函数执行出错，异常详情已安全省略")
+                        await record_once(
+                            prepared,
+                            status=ToolCallStatus.FAILED,
+                            error_type="TrustedRunnerExecutionError",
+                        )
+                        outcomes[prepared.tool_name] = outcome
+                    raise
+                if not isinstance(report.result, _ParallelToolOutcome):
+                    raise RuntimeError("trusted runner 返回了非法工具结果")
+                return report.result
+
+            return invocation
+
+        invocations = {prepared.tool_name: build_invocation(prepared) for prepared in batch.calls}
+        execution_error: ReadOnlyParallelExecutionError | None = None
+        report = None
+        try:
+            report = await batch.executor.execute(
+                graph=batch.graph,
+                selected_tools=tool_names,
+                effects={prepared.tool_name: ToolEffect.READ_ONLY for prepared in batch.calls},
+                invocations=invocations,
+                deadline=runtime.deadline,
+            )
+        except asyncio.CancelledError:
+            raise
+        except ReadOnlyParallelExecutionError as error:
+            execution_error = error
+
+        if trace_failures:
+            raise _ParallelTracePersistenceError("并行工具 trace 持久化失败，已拒绝伪造成功") from None
+        if report is not None:
+            for prepared in batch.calls:
+                outcome = report.result_for(prepared.tool_name)
+                if not isinstance(outcome, _ParallelToolOutcome):
+                    raise RuntimeError("parallel executor 返回了非法工具结果")
+                outcomes[prepared.tool_name] = outcome
+        else:
+            timed_out = isinstance(
+                execution_error,
+                ReadOnlyParallelExecutionTimeout,
+            )
+            for prepared in batch.calls:
+                if prepared.tool_name in outcomes:
+                    continue
+                if timed_out:
+                    status = ToolCallStatus.TIMED_OUT
+                    error_type = "TimeoutError"
+                    outcome = _ParallelToolOutcome("函数执行超时，已安全终止")
+                else:
+                    status = ToolCallStatus.REJECTED
+                    error_type = "ParallelDependencyAborted"
+                    outcome = _ParallelToolOutcome("并行工具调用已因同批次失败安全跳过")
+                await record_once(
+                    prepared,
+                    status=status,
+                    error_type=error_type,
+                )
+                outcomes[prepared.tool_name] = outcome
+
+        for prepared in batch.calls:
+            outcome = outcomes[prepared.tool_name]
+            if outcome.images:
+                self._pending_vision_images.extend(outcome.images)
+            send_message_list.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": prepared.call["id"],
+                    "content": outcome.content,
+                }
+            )
+        image_limit = config_parser.get_config("max_tool_images", 4)
+        if len(self._pending_vision_images) > image_limit:
+            self._pending_vision_images = self._pending_vision_images[:image_limit]
+        self._append_tool_round_history(
+            assistant_msg=assistant_msg,
+            tool_calls=tool_calls,
+            send_message_list=send_message_list,
+        )
+        return send_message_list
+
     async def _execute_tools(
         self,
         tool_calls: list,
@@ -106,6 +611,15 @@ class LlmToolsMixin:
                 or not str(call["function"]["arguments"]).strip()
             ):
                 call["function"]["arguments"] = "{}"
+
+        parallel_result = await self._try_execute_read_only_parallel_tools(
+            tool_calls,
+            result_text,
+            send_message_list,
+            reasoning_content,
+        )
+        if parallel_result is not None:
+            return parallel_result
 
         max_tool_calls_per_round = 1
         executable_tool_calls = tool_calls[:max_tool_calls_per_round]
@@ -634,33 +1148,11 @@ class LlmToolsMixin:
             )
 
         # 将本 round 的工具消息（截断结果）追加到历史记录 entity，供下轮对话使用
-        HISTORY_TOOL_RESULT_LIMIT = 300
-        history_tool_calls = self._sanitize_tool_calls_for_history(tool_calls)
-
-        history_msgs = [
-            {
-                "role": "assistant",
-                "content": assistant_msg["content"],
-                "tool_calls": history_tool_calls,
-            }
-        ]
-        for call in tool_calls:
-            tool_result_content = next(
-                (
-                    m["content"]
-                    for m in reversed(send_message_list)
-                    if m.get("role") == "tool" and m.get("tool_call_id") == call["id"]
-                ),
-                "",
-            )
-            history_msgs.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": tool_result_content[:HISTORY_TOOL_RESULT_LIMIT],
-                }
-            )
-        self.messages_handler.messages_entity.tool_messages.extend(history_msgs)
+        self._append_tool_round_history(
+            assistant_msg=assistant_msg,
+            tool_calls=tool_calls,
+            send_message_list=send_message_list,
+        )
         return send_message_list
 
     def _build_tool_limit_summary_prompt(self) -> str:

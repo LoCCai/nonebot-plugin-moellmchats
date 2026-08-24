@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from dataclasses import replace
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,9 @@ from nonebot_plugin_moellmchats.agent_context_runtime import (
 )
 from nonebot_plugin_moellmchats.agent_runtime import (
     AgentRunState,
+    AgentStep,
     DeadlineContext,
+    ToolCall,
     ToolCallStatus,
 )
 from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
@@ -27,15 +30,25 @@ from nonebot_plugin_moellmchats.pending_actions import (
     PendingActionStore,
     pending_action_store,
 )
-from nonebot_plugin_moellmchats.runtime_resources import RuntimeResourceBuilder
+from nonebot_plugin_moellmchats.runtime_resources import (
+    RuntimeGenerationResources,
+    RuntimeResourceBuilder,
+    RuntimeResourceSettings,
+)
 from nonebot_plugin_moellmchats.runtime_snapshot import RuntimeSnapshot
 from nonebot_plugin_moellmchats.tool_contracts import (
+    ToolContext,
     ToolEffect,
     ToolPolicy,
     ToolResult,
     ToolResultCitation,
     ToolResultFile,
     ToolSpec,
+)
+from nonebot_plugin_moellmchats.tool_graph import (
+    ToolGraph,
+    ToolGraphEdge,
+    ToolGraphRelation,
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
 from nonebot_plugin_moellmchats.tool_providers import (
@@ -93,12 +106,12 @@ class Harness(LlmToolsMixin):
         self.agent_runtime: AgentRequestRuntime | None = None
         self.sent = []
 
-    async def send_emotion_message(self, text: str) -> str:
-        self.sent.append(text)
-        return text
+    async def send_emotion_message(self, content: str) -> str:
+        self.sent.append(content)
+        return content
 
-    def _sanitize_tool_calls_for_history(self, calls):
-        return calls
+    def _sanitize_tool_calls_for_history(self, tool_calls):
+        return tool_calls
 
 
 def _call(identifier: int, name: str, arguments: str = "{}") -> dict:
@@ -136,6 +149,46 @@ async def _agent_request_runtime() -> AgentRequestRuntime:
     await runtime.advance(AgentRunState.PLANNING, model="model")
     await runtime.advance(AgentRunState.EXECUTING)
     return runtime
+
+
+async def _parallel_agent_request_runtime(
+    tool_snapshot: ToolSnapshot,
+    graph: ToolGraph,
+    *,
+    runner_tools: tuple[str, ...],
+) -> tuple[AgentRequestRuntime, RuntimeGenerationResources]:
+    snapshot = RuntimeSnapshot(
+        generation=tool_snapshot.generation,
+        config={"request_timeout_seconds": 30},
+        model_state=None,
+        temperaments={},
+        temperament_assignments={},
+        replies={},
+        tool_snapshot=tool_snapshot,
+        emotions=(),
+        reloaded_at=1,
+    )
+    resources = RuntimeResourceBuilder(
+        RuntimeResourceSettings(
+            trusted_runner_tools=runner_tools,
+            parallel_tool_graph=graph,
+        )
+    ).build(snapshot)
+    await resources.start()
+    runtime = await AgentRequestRuntime.begin(
+        AgentGenerationCoordinator(resources),
+        AgentRequestIdentity(
+            platform="onebot-v11",
+            platform_user_id="1",
+            group_id=None,
+            display_name="tester",
+        ),
+        request_id=1,
+        deadline=DeadlineContext.from_timeout(30),
+    )
+    await runtime.advance(AgentRunState.PLANNING, model="model")
+    await runtime.advance(AgentRunState.EXECUTING)
+    return runtime, resources
 
 
 def _complete_catalog(
@@ -180,6 +233,33 @@ def _complete_catalog(
     )
 
 
+def _registered_tool_snapshot(
+    generation: int,
+    specs: tuple[ToolSpec, ...],
+) -> ToolSnapshot:
+    return ToolSnapshot(
+        generation=generation,
+        plugin_info={},
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"} for spec in specs},
+        tool_dependencies={spec.name: set(spec.dependencies) for spec in specs},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(generation, registered=specs),
+    )
+
+
+def _parallel_graph(*tool_names: str) -> ToolGraph:
+    edges = tuple(
+        ToolGraphEdge(
+            first,
+            second,
+            ToolGraphRelation.PARALLEL_WITH,
+        )
+        for index, first in enumerate(tool_names)
+        for second in tool_names[index + 1 :]
+    )
+    return ToolGraph(tools=tuple(tool_names), edges=edges)
+
+
 @pytest.mark.asyncio
 async def test_only_one_tool_executes_each_round() -> None:
     calls = Counter()
@@ -203,6 +283,768 @@ async def test_only_one_tool_executes_each_round() -> None:
     )
     assert calls == {"first": 1}
     assert "已跳过" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_trusted_read_only_graph_uses_real_parallel_path() -> None:
+    active = 0
+    max_active = 0
+    entered: set[str] = set()
+    both_entered = asyncio.Event()
+
+    def build_handler(name: str):
+        async def handler() -> ToolResult:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            entered.add(name)
+            if len(entered) == 2:
+                both_entered.set()
+            try:
+                await both_entered.wait()
+                return ToolResult(
+                    text=f"{name}:" + "x" * 20,
+                    images=tuple(f"image:{name}:{index}" for index in range(3)),
+                )
+            finally:
+                active -= 1
+
+        return handler
+
+    specs = tuple(
+        ToolSpec(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler(name),
+            result_limit=8,
+        )
+        for name in ("first", "second")
+    )
+    tool_snapshot = _registered_tool_snapshot(10, specs)
+    graph = _parallel_graph("first", "second")
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        graph,
+        runner_tools=("first", "second"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await asyncio.wait_for(
+            harness._execute_tools(
+                [_call(1, "second"), _call(2, "first")],
+                "",
+                [],
+                "",
+            ),
+            timeout=2,
+        )
+
+        assert max_active == 2
+        assert entered == {"first", "second"}
+        assert [message["tool_call_id"] for message in messages[1:]] == [
+            "1",
+            "2",
+        ]
+        assert all("工具结果已截断" in message["content"] for message in messages[1:])
+        assert len(harness._pending_vision_images) == 4
+        assert {call.tool_name for call in runtime.tool_calls} == {
+            "first",
+            "second",
+        }
+        assert {call.status for call in runtime.tool_calls} == {ToolCallStatus.COMPLETED}
+        assert resources.trusted_runner is not None
+        runner_state = resources.trusted_runner.snapshot()
+        assert runner_state.completed == 2
+        assert runner_state.active == 0
+        assert runner_state.pending == 0
+        assert harness.messages_handler.messages_entity.tool_messages[1]["tool_call_id"] == "1"
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_parallel_trace_persistence_is_serialized_with_unique_step_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered: set[str] = set()
+    both_entered = asyncio.Event()
+
+    def build_handler(name: str):
+        async def handler() -> str:
+            entered.add(name)
+            if len(entered) == 2:
+                both_entered.set()
+            await both_entered.wait()
+            return name
+
+        return handler
+
+    specs = tuple(
+        ToolSpec(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler(name),
+        )
+        for name in ("first", "second")
+    )
+    tool_snapshot = _registered_tool_snapshot(18, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        _parallel_graph("first", "second"),
+        runner_tools=("first", "second"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+    original_persist_step = runtime.coordinator.persist_step
+    persistence_active = 0
+    max_persistence_active = 0
+    observed_indexes: list[int] = []
+
+    async def observed_persist_step(
+        step: AgentStep,
+        *,
+        call: ToolCall | None = None,
+        actor_user_id: str,
+        created_at: datetime,
+    ):
+        nonlocal persistence_active, max_persistence_active
+        persistence_active += 1
+        max_persistence_active = max(max_persistence_active, persistence_active)
+        observed_indexes.append(step.index)
+        try:
+            await asyncio.sleep(0.01)
+            return await original_persist_step(
+                step,
+                call=call,
+                actor_user_id=actor_user_id,
+                created_at=created_at,
+            )
+        finally:
+            persistence_active -= 1
+
+    monkeypatch.setattr(runtime.coordinator, "persist_step", observed_persist_step)
+
+    try:
+        await asyncio.wait_for(
+            harness._execute_tools(
+                [_call(1, "first"), _call(2, "second")],
+                "",
+                [],
+                "",
+            ),
+            timeout=2,
+        )
+        assert max_persistence_active == 1
+        assert len(observed_indexes) == 2
+        assert len(set(observed_indexes)) == 2
+        assert observed_indexes[1] == observed_indexes[0] + 1
+        assert [step.index for step in runtime.steps] == observed_indexes
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_parallel_critical_trace_failure_propagates_without_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence_failed = asyncio.Event()
+    peer_drained = asyncio.Event()
+
+    async def first() -> str:
+        return "first"
+
+    async def peer() -> str:
+        await persistence_failed.wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            peer_drained.set()
+        return "unreachable"
+
+    specs = (
+        ToolSpec(
+            name="first",
+            description="first",
+            parameters={"type": "object", "properties": {}},
+            handler=first,
+        ),
+        ToolSpec(
+            name="peer",
+            description="peer",
+            parameters={"type": "object", "properties": {}},
+            handler=peer,
+        ),
+    )
+    tool_snapshot = _registered_tool_snapshot(19, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        _parallel_graph("first", "peer"),
+        runner_tools=("first", "peer"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+    original_persist_step = runtime.coordinator.persist_step
+    persistence_attempts: Counter[str] = Counter()
+
+    async def failing_persist_step(
+        step: AgentStep,
+        *,
+        call: ToolCall | None = None,
+        actor_user_id: str,
+        created_at: datetime,
+    ):
+        persistence_attempts[step.tool or "unknown"] += 1
+        if step.tool == "first":
+            persistence_failed.set()
+            raise RuntimeError("critical persistence failure")
+        return await original_persist_step(
+            step,
+            call=call,
+            actor_user_id=actor_user_id,
+            created_at=created_at,
+        )
+
+    monkeypatch.setattr(runtime.coordinator, "persist_step", failing_persist_step)
+    messages: list[dict] = []
+
+    try:
+        with pytest.raises(RuntimeError, match="trace 持久化失败"):
+            await asyncio.wait_for(
+                harness._execute_tools(
+                    [_call(1, "first"), _call(2, "peer")],
+                    "",
+                    messages,
+                    "",
+                ),
+                timeout=2,
+            )
+        assert persistence_attempts["first"] == 1
+        assert peer_drained.is_set()
+        assert not any(message.get("role") == "tool" for message in messages)
+        assert "first" not in {call.tool_name for call in runtime.tool_calls}
+        assert resources.trusted_runner is not None
+        runner_state = resources.trusted_runner.snapshot()
+        assert runner_state.active == 0
+        assert runner_state.pending == 0
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_parallel_runtime_honors_complete_typed_dependency_dag() -> None:
+    root_names: set[str] = set()
+    roots_entered = asyncio.Event()
+    base_completed = asyncio.Event()
+    execution_order: list[str] = []
+
+    async def base() -> str:
+        root_names.add("base")
+        if len(root_names) == 2:
+            roots_entered.set()
+        await roots_entered.wait()
+        execution_order.append("base")
+        base_completed.set()
+        return "base"
+
+    async def peer() -> str:
+        root_names.add("peer")
+        if len(root_names) == 2:
+            roots_entered.set()
+        await roots_entered.wait()
+        execution_order.append("peer")
+        return "peer"
+
+    async def dependent() -> str:
+        assert base_completed.is_set()
+        execution_order.append("dependent")
+        return "dependent"
+
+    specs = (
+        ToolSpec(
+            name="base",
+            description="base",
+            parameters={"type": "object", "properties": {}},
+            handler=base,
+        ),
+        ToolSpec(
+            name="peer",
+            description="peer",
+            parameters={"type": "object", "properties": {}},
+            handler=peer,
+        ),
+        ToolSpec(
+            name="dependent",
+            description="dependent",
+            parameters={"type": "object", "properties": {}},
+            handler=dependent,
+            dependencies=("base",),
+        ),
+    )
+    graph = ToolGraph(
+        tools=("base", "peer", "dependent"),
+        edges=(
+            ToolGraphEdge(
+                "dependent",
+                "base",
+                ToolGraphRelation.DEPENDS_ON,
+            ),
+            ToolGraphEdge(
+                "base",
+                "peer",
+                ToolGraphRelation.PARALLEL_WITH,
+            ),
+        ),
+    )
+    tool_snapshot = _registered_tool_snapshot(15, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        graph,
+        runner_tools=("base", "peer", "dependent"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await asyncio.wait_for(
+            harness._execute_tools(
+                [
+                    _call(1, "dependent"),
+                    _call(2, "peer"),
+                    _call(3, "base"),
+                ],
+                "",
+                [],
+                "",
+            ),
+            timeout=2,
+        )
+        assert execution_order[-1] == "dependent"
+        assert set(execution_order[:2]) == {"base", "peer"}
+        assert [message["tool_call_id"] for message in messages[1:]] == [
+            "1",
+            "2",
+            "3",
+        ]
+        assert {call.status for call in runtime.tool_calls} == {ToolCallStatus.COMPLETED}
+        assert resources.trusted_runner is not None
+        assert resources.trusted_runner.snapshot().completed == 3
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_dependency_closure_never_enters_parallel_runner() -> None:
+    calls = Counter()
+
+    def build_handler(name: str):
+        async def handler() -> str:
+            calls[name] += 1
+            return name
+
+        return handler
+
+    specs = (
+        ToolSpec(
+            name="base",
+            description="base",
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler("base"),
+        ),
+        ToolSpec(
+            name="dependent",
+            description="dependent",
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler("dependent"),
+            dependencies=("base",),
+        ),
+        ToolSpec(
+            name="peer",
+            description="peer",
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler("peer"),
+        ),
+    )
+    graph = ToolGraph(
+        tools=("base", "dependent", "peer"),
+        edges=(
+            ToolGraphEdge(
+                "dependent",
+                "base",
+                ToolGraphRelation.DEPENDS_ON,
+            ),
+            ToolGraphEdge(
+                "dependent",
+                "peer",
+                ToolGraphRelation.PARALLEL_WITH,
+            ),
+        ),
+    )
+    tool_snapshot = _registered_tool_snapshot(16, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        graph,
+        runner_tools=("base", "dependent", "peer"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await harness._execute_tools(
+            [_call(1, "dependent"), _call(2, "peer")],
+            "",
+            [],
+            "",
+        )
+        assert calls == {"dependent": 1}
+        assert "已跳过" in messages[-1]["content"]
+        assert resources.trusted_runner is not None
+        assert resources.trusted_runner.snapshot().completed == 0
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_mutating_call_in_mixed_batch_stays_on_pending_action_path() -> None:
+    await pending_action_store.clear()
+    executions = Counter()
+
+    async def mutate() -> str:
+        executions["mutate"] += 1
+        return "changed"
+
+    async def safe() -> str:
+        executions["safe"] += 1
+        return "safe"
+
+    mutating_spec = ToolSpec(
+        name="mutate",
+        description="mutate",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+    )
+    safe_spec = ToolSpec(
+        name="safe",
+        description="safe",
+        parameters={"type": "object", "properties": {}},
+        handler=safe,
+    )
+    tool_snapshot = _registered_tool_snapshot(
+        17,
+        (mutating_spec, safe_spec),
+    )
+    graph = _parallel_graph("mutate", "safe")
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        graph,
+        runner_tools=("safe",),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await harness._execute_tools(
+            [_call(1, "mutate"), _call(2, "safe")],
+            "",
+            [],
+            "",
+        )
+        assert executions == {}
+        assert "尚未执行" in messages[-2]["content"]
+        assert "已跳过" in messages[-1]["content"]
+        assert [call.status for call in runtime.tool_calls] == [
+            ToolCallStatus.WAITING_CONFIRMATION,
+            ToolCallStatus.REJECTED,
+        ]
+        assert resources.trusted_runner is not None
+        assert resources.trusted_runner.snapshot().completed == 0
+    finally:
+        await pending_action_store.clear()
+        await resources.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "graph",
+    [
+        ToolGraph(
+            tools=("first", "second"),
+            edges=(
+                ToolGraphEdge(
+                    "first",
+                    "second",
+                    ToolGraphRelation.CONFLICTS_WITH,
+                ),
+            ),
+        ),
+        ToolGraph(
+            tools=("first", "second"),
+            edges=(
+                ToolGraphEdge(
+                    "first",
+                    "second",
+                    ToolGraphRelation.PARALLEL_WITH,
+                ),
+            ),
+            requires_confirmation={"first"},
+        ),
+        ToolGraph(
+            tools=("first", "second"),
+            edges=(
+                ToolGraphEdge(
+                    "first",
+                    "second",
+                    ToolGraphRelation.PARALLEL_WITH,
+                ),
+            ),
+            requires_capability={"first": ("network.read",)},
+        ),
+    ],
+    ids=("conflict", "confirmation", "capability"),
+)
+async def test_unsafe_graph_batch_keeps_existing_serial_and_reject_semantics(
+    graph: ToolGraph,
+) -> None:
+    calls = Counter()
+
+    def build_handler(name: str):
+        async def handler() -> str:
+            calls[name] += 1
+            return name
+
+        return handler
+
+    specs = tuple(
+        ToolSpec(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler(name),
+        )
+        for name in ("first", "second")
+    )
+    tool_snapshot = _registered_tool_snapshot(11, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        graph,
+        runner_tools=("first", "second"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await harness._execute_tools(
+            [_call(1, "first"), _call(2, "second")],
+            "",
+            [],
+            "",
+        )
+        assert calls == {"first": 1}
+        assert "已跳过" in messages[-1]["content"]
+        assert [call.status for call in runtime.tool_calls] == [
+            ToolCallStatus.COMPLETED,
+            ToolCallStatus.REJECTED,
+        ]
+        assert resources.trusted_runner is not None
+        assert resources.trusted_runner.snapshot().completed == 0
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_non_allowlisted_or_duplicate_tools_never_enter_parallel_runner() -> None:
+    calls = Counter()
+
+    def build_handler(name: str):
+        async def handler() -> str:
+            calls[name] += 1
+            return name
+
+        return handler
+
+    specs = tuple(
+        ToolSpec(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler(name),
+        )
+        for name in ("first", "second")
+    )
+    tool_snapshot = _registered_tool_snapshot(12, specs)
+    graph = _parallel_graph("first", "second")
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        graph,
+        runner_tools=("first",),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await harness._execute_tools(
+            [_call(1, "first"), _call(2, "second")],
+            "",
+            [],
+            "",
+        )
+        assert calls == {"first": 1}
+        assert "已跳过" in messages[-1]["content"]
+        assert resources.trusted_runner is not None
+        assert resources.trusted_runner.snapshot().completed == 0
+
+        duplicate_messages = await harness._execute_tools(
+            [_call(3, "first"), _call(4, "first")],
+            "",
+            [],
+            "",
+        )
+        assert calls == {"first": 2}
+        assert "已跳过" in duplicate_messages[-1]["content"]
+        assert resources.trusted_runner.snapshot().completed == 0
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_parallel_first_error_cancels_and_drains_sibling_without_leak() -> None:
+    entered: set[str] = set()
+    both_entered = asyncio.Event()
+    peer_drained = asyncio.Event()
+
+    async def failing() -> str:
+        entered.add("failing")
+        if len(entered) == 2:
+            both_entered.set()
+        await both_entered.wait()
+        raise RuntimeError("private parallel credential")
+
+    async def peer() -> str:
+        entered.add("peer")
+        if len(entered) == 2:
+            both_entered.set()
+        try:
+            await both_entered.wait()
+            await asyncio.Event().wait()
+        finally:
+            peer_drained.set()
+        return "unreachable"
+
+    specs = (
+        ToolSpec(
+            name="failing",
+            description="failing",
+            parameters={"type": "object", "properties": {}},
+            handler=failing,
+        ),
+        ToolSpec(
+            name="peer",
+            description="peer",
+            parameters={"type": "object", "properties": {}},
+            handler=peer,
+        ),
+    )
+    tool_snapshot = _registered_tool_snapshot(13, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        _parallel_graph("failing", "peer"),
+        runner_tools=("failing", "peer"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await asyncio.wait_for(
+            harness._execute_tools(
+                [_call(1, "failing"), _call(2, "peer")],
+                "",
+                [],
+                "",
+            ),
+            timeout=2,
+        )
+        assert peer_drained.is_set()
+        statuses = {call.tool_name: call.status for call in runtime.tool_calls}
+        assert statuses == {
+            "failing": ToolCallStatus.FAILED,
+            "peer": ToolCallStatus.CANCELLED,
+        }
+        assert "private parallel credential" not in str(messages)
+        assert resources.trusted_runner is not None
+        runner_state = resources.trusted_runner.snapshot()
+        assert runner_state.active == 0
+        assert runner_state.pending == 0
+        assert runner_state.failed == 1
+        assert runner_state.cancelled == 1
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+async def test_parallel_caller_cancellation_propagates_after_full_drain() -> None:
+    entered: set[str] = set()
+    both_entered = asyncio.Event()
+    drained: set[str] = set()
+
+    def build_handler(name: str):
+        async def handler() -> str:
+            entered.add(name)
+            if len(entered) == 2:
+                both_entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                drained.add(name)
+            return "unreachable"
+
+        return handler
+
+    specs = tuple(
+        ToolSpec(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            handler=build_handler(name),
+        )
+        for name in ("first", "second")
+    )
+    tool_snapshot = _registered_tool_snapshot(14, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        _parallel_graph("first", "second"),
+        runner_tools=("first", "second"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+    task = asyncio.create_task(
+        harness._execute_tools(
+            [_call(1, "first"), _call(2, "second")],
+            "",
+            [],
+            "",
+        )
+    )
+
+    try:
+        await asyncio.wait_for(both_entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert drained == {"first", "second"}
+        assert {call.status for call in runtime.tool_calls} == {ToolCallStatus.CANCELLED}
+        assert resources.trusted_runner is not None
+        runner_state = resources.trusted_runner.snapshot()
+        assert runner_state.active == 0
+        assert runner_state.pending == 0
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await resources.close()
 
 
 @pytest.mark.asyncio
@@ -395,6 +1237,7 @@ async def test_repeated_tool_limit_prevents_third_execution() -> None:
         return "ok"
 
     harness = Harness({"tool": {"func": tool}})
+    messages: list[dict] = []
     for index in range(3):
         messages = await harness._execute_tools([_call(index, "tool")], "", [], "")
     assert executions == 2
@@ -406,7 +1249,8 @@ async def test_mutating_tool_always_requires_separate_nonce_confirmation() -> No
     await pending_action_store.clear()
     executions = []
 
-    async def mutate(_tool_context=None):
+    async def mutate(_tool_context: ToolContext | None = None):
+        assert _tool_context is not None
         executions.append(_tool_context.confirmed)
         return "changed"
 
