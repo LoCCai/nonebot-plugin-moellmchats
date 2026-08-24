@@ -1,7 +1,7 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-24T05:33:39+00:00
+lastmod: 2026-08-24T05:41:31+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
@@ -29,6 +29,7 @@ lastmod: 2026-08-24T05:33:39+00:00
 - I-04 实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已完成 Agent 领域字段、现有 Schema 与三类 caller-owned `AsyncSession` PostgreSQL Repository 对齐；11 表/8 revision 已完整覆盖，不新增空 migration。四版本与最低依赖全量各 `2704 passed, 1 skipped`，数据库联合 `588 passed`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-05 保持锁定。
 - I-04 本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除。
 - I-05 实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 已完成显式 generation resource container：默认 Memory/零后端 I/O，PostgreSQL/Redis 只在强类型显式配置下惰性构造；Repository provider、cache、queue、metrics、logger、API 与 runner ports 同代组合，startup/逆序 shutdown、部分回滚、取消收尾、lease drain、reload handoff、失败代重试和 queue fail-closed 均有确定契约。四版本与最低依赖全量各 `2738 passed, 1 skipped`，联合 `1101 passed`，Sandbox `41 passed, 0 skipped`，静态、可复现制品和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-06 保持锁定。
+- I-05 本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除。
 
 ## 2. 状态口径
 
@@ -157,7 +158,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - startup/shutdown 次序、部分初始化回滚、取消、重复关闭与 reload generation 切换必须确定且可测试。
 - 实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 已满足上述资源组合与生命周期契约；四版本定向各 `34 passed`、联合 `1101 passed`、四版本及 Python 3.10 最低依赖全量各 `2738 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`。
 - Ruff/Pyright、104 成员 fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/resource lifecycle/零真实 I/O smoke 全部通过；详细哈希与目录见 `04-implementation-backlog.md`。
-- 精确 HEAD push/PR 双 `release-gate` 待关闭，I-06 继续锁定；未接真实聊天入口，未迁移、未连接真实服务、未合并、发布、部署或重启。
+- 本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除；未接真实聊天入口，未迁移、未连接真实服务、未合并、发布、部署或重启。
 
 ### I-06 Agent / History / Summary / Long-Memory Runtime Wiring
 
@@ -206,4 +207,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线与 I-01～I-04 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-05 实现提交与全部本地门禁已完成，下一步提交本地证据文档并关闭 I-05 精确 HEAD 双 run。I-06 在此之前保持锁定；仍不运行在线 migration、不连接真实服务、不操作生产。
+当前精确恢复点：规划审计基线与 I-01～I-05 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-06 前置依赖已解除，下一步按本节契约实现 Agent / History / Summary / Long-Memory Runtime Wiring。仍不运行在线 migration、不连接真实服务、不操作生产。

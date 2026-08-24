@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T05:33:39+00:00
+lastmod: 2026-08-24T05:41:31+00:00
 ---
 
 # 02-plan-future-architecture
@@ -25,6 +25,8 @@ lastmod: 2026-08-24T05:33:39+00:00
 > I-04 远端闭环（2026-08-23）：本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除；真实聊天/runtime 仍未构造或持久化 Agent 对象，未合并、发布、部署、迁移或连接真实服务。
 
 > I-05 本地门禁（2026-08-24）：实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 新增显式 generation resource container，组合 snapshot、完整 Repository provider、cache、queue、metrics、logger、API 与可选 runner ports；默认 Memory 模式零后端 I/O，PostgreSQL/Redis 只有显式强类型 settings 才惰性构造。startup/逆序 shutdown、部分初始化回滚、取消收尾、重复关闭、generation handoff、旧代 lease drain、失败代重试、queue fail-closed、嵌套/逃逸 lease 均有确定契约。四版本定向各 `34 passed`、联合 `1101 passed`、四版本与最低依赖全量各 `2738 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-06 继续锁定；container 尚未接真实聊天入口，未连接真实服务、未迁移、未发布或部署。
+
+> I-05 远端闭环（2026-08-24）：本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除；真实聊天/runtime 仍未消费 container 或持久化 Agent 对象，未合并、发布、部署、迁移或连接真实服务。
 
 > 推荐目标版本：`0.26 → 0.30`
 

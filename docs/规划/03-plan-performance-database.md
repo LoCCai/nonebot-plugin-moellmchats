@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T05:33:39+00:00
+lastmod: 2026-08-24T05:41:31+00:00
 ---
 
 # 03-plan-performance-database
@@ -25,6 +25,8 @@ lastmod: 2026-08-24T05:33:39+00:00
 > I-04 远端闭环（2026-08-23）：本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除；未运行 migration、未连接真实 PostgreSQL/Redis，未合并、发布或部署。
 
 > I-05 本地门禁（2026-08-24）：实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 将 database/Redis manager、完整 Repository provider、History/Tool/Classification cache 与 Usage/Audit queue 纳入显式 generation container；默认不读取环境或连接信息，未配置即纯 Memory，显式配置也只惰性构造 client/engine。queue 含未确认 durable 结果时 generation 关闭 fail closed，失败 active/retired generation 均保留供后续重试，reload 在旧 lease 排空前不关闭旧代。四版本与 Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量各 `2738 passed, 1 skipped`，联合 `1101 passed`、Sandbox `41 passed, 0 skipped`、静态/制品/四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-06 锁定；真实事务、cache committed 顺序、spool/failure policy/database metrics 尚未接线，未运行 migration、未连接真实服务、未发布或部署。
+
+> I-05 远端闭环（2026-08-24）：本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除；真实事务、cache committed 顺序、spool/failure policy/database metrics 仍待后续阶段，未运行 migration、未连接真实 PostgreSQL/Redis，未合并、发布或部署。
 
 > 推荐目标版本：`0.28 → 0.30`
 
