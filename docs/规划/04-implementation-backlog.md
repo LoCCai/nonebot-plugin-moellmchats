@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T07:50:35+00:00
+lastmod: 2026-08-24T07:58:32+00:00
 ---
 
 # 04-implementation-backlog
@@ -13,7 +13,7 @@ lastmod: 2026-08-24T07:50:35+00:00
 ## 当前实施状态（2026-08-24）
 
 - H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push `32636423646` / PR `32636425880` 已重新核验为各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
-- A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。I-03 structured ToolResult 已接真实 adapter/runner/history/model，I-04 Agent PostgreSQL Repository 与 I-05 generation resource composition 均已关闭双门禁；I-06 已在真实聊天路径构造 AgentRun/Step/ToolCall，接通 Deadline、history/cache、summary/LTM、usage/audit 并完成全部本地门禁。I-06 精确 HEAD 双 run 待关闭，I-07 继续锁定；模型能力路由的受信 catalog/runtime 接线、并行接线、spool/Redis failure policy/database metrics 等仍未完成。
+- A～H 已关闭的是既定 primitive gate，不是 Plan 2 / Plan 3 最终运行态验收。I-03 structured ToolResult 已接真实 adapter/runner/history/model，I-04 Agent PostgreSQL Repository 与 I-05 generation resource composition 均已关闭双门禁；I-06 已在真实聊天路径构造 AgentRun/Step/ToolCall，接通 Deadline、history/cache、summary/LTM、usage/audit，本地证据 HEAD 双 run 已关闭。I-07 依赖解除，但进入实现前仍须本最终闭环文档 HEAD 通过精确双 run；模型能力路由的受信 catalog/runtime 接线、并行接线、spool/Redis failure policy/database metrics 等仍未完成。
 - 规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 依赖据此解除。
 - I-01 实现提交 `4a643e062b83055722351df12d402e518dc51b51` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建与四组包外零真实 I/O smoke；本地证据文档 HEAD `3f3571322b7581f8cc632a03262760cf280ea550` 的 push `32638844775` / PR `32638846637` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-01 已完成，I-02 依赖已解除。
 - I-01 最终闭环文档 HEAD `84d7b9ae87822ee7a33523769dd47443023b074d` 的 push `32639069640` / PR `32639071853` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`。I-02 实现提交 `72258ccc9ac8b5cf2eda1ea26c423d68684161b4` 已完成四版本定向/联合/全量、最低依赖、Sandbox、静态、fresh 制品/重建及四组包外零真实 I/O smoke；本地证据 HEAD `0452bdd0696b8efd257e68c9b9a50d38b0de2f07` 的 push `32641447820` / PR `32641450374` 已各 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-02 已完成，I-03 依赖已解除。
@@ -21,7 +21,7 @@ lastmod: 2026-08-24T07:50:35+00:00
 - I-04 实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已完成领域/Schema/三类 PostgreSQL Repository 对齐、四版本定向/联合/全量、Python 3.10 最低依赖、Sandbox、静态、fresh 制品/重建及四组包外零真实 I/O smoke。现有 11 表/8 revision 完整覆盖，不新增或运行 migration；精确 HEAD 双 run 待完成，I-05 继续锁定。
 - I-04 本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功；本地、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除。
 - I-05 实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 与全部本地门禁已完成；本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。本地、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除。
-- I-05 最终闭环文档 HEAD `1dc7dd4fb3fdb29b37bd2be4a4f904103e19108d` 的 push `32694556611` / PR `32694558961` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。在此前提下，I-06 实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 与全部本地门禁已完成；精确 HEAD 双 run 待关闭，I-07 继续锁定。
+- I-05 最终闭环文档 HEAD `1dc7dd4fb3fdb29b37bd2be4a4f904103e19108d` 的 push `32694556611` / PR `32694558961` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。在此前提下，I-06 实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 与全部本地门禁已完成；本地证据 HEAD `fe3b48f212de1e79bdcad7c1f48c456bc3f317a8` 的 push `32703751436` / PR `32703756205` 也已各 11/11 success、`non_success=[]`、各唯一成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-06 已完成，I-07 依赖解除；本最终闭环文档 HEAD 自身仍须双 run。
 - Milestone A～F 已按依赖顺序完成各自精确 HEAD 双 run 门禁；D-09 因缺少至少一个发布周期 parity 观察且禁止生产操作而继续锁定。
 - G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 已完成四版本、本地 Sandbox、静态、最低依赖、fresh 制品、四组包外零数据库 I/O 与精确 HEAD 双 run 门禁；G-02 依赖已解除。
 - G-01 只提供不可变 Conversation/Message records 与调用方显式 session 的 PostgreSQL Repository；未接配置、生命周期、现有内存聊天路径或生产 runtime，未读取 DSN，未运行 migration，未连接真实 PostgreSQL/Redis。
@@ -1517,7 +1517,9 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 证据目录：制品 `/tmp/moellm-i06-dist.hILXsD`，重建 `/tmp/moellm-i06-rebuild.5Z3sj3`，包外 smoke `/tmp/moellm-i06-smoke.QNo6D0`，Sandbox JUnit `/tmp/moellm-i06-sandbox.GE4XR6/junit.xml`。一次最初的 wheel 内容读取命令因主机未安装 `unzip` 在读取前停止，不计门禁；随后使用 Python `ZipFile` 与 tar 重新比对，commit/wheel/sdist 三方模块哈希一致，未修改产品代码或制品。
 
-状态：I-06 实现提交与全部本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待关闭，I-07 继续锁定。未读取 DSN、Redis URL、token 或 credential，未连接真实 PostgreSQL/Redis/模型，未运行 migration，未合并、promotion、发布、部署或重启；用户未跟踪的 `uv.lock` 未修改、未暂存、未提交。
+远端证据：I-06 本地证据 HEAD `fe3b48f212de1e79bdcad7c1f48c456bc3f317a8` 对应 push run `32703751436` 与 PR run `32703756205`；两者均精确命中目标 SHA、各 11 个 job 全绿、`non_success=[]`，各恰好一个 `completed/success release-gate`。本地、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
+
+状态：I-06 实现、本地门禁与本地证据 HEAD 双 `release-gate` 均已完成，I-07 前置依赖解除；进入 I-07 前仍须本最终闭环文档 HEAD 自身通过精确双 run。未读取 DSN、Redis URL、token 或 credential，未连接真实 PostgreSQL/Redis/模型，未运行 migration，未合并、promotion、发布、部署或重启；用户未跟踪的 `uv.lock` 未修改、未暂存、未提交。
 
 ---
 
@@ -1529,7 +1531,7 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 验证：mutating、未知 effect、冲突、需确认和非 allowlist 工具不得并行；重复调用、结果上限、PendingAction、审计及 generation 边界保持有效。
 
-状态：🔒 等待 I-06。
+状态：I-06 本地证据 HEAD 双门禁已关闭；等待 I-06 最终闭环文档 HEAD 自身双 run 后开始。
 
 ---
 
