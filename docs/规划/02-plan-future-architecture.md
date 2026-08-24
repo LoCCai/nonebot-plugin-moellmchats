@@ -1,14 +1,14 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T09:37:07+00:00
+lastmod: 2026-08-24T14:55:54+00:00
 ---
 
 # 02-plan-future-architecture
 
 # Plan 2：后续功能与架构优化
 
-> 最终验收口径复核（2026-08-24）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。Provider/Capability/Trust consumer 已由 D-08 接入真实路径，I-03 structured ToolResult 与 I-06 Agent runtime 已关闭最终双门禁；I-07 已将受信强类型只读 DAG 接入真实工具路径并关闭本地证据 HEAD 双 run，Tool Graph 与 read_only 并行验收据此勾选。I-08 仍须等待 I-07 最终闭环文档 HEAD 自身双 run；模型能力路由的受信 catalog/runtime 接线与平台能力继续由 Milestone I 收口。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
+> 最终验收口径复核（2026-08-24）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。I-07 最终闭环文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的双 run 已关闭；I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975` 已把受信 capability routing 接入 `ModelSelector`/payload/chat，组合 generation-local Runtime API/Admin mounts、structured lifecycle logging 与 Full/platform metrics，并补齐 Tool Catalog / Tool Schema / Classification 三类同代 cache consumer；Plan 2 的开发态 runtime 验收项已收齐并通过本地门禁。当前没有 I-08 本地证据 HEAD 的远端双门禁，I-09 尚未开始；生产发布观察仍未发生。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
 
 > I-01 本地门禁（2026-08-23）：规划基线 `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已严格关闭。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增独立 `model_capabilities.py`，固定 text/vision/tools/json-schema/reasoning/streaming 六能力、context/output limits、精确 Decimal 每百万 token 成本、四态 availability 与 generation-bound descriptor；三类摘要分别绑定 raw identity、capability+limits 和完整 descriptor，未知成本与零成本严格区分，repr 不暴露 raw identity。四版本定向各 `98 passed`、联合各 `492 passed`、普通全量及最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 锁定；本阶段不读取/改写模型配置，不接 `ModelSelector`，不发网络请求。
 
@@ -37,6 +37,10 @@ lastmod: 2026-08-24T09:37:07+00:00
 > I-07 本地门禁（2026-08-24）：实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 将 generation-local `ToolGraph` 与 `TrustedRunnerPool` 双重显式 opt-in 接入真实 `_execute_tools()`。只有 provider-authoritative、trust 允许、强类型 `READ_ONLY`、无 capability/确认要求、allowlist 命中、依赖闭包完整且有显式 `parallel_with` 的同代调用才进入 G-09/G-10；其余保持既有串行/拒绝语义。共享 Deadline、首错取消并 drain、原请求顺序回填、请求局部 trace 锁和关键写 fail-closed 均已验证。四版本定向各 `68 passed`、联合 `471 passed`、四版本及最低依赖全量各 `2799 passed, 1 skipped`、Sandbox `41 passed, 0 skipped`；Ruff/Pyright、fresh 制品/重建及四组包外真实并发度 2/零真实 I/O smoke 全绿。精确 HEAD 双 run 待关闭，I-08 继续锁定；用户的 `uv.lock` 未修改、未暂存、未提交。
 
 > I-07 远端闭环（2026-08-24）：本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 已完成，I-08 依赖解除；进入实现前仍需本最终闭环文档 HEAD 的精确双 run。未迁移、连接真实服务、合并、发布或部署。
+
+> I-07 最终闭环（2026-08-24）：最终文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的 push `32713316379` / PR `32713320021` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-08 实现依赖已完全关闭；未触发新 CI，未迁移、连接真实服务、合并、发布或部署。
+
+> I-08 本地门禁（2026-08-24）：实现提交 `abc275721b67165224309d79e4406e95012f2975` 已完成受信 generation-bound model catalog/runtime、固定 pin 回滚与 capability-only 选择在 `ModelSelector`、category、vision、MoE 和 LLM payload 的真实消费；显式 H-01～H-05 platform mounts 保持鉴权/scope/只读 Admin/双 CAS，Agent/LLM/tool/reload 生命周期写入 payload-free structured log 与同代 Full/platform metrics。Tool Catalog Cache 现由真实 `Categorize` 消费，Tool Schema Cache 在选定模型后异步预备并由同步 payload 严格物化，Classification Cache 只发布 `MODEL_SUCCESS`，三者均拒绝跨代/config/key 漂移与 backend timeout 隐式降级。扩展联合回归 `1094 passed`，四版本与最低依赖全量均为 `2874 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态与 111 成员可复现制品/四组包外零真实 I/O 及 cache consumer `12 passed` 全绿。I-08 本地证据 HEAD 的 push/PR 双门禁待关闭，I-09 尚未开始；未迁移、连接真实服务、合并、发布或部署。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -1167,14 +1171,14 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [x] AgentRun（I-06 已由真实 runtime 创建并关闭精确 HEAD 双 run）
 - [x] AgentStep（I-06 已覆盖模型/工具真实轨迹并关闭精确 HEAD 双 run）
 - [x] ToolCall（I-06 已覆盖成功、确认、拒绝、失败、超时和取消轨迹并关闭双 run）
-- [x] DeadlineContext（I-06 已接单一请求预算；I-07 并行路径已复用并完成本地门禁）
-- [x] Tool Graph（I-07 已接真实工具路径并关闭本地证据 HEAD 双 run）
-- [x] read_only 并行工具（I-07 双重显式 opt-in 真实路径已关闭本地证据 HEAD 双 run）
-- [ ] ModelCapability（I-01 primitive 双 gate 已绿；待后续 runtime 实际消费）
-- [ ] capability based routing（I-02 primitive 双 gate 已绿；尚未接现有 selector/chat runtime）
-- [ ] Runtime API（H-01～H-05 primitive 已由 I-05 container 提供显式 handler port；待 I-08 挂载）
-- [ ] structured audit（I-06 已写入真实 Agent/工具生命周期并关闭双 run；I-08 仍需接 spool/平台事件）
-- [ ] structured metrics（H-07 primitive 已绿；待 I-08 观测并接 H-04）
+- [x] DeadlineContext（I-06 已接单一请求预算；I-07 并行路径已复用并关闭最终文档双 run）
+- [x] Tool Graph（I-07 已接真实工具路径并关闭最终文档双 run）
+- [x] read_only 并行工具（I-07 双重显式 opt-in 真实路径已关闭最终文档双 run）
+- [x] ModelCapability（I-08 实现提交 `abc2757` 已从受信 catalog 构造 generation-bound runtime，并由真实 selector/payload/chat 消费；本地门禁全绿）
+- [x] capability based routing（I-08 已把 fixed-only/fixed-preferred/capability-only 策略接入 category/vision/selected/MoE 真实选择路径，显式启用后配置错误 fail closed）
+- [x] Runtime API（I-08 已把 H-01～H-05 组合为同代 platform mounts，保留鉴权、scope、只读 Admin 与写操作双 CAS；本地门禁全绿）
+- [x] structured audit（I-06 已接 Agent/模型/工具 durable audit；I-08 又接 payload-free structured log、reload audit 与有界 Usage/Audit spool，未知结果不重放）
+- [x] structured metrics（I-08 已让真实 Agent/LLM/tool/database/spool 生命周期写入同代 Full/platform metrics，并由 H-04 安全读取）
 - [x] ToolResult structured output（I-03 已将六字段 canonical contract 接入真实 adapter/runner/history/model 路径并关闭双 gate）
 
 ---

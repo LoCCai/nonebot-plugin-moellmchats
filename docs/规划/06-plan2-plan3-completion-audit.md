@@ -1,19 +1,19 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-24T09:37:07+00:00
+lastmod: 2026-08-24T14:55:54+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
 
 ## 1. 审计结论
 
-截至 I-07 本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b`：
+截至 I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975`：
 
 - Plan 1 / Milestone A～C 已完成，既有安全门禁不得回退。
 - D-01a～D-08f、E-01～E-08、F-01～F-14、G-01～G-10 与 H-01～H-08 的既定增量 primitive 均有本地和精确 HEAD 双 run 证据。
 - H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push run `32636423646` 与 PR run `32636425880` 均精确命中该 SHA、各 11/11 success、`non_success=[]`，各恰好一个成功 `release-gate`；当时本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
-- 上述 H-08 证据只证明已拆分 primitive 的质量，不等于 Plan 2 / Plan 3 的最终运行态验收。此后 I-06 已在开发仓库真实聊天路径创建 Agent 领域记录并消费 history/summary/LTM/usage/audit 能力，最终文档 HEAD 双 run 已关闭；I-07 已将 Tool Graph / read-only scheduler / parallel executor / Trusted Runner Pool 接入真实工具路径，本地证据 HEAD 双 run 已关闭。I-07 最终闭环文档 HEAD 双 run 完成前不开始 I-08；其余能力继续按 I-08～I-09 收口。
+- 上述 H-08 证据只证明已拆分 primitive 的质量，不等于 Plan 2 / Plan 3 的最终运行态验收。此后 I-06 已在开发仓库真实聊天路径创建 Agent 领域记录并消费 history/summary/LTM/usage/audit，I-07 已将 Tool Graph / read-only scheduler / parallel executor / Trusted Runner Pool 接入真实工具路径；两项最终文档 HEAD 双 run 均已关闭。I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975` 又完成 capability routing、platform API/metrics/logging、Usage/Audit spool、Redis 组合故障策略、database/spool metrics，以及 Tool Catalog / Tool Schema / Classification 三类 cache consumer 的真实开发态接线和全部本地门禁；Plan 2 / Plan 3 的开发态 runtime 验收项据此收齐，但本地证据 HEAD 的远端双门禁尚未关闭，I-09 尚未开始。
 - D-09 仍要求至少一个真实发布周期的 Provider/legacy parity 观察。本任务禁止生产操作，因此 D-09 必须继续锁定；本地测试或 CI 不能替代发布观察。
 
 因此，H-08 是“已规划 primitive gate”的终点，不是总体目标终点。后续以 Milestone I 完成开发仓库内的运行态集成；生产迁移、发布、部署和 D-09 观察仍属于独立的生产门禁。
@@ -34,7 +34,9 @@ lastmod: 2026-08-24T09:37:07+00:00
 - I-06 本地证据 HEAD `fe3b48f212de1e79bdcad7c1f48c456bc3f317a8` 的 push `32703751436` / PR `32703756205` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-06 已完成，I-07 依赖解除；进入实现前仍需本最终闭环文档 HEAD 自身双 run。
 - I-06 最终闭环文档 HEAD `caf6e2c0f7d603835964042d7fae124e7c83a12f` 的 push `32704551636` / PR `32704555524` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 实现依赖已完全关闭。
 - I-07 实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 已完成 generation-local Tool Graph / Trusted Runner 双重显式 opt-in 的真实只读并行接线；mutating、冲突、确认、capability、非 allowlist、重复、缺依赖与 generation 漂移均保留串行/拒绝语义。四版本定向各 `68 passed`、联合 `471 passed`、四版本与最低依赖全量各 `2799 passed, 1 skipped`、Sandbox `41 passed, 0 skipped`，静态、可复现制品和四组包外真实并发度 2/零真实 I/O smoke 全绿。精确 HEAD 双 run 待关闭，I-08 继续锁定。
-- I-07 本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 已完成，I-08 依赖解除；进入实现前仍需本最终闭环文档 HEAD 自身双 run。
+- I-07 本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。最终闭环文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的 push `32713316379` / PR `32713320021` 也均为 11/11 success、`non_success=[]`、唯一 `release-gate` 成功并保持四方 HEAD 一致。I-08 实现依赖已完全关闭。
+- I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975` 将受信 generation-bound model routing 接入 `ModelSelector`/category/vision/MoE/payload；H-01～H-05 已组合为同代 platform mounts；Agent/LLM/tool/reload 事件已接 payload-free structured log 与 Full/platform metrics；Usage/Audit 已接私有 canonical local spool/worker；Redis PendingAction/cooldown/admission 已按危险操作 fail-closed 与显式单实例 fallback 策略接真实开发路径。Tool Catalog Cache 已由同代 `Categorize` 消费，Tool Schema Cache 已在模型选定后异步预备并由同步 payload 严格物化，Classification Cache 只发布 `MODEL_SUCCESS`；三者均拒绝 generation/config/key 漂移与 backend timeout 隐式降级。
+- Catalog/Schema/Classification 定向分别为 `54 passed, 9 deselected`、`68 passed, 9 deselected`、`117 passed, 4 deselected`，cache consumer 文件 `12 passed`，扩展 I-08 联合回归 `1094 passed`；四版本及 Python 3.10 最低依赖全量均为 `2874 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、111 成员可复现制品和四组包外零真实 I/O 与 cache consumer smoke 全绿。当前尚无本地证据 HEAD 的远端双 run，I-09 继续锁定；生产 migration、真实后端、发布与 D-09 观察均未发生。
 
 ## 2. 状态口径
 
@@ -51,14 +53,15 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 | 能力 | 已有证据 | 当前缺口 |
 | --- | --- | --- |
 | Provider / Capability / Trust | D-08 已将 categorize、payload、tool execution、pending action、search 与管理 consumer 切到 generation-bound Provider 视图，并保留 parity rollback | D-09 legacy 删除仍受生产发布周期门禁锁定 |
-| AgentRun / AgentStep / ToolCall / Deadline | I-06 已让真实 `handle_llm` 租用 generation resource，以单一 Deadline 创建并持久化 AgentRun、模型/工具 Step 与完整 ToolCall 状态轨迹，最终文档 HEAD 双 run 已关闭；I-07 并行路径已复用该 deadline/trace 并关闭本地证据 HEAD 双 run | 开发仓库内无剩余并行 deadline/trace 接线缺口；生产观察不在本轮范围 |
-| Model Capability / Routing | I-01 已实现无凭据 descriptor；I-02 双 gate 已实现 generation/catalog/policy/capability-bound 路由及固定模型兼容/回滚 | 尚未从受信 catalog 构造路由 snapshot，也未接现有 `ModelSelector`、payload 或真实聊天 runtime |
+| AgentRun / AgentStep / ToolCall / Deadline | I-06 已让真实 `handle_llm` 租用 generation resource，以单一 Deadline 创建并持久化 AgentRun、模型/工具 Step 与完整 ToolCall 状态轨迹，最终文档 HEAD 双 run 已关闭；I-07 并行路径已复用该 deadline/trace 并关闭最终文档双 run | 开发仓库内无剩余并行 deadline/trace 接线缺口；生产观察不在本轮范围 |
+| Model Capability / Routing | I-01/I-02 已实现无凭据 descriptor 与 generation/catalog/policy/capability-bound 路由；I-08 实现提交 `abc2757` 已从受信 model catalog 构造 runtime，并接 `ModelSelector`、category、vision、MoE 与 payload 真实路径 | 本地门禁已完成但尚无 I-08 本地证据 HEAD 的远端证据；真实模型与发布观察不在本轮范围 |
 | Structured ToolResult | I-03 已将六字段领域契约接入 Custom/NoneBot Provider、Generated runner、history preview 与模型消息，本地与精确 HEAD 双门禁已关闭 | 开发仓库内无剩余 structured ToolResult 缺口；生产发布观察不在本轮范围 |
-| Agent persistence | I-06 已以 caller-owned `AsyncSession` 短事务接入 User/Conversation/Message/Summary/AgentRun/AgentStep/ToolCall/Usage/Audit Repository，commit unknown 不重放，最终文档 HEAD 双 run 已关闭 | 未运行生产 migration，I-08 spool 尚未实现 |
+| Agent persistence | I-06 已以 caller-owned `AsyncSession` 短事务接入 User/Conversation/Message/Summary/AgentRun/AgentStep/ToolCall/Usage/Audit Repository，commit unknown 不重放；I-08 实现提交 `abc2757` 又接 definite-failure-only Usage/Audit durable spool，unknown 永久隔离且不重放 | 未运行生产 migration 或真实 PostgreSQL 观察；I-08 尚无本地证据 HEAD 的远端证据 |
 | History / Summary / Long-Term Memory | I-06 已接 committed MessagesHandler、hot-cache trust、summary CAS watermark 与显式 LTM untrusted prompt，定义失败降级/取消传播，最终文档 HEAD 双 run 已关闭 | 真实 PostgreSQL/Redis/模型生产观察不在本轮范围 |
-| Parallel execution / Runner pool | I-07 已以 generation-local Tool Graph / Trusted Runner 双重显式 opt-in 把 G-09/G-10 接入真实 `_execute_tools()`，并验证安全回退、共享 Deadline、trace 串行化与失败 drain，本地证据 HEAD 双 run 已关闭 | 其他调用仍保持 `max_tool_calls_per_round = 1` 的旧语义；生产观察不在本轮范围 |
-| Logging / Metrics / API / Admin | I-06 已启动/租用 generation host 并把 structured audit 写入 Agent/工具真实生命周期；I-05 container 仍可同代组合 Full Metrics、structured logger 与 API handler ports | Full Metrics/structured log、API/Admin 挂载及平台事件仍待 I-08 |
-| Database / Redis failure policy | 各 backend primitive 对自身错误 fail closed | DB failure spool、Redis 组件级组合降级与 database metrics 尚未实现 |
+| Parallel execution / Runner pool | I-07 已以 generation-local Tool Graph / Trusted Runner 双重显式 opt-in 把 G-09/G-10 接入真实 `_execute_tools()`，并验证安全回退、共享 Deadline、trace 串行化与失败 drain，最终文档 HEAD 双 run 已关闭 | 其他调用仍保持 `max_tool_calls_per_round = 1` 的旧语义；生产观察不在本轮范围 |
+| Logging / Metrics / API / Admin | I-08 实现提交 `abc2757` 已将 Agent/LLM/tool/reload 接入 payload-free structured log 与 generation-local Full/platform metrics，并把 H-01～H-05 组合成同代 platform mounts；鉴权/scope/只读 Admin/双 CAS 保持不变 | 本地门禁已完成但尚无 I-08 本地证据 HEAD 的远端证据；未挂载或观察生产平台 |
+| Database / Redis failure policy | I-08 实现提交 `abc2757` 已实现有界私有 Usage/Audit spool/worker、低基数 database/pool/spool metrics，以及 PendingAction 永远 fail closed、cooldown/admission 显式单实例 fallback 的 Redis 组合策略 | 真实 PostgreSQL/Redis、生产 migration 与发布观察均未发生；I-08 尚无本地证据 HEAD 的远端证据 |
+| Tool Catalog / Tool Schema / Classification Cache | I-08 实现提交 `abc2757` 已按 G-04 → G-05 → G-06 接入真实 consumer；catalog、schema、classification identity 均绑定同代 resource/config/key，schema 在异步预备后由同步 payload 重新核对完整 key，classification 只缓存成功模型结果 | 开发态 consumer 门禁已完成但尚无 I-08 本地证据 HEAD 的远端证据；真实 Redis/模型与发布观察不在本轮范围 |
 
 ## 4. Plan 2 当前状态
 
@@ -69,17 +72,14 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - Tool Trust Level enforcement
 - Structured ToolResult canonical adapter/runner/history/model 路径（I-03 精确 HEAD 双 gate 已关闭）
 - AgentRun/AgentStep/ToolCall、单一 Deadline、history/summary/LTM 与 structured audit 路径（I-06 最终文档双 run 已关闭）
-- Tool Graph / read-only scheduler / parallel executor / trusted runner pool 真实路径（I-07 本地证据 HEAD 双 run 已关闭）
+- Tool Graph / read-only scheduler / parallel executor / trusted runner pool 真实路径（I-07 最终文档双 run 已关闭）
+- Model Capability / capability routing 的受信 catalog、selector、category、vision、MoE 与 payload 路径（I-08 实现提交 `abc2757` 本地门禁已绿）
+- Runtime API / Web Admin platform mounts 与 structured logging / Full Metrics（I-08 实现提交 `abc2757` 本地门禁已绿）
 
-### Primitive 已完成、最终集成未完成
+### 尚缺闭环
 
-- Model Capability descriptor / capability-based routing（I-01/I-02 双 gate 已绿）
-- Runtime API / Web Admin
-- structured logging / Full Metrics
-
-### 尚缺核心实现
-
-- capability routing 与平台 observability/API 的真实消费
+- I-08 实现提交与本地门禁已完成，本地证据 HEAD 的 push/PR 双 `release-gate` 与最终文档 HEAD 尚未关闭。
+- I-09 最终矩阵、远端闭环与分层结论尚未开始；生产平台行为不在本轮授权范围内。
 
 ## 5. Plan 3 当前状态
 
@@ -92,13 +92,18 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - History、Tool Catalog、Tool Schema、Classification cache primitive
 - Usage/Audit batch queue
 
-### 最终集成未完成
+### 开发态 runtime 集成
 
-- I-06 已完成 Agent/history/hot cache/summary/long-memory/usage/audit 的 runtime 编排与精确 HEAD 双 run
-- I-07 已完成 read-only parallelism 的真实 runtime 接线并关闭本地证据 HEAD 双 run
-- Redis client 与各 Redis store 的统一生命周期和故障组合
-- DB failure spool 与可证明的不重复 flush 协议
-- database metrics
+- I-06 已完成 Agent/history/hot cache/summary/long-memory/usage/audit 的 runtime 编排与最终文档双 run。
+- I-07 已完成 read-only parallelism 的真实 runtime 接线并关闭最终文档双 run。
+- I-08 实现提交 `abc2757` 已完成 Redis client/PendingAction/cooldown/admission 的同代生命周期和组件级故障组合。
+- I-08 实现提交 `abc2757` 已完成 DB failure spool、可证明的不重复 flush 协议与 database/pool/spool metrics。
+- I-08 实现提交 `abc2757` 已按 G-04 → G-05 → G-06 完成 Tool Catalog、Tool Schema 与 Classification Cache 的同代真实 consumer 接线，并验证漂移、backend timeout 与非成功分类均 fail closed 或不发布。
+
+### 尚缺闭环与生产证据
+
+- Plan 3 开发态 runtime 验收项已全部接线并通过当前工作树本地门禁，但 I-08 尚无精确提交和远端双 run，I-09 尚未开始。
+- 真实数据库/Redis、在线 migration 与生产发布观察均未发生，不能由本地或 CI 证据替代。
 
 ## 6. Milestone I：Plan 2 / Plan 3 Completion
 
@@ -113,7 +118,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
   → I-05 Runtime Resource Composition and Lifecycle
   → I-06 Agent / History / Summary / Long-Memory Runtime Wiring
   → I-07 Read-only Parallel Runtime Wiring
-  → I-08 Audit / Logging / Metrics / API / Admin / Failure Policy Wiring
+  → I-08 Platform / Spool / Failure Policy / Cache Consumer Wiring
   → I-09 Final Matrix and Remote Closure
 ```
 
@@ -178,15 +183,22 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - I-06 最终文档 HEAD `caf6e2c0f7d603835964042d7fae124e7c83a12f` 的 push `32704551636` / PR `32704555524` 双 `release-gate` 已关闭。在此前提下，实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 新增 generation-local `parallel_tool_graph` 并与 `trusted_runner_tools / TrustedRunnerPool` 强制双重显式 opt-in，真实 `_execute_tools()` 只在 provider-authoritative、trust allowed、强类型 `READ_ONLY`、无 policy/确认/capability、allowlist 命中、依赖闭包完整且有显式 `parallel_with` 时使用 G-09/G-10。
 - 并行路径复用 I-06 的单一 Deadline 与 Agent trace；首错取消并 drain，请求顺序回填。请求局部锁串行化 trace 持久化以保证 step index 唯一；关键写失败 fail closed，禁止重放未知结果。不合格的整批调用完整回退原串行/PendingAction/拒绝语义，不做部分并行。
 - 四版本定向各 `68 passed`、联合 `471 passed`、四版本及 Python 3.10 最低依赖全量各 `2799 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright、105 成员 fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/真实并发度 2/原序回填/唯一 trace/零真实 I/O smoke 全绿。详细哈希和证据目录见 `04-implementation-backlog.md`。
-- 本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 已完成，I-08 依赖解除；进入实现前仍须本最终闭环文档 HEAD 自身双 run。未迁移、未连接真实服务、未合并、发布、部署或重启；`uv.lock` 未修改、未暂存、未提交。
+- 本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。最终文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的 push `32713316379` / PR `32713320021` 也各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功并保持四方 HEAD 一致。I-07 最终完成，I-08 实现依赖完全解除；未迁移、未连接真实服务、未合并、发布、部署或重启；`uv.lock` 未修改、未暂存、未提交。
 
-### I-08 Platform and Failure-policy Wiring
+### I-08 Platform / Spool / Failure Policy / Cache Consumer Wiring
 
 - 真实 Agent/LLM/tool 生命周期写入 structured audit/logging/Full Metrics，并让 H-04 读取一致 generation 的指标。
 - 显式挂载 H-01～H-05，鉴权、scope、只读 Admin 和写操作双 CAS 语义保持不变。
 - 实现有界、私有、canonical、租约化的 Usage/Audit local spool；未知 durable 结果禁止自动重放。
 - 组合 Redis failure policy：危险 PendingAction store 不可用时拒绝 mutating；单实例安全组件仅在显式策略允许时降级，不能把确认降级成免确认。
 - 增加低基数 database/pool/spool 指标，不记录 DSN、SQL、user/group 或 payload。
+- 实现提交 `abc275721b67165224309d79e4406e95012f2975` 基于已闭环 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef`，新增 model routing runtime、platform mounts/metrics、local spool/worker 与 Redis component policy，并接入真实 Agent/chat/model/tool/status/resource 生命周期；legacy routing/default Memory 行为在未显式启用时保持兼容。
+- model routing 只消费精确 allowlist metadata，不保留 transport/credential；显式启用后 catalog/policy/generation 漂移与非法精确成本 fail closed。平台 mounts 绑定同代 H-01～H-05，鉴权/scope/只读 Admin/双 CAS 不变；structured log 与 metrics 不记录 payload 或高基数 identity。
+- local spool 使用 `0700` 私有目录、canonical JSON、容量边界、单 owner 与租约状态机；明确未写入才可重试，commit unknown/cancellation unknown/遗留 lease 永久隔离。Redis PendingAction 永不回退，cooldown/admission 只有显式 `single_instance_safe` 才可有界降级；同一 generation lease 覆盖 cooldown、admission 与 Agent 请求。
+- Tool Catalog Cache 由同代 `Categorize` 执行 miss/publish/hit；Tool Schema Cache 在模型选定后异步预备，payload 同步物化前重新捕获并严格比较完整 key；Classification Cache 绑定 plain/catalog/permission/model/policy identity，且只发布 `MODEL_SUCCESS`。resolver backend timeout 统一归一为 cache unavailable，timeout、parse fallback 与 content-blocked 分类均不缓存。
+- Catalog/Schema/Classification 定向分别为 `54 passed, 9 deselected`、`68 passed, 9 deselected`、`117 passed, 4 deselected`；cache consumer 文件 `12 passed`，扩展 I-08 联合回归 `1094 passed`。四版本及 Python 3.10 最低依赖全量均为 `2874 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`，Ruff/diff/目标 format 与目标 Pyright 零诊断。
+- fresh wheel/sdist 各 111 成员，SHA256 为 `1b7503c8d815d86c1f5f865290e41298a1b8e41b2a42e8f262c9f8376affa3de` / `09adc954287ddc5953fc7afd40cc961beef9f35253b32ee943ac7f49bf9563ea`；Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/API/spool/routing 生命周期/零真实 I/O smoke 全绿，每组另有 site-packages cache consumer `12 passed`。fresh 制品目录为 `/tmp/moellm-i08-cache-artifacts.0kYH3Y`。
+- 状态：实现提交与本地门禁已完成，但本地证据 HEAD 的 push/PR 双 `release-gate` 与最终文档 HEAD 尚未关闭；I-08 不能标记为远端闭环，I-09 继续锁定。未迁移、未连接真实服务、未合并、发布、部署或重启；`uv.lock` 未修改、未暂存、未提交。
 
 ### I-09 Final Matrix and Remote Closure
 
@@ -194,6 +206,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 最低依赖、Ruff/Pyright、fresh wheel/sdist、Twine、制品内容和仓库外 smoke 全部通过。
 - 精确 HEAD push/PR 各 11 个 job、`non_success=[]`、各恰好一个成功 `release-gate`；四方 HEAD 一致且 PR 保持可合并。
 - 最终文档逐项更新 Plan 2 / Plan 3 验收状态，并明确未观察的生产迁移、发布与 D-09。
+- 状态：尚未开始；必须先完成 I-08 本地证据 HEAD 双 run 与最终文档 HEAD 双 run，不得把本地门禁当成远端闭环。
 
 ## 7. 每项门禁
 
@@ -215,4 +228,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线与 I-01～I-06 最终闭环所需双 `release-gate` 均已关闭；I-07 实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c`、全部本地门禁与本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push/PR 双 `release-gate` 已完成。下一步提交 I-07 最终闭环文档并让该文档 HEAD 自身通过精确双 run；此前不开始 I-08，仍不运行在线 migration、不连接真实服务、不操作生产。
+当前精确恢复点：规划审计基线与 I-01～I-07 最终闭环所需双 `release-gate` 均已关闭；I-07 最终文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的 push `32713316379` / PR `32713320021` 各 11/11 success。I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975` 与全部本地门禁已完成，G-04/G-05/G-06 cache consumer 也已收齐，Plan 2 / Plan 3 开发态 runtime 验收项据此完成；本地证据 HEAD 的远端双 run 与最终文档闭环尚未关闭，I-09 尚未开始。下一步提交本地证据文档并核验精确 push/PR 双 `release-gate`；继续不运行在线 migration、不连接真实服务、不合并、不发布、不部署、不操作生产。

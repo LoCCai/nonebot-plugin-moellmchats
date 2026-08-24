@@ -1,14 +1,14 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T09:37:07+00:00
+lastmod: 2026-08-24T14:55:54+00:00
 ---
 
 # 03-plan-performance-database
 
 # Plan 3：处理效率与数据库接入优化
 
-> 最终验收口径复核（2026-08-24）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数是显式注入的脱离态 primitive。Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。I-06 最终文档双门禁已关闭；I-07 只读并行真实 runtime 接线的本地证据 HEAD 双 run 也已关闭，read_only tool parallelism 据此勾选。I-08 仍须等待 I-07 最终闭环文档 HEAD 自身双 run；Milestone I 后续仍需收口 spool/Redis failure policy/database metrics。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+> 最终验收口径复核（2026-08-24）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数最初只是显式注入的脱离态 primitive。Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。I-07 最终闭环文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的双 run 已关闭；I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975` 已把 generation-local Redis PendingAction/cooldown/admission、Usage/Audit spool/worker、database/pool/spool metrics，以及 G-04/G-05/G-06 三类 cache 的真实 consumer 全部接入开发 runtime 并通过本地门禁。Plan 3 开发态 runtime 验收项据此全部勾选；I-08 本地证据 HEAD 的远端双门禁待关闭，I-09 尚未开始，生产 migration、真实后端和发布观察均未发生。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
 
 > I-01 本地门禁（2026-08-23）：实现提交 `4a643e062b83055722351df12d402e518dc51b51` 固化无凭据的模型 capability/limits/cost/availability descriptor，并将 Decimal 成本精确对齐现有 `NUMERIC(24,12)`、provider/model 长度对齐既有 Schema。四版本定向各 `98 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `492 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。I-01 精确 HEAD 双 run 待完成，I-02 锁定；G-06 Classification Cache 尚未接真实分类路径，未读取连接信息、未迁移、未连接服务。
 
@@ -37,6 +37,10 @@ lastmod: 2026-08-24T09:37:07+00:00
 > I-07 本地门禁（2026-08-24）：实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 仅在 generation-local `ToolGraph` + `TrustedRunnerPool` 双重显式 opt-in、信任/强类型只读/无 capability 与确认/allowlist/依赖闭包/显式 `parallel_with` 全部满足时接入 G-09/G-10；其余调用回退既有串行/拒绝语义。共享 Deadline、首错取消并 drain；trace await 以请求局部锁串行化，保证 PostgreSQL 短事务路径 step index 唯一，关键持久化失败则 fail closed 且不重放未知结果。四版本定向各 `68 passed`、联合 `471 passed`、四版本及 Python 3.10 最低 Redis/SQLAlchemy/Alembic/asyncpg/FakeRedis 全量各 `2799 passed, 1 skipped`、Sandbox `41 passed, 0 skipped`；静态、fresh 制品/重建及四组包外 11 表/8 revision/零 engine/asyncpg/Redis/socket I/O smoke 全绿。精确 HEAD 双 run 待关闭，I-08 继续锁定；未运行 migration、未连接真实 PostgreSQL/Redis/模型。
 
 > I-07 远端闭环（2026-08-24）：本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 均为目标 SHA、各 11/11 success、`non_success=[]`、各唯一成功 `release-gate`；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 已完成，I-08 依赖解除；进入实现前仍需本最终闭环文档 HEAD 的双门禁。未运行 migration、连接真实服务、合并、发布或部署。
+
+> I-07 最终闭环（2026-08-24）：最终文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的 push `32713316379` / PR `32713320021` 均为目标 SHA、各 11/11 success、`non_success=[]`、各唯一成功 `release-gate`；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-08 实现依赖已完全关闭；未触发新 CI，未运行 migration、连接真实服务、合并、发布或部署。
+
+> I-08 本地门禁（2026-08-24）：实现提交 `abc275721b67165224309d79e4406e95012f2975` 已组合 generation-owned Redis component ports；PendingAction 故障始终拒绝危险操作，cooldown/admission 只在显式 `single_instance_safe` 时允许有界 Memory fallback，且同一 lease 覆盖 claim、admission 与完整 Agent 请求。Usage/Audit 使用权限 `0700` 的有界 canonical local spool 与 unknown 隔离协议，database/pool/spool 低基数指标已接真实路径。此次又按 G-04 → G-05 → G-06 补齐 Catalog、Schema、Classification 三类 generation-local cache consumer：resolver backend timeout 明确归一为 unavailable；payload materialize 重新验证完整 key；只有成功模型分类可 publish。Catalog/Schema/Classification 定向分别 `54 passed, 9 deselected`、`68 passed, 9 deselected`、`117 passed, 4 deselected`，consumer 文件 `12 passed`，扩展联合 `1094 passed`；四版本及最低依赖全量均为 `2874 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、111 成员可复现制品及四组包外零真实 I/O 与 cache consumer smoke 全绿。I-08 本地证据 HEAD 的 push/PR 双门禁待关闭，I-09 尚未开始；未运行 migration、连接真实服务、合并、发布或部署。
 
 > 推荐目标版本：`0.28 → 0.30`
 
@@ -1364,24 +1368,24 @@ runner_start_duration
 - [x] Repository Layer（I-06 已完成真实短事务编排并关闭精确 HEAD 双 run）
 - [x] PostgreSQL 基础 Schema（I-06 已由真实 runtime 消费现有 11 表契约；生产迁移仍是独立门禁）
 - [x] Alembic Migration（8 个 append-only revision 已完整覆盖且无需空 revision；本轮按授权不在线执行）
-- [ ] Redis Client（F-11 primitive 已由 I-05 container 组合并验证惰性生命周期；待 I-08 接真实配置与组合故障策略）
-- [ ] cooldown Redis（F-13 primitive 已绿；待 I-08 接入 I-05 Redis resource 并定义组合故障策略）
-- [ ] PendingAction Redis（F-12 primitive 已绿；待 I-08 接入 I-05 Redis resource，故障时危险操作 fail closed）
+- [x] Redis Client（I-08 已由显式 `RuntimeResourceSettings` 组合 generation-owned lazy client 与三类组件端口；默认 Memory/无配置仍零网络 I/O）
+- [x] cooldown Redis（I-08 已在真实 `handle_llm` 路径以同代 lease 提前 claim；strict 故障拒绝，只有显式单实例安全策略才有有界 fallback）
+- [x] PendingAction Redis（I-08 已接真实工具、确认/取消和状态路径；Redis 不可用时危险操作 fail closed，绝不回退成免确认或 Memory 假状态）
 - [x] AgentRun 持久化（I-06 已完成真实 runtime 短事务接线并关闭双 run）
 - [x] AgentStep 持久化（I-06 已覆盖模型/工具轨迹并关闭双 run）
 - [x] ToolCall 持久化（I-06 已覆盖完整真实状态轨迹并关闭双 run）
-- [x] Token Usage 持久化（I-06 已接真实 LLM lifecycle 的单次短事务写入；I-08 再接 spool）
+- [x] Token Usage 持久化（I-06 已接真实 LLM lifecycle；I-08 又接入 definite failure 才落盘、unknown 不重放的 durable spool）
 - [x] Chat History 持久化（I-06 已接真实 MessagesHandler committed source）
 - [x] History Hot Cache（I-06 已接 committed load/invalidate 与整代不可信旁路）
 - [x] Session Summary（I-06 已接真实 summary/prompt 与 CAS watermark）
-- [ ] Batch Insert（I-06 已接 usage batch durable commit；audit 关键事件仍即时写，I-08 再接 spool）
-- [ ] DB Failure Spool（待 I-08）
-- [ ] Redis Failure Policy（I-05 已完成资源生命周期；待 I-08 完成组件级组合策略）
-- [ ] Tool Catalog Cache（G-04 primitive 已由 I-05 container 组合；真实 consumer 留待后续工具 runtime 阶段）
-- [ ] Tool Schema Cache（G-05 primitive 已由 I-05 container 组合；真实 payload consumer 留待后续工具 runtime 阶段）
-- [ ] Classification Cache（G-06 primitive 已由 I-05 container 组合；真实 classify consumer 留待后续 runtime 阶段）
-- [x] read_only tool parallelism（I-07 真实 runtime 接线已关闭本地证据 HEAD 双 run）
-- [ ] database metrics（待 I-08）
+- [x] Batch Insert（I-08 spool worker 已消费 Usage/Audit 有界队列并通过显式 batch Repository 一次写入；关键 audit 仍保持即时语义）
+- [x] DB Failure Spool（I-08 已实现私有、canonical、容量有界、租约化 local spool；unknown 与中断 lease 永久隔离且禁止自动重放）
+- [x] Redis Failure Policy（I-08 已完成 PendingAction 永远 fail closed、cooldown/admission 显式单实例 fallback 与 history generation bypass 的组件级组合）
+- [x] Tool Catalog Cache（I-08 实现提交 `abc2757` 已由同代 `Categorize` consumer 执行 miss/publish/hit；generation/identity/backend 漂移 fail closed）
+- [x] Tool Schema Cache（I-08 已在模型选定后异步预备 record，并在同步 payload 物化前重新捕获并严格比较完整 key）
+- [x] Classification Cache（I-08 已依赖同代 catalog/model/prompt/policy identity 接真实分类；timeout/parse/content-blocked 均不 publish）
+- [x] read_only tool parallelism（I-07 真实 runtime 接线已关闭最终文档双 run）
+- [x] database metrics（I-08 已接低基数 transaction success/failure/duration、pool wait/active/peak 与 spool 指标，不记录 DSN、SQL、identity 或 payload）
 
 ---
 
