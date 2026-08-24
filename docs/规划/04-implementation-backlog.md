@@ -1,7 +1,7 @@
 ---
 title: 04-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T16:11:29+00:00
+lastmod: 2026-08-24T05:33:39+00:00
 ---
 
 # 04-implementation-backlog
@@ -1365,7 +1365,7 @@ prompt 与预算：service 依次尝试相关完整 record，单条加入后超�
 
 # Milestone I：Plan 2 / Plan 3 Completion
 
-**状态：规划审计基线与 I-01～I-04 精确 HEAD 双 run gate 均已关闭；I-05 前置依赖已解除**
+**状态：规划审计基线与 I-01～I-04 精确 HEAD 双 run gate 均已关闭；I-05 实现与本地门禁已完成，精确 HEAD 双 run 待关闭**
 
 Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
 
@@ -1475,7 +1475,19 @@ identity 边界：`ModelDescriptor` 只携带有界 `descriptor_id/provider/mode
 
 验证：默认 Memory 兼容模式零 PostgreSQL/Redis I/O；只有显式有效配置才能惰性构造后端，测试只使用 fake/recording ports。
 
-状态：I-04 前置门禁已关闭，待按本节契约实现。
+实现落点：I-04 最终闭环文档 HEAD `ba68e64372ac7bf35b8554ddef988b9b3ab454d0` 的 push `32651034878` / PR `32651039108` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。在此前提下，实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 新增独立 `runtime_resources.py` 与 `tests/test_runtime_resources.py`，没有修改 `__init__.py`、`chat_runtime.py`、现有配置 Schema 或真实聊天入口。
+
+资源与配置边界：`RuntimeResourceSettings` 不读取环境或插件配置；缺少 database/Redis settings 即禁用对应后端，默认组合 Memory History/Tool Catalog/Tool Schema/Classification cache、Usage/Audit queue 与 generation-bound Full Metrics。显式 PostgreSQL settings 只创建惰性 `DatabaseEngineManager` 和 `PostgresRuntimeRepositoryProvider`；provider 从调用方持有的 `AsyncSession` 构造 Conversation/Message/Summary/AgentRun/AgentStep/ToolCall/Usage/Audit Repository，不 execute、不创建或拥有事务。显式 Redis settings 只创建惰性 manager；Redis History 通过 `LazyRedisHistoryHotCache` 在第一次明确 cache 操作前保持未初始化。structured log sink、API handlers、trusted runner 与额外 lifecycle ports 均只由调用方显式注入；模块不存在全局 manager、generation、engine、client、task 或 worker。
+
+生命周期与并发边界：generation 按 managed port 声明顺序启动、逆序关闭；部分启动失败和启动取消都在返回前完成逆序回滚，重复 start/close 幂等，关闭失败只保留未关闭 port 供重试。Manager 先完整启动 candidate，再原子发布新 generation；旧代 lease 排空前不关闭，旧代关闭失败保留 retired generation，active 关闭失败同样不丢失。请求 lease 通过可失效 ContextVar binding 固定所见 generation，nested lease 在切换后仍绑定旧代；继承 binding 的逃逸子任务在父 lease 释放后不回退到新 active，lease 内 reload/close 立即拒绝以避免等待自身。start/close/reload/lease-release 的调用方取消都先等待收尾再重抛。Usage/Audit queue 有 pending、active lease 或 result-unknown 时关闭 fail closed，不删除、不确认、不猜测 durable 结果。
+
+本地门禁：Python 3.10.20、3.11.15、3.12.13 与 3.13.13 I-05 定向各 `34 passed`；database/Redis/cache/queue/metrics/logging/API/snapshot/reload/lifecycle/runner/全部 PostgreSQL Repository 相关联合 `1101 passed`；严格串行普通全量各 `2738 passed, 1 skipped`。Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量同为 `2738 passed, 1 skipped`。mandatory root Sandbox fresh JUnit 为 `tests=41 / failures=0 / errors=0 / skipped=0`；全仓 Ruff 0.16.2、目标 format/diff check 与 Pyright 1.1.407 目标模块/测试均为 `0 errors, 0 warnings`。
+
+制品门禁：fresh wheel/sdist SHA256 分别为 `88635a33b1ab42c12067e4fea51e81f69c56d2d58dc3e666a4c7c220fd8d0243` / `ce8cfd0827925ab0282c28781efba4ea38a6738121d1df6aacc3744d69f870c4`，各 104 个成员并包含 `runtime_resources.py`，不含 `uv.lock`、cache 或 bytecode；Twine 通过，sdist 仓库外重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组隔离 target 均从包外 site-packages 加载，验证 11 表、8 revision、离线 DDL、Memory start/reload/close、显式 PostgreSQL/Redis 惰性组合与八类 Repository 构造，engine create、asyncpg connect、Redis client 与 socket 调用计数均为 0。制品目录 `/tmp/moellm-i05-dist.ejDwbq`，重建目录 `/tmp/moellm-i05-rebuild.RhHflW`，最终 smoke 根目录 `/tmp/moellm-i05-smoke-final.Rp9w2l`，Sandbox JUnit `/tmp/moellm-i05-sandbox-final2.hARqhX/junit.xml`。
+
+作废证据：一次 Python 3.13 普通全量中既有 watcher 测试未在 3 秒内观察第二次重试，I-05 定向项全部通过；同解释器隔离复跑该项 `1 passed`，随后完整全量 `2738 passed, 1 skipped`，故超时轮次不计门禁且未修改无关产品代码。首个 Sandbox 本体 `41 passed` 后因 JUnit 解析命令引号错误退出，最终使用新目录完整重跑并解析通过。首个 Python 3.10 wheel smoke 在安装前因临时环境无 pip 停止，第二次在 I-05 验证前因直接 import 缺少 NoneBot plugin context 停止；最终使用离线 `uv --target`、`~none` driver、`nonebot.load_plugin()` 与隔离 XDG 目录后四组全部通过，失败目录不计门禁。
+
+状态：I-05 本地门禁已完成，精确 HEAD push/PR 双 `release-gate` 待关闭，I-06 继续锁定。未读取 DSN、Redis URL、token 或 credential，未连接真实 PostgreSQL/Redis/模型，未运行 migration，未合并、promotion、发布、部署或重启；用户未跟踪的 `uv.lock` 未修改、未暂存、未提交。
 
 ---
 

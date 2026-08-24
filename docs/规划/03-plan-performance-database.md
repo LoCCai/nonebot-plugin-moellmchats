@@ -1,7 +1,7 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T16:11:29+00:00
+lastmod: 2026-08-24T05:33:39+00:00
 ---
 
 # 03-plan-performance-database
@@ -23,6 +23,8 @@ lastmod: 2026-08-23T16:11:29+00:00
 > I-04 本地门禁（2026-08-23）：实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 新增 `PostgresAgentRunRepository / PostgresAgentStepRepository / PostgresToolCallRepository`，严格复用现有 11 表/8 revision，Schema 审计确认全部列、约束、索引和 `(run_id, step_id)` 复合外键已覆盖，故不新增空 `0009`。Repository 仅接受调用方 `AsyncSession`，不拥有事务或重试；Run/ToolCall 使用 CAS，Step/ToolCall 使用绑定 run 的稳定 keyset，未知结果禁止自动重放。本地四版本与 Python 3.10 最低数据库/Redis 依赖全量各 `2704 passed, 1 skipped`，数据库相关联合 `588 passed`，Sandbox `41 passed, 0 skipped`，静态、可复现制品与 Python 3.10/3.12 × wheel/sdist 四组包外零 engine/asyncpg/Redis/socket I/O smoke 均通过。精确 HEAD 双 run 待完成，I-05 锁定；未运行 migration、未连接真实服务，真实 runtime 事务编排仍待 I-05/I-06。
 
 > I-04 远端闭环（2026-08-23）：本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除；未运行 migration、未连接真实 PostgreSQL/Redis，未合并、发布或部署。
+
+> I-05 本地门禁（2026-08-24）：实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 将 database/Redis manager、完整 Repository provider、History/Tool/Classification cache 与 Usage/Audit queue 纳入显式 generation container；默认不读取环境或连接信息，未配置即纯 Memory，显式配置也只惰性构造 client/engine。queue 含未确认 durable 结果时 generation 关闭 fail closed，失败 active/retired generation 均保留供后续重试，reload 在旧 lease 排空前不关闭旧代。四版本与 Python 3.10 最低 Redis 5.2.0 / SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / FakeRedis 2.31.0 全量各 `2738 passed, 1 skipped`，联合 `1101 passed`、Sandbox `41 passed, 0 skipped`、静态/制品/四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-06 锁定；真实事务、cache committed 顺序、spool/failure policy/database metrics 尚未接线，未运行 migration、未连接真实服务、未发布或部署。
 
 > 推荐目标版本：`0.28 → 0.30`
 
@@ -1347,25 +1349,25 @@ runner_start_duration
 
 # 31. Plan 3 验收标准
 
-- [ ] Repository Layer（I-04 已补齐 Agent 三类具体 Repository 本地门禁；待 I-05/I-06 资源与真实事务编排）
+- [ ] Repository Layer（I-04 已补齐 Agent 三类具体 Repository，I-05 已组合完整 provider；待 I-06 真实事务编排）
 - [ ] PostgreSQL 基础 Schema（F 阶段离线 Schema 与 I-04 最终领域映射验证已绿；待真实 runtime 消费）
 - [ ] Alembic Migration（I-04 确认 8 个 append-only revision 已完整覆盖且不制造空 revision；本轮不在线执行）
-- [ ] Redis Client（F-11 primitive 已绿；待 I-05 资源生命周期接线）
-- [ ] cooldown Redis（F-13 primitive 已绿；待 I-05/I-08 组合故障策略）
-- [ ] PendingAction Redis（F-12 primitive 已绿；待 I-05/I-08 接线且故障时危险操作 fail closed）
-- [ ] AgentRun 持久化（I-04 具体 Repository 本地门禁已绿；待 I-05/I-06 真实 runtime 事务编排）
-- [ ] AgentStep 持久化（I-04 具体 Repository 本地门禁已绿；待 I-05/I-06 真实 runtime 事务编排）
-- [ ] ToolCall 持久化（I-04 具体 Repository 本地门禁已绿；待 I-05/I-06 真实 runtime 事务编排）
+- [ ] Redis Client（F-11 primitive 已由 I-05 container 组合并验证惰性生命周期；待 I-08 接真实配置与组合故障策略）
+- [ ] cooldown Redis（F-13 primitive 已绿；待 I-08 接入 I-05 Redis resource 并定义组合故障策略）
+- [ ] PendingAction Redis（F-12 primitive 已绿；待 I-08 接入 I-05 Redis resource，故障时危险操作 fail closed）
+- [ ] AgentRun 持久化（I-04 Repository 与 I-05 resource provider 本地门禁已绿；待 I-06 真实事务编排）
+- [ ] AgentStep 持久化（I-04 Repository 与 I-05 resource provider 本地门禁已绿；待 I-06 真实事务编排）
+- [ ] ToolCall 持久化（I-04 Repository 与 I-05 resource provider 本地门禁已绿；待 I-06 真实事务编排）
 - [ ] Token Usage 持久化（G-07 Repository/租约 primitive 已绿；待 I-06/I-08 接 LLM lifecycle 与 spool）
 - [ ] Chat History 持久化（G-01 Repository 已绿；待 I-06 接真实 MessagesHandler）
-- [ ] History Hot Cache（G-02 primitive 已绿；待 I-05/I-06 接 committed load/invalidate）
+- [ ] History Hot Cache（G-02 primitive 已由 I-05 container 组合；待 I-06 接 committed load/invalidate）
 - [ ] Session Summary（G-03 primitive 已绿；待 I-06 接真实 summary/prompt）
 - [ ] Batch Insert（G-07/G-08 primitive 已绿；待 I-06/I-08 接 lifecycle 与 durable commit）
 - [ ] DB Failure Spool（待 I-08）
-- [ ] Redis Failure Policy（待 I-05/I-08）
-- [ ] Tool Catalog Cache（G-04 primitive 已绿；待 I-05/I-06 接真实 catalog consumer）
-- [ ] Tool Schema Cache（G-05 primitive 已绿；待 I-05/I-06 接真实 payload consumer）
-- [ ] Classification Cache（G-06 primitive 已绿；待 I-02/I-05/I-06 接真实 classify path）
+- [ ] Redis Failure Policy（I-05 已完成资源生命周期；待 I-08 完成组件级组合策略）
+- [ ] Tool Catalog Cache（G-04 primitive 已由 I-05 container 组合；待 I-06 接真实 catalog consumer）
+- [ ] Tool Schema Cache（G-05 primitive 已由 I-05 container 组合；待 I-06 接真实 payload consumer）
+- [ ] Classification Cache（G-06 primitive 已由 I-05 container 组合；待 I-06 接真实 classify path）
 - [ ] read_only tool parallelism（G-09/G-10 primitive 已绿；待 I-07）
 - [ ] database metrics（待 I-08）
 

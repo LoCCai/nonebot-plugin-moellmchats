@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-23T16:11:29+00:00
+lastmod: 2026-08-24T05:33:39+00:00
 ---
 
 # 02-plan-future-architecture
@@ -23,6 +23,8 @@ lastmod: 2026-08-23T16:11:29+00:00
 > I-04 本地门禁（2026-08-23）：实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已对齐 AgentRun/AgentStep/ToolCall 的完整持久化领域字段，并新增三类 caller-owned `AsyncSession` PostgreSQL Repository；现有 11 表/8 revision 足够，不新增空 migration。Run state+generation CAS、ToolCall status CAS、绑定 run 的 Step/ToolCall keyset、复合 run/step identity、未知结果不重放及事务所有权边界均已验证。四版本与最低依赖全量各 `2704 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 通过。I-04 精确 HEAD 双 run 待完成，I-05 继续锁定；真实聊天/runtime 尚未构造或持久化这些对象，未迁移、未连接真实服务、未发布或部署。
 
 > I-04 远端闭环（2026-08-23）：本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除；真实聊天/runtime 仍未构造或持久化 Agent 对象，未合并、发布、部署、迁移或连接真实服务。
+
+> I-05 本地门禁（2026-08-24）：实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 新增显式 generation resource container，组合 snapshot、完整 Repository provider、cache、queue、metrics、logger、API 与可选 runner ports；默认 Memory 模式零后端 I/O，PostgreSQL/Redis 只有显式强类型 settings 才惰性构造。startup/逆序 shutdown、部分初始化回滚、取消收尾、重复关闭、generation handoff、旧代 lease drain、失败代重试、queue fail-closed、嵌套/逃逸 lease 均有确定契约。四版本定向各 `34 passed`、联合 `1101 passed`、四版本与最低依赖全量各 `2738 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-06 继续锁定；container 尚未接真实聊天入口，未连接真实服务、未迁移、未发布或部署。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -1150,15 +1152,15 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [x] ToolProvider 接口（D-01/D-08 generation-bound Provider consumer 已接真实路径；D-09 仅为发布观察后的 legacy 清理）
 - [x] Tool Capability（D-07 versioned merge 与 D-08 selection/execution enforcement 已接线）
 - [x] Tool Trust Level（D-06/D-08 selection、execution、confirmation 与 management enforcement 已接线）
-- [ ] AgentRun（I-04 字段/Schema/PostgreSQL Repository 本地门禁已绿；待 I-05/I-06 组合并由真实 runtime 创建）
-- [ ] AgentStep（I-04 持久化映射/PostgreSQL Repository 本地门禁已绿；待 I-05/I-06 组合并由真实 runtime 创建）
-- [ ] ToolCall（I-04 完整 identity/PostgreSQL Repository 本地门禁已绿；待 I-05/I-06 组合并由真实 runtime 创建）
+- [ ] AgentRun（I-04 Repository 与 I-05 resource composition 本地门禁已绿；待 I-06 由真实 runtime 创建）
+- [ ] AgentStep（I-04 Repository 与 I-05 resource composition 本地门禁已绿；待 I-06 由真实 runtime 创建）
+- [ ] ToolCall（I-04 Repository 与 I-05 resource composition 本地门禁已绿；待 I-06 由真实 runtime 创建）
 - [ ] DeadlineContext（E-05 primitive 已绿；I-06/I-07 负责真实请求预算接线）
 - [ ] Tool Graph（E-06～E-08 primitive 已绿；I-07 负责真实工具路径接线）
 - [ ] read_only 并行工具（G-09/G-10 primitive 已绿；`_execute_tools()` 仍每轮单工具，待 I-07）
 - [ ] ModelCapability（I-01 primitive 双 gate 已绿；待后续 runtime 实际消费）
 - [ ] capability based routing（I-02 primitive 双 gate 已绿；尚未接现有 selector/chat runtime）
-- [ ] Runtime API（H-01～H-05 脱离态门禁已绿；待 I-05/I-08 组合和挂载）
+- [ ] Runtime API（H-01～H-05 primitive 已由 I-05 container 提供显式 handler port；待 I-08 挂载）
 - [ ] structured audit（G-08/H-06 primitive 已绿；待 I-06/I-08 写入真实生命周期）
 - [ ] structured metrics（H-07 primitive 已绿；待 I-06/I-08 观测并接 H-04）
 - [x] ToolResult structured output（I-03 已将六字段 canonical contract 接入真实 adapter/runner/history/model 路径并关闭双 gate）
