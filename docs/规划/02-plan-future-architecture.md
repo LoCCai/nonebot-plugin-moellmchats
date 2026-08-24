@@ -1,14 +1,14 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T07:58:32+00:00
+lastmod: 2026-08-24T09:32:45+00:00
 ---
 
 # 02-plan-future-architecture
 
 # Plan 2：后续功能与架构优化
 
-> 最终验收口径复核（2026-08-23）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单现统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。当前 Provider/Capability/Trust consumer 已由 D-08 接入真实路径，I-03 structured ToolResult 已接入 adapter/runner/history/model 路径；Agent runtime、模型能力路由的受信 catalog/runtime 接线、并行执行与平台能力仍需 Milestone I。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
+> 最终验收口径复核（2026-08-24）：H-08 只关闭 A～H 已拆分 primitive 的本地与精确 HEAD 双 run 门禁。Plan 2 验收清单统一以“真实 runtime 已消费且验证”为 `[x]`；脱离态领域对象、API、执行器、日志或指标即使已有绿色门禁也仍为 `[ ]`。Provider/Capability/Trust consumer 已由 D-08 接入真实路径，I-03 structured ToolResult 与 I-06 Agent runtime 已关闭最终双门禁；I-07 已将受信强类型只读 DAG 接入真实工具路径并完成本地门禁，但精确 HEAD 双 run 尚未关闭，验收勾选仍保留待闭环。模型能力路由的受信 catalog/runtime 接线与平台能力继续由 Milestone I 收口。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。D-09 继续受生产发布周期观察锁定，本轮不以 CI 替代。
 
 > I-01 本地门禁（2026-08-23）：规划基线 `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已严格关闭。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增独立 `model_capabilities.py`，固定 text/vision/tools/json-schema/reasoning/streaming 六能力、context/output limits、精确 Decimal 每百万 token 成本、四态 availability 与 generation-bound descriptor；三类摘要分别绑定 raw identity、capability+limits 和完整 descriptor，未知成本与零成本严格区分，repr 不暴露 raw identity。四版本定向各 `98 passed`、联合各 `492 passed`、普通全量及最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 锁定；本阶段不读取/改写模型配置，不接 `ModelSelector`，不发网络请求。
 
@@ -31,6 +31,10 @@ lastmod: 2026-08-24T07:58:32+00:00
 > I-06 本地门禁（2026-08-24）：I-05 最终文档 HEAD `1dc7dd4fb3fdb29b37bd2be4a4f904103e19108d` 的双 run 已严格关闭。实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 新增 `AgentGenerationCoordinator / AgentRequestRuntime / RuntimeResourceHost`，将 generation lease、单一 Deadline、AgentRun/Step/ToolCall、committed history/cache、summary/LTM、usage/audit 接入真实聊天、模型与工具路径；waiting-confirmation、completed、failed、timed_out、cancelled、rejected 均形成明确轨迹。PostgreSQL 事务不跨模型/工具调用，commit unknown 与 commit cancellation unknown 均禁止重放；commit/session cleanup/cache publish/invalidate 不确定即整代旁路。四版本定向各 `26 passed`、联合 `1024 passed`、四版本及最低依赖全量各 `2786 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现 105 成员制品与四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-07 继续锁定；未连接真实 PostgreSQL/Redis/模型，未迁移、合并、发布或部署。
 
 > I-06 远端闭环（2026-08-24）：本地证据 HEAD `fe3b48f212de1e79bdcad7c1f48c456bc3f317a8` 的 push `32703751436` / PR `32703756205` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-06 已完成，I-07 依赖解除；进入实现前仍需本最终闭环文档 HEAD 的精确双 run。未迁移、连接真实服务、合并、发布或部署。
+
+> I-06 最终闭环（2026-08-24）：最终文档 HEAD `caf6e2c0f7d603835964042d7fae124e7c83a12f` 的 push `32704551636` / PR `32704555524` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-07 实现依赖已完全关闭；未迁移、连接真实服务、合并、发布或部署。
+
+> I-07 本地门禁（2026-08-24）：实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 将 generation-local `ToolGraph` 与 `TrustedRunnerPool` 双重显式 opt-in 接入真实 `_execute_tools()`。只有 provider-authoritative、trust 允许、强类型 `READ_ONLY`、无 capability/确认要求、allowlist 命中、依赖闭包完整且有显式 `parallel_with` 的同代调用才进入 G-09/G-10；其余保持既有串行/拒绝语义。共享 Deadline、首错取消并 drain、原请求顺序回填、请求局部 trace 锁和关键写 fail-closed 均已验证。四版本定向各 `68 passed`、联合 `471 passed`、四版本及最低依赖全量各 `2799 passed, 1 skipped`、Sandbox `41 passed, 0 skipped`；Ruff/Pyright、fresh 制品/重建及四组包外真实并发度 2/零真实 I/O smoke 全绿。精确 HEAD 双 run 待关闭，I-08 继续锁定；用户的 `uv.lock` 未修改、未暂存、未提交。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -1161,9 +1165,9 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [x] AgentRun（I-06 已由真实 runtime 创建并关闭精确 HEAD 双 run）
 - [x] AgentStep（I-06 已覆盖模型/工具真实轨迹并关闭精确 HEAD 双 run）
 - [x] ToolCall（I-06 已覆盖成功、确认、拒绝、失败、超时和取消轨迹并关闭双 run）
-- [x] DeadlineContext（I-06 已接单一请求预算；I-07 将复用到并行工具）
-- [ ] Tool Graph（E-06～E-08 primitive 已绿；I-07 负责真实工具路径接线）
-- [ ] read_only 并行工具（G-09/G-10 primitive 已绿；`_execute_tools()` 仍每轮单工具，待 I-07）
+- [x] DeadlineContext（I-06 已接单一请求预算；I-07 并行路径已复用并完成本地门禁）
+- [ ] Tool Graph（I-07 已接真实工具路径并完成本地门禁；待精确 HEAD 双 run 关闭后勾选）
+- [ ] read_only 并行工具（I-07 双重显式 opt-in 真实路径已绿；待精确 HEAD 双 run 关闭后勾选）
 - [ ] ModelCapability（I-01 primitive 双 gate 已绿；待后续 runtime 实际消费）
 - [ ] capability based routing（I-02 primitive 双 gate 已绿；尚未接现有 selector/chat runtime）
 - [ ] Runtime API（H-01～H-05 primitive 已由 I-05 container 提供显式 handler port；待 I-08 挂载）
