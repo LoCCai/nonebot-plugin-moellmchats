@@ -1,14 +1,14 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T15:24:31+00:00
+lastmod: 2026-08-24T15:36:01+00:00
 ---
 
 # 02-plan-future-architecture
 
 # Plan 2：后续功能与架构优化
 
-> 最终验收口径复核（2026-08-24）：Plan 2 验收清单统一以“真实开发版 runtime 已消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭；I-09 随后以隔离四版本、最低依赖、mandatory root Sandbox、静态、可复现制品和四组包外零真实 I/O 矩阵复核全部已勾选项。Plan 2 的 Primitive 与 Runtime integration 两层开发态验收已完成，当前只待 I-09 本地证据文档 HEAD 及最终文档 HEAD 自身的远端双 `release-gate`。生产模型、平台挂载、发布与部署未观察；D-09 继续受真实发布周期 parity 观察锁定，本轮不以本地或 CI 替代。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+> 最终验收口径复核（2026-08-24）：Plan 2 验收清单统一以“真实开发版 runtime 已消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 与 I-09 本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁均已关闭；隔离最终矩阵已复核全部已勾选项。Plan 2 的 Primitive 与 Runtime integration 两层开发态验收已完成。本次远端证据回填提交定义为最终文档 HEAD，以其自身精确双 `release-gate` 作为 I-09 最终判据；不为记录该自指门禁另起提交。生产模型、平台挂载、发布与部署未观察；D-09 继续受真实发布周期 parity 观察锁定，本轮不以本地或 CI 替代。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
 
 > I-01 本地门禁（2026-08-23）：规划基线 `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已严格关闭。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增独立 `model_capabilities.py`，固定 text/vision/tools/json-schema/reasoning/streaming 六能力、context/output limits、精确 Decimal 每百万 token 成本、四态 availability 与 generation-bound descriptor；三类摘要分别绑定 raw identity、capability+limits 和完整 descriptor，未知成本与零成本严格区分，repr 不暴露 raw identity。四版本定向各 `98 passed`、联合各 `492 passed`、普通全量及最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 锁定；本阶段不读取/改写模型配置，不接 `ModelSelector`，不发网络请求。
 
@@ -46,7 +46,9 @@ lastmod: 2026-08-24T15:24:31+00:00
 
 > I-08 最终闭环（2026-08-24）：最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的 push `32742896973` / PR `32742899876` 已各 11/11 success、`non_success=[]`、各唯一 `completed/success release-gate`；本地、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-09 依赖据此完全关闭；未迁移、连接真实服务、合并、发布或部署。
 
-> I-09 本地最终矩阵（2026-08-24）：Python 3.10/3.11/3.12/3.13 与 Python 3.10 最低依赖全量各 `2874 passed, 1 skipped`，mandatory root Sandbox `41 passed` 且 JUnit 零失败/错误/跳过；Ruff 0.16.2 全仓通过，18 个新增/consumer 目标文件 format 通过，目标 Pyright 1.1.407 为 `0 errors, 0 warnings`。fresh wheel/sdist 各 111 成员、Twine 通过且 sdist 重建 wheel 字节一致；Python 3.10/3.12 × wheel/sdist 四组 site-packages smoke 均验证 11 表、8 revision、API/spool/routing lifecycle、spool `0700`、cache consumer `12 passed` 与零 engine/asyncpg/Redis/socket I/O。扩大静态范围会复现既有 format/Pyright 基线，故不声明全仓 format/Pyright 零诊断。Plan 2 开发态验收完成，I-09 本地证据文档 HEAD 远端双门禁待提交和核验；生产观察与 D-09 仍锁定。
+> I-09 本地最终矩阵（2026-08-24）：Python 3.10/3.11/3.12/3.13 与 Python 3.10 最低依赖全量各 `2874 passed, 1 skipped`，mandatory root Sandbox `41 passed` 且 JUnit 零失败/错误/跳过；Ruff 0.16.2 全仓通过，18 个新增/consumer 目标文件 format 通过，目标 Pyright 1.1.407 为 `0 errors, 0 warnings`。fresh wheel/sdist 各 111 成员、Twine 通过且 sdist 重建 wheel 字节一致；Python 3.10/3.12 × wheel/sdist 四组 site-packages smoke 均验证 11 表、8 revision、API/spool/routing lifecycle、spool `0700`、cache consumer `12 passed` 与零 engine/asyncpg/Redis/socket I/O。扩大静态范围会复现既有 format/Pyright 基线，故不声明全仓 format/Pyright 零诊断。Plan 2 开发态验收完成，本地证据 HEAD 远端双门禁已关闭；生产观察与 D-09 仍锁定。
+
+> I-09 本地证据远端闭环（2026-08-24）：本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的 push `32745646558` / PR `32745651110` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `completed/success release-gate`；四方 HEAD 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。本次回填提交即最终文档 HEAD，其自身精确双门禁为 I-09 最终判据；未迁移、连接真实服务、合并、发布或部署。
 
 > 推荐目标版本：`0.26 → 0.30`
 

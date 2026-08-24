@@ -1,22 +1,22 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-24T15:24:31+00:00
+lastmod: 2026-08-24T15:36:01+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
 
 ## 1. 审计结论
 
-截至 I-09 本地最终矩阵完成：
+截至 I-09 本地证据文档 HEAD 双门禁完成：
 
 - Plan 1 / Milestone A～C 已完成，既有安全门禁不得回退。
 - D-01a～D-08f、E-01～E-08、F-01～F-14、G-01～G-10 与 H-01～H-08 的既定增量 primitive 均有本地和精确 HEAD 双 run 证据。
 - H-08 最终闭环 HEAD `66df2100cf5c0aaf209d0ae973f4524a75158aba` 的 push run `32636423646` 与 PR run `32636425880` 均精确命中该 SHA、各 11/11 success、`non_success=[]`，各恰好一个成功 `release-gate`；当时本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
-- 上述 H-08 证据只证明已拆分 primitive 的质量，不等于 Plan 2 / Plan 3 的最终运行态验收。此后 I-06 已在开发仓库真实聊天路径创建 Agent 领域记录并消费 history/summary/LTM/usage/audit，I-07 已将 Tool Graph / read-only scheduler / parallel executor / Trusted Runner Pool 接入真实工具路径，I-08 又完成 capability routing、platform API/metrics/logging、Usage/Audit spool、Redis 组合故障策略、database/spool metrics，以及 Tool Catalog / Tool Schema / Classification 三类 cache consumer 的真实开发态接线；三项最终文档 HEAD 中 I-06～I-08 的双 run 均已关闭。I-09 随后以四版本、最低依赖、mandatory root Sandbox、静态、可复现制品及四组包外零真实 I/O 矩阵完成最终复核。Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成；当前仅剩 I-09 本地证据文档 HEAD 与最终文档 HEAD 自身的远端双 `release-gate`。
+- 上述 H-08 证据只证明已拆分 primitive 的质量，不等于 Plan 2 / Plan 3 的最终运行态验收。此后 I-06 已在开发仓库真实聊天路径创建 Agent 领域记录并消费 history/summary/LTM/usage/audit，I-07 已将 Tool Graph / read-only scheduler / parallel executor / Trusted Runner Pool 接入真实工具路径，I-08 又完成 capability routing、platform API/metrics/logging、Usage/Audit spool、Redis 组合故障策略、database/spool metrics，以及 Tool Catalog / Tool Schema / Classification 三类 cache consumer 的真实开发态接线；I-06～I-08 最终文档 HEAD 双 run 均已关闭。I-09 随后完成四版本、最低依赖、mandatory root Sandbox、静态、可复现制品及四组包外零真实 I/O 最终矩阵，本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的双 run 也已关闭。Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成；本次远端证据回填提交定义为最终文档 HEAD，其自身精确双 `release-gate` 是 I-09 与开发态总目标的最终判据。
 - D-09 仍要求至少一个真实发布周期的 Provider/legacy parity 观察。本任务禁止生产操作，因此 D-09 必须继续锁定；本地测试或 CI 不能替代发布观察。
 
-因此，Milestone I 已在开发仓库完成 Plan 2 / Plan 3 的运行态集成与本地最终矩阵，但远端文档闭环尚未完成。生产迁移、真实服务、发布、部署和 D-09 观察仍属于独立生产门禁，不在本轮授权或完成口径内。
+因此，Milestone I 已在开发仓库完成 Plan 2 / Plan 3 的运行态集成、本地最终矩阵及本地证据远端门禁；只在本次最终文档 HEAD 自身双门禁通过后判定开发态总目标闭环，不为记录该自指门禁另起提交。生产迁移、真实服务、发布、部署和 D-09 观察仍属于独立生产门禁，不在本轮授权或完成口径内。
 
 ### Milestone I 进展（2026-08-24）
 
@@ -39,7 +39,7 @@ lastmod: 2026-08-24T15:24:31+00:00
 - Catalog/Schema/Classification 定向分别为 `54 passed, 9 deselected`、`68 passed, 9 deselected`、`117 passed, 4 deselected`，cache consumer 文件 `12 passed`，扩展 I-08 联合回归 `1094 passed`；四版本及 Python 3.10 最低依赖全量均为 `2874 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、111 成员可复现制品和四组包外零真实 I/O 与 cache consumer smoke 全绿。
 - I-08 本地证据 HEAD `d77986d7e724758f24ad53fac9806e7482938ef4` 的 push `32742181099` / PR `32742192391` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。
 - I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的 push `32742896973` / PR `32742899876` 也均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `completed/success release-gate`，四方 HEAD 一致且 PR #2 保持 `OPEN / MERGEABLE / CLEAN`。I-09 依赖完全关闭。
-- I-09 隔离最终矩阵根目录 `/tmp/moellm-i09-matrix.wSgBFe`：四版本与 Python 3.10 最低依赖全量各 `2874 passed, 1 skipped`，Sandbox `41 passed` 且 JUnit 零失败/错误/跳过；Ruff 全仓、18 个目标 format 与目标 Pyright 零诊断；111 成员 fresh wheel/sdist、Twine、字节一致重建及四组 site-packages 零真实 I/O/cache consumer smoke 全绿。Plan 2 / Plan 3 开发态完成；I-09 本地证据文档 HEAD 双门禁待提交和核验，生产 migration、真实后端、发布与 D-09 观察均未发生。
+- I-09 隔离最终矩阵根目录 `/tmp/moellm-i09-matrix.wSgBFe`：四版本与 Python 3.10 最低依赖全量各 `2874 passed, 1 skipped`，Sandbox `41 passed` 且 JUnit 零失败/错误/跳过；Ruff 全仓、18 个目标 format 与目标 Pyright 零诊断；111 成员 fresh wheel/sdist、Twine、字节一致重建及四组 site-packages 零真实 I/O/cache consumer smoke 全绿。I-09 本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的 push `32745646558` / PR `32745651110` 各 11/11 success、`non_success=[]`、唯一成功 `release-gate`；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。Plan 2 / Plan 3 开发态完成；生产 migration、真实后端、发布与 D-09 观察均未发生。
 
 ## 2. 状态口径
 
@@ -82,7 +82,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 ### 开发态结论与待闭环
 
 - Plan 2 的 Primitive 与 Runtime integration 两层验收已经 I-08 最终文档 HEAD 双门禁和 I-09 本地最终矩阵复核完成。
-- I-09 本地证据文档 HEAD 与随后最终文档 HEAD 的远端双 `release-gate` 尚待关闭；生产平台行为不在本轮授权或完成范围内。
+- I-09 本地证据文档 HEAD 双 `release-gate` 已关闭；本次回填提交自身双门禁为最终判据，生产平台行为不在本轮授权或完成范围内。
 
 ## 5. Plan 3 当前状态
 
@@ -105,7 +105,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 
 ### 开发态结论与生产证据边界
 
-- Plan 3 的 Primitive 与 Runtime integration 两层验收已经 I-08 最终文档 HEAD 双门禁和 I-09 本地最终矩阵复核完成；只剩 I-09 两轮文档 HEAD 的远端闭环。
+- Plan 3 的 Primitive 与 Runtime integration 两层验收已经 I-08 最终文档 HEAD 双门禁、I-09 本地最终矩阵及本地证据 HEAD 双门禁复核完成；本次回填提交自身双门禁为最终判据。
 - 真实数据库/Redis、在线 migration 与生产发布观察均未发生，不能由本地或 CI 证据替代。
 
 ## 6. Milestone I：Plan 2 / Plan 3 Completion
@@ -212,7 +212,8 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 静态：Ruff 0.16.2 全仓通过，18 个新增/consumer 目标文件 format 通过，目标 Pyright 1.1.407 为 `0 errors, 0 warnings`。扩大范围会复现既有 format/Pyright 基线，因此不声明全仓 format/Pyright 零诊断。
 - 制品：fresh wheel/sdist SHA256 为 `1b7503c8d815d86c1f5f865290e41298a1b8e41b2a42e8f262c9f8376affa3de` / `09adc954287ddc5953fc7afd40cc961beef9f35253b32ee943ac7f49bf9563ea`，各 111 成员；Twine 通过，sdist 重建 wheel 字节一致。Python 3.10/3.12 × wheel/sdist 四组均从目标 site-packages 加载，验证 11 表、8 revision、API/spool/routing lifecycle、spool `0700`、cache consumer `12 passed` 与零 engine/asyncpg/Redis/socket I/O。
 - 分层结论：Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收完成；生产 migration、真实 PostgreSQL/Redis/模型、发布、部署和 D-09 parity 观察均未发生。
-- 状态：本地最终矩阵完成；本轮文档提交的精确 push/PR 双 `release-gate` 尚待核验，之后还需回填 run 并让最终文档 HEAD 自身通过同样双门禁。
+- 远端证据：本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的 push `32745646558` / PR `32745651110` 各 11/11 success、`non_success=[]`、各唯一 `completed/success release-gate`；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。
+- 状态：本地最终矩阵与本地证据 HEAD 双门禁完成；本次回填提交定义为最终文档 HEAD，只在其自身精确双 `release-gate` 完成后判定 I-09 最终闭环，不为记录该自指门禁另起提交。
 
 ## 7. 每项门禁
 
@@ -234,4 +235,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线与 I-01～I-08 最终闭环所需双 `release-gate` 均已关闭，I-08 最终文档 HEAD 为 `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9`。I-09 隔离本地最终矩阵已完成，Plan 2 / Plan 3 开发态验收已收齐；下一步提交这五份规划文档作为 I-09 本地证据 HEAD，并核验精确 push/PR 双 `release-gate`，再回填 run 并关闭最终文档 HEAD 自身双门禁。继续不运行在线 migration、不连接真实服务、不合并、不发布、不部署、不操作生产；D-09 保持锁定。
+当前精确恢复点：规划审计基线与 I-01～I-08 最终闭环所需双 `release-gate` 均已关闭；I-09 隔离本地最终矩阵及本地证据 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的 push `32745646558` / PR `32745651110` 双门禁也已完成，Plan 2 / Plan 3 开发态验收已收齐。本次回填五份规划文档的提交即最终文档 HEAD，以其自身精确 push/PR 双 `release-gate` 为最后判据；不再为记录该自指门禁另起提交。继续不运行在线 migration、不连接真实服务、不合并、不发布、不部署、不操作生产；D-09 保持锁定。
