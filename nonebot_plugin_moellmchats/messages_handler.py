@@ -1,5 +1,8 @@
+from collections import deque
+from collections.abc import Mapping
 import time
 
+from .chat_history import MessageRecord, mutable_history_json
 from .config import config_parser
 from .state_store import BoundedDequeStore
 
@@ -9,7 +12,7 @@ messages_dict = BoundedDequeStore(
 # messages_entity_list = [messages_entity1, messages_entity2]
 
 
-def _flatten_tool_messages(tool_messages: list) -> dict:
+def _flatten_tool_messages(tool_messages: list) -> dict | None:
     """把 role:tool / role:assistant+tool_calls 消息拍平为一条 assistant 文本，用于不支持工具格式的模型。"""
     parts = []
     for m in tool_messages:
@@ -39,10 +42,10 @@ class MessagesEntity:
     def add_assistant_msg(self, assistant_msg: dict):
         self.assistant_msg = assistant_msg
 
-    def get_user_msg(self) -> dict:
+    def get_user_msg(self) -> dict | None:
         return self.user_msg
 
-    def get_assistant_msg(self) -> dict:
+    def get_assistant_msg(self) -> dict | None:
         return self.assistant_msg
 
 
@@ -52,7 +55,78 @@ class MessagesHandler:
         self.timestamp = time.time()
         self.messages_entity = MessagesEntity(self.timestamp)
         self.messages_entity_list = messages_dict[self.user_id]
+        self._durable_history_bound = False
         self.current_images = []  # 暂存当前轮次的图片
+
+    @property
+    def durable_history_bound(self) -> bool:
+        return self._durable_history_bound
+
+    def bind_committed_history(
+        self,
+        messages: tuple[MessageRecord, ...],
+    ) -> None:
+        """Use one detached committed PostgreSQL view instead of process memory."""
+
+        if not isinstance(messages, tuple) or any(
+            not isinstance(message, MessageRecord) or not message.persisted
+            for message in messages
+        ):
+            raise TypeError("committed history 必须是已持久化 MessageRecord tuple")
+        entities: deque[MessagesEntity] = deque(
+            maxlen=config_parser.get_config("max_user_history", 8)
+        )
+        current: MessagesEntity | None = None
+        for message in messages:
+            timestamp = message.created_at.timestamp()
+            if message.role == "user":
+                current = MessagesEntity(timestamp)
+                current.add_user_msg(
+                    {"role": "user", "content": message.content or "（空消息）"}
+                )
+                entities.append(current)
+                continue
+            if message.role != "assistant":
+                continue
+            if current is None or current.get_assistant_msg() is not None:
+                current = MessagesEntity(timestamp)
+                entities.append(current)
+            current.add_assistant_msg(
+                {
+                    "role": "assistant",
+                    "content": message.content or "（执行完毕）",
+                }
+            )
+            structured = mutable_history_json(message.structured_content)
+            if isinstance(structured, Mapping):
+                tool_messages = structured.get("tool_messages")
+                if isinstance(tool_messages, list) and all(
+                    isinstance(item, dict) for item in tool_messages
+                ):
+                    current.tool_messages = tool_messages
+                    for item in tool_messages:
+                        if item.get("role") != "assistant":
+                            continue
+                        calls = item.get("tool_calls")
+                        if not isinstance(calls, list):
+                            continue
+                        for call in calls:
+                            function = (
+                                call.get("function")
+                                if isinstance(call, dict)
+                                else None
+                            )
+                            name = (
+                                function.get("name")
+                                if isinstance(function, dict)
+                                else None
+                            )
+                            if isinstance(name, str) and name:
+                                current.used_plugins.add(name)
+        self.messages_entity_list = entities
+        self._durable_history_bound = True
+        if messages_dict.get(self.user_id) is not None:
+            del messages_dict[self.user_id]
 
     def get_all_used_plugins(self) -> set:
         """获取整个上下文中所有用过的工具集合"""
@@ -106,7 +180,9 @@ class MessagesHandler:
         return plain
 
     def append_message_list(self, messages_entity):
-        messages_dict[self.user_id].append(self.messages_entity)
+        if self._durable_history_bound:
+            return
+        messages_dict[self.user_id].append(messages_entity)
 
     def get_send_message_list(self, supports_tools: bool = True) -> list:
         result = []
@@ -128,7 +204,9 @@ class MessagesHandler:
                 ast_msg["content"] = "（执行完毕）"
             result.append(ast_msg)
 
-        result.append(self.messages_entity.get_user_msg())
+        current_user_message = self.messages_entity.get_user_msg()
+        if current_user_message is not None:
+            result.append(current_user_message)
         max_chars = config_parser.get_config("max_history_chars", 16_000)
         # Deterministic conservative estimate for multilingual OpenAI-compatible
         # models. Exact tokenizer packages are intentionally not required.
@@ -173,5 +251,8 @@ class MessagesHandler:
             self.messages_entity.tool_messages = tool_messages
 
         # 避免在流式输出与结尾总结时被重复 append
-        if self.messages_entity not in messages_dict[self.user_id]:
+        if (
+            not self._durable_history_bound
+            and self.messages_entity not in messages_dict[self.user_id]
+        ):
             messages_dict[self.user_id].append(self.messages_entity)

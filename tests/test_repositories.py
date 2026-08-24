@@ -29,6 +29,7 @@ from nonebot_plugin_moellmchats.repositories import (
     ToolCallRepository,
     ToolRepository,
     UsageRepository,
+    UserRepository,
 )
 
 
@@ -56,6 +57,17 @@ class _ConversationRepository:
 
     async def replace(self, conversation: str) -> None:
         self.records[conversation] = conversation
+
+
+class _UserRepository:
+    def __init__(self) -> None:
+        self.records: dict[str, str] = {}
+
+    async def resolve(self, user: str) -> str:
+        return self.records.setdefault(user, user)
+
+    async def get(self, user_id: str) -> str | None:
+        return self.records.get(user_id)
 
 
 class _MessageRepository:
@@ -304,6 +316,7 @@ def test_repository_errors_preserve_conflict_and_availability_categories() -> No
 
 
 def test_repository_protocols_are_runtime_checkable() -> None:
+    users: UserRepository[str] = _UserRepository()
     conversation: ConversationRepository[str] = _ConversationRepository()
     messages: MessageRepository[str] = _MessageRepository()
     runs: AgentRunRepository = _AgentRunRepository()
@@ -316,6 +329,7 @@ def test_repository_protocols_are_runtime_checkable() -> None:
     batch_audit: BatchAuditRepository[str] = _AuditRepository()
     transaction: RepositoryTransaction = _Transaction()
 
+    assert isinstance(users, UserRepository)
     assert isinstance(conversation, ConversationRepository)
     assert isinstance(messages, MessageRepository)
     assert isinstance(runs, AgentRunRepository)
@@ -349,6 +363,7 @@ def test_batch_audit_extension_preserves_legacy_audit_implementations() -> None:
     ("protocol", "method_names"),
     [
         (RepositoryTransaction, ("commit", "rollback")),
+        (UserRepository, ("resolve", "get")),
         (ConversationRepository, ("create", "get", "replace")),
         (MessageRepository, ("append", "list_recent")),
         (AgentRunRepository, ("create", "get", "replace")),

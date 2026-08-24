@@ -41,6 +41,7 @@ from .postgres_audit_repository import PostgresAuditRepository
 from .postgres_history_repository import (
     PostgresConversationRepository,
     PostgresMessageRepository,
+    PostgresUserRepository,
 )
 from .postgres_session_summary_repository import (
     PostgresSessionSummaryRepository,
@@ -254,6 +255,7 @@ class RuntimeResourceSettings:
 class RuntimePostgresRepositories:
     """One detached repository set bound to one caller-owned AsyncSession."""
 
+    user: PostgresUserRepository
     conversation: PostgresConversationRepository
     message: PostgresMessageRepository
     session_summary: PostgresSessionSummaryRepository
@@ -274,6 +276,7 @@ class PostgresRuntimeRepositoryProvider:
         if not isinstance(session, AsyncSession):
             raise TypeError("session 必须是调用方显式持有的 AsyncSession")
         return RuntimePostgresRepositories(
+            user=PostgresUserRepository(session),
             conversation=PostgresConversationRepository(session),
             message=PostgresMessageRepository(session),
             session_summary=PostgresSessionSummaryRepository(session),

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 import datetime
 import re
 
@@ -10,29 +11,87 @@ from .request_manager import get_current_request_elapsed
 
 
 class LlmApiMixin:
-    def _record_token_usage(self, usage: dict):
-        """将 API 返回的 token 消耗记录写入历史"""
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-        total_tokens = usage.get("total_tokens", 0)
-        prompt_tokens_details = usage.get("prompt_tokens_details") or {}
-        cache_hit = prompt_tokens_details.get("cached_tokens", 0) or usage.get(
-            "prompt_cache_hit_tokens", 0
-        )
-        elapsed = get_current_request_elapsed()
-        token_usage_history.appendleft(
-            {
-                "time": datetime.datetime.now().strftime("%m-%d %H:%M:%S"),
-                "model": self.model_info["model"],
-                "prompt": prompt_tokens,
-                "cache": cache_hit,
-                "completion": completion_tokens,
-                "total": total_tokens,
-                "elapsed": elapsed,
-                "tools": dict(getattr(self, "_current_tool_usage", {})),
-            }
+    @staticmethod
+    def _usage_integer(value: object) -> int:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 0 <= value <= (1 << 63) - 1
+        ):
+            return 0
+        return value
 
-        )
+    def _record_token_usage(self, usage: object) -> None:
+        """Normalize an untrusted API usage payload without breaking chat."""
+
+        try:
+            payload = usage if isinstance(usage, Mapping) else {}
+            prompt_tokens = self._usage_integer(payload.get("prompt_tokens"))
+            completion_tokens = self._usage_integer(
+                payload.get("completion_tokens")
+            )
+            prompt_details = payload.get("prompt_tokens_details")
+            if not isinstance(prompt_details, Mapping):
+                prompt_details = {}
+            completion_details = payload.get("completion_tokens_details")
+            if not isinstance(completion_details, Mapping):
+                completion_details = {}
+            cached_tokens = self._usage_integer(
+                prompt_details.get("cached_tokens")
+            )
+            if cached_tokens == 0:
+                cached_tokens = self._usage_integer(
+                    payload.get("prompt_cache_hit_tokens")
+                )
+            cached_tokens = min(cached_tokens, prompt_tokens)
+            reasoning_tokens = min(
+                self._usage_integer(completion_details.get("reasoning_tokens")),
+                completion_tokens,
+            )
+            total_tokens = min(
+                (1 << 63) - 1,
+                prompt_tokens + completion_tokens,
+            )
+            try:
+                elapsed = get_current_request_elapsed()
+            except Exception:
+                elapsed = None
+            try:
+                tools = dict(getattr(self, "_current_tool_usage", {}))
+            except Exception:
+                tools = {}
+            model_info = getattr(self, "model_info", {})
+            if not isinstance(model_info, Mapping):
+                model_info = {}
+            model = model_info.get("model")
+            model_label = model if isinstance(model, str) and model else "unknown"
+            token_usage_history.appendleft(
+                {
+                    "time": datetime.datetime.now().strftime("%m-%d %H:%M:%S"),
+                    "model": model_label,
+                    "prompt": prompt_tokens,
+                    "cache": cached_tokens,
+                    "completion": completion_tokens,
+                    "total": total_tokens,
+                    "elapsed": elapsed,
+                    "tools": tools,
+                }
+            )
+            runtime = getattr(self, "agent_runtime", None)
+            capture_usage = getattr(runtime, "capture_usage", None)
+            if callable(capture_usage):
+                capture_usage(
+                    provider=model_info.get("provider", "unknown"),
+                    model=model_label,
+                    input_tokens=prompt_tokens,
+                    output_tokens=completion_tokens,
+                    reasoning_tokens=reasoning_tokens,
+                    cached_tokens=cached_tokens,
+                )
+        except Exception:
+            # Usage is accounting data from an untrusted response.  A malformed
+            # provider payload must never alter the model response lifecycle.
+            return
 
     def _extract_api_error_info(self, error_text: str) -> dict[str, str]:
         """从 API 错误响应中提取常见结构化字段，解析失败时返回空字典。"""

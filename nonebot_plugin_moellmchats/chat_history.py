@@ -10,6 +10,7 @@ from typing import Any, TypeAlias
 
 from .database_schema import (
     CONVERSATION_TYPE_MAX_CHARS,
+    DISPLAY_NAME_MAX_CHARS,
     ENTITY_ID_MAX_CHARS,
     MESSAGE_ROLE_MAX_CHARS,
     PLATFORM_MAX_CHARS,
@@ -153,6 +154,68 @@ def validate_conversation_id(value: object) -> str:
         label="conversation_id",
         maximum=ENTITY_ID_MAX_CHARS,
     )
+
+
+def validate_user_id(value: object) -> str:
+    """Validate the durable user identity shared by runtime records."""
+
+    return _require_bounded_text(
+        value,
+        label="user_id",
+        maximum=ENTITY_ID_MAX_CHARS,
+    )
+
+
+@dataclass(frozen=True)
+class UserRecord:
+    """Detached immutable representation of one platform user."""
+
+    user_id: str
+    platform: str
+    platform_user_id: str
+    display_name: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_user_id(self.user_id)
+        _require_bounded_text(
+            self.platform,
+            label="UserRecord.platform",
+            maximum=PLATFORM_MAX_CHARS,
+        )
+        _require_bounded_text(
+            self.platform_user_id,
+            label="UserRecord.platform_user_id",
+            maximum=ENTITY_ID_MAX_CHARS,
+        )
+        _require_optional_bounded_text(
+            self.display_name,
+            label="UserRecord.display_name",
+            maximum=DISPLAY_NAME_MAX_CHARS,
+        )
+        created_at = _normalize_datetime(
+            self.created_at,
+            label="UserRecord.created_at",
+        )
+        updated_at = _normalize_datetime(
+            self.updated_at,
+            label="UserRecord.updated_at",
+        )
+        if updated_at < created_at:
+            raise ValueError("UserRecord.updated_at 不能早于 created_at")
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "updated_at", updated_at)
+
+    def as_dict(self) -> dict[str, str | datetime | None]:
+        return {
+            "user_id": self.user_id,
+            "platform": self.platform,
+            "platform_user_id": self.platform_user_id,
+            "display_name": self.display_name,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
 
 
 @dataclass(frozen=True)

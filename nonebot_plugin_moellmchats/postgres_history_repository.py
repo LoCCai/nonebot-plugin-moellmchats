@@ -11,16 +11,19 @@ import re
 from typing import Any, TypeGuard
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .chat_history import (
     ConversationRecord,
     MessageRecord,
+    UserRecord,
     mutable_history_json,
     validate_conversation_id,
+    validate_user_id,
 )
-from .database_schema import conversations_table, messages_table
+from .database_schema import conversations_table, messages_table, users_table
 from .repositories import (
     ConversationRepository,
     MessageRepository,
@@ -28,6 +31,7 @@ from .repositories import (
     RepositoryPage,
     RepositoryPageRequest,
     RepositoryUnavailableError,
+    UserRepository,
 )
 
 _CURSOR_PREFIX = "message-v1."
@@ -36,6 +40,14 @@ _ERROR_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 _POSTGRES_BIGINT_MAX = (1 << 63) - 1
 
+_USER_COLUMNS = (
+    users_table.c.id,
+    users_table.c.platform,
+    users_table.c.platform_user_id,
+    users_table.c.display_name,
+    users_table.c.created_at,
+    users_table.c.updated_at,
+)
 _CONVERSATION_COLUMNS = (
     conversations_table.c.id,
     conversations_table.c.type,
@@ -146,6 +158,17 @@ def _conversation_values(record: ConversationRecord) -> dict[str, Any]:
     }
 
 
+def _user_values(record: UserRecord) -> dict[str, Any]:
+    return {
+        "id": record.user_id,
+        "platform": record.platform,
+        "platform_user_id": record.platform_user_id,
+        "display_name": record.display_name,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
 def _message_values(record: MessageRecord) -> dict[str, Any]:
     return {
         "conversation_id": record.conversation_id,
@@ -168,6 +191,17 @@ def _conversation_from_row(row: Mapping[str, Any]) -> ConversationRecord:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         last_message_at=row["last_message_at"],
+    )
+
+
+def _user_from_row(row: Mapping[str, Any]) -> UserRecord:
+    return UserRecord(
+        user_id=row["id"],
+        platform=row["platform"],
+        platform_user_id=row["platform_user_id"],
+        display_name=row["display_name"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -212,11 +246,128 @@ class _PostgresRepository:
             raise _unavailable(operation, error=error) from None
 
 
+class PostgresUserRepository(
+    _PostgresRepository,
+    UserRepository[UserRecord],
+):
+    """Resolve one platform identity without a check-then-insert race."""
+
+    async def resolve(self, user: UserRecord) -> UserRecord:
+        if not isinstance(user, UserRecord):
+            raise TypeError("user 必须是 UserRecord")
+        statement = postgresql.insert(users_table).values(**_user_values(user))
+        excluded = statement.excluded
+        statement = statement.on_conflict_do_update(
+            index_elements=(
+                users_table.c.platform,
+                users_table.c.platform_user_id,
+            ),
+            set_={
+                "display_name": sa.func.coalesce(
+                    excluded.display_name,
+                    users_table.c.display_name,
+                ),
+                "updated_at": sa.func.greatest(
+                    users_table.c.updated_at,
+                    excluded.updated_at,
+                ),
+            },
+        ).returning(*_USER_COLUMNS)
+        result = await self._execute(
+            statement,
+            operation="user.resolve",
+            integrity_is_conflict=True,
+        )
+        try:
+            row = result.mappings().one()
+            if not isinstance(row, Mapping):
+                raise TypeError("row is not a mapping")
+            resolved = _user_from_row(row)
+        except Exception as error:
+            raise _unavailable("user.resolve", error=error) from None
+        if resolved.platform != user.platform or resolved.platform_user_id != user.platform_user_id:
+            raise _unavailable("user.resolve")
+        return resolved
+
+    async def get(self, user_id: str) -> UserRecord | None:
+        user_id = validate_user_id(user_id)
+        statement = sa.select(*_USER_COLUMNS).where(users_table.c.id == user_id)
+        result = await self._execute(statement, operation="user.get")
+        try:
+            row = result.mappings().one_or_none()
+            if row is None:
+                return None
+            if not isinstance(row, Mapping):
+                raise TypeError("row is not a mapping")
+            resolved = _user_from_row(row)
+        except Exception as error:
+            raise _unavailable("user.get", error=error) from None
+        if resolved.user_id != user_id:
+            raise _unavailable("user.get")
+        return resolved
+
+
 class PostgresConversationRepository(
     _PostgresRepository,
     ConversationRepository[ConversationRecord],
 ):
     """PostgreSQL conversation access using a caller-owned transaction."""
+
+    async def resolve(self, conversation: ConversationRecord) -> ConversationRecord:
+        """Resolve one canonical group/private scope using its partial unique key."""
+
+        if not isinstance(conversation, ConversationRecord):
+            raise TypeError("conversation 必须是 ConversationRecord")
+        statement = postgresql.insert(conversations_table).values(**_conversation_values(conversation))
+        excluded = statement.excluded
+        if conversation.group_id is not None:
+            index_elements = (
+                conversations_table.c.platform,
+                conversations_table.c.type,
+                conversations_table.c.group_id,
+            )
+            index_where = conversations_table.c.group_id.is_not(None)
+        else:
+            index_elements = (
+                conversations_table.c.platform,
+                conversations_table.c.type,
+                conversations_table.c.user_id,
+            )
+            index_where = conversations_table.c.group_id.is_(None) & conversations_table.c.user_id.is_not(None)
+        statement = statement.on_conflict_do_update(
+            index_elements=index_elements,
+            index_where=index_where,
+            set_={
+                "updated_at": sa.func.greatest(
+                    conversations_table.c.updated_at,
+                    excluded.updated_at,
+                ),
+                "last_message_at": sa.func.greatest(
+                    conversations_table.c.last_message_at,
+                    excluded.last_message_at,
+                ),
+            },
+        ).returning(*_CONVERSATION_COLUMNS)
+        result = await self._execute(
+            statement,
+            operation="conversation.resolve",
+            integrity_is_conflict=True,
+        )
+        try:
+            row = result.mappings().one()
+            if not isinstance(row, Mapping):
+                raise TypeError("row is not a mapping")
+            resolved = _conversation_from_row(row)
+        except Exception as error:
+            raise _unavailable("conversation.resolve", error=error) from None
+        if (
+            resolved.platform != conversation.platform
+            or resolved.conversation_type != conversation.conversation_type
+            or resolved.group_id != conversation.group_id
+            or (conversation.group_id is None and resolved.user_id != conversation.user_id)
+        ):
+            raise _unavailable("conversation.resolve")
+        return resolved
 
     async def create(self, conversation: ConversationRecord) -> None:
         if not isinstance(conversation, ConversationRecord):

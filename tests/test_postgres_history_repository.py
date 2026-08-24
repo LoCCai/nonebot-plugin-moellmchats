@@ -16,11 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nonebot_plugin_moellmchats.chat_history import (
     ConversationRecord,
     MessageRecord,
+    UserRecord,
 )
 import nonebot_plugin_moellmchats.postgres_history_repository as repository_module
 from nonebot_plugin_moellmchats.postgres_history_repository import (
     PostgresConversationRepository,
     PostgresMessageRepository,
+    PostgresUserRepository,
 )
 from nonebot_plugin_moellmchats.repositories import (
     ConversationRepository,
@@ -28,6 +30,7 @@ from nonebot_plugin_moellmchats.repositories import (
     RepositoryConflictError,
     RepositoryPageRequest,
     RepositoryUnavailableError,
+    UserRepository,
 )
 
 _NOW = datetime(2026, 8, 22, 20, 0, tzinfo=timezone.utc)
@@ -75,6 +78,16 @@ class _Result:
             raise RuntimeError("multiple rows")
         return rows[0] if rows else None
 
+    def one(self) -> Any:
+        if self._rows is _UNSET:
+            raise AssertionError("mapping rows were not configured")
+        rows = self._resolve(self._rows)
+        if not isinstance(rows, (list, tuple)):
+            raise TypeError("rows must be a sequence")
+        if len(rows) != 1:
+            raise RuntimeError("expected exactly one row")
+        return rows[0]
+
     def all(self) -> Any:
         if self._rows is _UNSET:
             raise AssertionError("mapping rows were not configured")
@@ -102,6 +115,23 @@ def _conversation(
         created_at=_NOW,
         updated_at=_NOW + timedelta(seconds=1),
         last_message_at=_NOW + timedelta(seconds=1),
+    )
+
+
+def _user(
+    user_id: str = "user-1",
+    *,
+    platform: str = "onebot-v11",
+    platform_user_id: str = "10001",
+    display_name: str | None = "Moe",
+) -> UserRecord:
+    return UserRecord(
+        user_id=user_id,
+        platform=platform,
+        platform_user_id=platform_user_id,
+        display_name=display_name,
+        created_at=_NOW,
+        updated_at=_NOW + timedelta(seconds=1),
     )
 
 
@@ -135,6 +165,18 @@ def _conversation_row(record: ConversationRecord) -> dict[str, Any]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "last_message_at": record.last_message_at,
+    }
+
+
+def _user_row(record: UserRecord) -> dict[str, Any]:
+    values = record.as_dict()
+    return {
+        "id": values["user_id"],
+        "platform": values["platform"],
+        "platform_user_id": values["platform_user_id"],
+        "display_name": values["display_name"],
+        "created_at": values["created_at"],
+        "updated_at": values["updated_at"],
     }
 
 
@@ -193,6 +235,62 @@ def test_history_records_are_detached_deeply_immutable_and_utc_normalized() -> N
         message.content = "changed"  # type: ignore[misc]
     with pytest.raises(TypeError):
         structured["new"] = True  # type: ignore[index]
+
+
+def test_user_record_is_immutable_and_utc_normalized() -> None:
+    local_time = _NOW.astimezone(timezone(timedelta(hours=8)))
+    user = UserRecord(
+        user_id="user-1",
+        platform="onebot-v11",
+        platform_user_id="10001",
+        display_name="Moe",
+        created_at=local_time,
+        updated_at=local_time,
+    )
+
+    assert user.created_at == _NOW
+    assert user.updated_at.tzinfo is timezone.utc
+    assert user.as_dict() == {
+        "user_id": "user-1",
+        "platform": "onebot-v11",
+        "platform_user_id": "10001",
+        "display_name": "Moe",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    with pytest.raises(FrozenInstanceError):
+        user.display_name = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"user_id": ""},
+        {"platform": " onebot-v11"},
+        {"platform_user_id": "10001\n"},
+        {"display_name": ""},
+        {"created_at": datetime(2026, 8, 22, 20, 0)},
+        {
+            "created_at": _NOW + timedelta(seconds=1),
+            "updated_at": _NOW,
+        },
+    ],
+)
+def test_user_record_rejects_invalid_durable_values(
+    changes: dict[str, Any],
+) -> None:
+    values = {
+        "user_id": "user-1",
+        "platform": "onebot-v11",
+        "platform_user_id": "10001",
+        "display_name": "Moe",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError, match=r"UserRecord|user_id"):
+        UserRecord(**values)
 
 
 @pytest.mark.parametrize(
@@ -269,18 +367,151 @@ def test_message_record_rejects_cyclic_structured_content() -> None:
 
 def test_postgres_repositories_require_an_explicit_async_session() -> None:
     with pytest.raises(TypeError, match="AsyncSession"):
+        PostgresUserRepository(object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="AsyncSession"):
         PostgresConversationRepository(object())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="AsyncSession"):
         PostgresMessageRepository(object())  # type: ignore[arg-type]
 
     session = _session()
+    users = PostgresUserRepository(session)
     conversations = PostgresConversationRepository(session)
     messages = PostgresMessageRepository(session)
 
+    assert isinstance(users, UserRepository)
     assert isinstance(conversations, ConversationRepository)
     assert isinstance(messages, MessageRepository)
+    assert inspect.iscoroutinefunction(users.resolve)
     assert inspect.iscoroutinefunction(conversations.create)
     assert inspect.iscoroutinefunction(messages.list_recent)
+
+
+@pytest.mark.asyncio
+async def test_user_repository_resolves_and_gets_with_one_statement_each() -> None:
+    proposed = _user()
+    canonical = _user(user_id="canonical-user")
+    session = _session(
+        _Result(rows=[_user_row(canonical)]),
+        _Result(rows=[_user_row(canonical)]),
+    )
+    repository = PostgresUserRepository(session)
+
+    assert await repository.resolve(proposed) == canonical
+    assert await repository.get(canonical.user_id) == canonical
+
+    upsert_sql, upsert_params = _compile(session.execute.await_args_list[0].args[0])
+    select_sql, select_params = _compile(session.execute.await_args_list[1].args[0])
+
+    assert upsert_sql.startswith("INSERT INTO users")
+    assert "ON CONFLICT (platform, platform_user_id) DO UPDATE" in upsert_sql
+    assert "coalesce(excluded.display_name, users.display_name)" in upsert_sql
+    assert "greatest(users.updated_at, excluded.updated_at)" in upsert_sql
+    assert "RETURNING users.id, users.platform" in upsert_sql
+    assert proposed.user_id in upsert_params.values()
+    assert select_sql.startswith("SELECT users.id, users.platform")
+    assert "SELECT *" not in select_sql
+    assert "WHERE users.id =" in select_sql
+    assert canonical.user_id in select_params.values()
+    session.commit.assert_not_awaited()
+    session.rollback.assert_not_awaited()
+    session.flush.assert_not_awaited()
+    session.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("conversation", "conflict_target", "conflict_predicate"),
+    [
+        (
+            _conversation(group_id="group-1", user_id=None),
+            "platform, type, group_id",
+            "group_id IS NOT NULL",
+        ),
+        (
+            _conversation(),
+            "platform, type, user_id",
+            "group_id IS NULL AND user_id IS NOT NULL",
+        ),
+    ],
+)
+async def test_conversation_repository_resolves_scope_with_atomic_upsert(
+    conversation: ConversationRecord,
+    conflict_target: str,
+    conflict_predicate: str,
+) -> None:
+    canonical = ConversationRecord(
+        **{
+            **conversation.as_dict(),
+            "conversation_id": "canonical-conversation",
+        }
+    )
+    session = _session(_Result(rows=[_conversation_row(canonical)]))
+    repository = PostgresConversationRepository(session)
+
+    assert await repository.resolve(conversation) == canonical
+
+    statement_sql, params = _compile(session.execute.await_args.args[0])
+    assert statement_sql.startswith("INSERT INTO conversations")
+    assert f"ON CONFLICT ({conflict_target})" in statement_sql
+    assert conflict_predicate in statement_sql
+    assert "DO UPDATE SET updated_at = greatest(" in statement_sql
+    assert "RETURNING conversations.id, conversations.type" in statement_sql
+    assert conversation.conversation_id in params.values()
+    assert session.execute.await_count == 1
+    session.commit.assert_not_awaited()
+    session.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_rejects_drifted_or_malformed_returned_identity() -> None:
+    proposed_user = _user()
+    drifted_user = _user(platform_user_id="other")
+    proposed_conversation = _conversation()
+    drifted_conversation = _conversation(user_id="other-user")
+    session = _session(
+        _Result(rows=[_user_row(drifted_user)]),
+        _Result(rows=[_conversation_row(drifted_conversation)]),
+    )
+
+    with pytest.raises(RepositoryUnavailableError, match=r"user\.resolve"):
+        await PostgresUserRepository(session).resolve(proposed_user)
+    with pytest.raises(RepositoryUnavailableError, match=r"conversation\.resolve"):
+        await PostgresConversationRepository(session).resolve(
+            proposed_conversation,
+        )
+
+    assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_user_resolve_sanitizes_conflict_and_never_retries() -> None:
+    backend_error = IntegrityError(
+        "INSERT INTO users VALUES ('private-user')",
+        {"password": "top-secret"},
+        RuntimeError("postgresql://user:top-secret@db.internal/private"),
+    )
+    session = _session(backend_error)
+
+    with pytest.raises(RepositoryConflictError, match="IntegrityError") as error:
+        await PostgresUserRepository(session).resolve(_user())
+
+    rendered = str(error.value)
+    for secret in ("private-user", "password", "top-secret", "db.internal"):
+        assert secret not in rendered
+    assert error.value.__cause__ is None
+    assert session.execute.await_count == 1
+    session.commit.assert_not_awaited()
+    session.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_resolve_preserves_cancellation_without_retry() -> None:
+    session = _session(asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await PostgresUserRepository(session).resolve(_user())
+
+    assert session.execute.await_count == 1
 
 
 @pytest.mark.asyncio

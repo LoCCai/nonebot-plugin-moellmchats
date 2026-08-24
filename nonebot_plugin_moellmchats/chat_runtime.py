@@ -4,6 +4,13 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, Pr
 
 from . import moe_llm as llm
 from .admission import AdmissionGateProtocol, AdmissionRejected, get_llm_controller
+from .agent_context_runtime import (
+    AgentRequestIdentity,
+    AgentRequestRuntime,
+    RuntimeResourceHost,
+    runtime_resource_host,
+)
+from .agent_runtime import AgentRunState, DeadlineContext
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
@@ -62,11 +69,15 @@ async def handle_llm(
     *,
     cooldown_store: CooldownStoreProtocol | None = None,
     admission_controller: AdmissionGateProtocol | None = None,
+    resource_host: RuntimeResourceHost | None = None,
 ):
     user_id = event.sender.user_id
     if user_id is None:
         raise CooldownError("LLM cooldown 无法确认当前 user_id")
     cooldown_seconds = int(config_parser.get_config("cd_seconds", 120) or 0)
+    deadline = DeadlineContext.from_timeout(
+        config_parser.get_config("request_timeout_seconds", 180)
+    )
     action_store = default_cooldown_store if cooldown_store is None else cooldown_store
     cooldown_claim = await action_store.claim(
         user_id=user_id,
@@ -81,10 +92,9 @@ async def handle_llm(
         )
 
     is_finished: str | bool = False
+    agent_request: AgentRequestRuntime | None = None
     try:
-        async with timeout_scope(
-            config_parser.get_config("request_timeout_seconds", 180)
-        ):
+        async with timeout_scope(deadline.remaining()):
             admission_gate = (
                 get_llm_controller()
                 if admission_controller is None
@@ -92,6 +102,8 @@ async def handle_llm(
             )
             async with admission_gate.slot(user_id):
                 snapshot = runtime_snapshots.current()
+                if snapshot is None:
+                    raise RuntimeError("LLM runtime snapshot 尚未发布")
                 with runtime_snapshots.bind(snapshot):
                     temp = (
                         "ai助手"
@@ -101,12 +113,60 @@ async def handle_llm(
                     if not temp:
                         await matcher.finish("出错了，赶快喊机器人主人来修复一下吧~")
 
-                    llm_chat = llm.MoeLlm(
-                        bot, event, format_message_dict, temperament=temp
-                    )
                     request_id = register_request(event, format_message_dict, is_ai)
                     try:
-                        is_finished = await llm_chat.get_llm_chat()
+                        selected_host = (
+                            runtime_resource_host
+                            if resource_host is None
+                            else resource_host
+                        )
+                        async with selected_host.lease(snapshot) as coordinator:
+                            agent_request = await AgentRequestRuntime.begin(
+                                coordinator,
+                                AgentRequestIdentity.from_event(event),
+                                request_id=request_id,
+                                deadline=deadline,
+                            )
+                            llm_chat = llm.MoeLlm(
+                                bot,
+                                event,
+                                format_message_dict,
+                                temperament=temp,
+                                agent_runtime=agent_request,
+                            )
+                            try:
+                                is_finished = await llm_chat.get_llm_chat()
+                                if (
+                                    isinstance(is_finished, str)
+                                    or not is_finished
+                                ) and not agent_request.run.is_terminal:
+                                    await agent_request.finish_exception(
+                                        AgentRunState.FAILED
+                                    )
+                                elif (
+                                    is_finished
+                                    and not agent_request.run.is_terminal
+                                ):
+                                    await agent_request.finish_success()
+                            except asyncio.CancelledError as error:
+                                if not agent_request.run.is_terminal:
+                                    state = (
+                                        AgentRunState.TIMED_OUT
+                                        if deadline.remaining() <= 0
+                                        else AgentRunState.CANCELLED
+                                    )
+                                    await agent_request.finish_exception(
+                                        state,
+                                        error,
+                                    )
+                                raise
+                            except Exception as error:
+                                if not agent_request.run.is_terminal:
+                                    await agent_request.finish_exception(
+                                        AgentRunState.FAILED,
+                                        error,
+                                    )
+                                raise
                     finally:
                         unregister_request(request_id)
     except AdmissionRejected:
@@ -130,6 +190,13 @@ async def handle_llm(
             user_id=user_id,
         )
         await matcher.finish("当前 LLM 请求已被超级管理员终止。")
+    except Exception:
+        await _release_cooldown(
+            action_store,
+            cooldown_claim.lease,
+            user_id=user_id,
+        )
+        raise
 
     is_repeat_ask_dict[user_id] = False
     if isinstance(is_finished, str):

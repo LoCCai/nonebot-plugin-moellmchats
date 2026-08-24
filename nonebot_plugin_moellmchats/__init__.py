@@ -26,6 +26,7 @@ _model_refresh_task: asyncio.Task | None = None
 _runner_preflight_task: asyncio.Task | None = None
 
 from . import moe_llm as llm
+from .agent_context_runtime import runtime_resource_host
 from .chat_runtime import (
     cd,
     chat_rule,
@@ -584,6 +585,14 @@ async def _startup_tasks():
         await reload_tools_for_commands()
     except Exception:
         logger.exception("启动时加载工具失败")
+    initial_snapshot = runtime_snapshots.current()
+    if initial_snapshot is None:
+        logger.error("启动时未发布 LLM runtime snapshot；聊天入口将保持 fail closed")
+    else:
+        try:
+            await runtime_resource_host.start(initial_snapshot)
+        except Exception:
+            logger.exception("启动 Agent runtime resources 失败；聊天入口将保持 fail closed")
 
     # 模型拉取保持后台执行，不阻塞 Bot 启动
     async def refresh_models_in_background():
@@ -616,7 +625,10 @@ async def _close_http_session():
             except asyncio.CancelledError:
                 pass
     await runtime_reloader.stop_watcher()
-    await close_session()
+    try:
+        await runtime_resource_host.close()
+    finally:
+        await close_session()
 
 
 # 超级管理员可手动触发模型刷新

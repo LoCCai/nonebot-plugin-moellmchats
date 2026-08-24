@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 _CURSOR_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,512}$")
 
 ConversationRecordT = TypeVar("ConversationRecordT")
+UserRecordT = TypeVar("UserRecordT")
 MessageRecordT = TypeVar("MessageRecordT")
 ToolRecordT = TypeVar("ToolRecordT")
 UsageRecordT = TypeVar("UsageRecordT")
@@ -88,6 +89,13 @@ class RepositoryTransaction(Protocol):
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
+
+
+@runtime_checkable
+class UserRepository(Protocol[UserRecordT]):
+    async def resolve(self, user: UserRecordT) -> UserRecordT: ...
+
+    async def get(self, user_id: str) -> UserRecordT | None: ...
 
 
 @runtime_checkable

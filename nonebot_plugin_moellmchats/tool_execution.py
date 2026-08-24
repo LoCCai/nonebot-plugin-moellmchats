@@ -18,6 +18,10 @@ class ToolExecutionError(RuntimeError):
     pass
 
 
+class ToolExecutionTimeoutError(ToolExecutionError):
+    """A custom tool exceeded its own cancellable execution budget."""
+
+
 def ensure_cancellable_mutating_handler(
     tool_name: str,
     spec: Any,
@@ -280,5 +284,7 @@ async def execute_custom_tool(
             )
     except TimeoutError:
         runtime_metrics.tool_timeouts += 1
-        raise ToolExecutionError(f"工具执行超过 {timeout} 秒预算") from None
+        raise ToolExecutionTimeoutError(
+            f"工具执行超过 {timeout} 秒预算"
+        ) from None
     return _normalize_result(result, spec=spec)

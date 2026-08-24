@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from nonebot_plugin_moellmchats.agent_context_runtime import (
+    AgentGenerationCoordinator,
+    AgentRequestIdentity,
+    AgentRequestRuntime,
+)
+from nonebot_plugin_moellmchats.agent_runtime import (
+    AgentRunState,
+    DeadlineContext,
+    ToolCallStatus,
+)
 from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
 from nonebot_plugin_moellmchats.config import config_parser
 from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
@@ -16,6 +27,8 @@ from nonebot_plugin_moellmchats.pending_actions import (
     PendingActionStore,
     pending_action_store,
 )
+from nonebot_plugin_moellmchats.runtime_resources import RuntimeResourceBuilder
+from nonebot_plugin_moellmchats.runtime_snapshot import RuntimeSnapshot
 from nonebot_plugin_moellmchats.tool_contracts import (
     ToolEffect,
     ToolPolicy,
@@ -77,6 +90,7 @@ class Harness(LlmToolsMixin):
         self._current_tool_usage = Counter()
         self.emotion_flag = False
         self.is_superuser = True
+        self.agent_runtime: AgentRequestRuntime | None = None
         self.sent = []
 
     async def send_emotion_message(self, text: str) -> str:
@@ -93,6 +107,35 @@ def _call(identifier: int, name: str, arguments: str = "{}") -> dict:
         "type": "function",
         "function": {"name": name, "arguments": arguments},
     }
+
+
+async def _agent_request_runtime() -> AgentRequestRuntime:
+    snapshot = RuntimeSnapshot(
+        generation=1,
+        config={},
+        model_state=None,
+        temperaments={},
+        temperament_assignments={},
+        replies={},
+        tool_snapshot=None,
+        emotions=(),
+        reloaded_at=1,
+    )
+    resources = RuntimeResourceBuilder().build(snapshot)
+    runtime = await AgentRequestRuntime.begin(
+        AgentGenerationCoordinator(resources),
+        AgentRequestIdentity(
+            platform="onebot-v11",
+            platform_user_id="1",
+            group_id=None,
+            display_name="tester",
+        ),
+        request_id=1,
+        deadline=DeadlineContext.from_timeout(30),
+    )
+    await runtime.advance(AgentRunState.PLANNING, model="model")
+    await runtime.advance(AgentRunState.EXECUTING)
+    return runtime
 
 
 def _complete_catalog(
@@ -160,6 +203,186 @@ async def test_only_one_tool_executes_each_round() -> None:
     )
     assert calls == {"first": 1}
     assert "已跳过" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_real_tool_path_records_completed_rejected_and_round_limit_calls() -> None:
+    async def tool() -> str:
+        return "ok"
+
+    first = ToolSpec(
+        name="first",
+        description="first",
+        parameters={"type": "object", "properties": {}},
+        handler=tool,
+    ).as_legacy_schema()
+    first["source"] = "registered"
+    second = ToolSpec(
+        name="second",
+        description="second",
+        parameters={"type": "object", "properties": {}},
+        handler=tool,
+    ).as_legacy_schema()
+    second["source"] = "registered"
+    harness = Harness({"first": first, "second": second})
+    harness.agent_runtime = await _agent_request_runtime()
+    runtime = harness.agent_runtime
+    assert runtime is not None
+
+    await harness._execute_tools(
+        [_call(1, "first"), _call(2, "second")],
+        "",
+        [],
+        "",
+    )
+    await harness._execute_tools(
+        [_call(3, "first", "[]")],
+        "",
+        [],
+        "",
+    )
+
+    assert [call.status for call in runtime.tool_calls] == [
+        ToolCallStatus.COMPLETED,
+        ToolCallStatus.REJECTED,
+        ToolCallStatus.REJECTED,
+    ]
+    assert [step.status.value for step in runtime.steps] == [
+        "completed",
+        "skipped",
+        "skipped",
+    ]
+    assert all(
+        call.tool_source.value == "registered"
+        for call in runtime.tool_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_timeout_records_timed_out_trace() -> None:
+    async def slow_tool() -> str:
+        await asyncio.sleep(1)
+        return "late"
+
+    spec = ToolSpec(
+        name="slow_tool",
+        description="slow tool",
+        parameters={"type": "object", "properties": {}},
+        handler=slow_tool,
+        timeout_seconds=0.01,
+    )
+    harness = Harness(
+        {
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        }
+    )
+    harness.agent_runtime = await _agent_request_runtime()
+
+    messages = await harness._execute_tools(
+        [_call(1, spec.name)],
+        "",
+        [],
+        "",
+    )
+
+    runtime = harness.agent_runtime
+    assert runtime is not None
+    assert runtime.tool_calls[-1].status is ToolCallStatus.TIMED_OUT
+    assert runtime.steps[-1].status.value == "timed_out"
+    assert "超时" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_failure_records_failed_trace_without_secret_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    async def failing_tool() -> str:
+        raise RuntimeError("private tool credential")
+
+    spec = ToolSpec(
+        name="failing_tool",
+        description="failing tool",
+        parameters={"type": "object", "properties": {}},
+        handler=failing_tool,
+    )
+    harness = Harness(
+        {
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        }
+    )
+    harness.agent_runtime = await _agent_request_runtime()
+    logs: list[str] = []
+    monkeypatch.setattr(
+        module.logger,
+        "error",
+        lambda message: logs.append(str(message)),
+    )
+
+    messages = await harness._execute_tools(
+        [_call(1, spec.name)],
+        "",
+        [],
+        "",
+    )
+
+    runtime = harness.agent_runtime
+    assert runtime is not None
+    assert runtime.tool_calls[-1].status is ToolCallStatus.FAILED
+    assert runtime.steps[-1].status.value == "failed"
+    assert "private tool credential" not in messages[-1]["content"]
+    assert logs == ["自定义工具执行失败，异常详情已安全省略"]
+
+
+@pytest.mark.asyncio
+async def test_custom_tool_cancellation_records_cancelled_trace_and_propagates() -> None:
+    entered = asyncio.Event()
+
+    async def cancellable_tool() -> str:
+        entered.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    spec = ToolSpec(
+        name="cancellable_tool",
+        description="cancellable tool",
+        parameters={"type": "object", "properties": {}},
+        handler=cancellable_tool,
+    )
+    harness = Harness(
+        {
+            spec.name: {
+                **spec.as_legacy_schema(),
+                "source": "registered",
+            }
+        }
+    )
+    harness.agent_runtime = await _agent_request_runtime()
+    task = asyncio.create_task(
+        harness._execute_tools(
+            [_call(1, spec.name)],
+            "",
+            [],
+            "",
+        )
+    )
+    await entered.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    runtime = harness.agent_runtime
+    assert runtime is not None
+    assert runtime.tool_calls[-1].status is ToolCallStatus.CANCELLED
+    assert runtime.steps[-1].status.value == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -646,6 +869,7 @@ async def test_provider_mutating_execution_still_creates_pending_action() -> Non
         provider_catalog=_complete_catalog(4, registered=(spec,)),
     )
     harness = Harness({}, snapshot=snapshot)
+    harness.agent_runtime = await _agent_request_runtime()
 
     messages = await harness._execute_tools(
         [_call(1, spec.name, '{"confirm":true}')],
@@ -657,6 +881,14 @@ async def test_provider_mutating_execution_still_creates_pending_action() -> Non
     assert executions == 0
     assert "尚未执行" in messages[-1]["content"]
     assert "确认执行" in messages[-1]["content"]
+    runtime = harness.agent_runtime
+    assert runtime is not None
+    assert runtime.tool_calls[-1].status is ToolCallStatus.WAITING_CONFIRMATION
+    assert runtime.tool_calls[-1].confirmation_id is not None
+    assert AgentRunState.WAITING_CONFIRMATION in {
+        run.state for run in runtime.run_history
+    }
+    assert runtime.run.state is AgentRunState.EXECUTING
     await pending_action_store.clear()
 
 

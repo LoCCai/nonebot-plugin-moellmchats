@@ -378,6 +378,7 @@ def test_postgres_repository_provider_constructs_all_ports_without_session_io() 
     assert {
         repository._session
         for repository in (
+            repositories.user,
             repositories.conversation,
             repositories.message,
             repositories.session_summary,

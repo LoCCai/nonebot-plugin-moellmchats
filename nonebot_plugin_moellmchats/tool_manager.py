@@ -4,6 +4,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+import re
 from typing import Any
 
 import nonebot
@@ -88,6 +89,8 @@ class LlmToolExecutionView:
     spec: ToolSpec | None
     legacy_entry: Mapping[str, Any] | None
     provider_authoritative: bool
+    bundle_id: str | None = None
+    bundle_digest: str | None = None
     trust_decision: ToolTrustDecision | None = None
 
     def __post_init__(self) -> None:
@@ -126,6 +129,16 @@ class LlmToolExecutionView:
                 raise ValueError("builtin llm_tools 执行视图不得携带 sidecar entry")
         elif self.legacy_entry is None:
             raise ValueError("legacy adapter llm_tools 执行视图缺少 sidecar entry")
+        if self.source is ToolSource.GENERATED:
+            if (
+                not isinstance(self.bundle_id, str)
+                or not self.bundle_id
+                or not isinstance(self.bundle_digest, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", self.bundle_digest)
+            ):
+                raise ValueError("Generated llm_tools 执行视图缺少 bundle identity")
+        elif self.bundle_id is not None or self.bundle_digest is not None:
+            raise ValueError("非 Generated llm_tools 执行视图不得携带 bundle identity")
         if type(self.provider_authoritative) is not bool:
             raise TypeError("llm_tools 执行视图 authority 标志必须是布尔值")
         if self.provider_authoritative:
@@ -864,6 +877,16 @@ class ToolSnapshot:
             if tool_name in self.mcp_tool_names:
                 source = ToolSource.MCP
             spec = custom_entry.get("tool_spec")
+            bundle_id = (
+                custom_entry.get("bundle_id")
+                if source is ToolSource.GENERATED
+                else None
+            )
+            bundle_digest = (
+                custom_entry.get("bundle_digest")
+                if source is ToolSource.GENERATED
+                else None
+            )
             return LlmToolExecutionView(
                 tool_name=tool_name,
                 generation=self.generation,
@@ -872,6 +895,8 @@ class ToolSnapshot:
                 spec=spec if isinstance(spec, ToolSpec) else None,
                 legacy_entry=custom_entry,
                 provider_authoritative=False,
+                bundle_id=bundle_id,
+                bundle_digest=bundle_digest,
             )
 
         plugin_entry = self.plugin_info.get(tool_name)
@@ -974,6 +999,20 @@ class ToolSnapshot:
                 f"llm_tools Provider 执行视图与 legacy rollback view 不一致: {tool_name}"
             )
 
+        provider_bundle_id = (
+            item.artifact.bundle_id if item.artifact is not None else None
+        )
+        provider_bundle_digest = (
+            item.artifact.bundle_digest if item.artifact is not None else None
+        )
+        if (
+            legacy_view.bundle_id != provider_bundle_id
+            or legacy_view.bundle_digest != provider_bundle_digest
+        ):
+            raise ProviderConsumerParityError(
+                f"llm_tools Provider bundle identity 与 legacy view 不一致: {tool_name}"
+            )
+
         decision = provider_catalog.decide_trust(
             tool_name,
             ToolTrustOperation.EXECUTION,
@@ -988,6 +1027,8 @@ class ToolSnapshot:
             spec=item.spec,
             legacy_entry=legacy_view.legacy_entry,
             provider_authoritative=True,
+            bundle_id=provider_bundle_id,
+            bundle_digest=provider_bundle_digest,
             trust_decision=decision,
         )
 
