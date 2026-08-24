@@ -1,14 +1,14 @@
 ---
 title: 03-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T15:02:58+00:00
+lastmod: 2026-08-24T15:24:31+00:00
 ---
 
 # 03-plan-performance-database
 
 # Plan 3：处理效率与数据库接入优化
 
-> 最终验收口径复核（2026-08-24）：F/G/H 阶段已绿的 Schema、Repository、Redis、cache、batch、并行和 metrics 多数最初只是显式注入的脱离态 primitive。Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`；未运行生产 migration、未连接真实 PostgreSQL/Redis 是本轮硬边界，不属于可用本地证据替代的验收项。I-07 最终闭环文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的双 run 已关闭；I-08 实现提交 `abc275721b67165224309d79e4406e95012f2975` 已把 generation-local Redis PendingAction/cooldown/admission、Usage/Audit spool/worker、database/pool/spool metrics，以及 G-04/G-05/G-06 三类 cache 的真实 consumer 全部接入开发 runtime 并通过本地门禁。Plan 3 开发态 runtime 验收项据此全部勾选；本地证据 HEAD `d77986d7e724758f24ad53fac9806e7482938ef4` 的远端双门禁已关闭，本最终闭环文档 HEAD 的双门禁完成前不开始 I-09，生产 migration、真实后端和发布观察均未发生。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+> 最终验收口径复核（2026-08-24）：Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭；I-09 随后用四版本、Python 3.10 最低依赖、mandatory root Sandbox、静态、可复现制品和四组包外零真实 I/O 矩阵复核 Schema、Repository、Redis、cache、batch、并行和 metrics 的组合结果。Plan 3 的 Primitive 与 Runtime integration 两层开发态验收已完成，当前只待 I-09 本地证据文档 HEAD 及最终文档 HEAD 自身的远端双 `release-gate`。生产 migration、真实 PostgreSQL/Redis、发布和部署均未发生，不能由本地或 CI 替代。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
 
 > I-01 本地门禁（2026-08-23）：实现提交 `4a643e062b83055722351df12d402e518dc51b51` 固化无凭据的模型 capability/limits/cost/availability descriptor，并将 Decimal 成本精确对齐现有 `NUMERIC(24,12)`、provider/model 长度对齐既有 Schema。四版本定向各 `98 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `492 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。I-01 精确 HEAD 双 run 待完成，I-02 锁定；G-06 Classification Cache 尚未接真实分类路径，未读取连接信息、未迁移、未连接服务。
 
@@ -43,6 +43,10 @@ lastmod: 2026-08-24T15:02:58+00:00
 > I-08 本地门禁（2026-08-24）：实现提交 `abc275721b67165224309d79e4406e95012f2975` 已组合 generation-owned Redis component ports；PendingAction 故障始终拒绝危险操作，cooldown/admission 只在显式 `single_instance_safe` 时允许有界 Memory fallback，且同一 lease 覆盖 claim、admission 与完整 Agent 请求。Usage/Audit 使用权限 `0700` 的有界 canonical local spool 与 unknown 隔离协议，database/pool/spool 低基数指标已接真实路径。此次又按 G-04 → G-05 → G-06 补齐 Catalog、Schema、Classification 三类 generation-local cache consumer：resolver backend timeout 明确归一为 unavailable；payload materialize 重新验证完整 key；只有成功模型分类可 publish。Catalog/Schema/Classification 定向分别 `54 passed, 9 deselected`、`68 passed, 9 deselected`、`117 passed, 4 deselected`，consumer 文件 `12 passed`，扩展联合 `1094 passed`；四版本及最低依赖全量均为 `2874 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、111 成员可复现制品及四组包外零真实 I/O 与 cache consumer smoke 全绿；未运行 migration、连接真实服务、合并、发布或部署。
 
 > I-08 远端闭环（2026-08-24）：本地证据 HEAD `d77986d7e724758f24ad53fac9806e7482938ef4` 的 push `32742181099` / PR `32742192391` 均为目标 SHA、各 11/11 success、`non_success=[]`、各唯一成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-08 本地证据门禁已关闭，I-09 依赖解除；进入实现前仍需本最终闭环文档 HEAD 的精确双 run。未运行 migration、连接真实服务、合并、发布或部署。
+
+> I-08 最终闭环（2026-08-24）：最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的 push `32742896973` / PR `32742899876` 均为目标 SHA、各 11/11 success、`non_success=[]`、各唯一 `completed/success release-gate`；本地、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-09 依赖据此完全关闭；未运行 migration、连接真实服务、合并、发布或部署。
+
+> I-09 本地最终矩阵（2026-08-24）：Python 3.10/3.11/3.12/3.13 与 Python 3.10 最低 SQLAlchemy 2.0.0 / Alembic 1.13.0 / asyncpg 0.30.0 / Redis 5.2.0 / FakeRedis 2.31.0 全量各 `2874 passed, 1 skipped`；mandatory root Sandbox `41 passed` 且 JUnit 为 `tests=41 / failures=0 / errors=0 / skipped=0`。Ruff 0.16.2 全仓、18 个新增/consumer 目标 format 与目标 Pyright 1.1.407 均通过；扩大静态范围会复现既有 format/Pyright 基线，故不声明全仓 format/Pyright 零诊断。fresh wheel/sdist 各 111 成员、Twine 通过且 sdist 重建 wheel 字节一致；Python 3.10/3.12 × wheel/sdist 四组从 site-packages 加载并验证 11 表、8 revision、spool `0700`、cache consumer `12 passed` 与零 engine/asyncpg/Redis/socket I/O。Plan 3 开发态验收完成，I-09 本地证据文档 HEAD 远端双门禁待提交和核验；生产 migration、真实后端、发布观察及 D-09 均未关闭。
 
 > 推荐目标版本：`0.28 → 0.30`
 
