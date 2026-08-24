@@ -1,7 +1,7 @@
 ---
 title: 02-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T05:41:31+00:00
+lastmod: 2026-08-24T07:50:35+00:00
 ---
 
 # 02-plan-future-architecture
@@ -27,6 +27,8 @@ lastmod: 2026-08-24T05:41:31+00:00
 > I-05 本地门禁（2026-08-24）：实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 新增显式 generation resource container，组合 snapshot、完整 Repository provider、cache、queue、metrics、logger、API 与可选 runner ports；默认 Memory 模式零后端 I/O，PostgreSQL/Redis 只有显式强类型 settings 才惰性构造。startup/逆序 shutdown、部分初始化回滚、取消收尾、重复关闭、generation handoff、旧代 lease drain、失败代重试、queue fail-closed、嵌套/逃逸 lease 均有确定契约。四版本定向各 `34 passed`、联合 `1101 passed`、四版本与最低依赖全量各 `2738 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-06 继续锁定；container 尚未接真实聊天入口，未连接真实服务、未迁移、未发布或部署。
 
 > I-05 远端闭环（2026-08-24）：本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 已各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除；真实聊天/runtime 仍未消费 container 或持久化 Agent 对象，未合并、发布、部署、迁移或连接真实服务。
+
+> I-06 本地门禁（2026-08-24）：I-05 最终文档 HEAD `1dc7dd4fb3fdb29b37bd2be4a4f904103e19108d` 的双 run 已严格关闭。实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 新增 `AgentGenerationCoordinator / AgentRequestRuntime / RuntimeResourceHost`，将 generation lease、单一 Deadline、AgentRun/Step/ToolCall、committed history/cache、summary/LTM、usage/audit 接入真实聊天、模型与工具路径；waiting-confirmation、completed、failed、timed_out、cancelled、rejected 均形成明确轨迹。PostgreSQL 事务不跨模型/工具调用，commit unknown 与 commit cancellation unknown 均禁止重放；commit/session cleanup/cache publish/invalidate 不确定即整代旁路。四版本定向各 `26 passed`、联合 `1024 passed`、四版本及最低依赖全量各 `2786 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现 105 成员制品与四组包外零真实 I/O smoke 全绿。精确 HEAD 双 run 待完成，I-07 继续锁定；未连接真实 PostgreSQL/Redis/模型，未迁移、合并、发布或部署。
 
 > 推荐目标版本：`0.26 → 0.30`
 
@@ -1154,17 +1156,17 @@ F-08 四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Sched
 - [x] ToolProvider 接口（D-01/D-08 generation-bound Provider consumer 已接真实路径；D-09 仅为发布观察后的 legacy 清理）
 - [x] Tool Capability（D-07 versioned merge 与 D-08 selection/execution enforcement 已接线）
 - [x] Tool Trust Level（D-06/D-08 selection、execution、confirmation 与 management enforcement 已接线）
-- [ ] AgentRun（I-04 Repository 与 I-05 resource composition 本地门禁已绿；待 I-06 由真实 runtime 创建）
-- [ ] AgentStep（I-04 Repository 与 I-05 resource composition 本地门禁已绿；待 I-06 由真实 runtime 创建）
-- [ ] ToolCall（I-04 Repository 与 I-05 resource composition 本地门禁已绿；待 I-06 由真实 runtime 创建）
-- [ ] DeadlineContext（E-05 primitive 已绿；I-06/I-07 负责真实请求预算接线）
+- [ ] AgentRun（I-06 已由真实 runtime 创建并完成本地门禁；待精确 HEAD 双 run 关闭）
+- [ ] AgentStep（I-06 已覆盖模型/工具真实轨迹并完成本地门禁；待精确 HEAD 双 run 关闭）
+- [ ] ToolCall（I-06 已覆盖成功、确认、拒绝、失败、超时和取消轨迹；待精确 HEAD 双 run 关闭）
+- [ ] DeadlineContext（I-06 已接单一请求预算并完成本地门禁；I-07 将复用到并行工具，当前待 I-06 双 run）
 - [ ] Tool Graph（E-06～E-08 primitive 已绿；I-07 负责真实工具路径接线）
 - [ ] read_only 并行工具（G-09/G-10 primitive 已绿；`_execute_tools()` 仍每轮单工具，待 I-07）
 - [ ] ModelCapability（I-01 primitive 双 gate 已绿；待后续 runtime 实际消费）
 - [ ] capability based routing（I-02 primitive 双 gate 已绿；尚未接现有 selector/chat runtime）
 - [ ] Runtime API（H-01～H-05 primitive 已由 I-05 container 提供显式 handler port；待 I-08 挂载）
-- [ ] structured audit（G-08/H-06 primitive 已绿；待 I-06/I-08 写入真实生命周期）
-- [ ] structured metrics（H-07 primitive 已绿；待 I-06/I-08 观测并接 H-04）
+- [ ] structured audit（I-06 已写入真实 Agent/工具生命周期；待精确 HEAD 双 run，I-08 再接 spool/平台事件）
+- [ ] structured metrics（H-07 primitive 已绿；待 I-08 观测并接 H-04）
 - [x] ToolResult structured output（I-03 已将六字段 canonical contract 接入真实 adapter/runner/history/model 路径并关闭双 gate）
 
 ---

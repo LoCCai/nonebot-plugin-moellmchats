@@ -1,7 +1,7 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-24T05:41:31+00:00
+lastmod: 2026-08-24T07:50:35+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
@@ -13,7 +13,7 @@ lastmod: 2026-08-24T05:41:31+00:00
 - Plan 1 / Milestone A～C 已完成，既有安全门禁不得回退。
 - D-01a～D-08f、E-01～E-08、F-01～F-14、G-01～G-10 与 H-01～H-08 的既定增量 primitive 均有本地和精确 HEAD 双 run 证据。
 - H-08 最终闭环 push run `32636423646` 与 PR run `32636425880` 均精确命中上述 SHA、各 11/11 success、`non_success=[]`，各恰好一个成功 `release-gate`；本地、origin、`ls-remote` 与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。
-- 上述证据只证明已拆分 primitive 的质量，不等于 Plan 2 / Plan 3 的最终运行态验收。真实聊天路径仍未创建 Agent 领域记录，也未消费多数 G/H 阶段能力。
+- 上述 H-08 证据只证明已拆分 primitive 的质量，不等于 Plan 2 / Plan 3 的最终运行态验收。此后 I-06 已在开发仓库真实聊天路径创建 Agent 领域记录并消费 history/summary/LTM/usage/audit 能力，当前完成本地门禁但仍待精确 HEAD 双 run；其余能力继续按 I-07～I-09 收口。
 - D-09 仍要求至少一个真实发布周期的 Provider/legacy parity 观察。本任务禁止生产操作，因此 D-09 必须继续锁定；本地测试或 CI 不能替代发布观察。
 
 因此，H-08 是“已规划 primitive gate”的终点，不是总体目标终点。后续以 Milestone I 完成开发仓库内的运行态集成；生产迁移、发布、部署和 D-09 观察仍属于独立的生产门禁。
@@ -30,6 +30,7 @@ lastmod: 2026-08-24T05:41:31+00:00
 - I-04 本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除。
 - I-05 实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 已完成显式 generation resource container：默认 Memory/零后端 I/O，PostgreSQL/Redis 只在强类型显式配置下惰性构造；Repository provider、cache、queue、metrics、logger、API 与 runner ports 同代组合，startup/逆序 shutdown、部分回滚、取消收尾、lease drain、reload handoff、失败代重试和 queue fail-closed 均有确定契约。四版本与最低依赖全量各 `2738 passed, 1 skipped`，联合 `1101 passed`，Sandbox `41 passed, 0 skipped`，静态、可复现制品和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-06 保持锁定。
 - I-05 本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功；四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除。
+- I-05 最终闭环文档 HEAD `1dc7dd4fb3fdb29b37bd2be4a4f904103e19108d` 的 push `32694556611` / PR `32694558961` 已各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功。在此前提下，I-06 实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 已完成真实 Agent/History/Summary/LTM Runtime Wiring：四版本定向各 `26 passed`、联合 `1024 passed`、四版本与最低依赖全量各 `2786 passed, 1 skipped`，Sandbox `41 passed, 0 skipped`，静态、可复现制品及四组包外零真实 I/O smoke 均通过。I-06 精确 HEAD 双 run 待关闭，I-07 保持锁定。
 
 ## 2. 状态口径
 
@@ -46,13 +47,13 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 | 能力 | 已有证据 | 当前缺口 |
 | --- | --- | --- |
 | Provider / Capability / Trust | D-08 已将 categorize、payload、tool execution、pending action、search 与管理 consumer 切到 generation-bound Provider 视图，并保留 parity rollback | D-09 legacy 删除仍受生产发布周期门禁锁定 |
-| AgentRun / AgentStep / ToolCall / Deadline | I-04 已对齐不可变对象、Schema 与三类 PostgreSQL Repository；I-05 已将完整 Repository provider 纳入 generation container；状态机与共享 deadline 已有本地门禁 | `__init__.py`、`chat_runtime.py`、`llm_tools.py` 仍不消费 container、构造或持久化这些对象，真实事务编排待 I-06 |
+| AgentRun / AgentStep / ToolCall / Deadline | I-06 已让真实 `handle_llm` 租用 generation resource，以单一 Deadline 创建并持久化 AgentRun、模型/工具 Step 与完整 ToolCall 状态轨迹，本地门禁全绿 | 精确 HEAD 双 run 待关闭；I-07 尚未让并行工具复用该 deadline/trace |
 | Model Capability / Routing | I-01 已实现无凭据 descriptor；I-02 双 gate 已实现 generation/catalog/policy/capability-bound 路由及固定模型兼容/回滚 | 尚未从受信 catalog 构造路由 snapshot，也未接现有 `ModelSelector`、payload 或真实聊天 runtime |
 | Structured ToolResult | I-03 已将六字段领域契约接入 Custom/NoneBot Provider、Generated runner、history preview 与模型消息，本地与精确 HEAD 双门禁已关闭 | 开发仓库内无剩余 structured ToolResult 缺口；生产发布观察不在本轮范围 |
-| Agent persistence | I-04 已实现三类 Agent PostgreSQL Repository，I-05 已提供调用方 `AsyncSession` 到完整 Repository set 的 generation-local provider | 尚未由 I-06 真实聊天事务编排消费；未运行生产 migration |
-| History / Summary / Long-Term Memory | G-01/G-02/G-03/H-08 各自具备脱离态实现 | 真实 `MessagesHandler` / prompt 编排未消费，未定义组合失败策略 |
+| Agent persistence | I-06 已以 caller-owned `AsyncSession` 短事务接入 User/Conversation/Message/Summary/AgentRun/AgentStep/ToolCall/Usage/Audit Repository，commit unknown 不重放，本地门禁全绿 | 精确 HEAD 双 run 待关闭；未运行生产 migration，I-08 spool 尚未实现 |
+| History / Summary / Long-Term Memory | I-06 已接 committed MessagesHandler、hot-cache trust、summary CAS watermark 与显式 LTM untrusted prompt，定义失败降级/取消传播 | 精确 HEAD 双 run 待关闭；真实 PostgreSQL/Redis/模型生产观察不在本轮范围 |
 | Parallel execution / Runner pool | G-09/G-10 已有脱离态 executor/pool | `_execute_tools()` 仍固定 `max_tool_calls_per_round = 1` 并逐个执行 |
-| Logging / Metrics / API / Admin | H-01～H-07 已有显式注入 primitive；I-05 container 可同代组合 Full Metrics、structured logger 与 API handler ports | 按设计仍无模块级全局 manager；现有真实 runtime 未启动/租用 container、未写 Full Metrics/structured log，也未挂载 API/Admin |
+| Logging / Metrics / API / Admin | I-06 已启动/租用 generation host 并把 structured audit 写入 Agent/工具真实生命周期；I-05 container 仍可同代组合 Full Metrics、structured logger 与 API handler ports | Full Metrics/structured log、API/Admin 挂载及平台事件仍待 I-08 |
 | Database / Redis failure policy | 各 backend primitive 对自身错误 fail closed | DB failure spool、Redis 组件级组合降级与 database metrics 尚未实现 |
 
 ## 4. Plan 2 当前状态
@@ -63,20 +64,18 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - Tool Capability versioning / merge / enforcement
 - Tool Trust Level enforcement
 - Structured ToolResult canonical adapter/runner/history/model 路径（I-03 精确 HEAD 双 gate 已关闭）
+- AgentRun/AgentStep/ToolCall、单一 Deadline、history/summary/LTM 与 structured audit 路径（I-06 本地门禁已绿，待双 run）
 
 ### Primitive 已完成、最终集成未完成
 
-- AgentRun / AgentStep / ToolCall（I-04 字段/Schema/PostgreSQL Repository 本地门禁已绿）
-- DeadlineContext
 - Tool Graph / read-only scheduler / parallel executor / trusted runner pool
 - Model Capability descriptor / capability-based routing（I-01/I-02 双 gate 已绿）
 - Runtime API / Web Admin
-- structured audit / structured logging / Full Metrics
-- Long-Term Memory retrieval boundary
+- structured logging / Full Metrics
 
 ### 尚缺核心实现
 
-- Agent runtime 对上述其余能力的真实消费
+- capability routing、parallel executor 与平台 observability/API 的真实消费
 
 ## 5. Plan 3 当前状态
 
@@ -91,9 +90,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 
 ### 最终集成未完成
 
-- I-05 已完成 Agent Repository 的 generation resource provider；真实事务生命周期与聊天路径编排待 I-06
-- history/hot cache/summary/long-memory 与聊天路径编排
-- token usage、audit batch 与真实 LLM/tool 路径编排
+- I-06 已完成 Agent/history/hot cache/summary/long-memory/usage/audit 的本地 runtime 编排，待精确 HEAD 双 run
 - Redis client 与各 Redis store 的统一生命周期和故障组合
 - DB failure spool 与可证明的不重复 flush 协议
 - database metrics
@@ -165,6 +162,9 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 真实聊天入口创建 AgentRun/Step/ToolCall，并经状态机与单一 DeadlineContext 驱动。
 - 编排 committed history、hot cache、session summary、long-memory prompt、usage 与 audit；明确每类后端不可用时的继续、降级或拒绝语义。
 - 默认 Memory 兼容模式保持现有用户行为；持久化写入的 durable commit 与 cache invalidate 顺序必须可证明。
+- 实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 已将 generation host、单一 Deadline、AgentRun/Step/ToolCall、committed history/cache、summary/LTM、usage/audit 接入真实聊天/模型/工具生命周期；默认 Memory 零后端 I/O，显式 PostgreSQL 只用短事务且未知 commit 不重放。
+- 四版本定向各 `26 passed`、联合 `1024 passed`、四版本与 Python 3.10 最低依赖全量各 `2786 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright、105 成员 fresh wheel/sdist/Twine、sdist 重建一致与四组包外 11 表/8 revision/Memory Agent 生命周期/零真实 I/O smoke 均通过。详细哈希和证据目录见 `04-implementation-backlog.md`。
+- 当前仅本地门禁完成；I-06 精确 HEAD push/PR 双 `release-gate` 待关闭，I-07 继续锁定。未迁移、未连接真实服务、未合并、发布、部署或重启。
 
 ### I-07 Read-only Parallel Runtime Wiring
 
@@ -207,4 +207,4 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 用 CI、本地 smoke 或模拟数据冒充生产发布周期观察；
 - 删除 D-09 legacy sidecar。
 
-当前精确恢复点：规划审计基线与 I-01～I-05 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-06 前置依赖已解除，下一步按本节契约实现 Agent / History / Summary / Long-Memory Runtime Wiring。仍不运行在线 migration、不连接真实服务、不操作生产。
+当前精确恢复点：规划审计基线与 I-01～I-05 精确 HEAD push/PR 双 `release-gate` 均已关闭；I-06 实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 与全部本地门禁已完成，下一步提交本地证据文档并关闭 I-06 精确 HEAD 双 run。I-07 在此之前保持锁定；仍不运行在线 migration、不连接真实服务、不操作生产。
