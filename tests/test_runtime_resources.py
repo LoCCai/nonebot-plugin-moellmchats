@@ -3,16 +3,15 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 import socket
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from nonebot_plugin_moellmchats.classification_cache import (
-    MemoryClassificationCache,
-)
+from nonebot_plugin_moellmchats.classification_cache import MemoryClassificationCache
 from nonebot_plugin_moellmchats.database_engine import (
     DatabaseEngineManager,
     DatabaseEngineSettings,
@@ -22,6 +21,7 @@ from nonebot_plugin_moellmchats.history_hot_cache import (
     HistoryCacheLookup,
     MemoryHistoryHotCache,
 )
+from nonebot_plugin_moellmchats.local_spool import LocalSpoolSettings
 from nonebot_plugin_moellmchats.model_usage import ModelUsageRecord
 from nonebot_plugin_moellmchats.redis_client import (
     RedisClientManager,
@@ -56,7 +56,9 @@ from nonebot_plugin_moellmchats.runtime_resources import (
     RuntimeResourceStartupError,
 )
 from nonebot_plugin_moellmchats.runtime_snapshot import RuntimeSnapshot
+from nonebot_plugin_moellmchats.spool_worker import SpoolWorkerState
 from nonebot_plugin_moellmchats.structured_logging import (
+    StructuredLogEmitter,
     StructuredLogLevel,
 )
 from nonebot_plugin_moellmchats.tool_catalog_cache import (
@@ -64,7 +66,10 @@ from nonebot_plugin_moellmchats.tool_catalog_cache import (
 )
 from nonebot_plugin_moellmchats.tool_graph import ToolGraph
 from nonebot_plugin_moellmchats.tool_schema_cache import MemoryToolSchemaCache
-from nonebot_plugin_moellmchats.usage_batch import UsageBatchQueueState
+from nonebot_plugin_moellmchats.usage_batch import UsageBatchPolicy, UsageBatchQueueState
+
+if TYPE_CHECKING:
+    from nonebot_plugin_moellmchats.audit_event import AuditEventRecord
 
 
 def _snapshot(generation: int) -> RuntimeSnapshot:
@@ -123,6 +128,22 @@ class _RecordingLifecyclePort:
             raise RuntimeError("sensitive close detail")
 
 
+class _RecordingSpoolWriter:
+    def __init__(self) -> None:
+        self.usage: list[tuple[ModelUsageRecord, ...]] = []
+        self.audit: list[tuple[AuditEventRecord, ...]] = []
+        self.usage_written = asyncio.Event()
+        self.audit_written = asyncio.Event()
+
+    async def write_usage(self, records: tuple[ModelUsageRecord, ...]) -> None:
+        self.usage.append(records)
+        self.usage_written.set()
+
+    async def write_audit(self, records: tuple[AuditEventRecord, ...]) -> None:
+        self.audit.append(records)
+        self.audit_written.set()
+
+
 class _CapturingFactory:
     def __init__(self, builder: RuntimeResourceBuilder) -> None:
         self.builder = builder
@@ -141,10 +162,13 @@ class _FailingFactory:
 
 
 class _Sink:
-    def __init__(self) -> None:
+    def __init__(self, *, fail: bool = False) -> None:
         self.lines: list[str] = []
+        self.fail = fail
 
     def emit(self, line: str, /) -> None:
+        if self.fail:
+            raise RuntimeError("private sink detail")
         self.lines.append(line)
 
 
@@ -238,6 +262,12 @@ def test_default_settings_are_memory_only_and_safe() -> None:
     assert settings.safe_diagnostics() == {
         "database_configured": False,
         "redis_configured": False,
+        "redis_pending_actions_configured": False,
+        "redis_cooldowns_configured": False,
+        "redis_admission_configured": False,
+        "redis_single_instance_safe": False,
+        "local_spool_configured": False,
+        "platform_api_configured": False,
         "history_backend": "memory",
         "trusted_runner_tool_count": 0,
         "parallel_tool_graph_configured": False,
@@ -305,6 +335,10 @@ async def test_default_builder_composes_memory_primitives_with_zero_backend_io(
     assert resources.generation == 1
     assert resources.database_manager is None
     assert resources.redis_manager is None
+    assert resources.redis_components is None
+    assert resources.pending_action_store is None
+    assert resources.cooldown_store is None
+    assert resources.admission_gate is None
     assert resources.repositories is None
     assert isinstance(resources.history_cache, MemoryHistoryHotCache)
     assert isinstance(resources.tool_catalog_cache, MemoryToolCatalogCache)
@@ -314,6 +348,10 @@ async def test_default_builder_composes_memory_primitives_with_zero_backend_io(
         MemoryClassificationCache,
     )
     assert resources.metrics.generation == 1
+    assert resources.platform_metrics.generation == 1
+    assert resources.platform_metrics.full is resources.metrics
+    assert resources.spool_worker is None
+    assert resources.platform_api_mounts is None
     assert resources.structured_logger is None
     assert resources.api_ports == RuntimeApiPorts()
     assert resources.trusted_runner is None
@@ -326,6 +364,62 @@ async def test_default_builder_composes_memory_primitives_with_zero_backend_io(
     await resources.close()
     assert resources.state is RuntimeGenerationResourceState.CLOSED
     assert socket_calls == 0
+
+
+def test_local_spool_requires_an_explicit_database(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeResourceConfigurationError, match="PostgreSQL"):
+        RuntimeResourceSettings(
+            local_spool=LocalSpoolSettings(root=tmp_path / "spool"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_explicit_spool_worker_drains_before_queue_and_database_close(
+    tmp_path: Path,
+) -> None:
+    database_settings = DatabaseEngineSettings(
+        database_url="postgresql+asyncpg://local:local@db.invalid/local",
+    )
+    engine_calls = 0
+
+    def engine_factory(*_args: object, **_kwargs: object) -> AsyncEngine:
+        nonlocal engine_calls
+        engine_calls += 1
+        raise AssertionError("fake spool writer must keep database engine lazy")
+
+    def database_manager_factory(
+        settings: DatabaseEngineSettings,
+    ) -> DatabaseEngineManager:
+        return DatabaseEngineManager(settings, engine_factory=engine_factory)
+
+    writer = _RecordingSpoolWriter()
+    settings = RuntimeResourceSettings(
+        database=database_settings,
+        local_spool=LocalSpoolSettings(root=tmp_path / "spool"),
+        usage_batch=UsageBatchPolicy(
+            max_batch_size=1,
+            flush_interval_seconds=0.001,
+        ),
+    )
+    resources = RuntimeResourceBuilder(
+        settings,
+        database_manager_factory=database_manager_factory,
+        spool_writer_factory=lambda _manager: writer,
+    ).build(_snapshot(2))
+    assert resources.spool_worker is not None
+    await resources.start()
+    assert resources.spool_worker.state.value == SpoolWorkerState.RUNNING.value
+
+    usage = _usage_record()
+    await resources.usage_queue.put(usage)
+    await asyncio.wait_for(writer.usage_written.wait(), timeout=1)
+    await resources.close()
+
+    assert resources.state is RuntimeGenerationResourceState.CLOSED
+    assert resources.spool_worker.state.value == SpoolWorkerState.CLOSED.value
+    assert writer.usage == [(usage,)]
+    assert resources.platform_metrics.snapshot().spool_committed_records == 1
+    assert engine_calls == 0
 
 
 def test_module_does_not_create_global_resource_manager_or_generation() -> None:
@@ -679,12 +773,42 @@ def test_api_and_structured_log_ports_are_explicitly_composed() -> None:
 
     assert resources.api_ports.handlers == (handler,)
     assert resources.structured_logger is not None
-    resources.structured_logger.emit(
+    record = resources.emit_structured_log(
         event="runtime_resources_composed",
         level=StructuredLogLevel.INFO,
     )
+    assert record is not None
     assert len(sink.lines) == 1
     assert '"event":"runtime_resources_composed"' in sink.lines[0]
+
+    failing = RuntimeResourceBuilder(
+        log_sink_factory=lambda _snapshot: _Sink(fail=True),
+    ).build(_snapshot(12))
+    assert (
+        failing.emit_structured_log(
+            event="runtime_resources_sink_failed",
+            level=StructuredLogLevel.ERROR,
+        )
+        is None
+    )
+    assert failing.platform_metrics.snapshot().structured_log_failure_total == 1
+
+    def failing_clock() -> datetime:
+        raise RuntimeError("private clock detail")
+
+    clock_failure = RuntimeResourceBuilder().build(_snapshot(12))
+    clock_failure._structured_logger = StructuredLogEmitter(
+        sink=_Sink(),
+        clock=failing_clock,
+    )
+    assert (
+        clock_failure.emit_structured_log(
+            event="runtime_resources_clock_failed",
+            level=StructuredLogLevel.ERROR,
+        )
+        is None
+    )
+    assert clock_failure.platform_metrics.snapshot().structured_log_failure_total == 1
 
 
 def test_runner_configuration_requires_a_snapshot_catalog() -> None:
@@ -827,6 +951,77 @@ async def test_reload_candidate_failure_keeps_previous_generation_active() -> No
     assert manager.active() is first
     assert manager.current_generation == 18
     assert ("generation-18", "close", None) not in events
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_reload_metrics_logs_and_durable_audit_follow_active_generation(
+    tmp_path: Path,
+) -> None:
+    writer = _RecordingSpoolWriter()
+    sink = _Sink()
+    events: list[tuple[str, str, int | None]] = []
+
+    def lifecycle_ports(
+        snapshot: RuntimeSnapshot,
+    ) -> tuple[_RecordingLifecyclePort, ...]:
+        return (
+            _RecordingLifecyclePort(
+                f"generation-{snapshot.generation}",
+                events,
+                fail_start=snapshot.generation == 41,
+            ),
+        )
+
+    builder = RuntimeResourceBuilder(
+        RuntimeResourceSettings(
+            database=DatabaseEngineSettings(
+                database_url="postgresql+asyncpg://local:local@db.invalid/local",
+            ),
+            local_spool=LocalSpoolSettings(root=tmp_path / "spool"),
+        ),
+        spool_writer_factory=lambda _manager: writer,
+        log_sink_factory=lambda _snapshot: sink,
+        lifecycle_ports_factory=lifecycle_ports,
+    )
+    manager = RuntimeResourceManager(builder)
+    first = await manager.start(_snapshot(40))
+
+    with pytest.raises(RuntimeResourceReloadError):
+        await manager.reload(_snapshot(41))
+    await asyncio.wait_for(writer.audit_written.wait(), timeout=1)
+
+    assert manager.active() is first
+    assert first.metrics.snapshot().reload_failure == 1
+    failed_audit = writer.audit[-1][0]
+    assert failed_audit.event_type == "runtime_reload_failed"
+    assert failed_audit.target_id == "generation-41"
+    assert dict(failed_audit.metadata_json) == {
+        "from_generation": 40,
+        "to_generation": 41,
+        "success": False,
+    }
+
+    writer.audit_written.clear()
+    second = await manager.reload(_snapshot(42))
+    await asyncio.wait_for(writer.audit_written.wait(), timeout=1)
+
+    assert manager.active() is second
+    assert second.metrics.snapshot().reload_success == 1
+    succeeded_audit = writer.audit[-1][0]
+    assert succeeded_audit.event_type == "runtime_reload"
+    assert succeeded_audit.target_id == "generation-42"
+    assert dict(succeeded_audit.metadata_json) == {
+        "from_generation": 40,
+        "to_generation": 42,
+        "success": True,
+    }
+    rendered_logs = "".join(sink.lines)
+    assert '"event":"runtime.reload.failed"' in rendered_logs
+    assert '"event":"runtime.reload.succeeded"' in rendered_logs
+    assert "db.invalid" not in rendered_logs
+    assert "private" not in rendered_logs
+
     await manager.close()
 
 

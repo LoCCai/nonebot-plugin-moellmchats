@@ -21,6 +21,7 @@ from .llm_payload import LlmPayloadMixin
 from .llm_state import context_dict, token_usage_history
 from .llm_tools import LlmToolsMixin
 from .messages_handler import MessagesHandler
+from .model_capabilities import ModelCapability
 from .model_selector import model_selector
 from .runtime_snapshot import runtime_snapshots
 from .temperament_manager import temperament_manager
@@ -58,6 +59,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self.prompt = temperament_manager.get_temperament_prompt(temperament)
         self.dynamic_context = ""
         self._pending_vision_images: list = []  # 本轮工具调用返回的待处理图片
+        self._tool_schema_record = None
         self._current_tool_usage = Counter()
         self._last_api_error_non_retryable = False
         bot_config = getattr(bot, "config", None)
@@ -74,8 +76,20 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         )
 
     async def _validate_runtime_model_config(self) -> str | None:
-
-        if model_selector.get_model("selected_model") is None:
+        if (
+            model_selector.get_model_for_capabilities(
+                "selected_model",
+                ModelCapability(
+                    text=True,
+                    vision=False,
+                    tools=False,
+                    json_schema=False,
+                    reasoning=False,
+                    streaming=False,
+                ),
+            )
+            is None
+        ):
             return "当前没有可用聊天模型，请检查模型配置后重载 LLM。"
         return None
 
@@ -467,7 +481,17 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
 
                 # 若插件返回了图片，自动切换至视觉模型并注入图片消息
                 if self._pending_vision_images:
-                    vision_model_info = model_selector.get_model("vision_model")
+                    vision_model_info = model_selector.get_model_for_capabilities(
+                        "vision_model",
+                        ModelCapability(
+                            text=True,
+                            vision=True,
+                            tools=model_selector.get_use_tools(),
+                            json_schema=False,
+                            reasoning=False,
+                            streaming=False,
+                        ),
+                    )
                     if vision_model_info:
                         logger.info(
                             f"插件返回图片，自动切换至视觉模型: {vision_model_info['model']}"

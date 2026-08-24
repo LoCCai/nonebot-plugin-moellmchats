@@ -5,15 +5,18 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 import inspect
 import os
 import re
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import platform_metrics as _platform_metrics
 from .audit_batch import AuditBatchPolicy, AuditBatchQueue, AuditBatchQueueState
+from .audit_event import AuditEventRecord
 from .classification_cache import (
     ClassificationCacheProtocol,
     MemoryClassificationCache,
@@ -32,6 +35,13 @@ from .history_hot_cache import (
     MemoryHistoryHotCache,
     MemoryHistoryHotCacheSettings,
 )
+from .local_spool import LocalSpoolSettings, LocalUsageAuditSpool
+from .platform_api import (
+    PlatformApiMounts,
+    PlatformApiSettings,
+    build_platform_api_mounts,
+)
+from .platform_metrics import PlatformMetricsRegistry
 from .postgres_agent_repository import (
     PostgresAgentRunRepository,
     PostgresAgentStepRepository,
@@ -47,14 +57,37 @@ from .postgres_session_summary_repository import (
     PostgresSessionSummaryRepository,
 )
 from .postgres_usage_repository import PostgresUsageRepository
+from .redis_admission import RedisAdmissionSettings
 from .redis_client import RedisClientManager, RedisClientSettings
+from .redis_cooldowns import RedisCooldownSettings
+from .redis_failure_policy import (
+    RedisComponentPorts,
+    RedisFailurePolicy,
+    build_redis_component_ports,
+)
 from .redis_history_hot_cache import (
     RedisHistoryHotCache,
     RedisHistoryHotCacheSettings,
 )
+from .redis_pending_actions import RedisPendingActionSettings
 from .runtime_api import RuntimeApiHandler
 from .runtime_snapshot import RuntimeSnapshot
-from .structured_logging import StructuredLogEmitter, StructuredLogSink
+from .spool_worker import (
+    PostgresSpoolRecordWriter,
+    SpoolRecordWriter,
+    SpoolWorkerDrainRequiredError,
+    SpoolWorkerPolicy,
+    SpoolWorkerResultUnknownError,
+    UsageAuditSpoolWorker,
+)
+from .structured_logging import (
+    StructuredLogContext,
+    StructuredLogEmitter,
+    StructuredLogError,
+    StructuredLogLevel,
+    StructuredLogRecord,
+    StructuredLogSink,
+)
 from .tool_catalog_cache import (
     MemoryToolCatalogCache,
     MemoryToolCatalogCacheSettings,
@@ -71,6 +104,11 @@ from .trusted_runner_pool import (
     TrustedRunnerPoolPolicy,
 )
 from .usage_batch import UsageBatchPolicy, UsageBatchQueue, UsageBatchQueueState
+
+if TYPE_CHECKING:
+    from .admission import AdmissionGateProtocol
+    from .cooldowns import CooldownStoreProtocol
+    from .pending_actions import PendingActionStoreProtocol
 
 _POSTGRES_BIGINT_MAX = (1 << 63) - 1
 _LIFECYCLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
@@ -158,6 +196,10 @@ class RuntimeResourceSettings:
 
     database: DatabaseEngineSettings | None = None
     redis: RedisClientSettings | None = None
+    redis_pending_actions: RedisPendingActionSettings | None = None
+    redis_cooldowns: RedisCooldownSettings | None = None
+    redis_admission: RedisAdmissionSettings | None = None
+    redis_failure_policy: RedisFailurePolicy = field(default_factory=RedisFailurePolicy)
     history_backend: RuntimeResourceHistoryBackend = RuntimeResourceHistoryBackend.MEMORY
     memory_history: MemoryHistoryHotCacheSettings = field(default_factory=MemoryHistoryHotCacheSettings)
     redis_history: RedisHistoryHotCacheSettings = field(default_factory=RedisHistoryHotCacheSettings)
@@ -166,6 +208,9 @@ class RuntimeResourceSettings:
     classification: MemoryClassificationCacheSettings = field(default_factory=MemoryClassificationCacheSettings)
     usage_batch: UsageBatchPolicy = field(default_factory=UsageBatchPolicy)
     audit_batch: AuditBatchPolicy = field(default_factory=AuditBatchPolicy)
+    local_spool: LocalSpoolSettings | None = None
+    spool_worker: SpoolWorkerPolicy = field(default_factory=SpoolWorkerPolicy)
+    platform_api: PlatformApiSettings | None = None
     trusted_runner_tools: tuple[str, ...] = ()
     trusted_runner_policy: TrustedRunnerPoolPolicy = field(default_factory=TrustedRunnerPoolPolicy)
     parallel_tool_graph: ToolGraph | None = None
@@ -181,6 +226,55 @@ class RuntimeResourceSettings:
             RedisClientSettings,
         ):
             raise TypeError("redis 必须是 RedisClientSettings 或 None")
+        for value, expected_type, label in (
+            (
+                self.redis_pending_actions,
+                RedisPendingActionSettings,
+                "redis_pending_actions",
+            ),
+            (
+                self.redis_cooldowns,
+                RedisCooldownSettings,
+                "redis_cooldowns",
+            ),
+            (
+                self.redis_admission,
+                RedisAdmissionSettings,
+                "redis_admission",
+            ),
+        ):
+            if value is not None and not isinstance(value, expected_type):
+                raise TypeError(f"{label} 类型非法")
+        if not isinstance(self.redis_failure_policy, RedisFailurePolicy):
+            raise TypeError("redis_failure_policy 必须是 RedisFailurePolicy")
+        if (
+            self.redis_pending_actions is not None
+            or self.redis_cooldowns is not None
+            or self.redis_admission is not None
+        ) and self.redis is None:
+            raise RuntimeResourceConfigurationError(
+                "Redis component 必须显式提供 RedisClientSettings"
+            )
+        if (
+            self.redis_failure_policy.cooldown_memory_fallback
+            and self.redis_cooldowns is None
+        ):
+            raise RuntimeResourceConfigurationError(
+                "cooldown fallback 缺少显式 Redis cooldown 配置"
+            )
+        if (
+            self.redis_failure_policy.admission_memory_fallback
+            and self.redis_admission is None
+        ):
+            raise RuntimeResourceConfigurationError(
+                "admission fallback 缺少显式 Redis admission 配置"
+            )
+        if self.local_spool is not None and not isinstance(self.local_spool, LocalSpoolSettings):
+            raise TypeError("local_spool 必须是 LocalSpoolSettings 或 None")
+        if self.local_spool is not None and self.database is None:
+            raise RuntimeResourceConfigurationError("local spool 必须显式配置 PostgreSQL 才能安全排空")
+        if self.platform_api is not None and not isinstance(self.platform_api, PlatformApiSettings):
+            raise TypeError("platform_api 必须是 PlatformApiSettings 或 None")
         if not isinstance(self.history_backend, RuntimeResourceHistoryBackend):
             raise TypeError("history_backend 必须是 RuntimeResourceHistoryBackend")
         if self.history_backend is RuntimeResourceHistoryBackend.REDIS and self.redis is None:
@@ -213,6 +307,7 @@ class RuntimeResourceSettings:
             ),
             (self.usage_batch, UsageBatchPolicy, "usage_batch"),
             (self.audit_batch, AuditBatchPolicy, "audit_batch"),
+            (self.spool_worker, SpoolWorkerPolicy, "spool_worker"),
             (
                 self.trusted_runner_policy,
                 TrustedRunnerPoolPolicy,
@@ -253,6 +348,11 @@ class RuntimeResourceSettings:
             f"{type(self).__name__}("
             f"database_configured={self.database is not None!r}, "
             f"redis_configured={self.redis is not None!r}, "
+            f"redis_pending_actions_configured={self.redis_pending_actions is not None!r}, "
+            f"redis_cooldowns_configured={self.redis_cooldowns is not None!r}, "
+            f"redis_admission_configured={self.redis_admission is not None!r}, "
+            f"local_spool_configured={self.local_spool is not None!r}, "
+            f"platform_api_configured={self.platform_api is not None!r}, "
             f"history_backend={self.history_backend.value!r}, "
             f"trusted_runner_tools={len(self.trusted_runner_tools)!r})"
         )
@@ -261,6 +361,13 @@ class RuntimeResourceSettings:
         return {
             "database_configured": self.database is not None,
             "redis_configured": self.redis is not None,
+            "redis_pending_actions_configured": self.redis_pending_actions
+            is not None,
+            "redis_cooldowns_configured": self.redis_cooldowns is not None,
+            "redis_admission_configured": self.redis_admission is not None,
+            "redis_single_instance_safe": self.redis_failure_policy.single_instance_safe,
+            "local_spool_configured": self.local_spool is not None,
+            "platform_api_configured": self.platform_api is not None,
             "history_backend": self.history_backend.value,
             "trusted_runner_tool_count": len(self.trusted_runner_tools),
             "parallel_tool_graph_configured": self.parallel_tool_graph is not None,
@@ -456,6 +563,26 @@ class _AuditQueueLifecyclePort:
             raise RuntimeResourceDrainRequiredError("audit queue 仍含未确认 durable 结果")
 
 
+class _SpoolWorkerLifecyclePort:
+    lifecycle_name = "usage-audit-spool"
+
+    def __init__(self, worker: UsageAuditSpoolWorker) -> None:
+        self._worker = worker
+
+    async def start(self, generation: int) -> None:
+        if self._worker.generation != generation:
+            raise RuntimeResourceGenerationError("spool worker generation 与资源代际不一致")
+        await self._worker.start()
+
+    async def close(self) -> None:
+        try:
+            await self._worker.close()
+        except SpoolWorkerResultUnknownError as error:
+            raise RuntimeResourceDrainRequiredError("local spool durable result unknown") from error
+        except SpoolWorkerDrainRequiredError as error:
+            raise RuntimeResourceDrainRequiredError("local spool 仍含未确认 durable records") from error
+
+
 class _TrustedRunnerLifecyclePort:
     lifecycle_name = "trusted-runner"
 
@@ -515,6 +642,7 @@ class RuntimeGenerationResources:
         settings: RuntimeResourceSettings,
         database_manager: DatabaseEngineManager | None,
         redis_manager: RedisClientManager | None,
+        redis_components: RedisComponentPorts | None,
         repositories: PostgresRuntimeRepositoryProvider | None,
         history_cache: HistoryHotCacheProtocol,
         tool_catalog_cache: ToolCatalogCacheProtocol,
@@ -522,9 +650,11 @@ class RuntimeGenerationResources:
         classification_cache: ClassificationCacheProtocol,
         usage_queue: UsageBatchQueue,
         audit_queue: AuditBatchQueue,
-        metrics: FullMetricsRegistry,
+        platform_metrics: PlatformMetricsRegistry,
+        spool_worker: UsageAuditSpoolWorker | None,
         structured_logger: StructuredLogEmitter | None,
         api_ports: RuntimeApiPorts,
+        platform_api_mounts: PlatformApiMounts | None,
         trusted_runner: TrustedRunnerPool | None,
         parallel_tool_graph: ToolGraph | None,
         managed_ports: tuple[RuntimeLifecyclePort, ...],
@@ -537,10 +667,25 @@ class RuntimeGenerationResources:
         )
         if not isinstance(settings, RuntimeResourceSettings):
             raise TypeError("settings 必须是 RuntimeResourceSettings")
-        if metrics.generation != generation:
-            raise RuntimeResourceGenerationError("FullMetrics generation 与 RuntimeSnapshot 不一致")
+        if not isinstance(platform_metrics, PlatformMetricsRegistry) or platform_metrics.generation != generation:
+            raise RuntimeResourceGenerationError("PlatformMetrics generation 与 RuntimeSnapshot 不一致")
+        if spool_worker is not None and (
+            not isinstance(spool_worker, UsageAuditSpoolWorker) or spool_worker.generation != generation
+        ):
+            raise RuntimeResourceGenerationError("spool worker generation 与 RuntimeSnapshot 不一致")
+        if redis_components is not None and not isinstance(
+            redis_components,
+            RedisComponentPorts,
+        ):
+            raise TypeError("redis_components 必须是 RedisComponentPorts 或 None")
+        if redis_components is not None and redis_manager is None:
+            raise RuntimeResourceConfigurationError(
+                "redis_components 缺少 generation Redis manager"
+            )
         if not isinstance(api_ports, RuntimeApiPorts):
             raise TypeError("api_ports 必须是 RuntimeApiPorts")
+        if platform_api_mounts is not None and not isinstance(platform_api_mounts, PlatformApiMounts):
+            raise TypeError("platform_api_mounts 必须是 PlatformApiMounts 或 None")
         if parallel_tool_graph is not None and not isinstance(
             parallel_tool_graph,
             ToolGraph,
@@ -559,6 +704,7 @@ class RuntimeGenerationResources:
         self._settings = settings
         self._database_manager = database_manager
         self._redis_manager = redis_manager
+        self._redis_components = redis_components
         self._repositories = repositories
         self._history_cache = history_cache
         self._tool_catalog_cache = tool_catalog_cache
@@ -566,9 +712,11 @@ class RuntimeGenerationResources:
         self._classification_cache = classification_cache
         self._usage_queue = usage_queue
         self._audit_queue = audit_queue
-        self._metrics = metrics
+        self._platform_metrics = platform_metrics
+        self._spool_worker = spool_worker
         self._structured_logger = structured_logger
         self._api_ports = api_ports
+        self._platform_api_mounts = platform_api_mounts
         self._trusted_runner = trusted_runner
         self._parallel_tool_graph = parallel_tool_graph
         self._managed_ports = normalized_ports
@@ -609,6 +757,25 @@ class RuntimeGenerationResources:
         return self._redis_manager
 
     @property
+    def redis_components(self) -> RedisComponentPorts | None:
+        return self._redis_components
+
+    @property
+    def pending_action_store(self) -> PendingActionStoreProtocol | None:
+        components = self._redis_components
+        return None if components is None else components.pending_actions
+
+    @property
+    def cooldown_store(self) -> CooldownStoreProtocol | None:
+        components = self._redis_components
+        return None if components is None else components.cooldowns
+
+    @property
+    def admission_gate(self) -> AdmissionGateProtocol | None:
+        components = self._redis_components
+        return None if components is None else components.admission
+
+    @property
     def repositories(self) -> PostgresRuntimeRepositoryProvider | None:
         return self._repositories
 
@@ -638,15 +805,48 @@ class RuntimeGenerationResources:
 
     @property
     def metrics(self) -> FullMetricsRegistry:
-        return self._metrics
+        return self._platform_metrics.full
+
+    @property
+    def platform_metrics(self) -> PlatformMetricsRegistry:
+        return self._platform_metrics
+
+    @property
+    def spool_worker(self) -> UsageAuditSpoolWorker | None:
+        return self._spool_worker
 
     @property
     def structured_logger(self) -> StructuredLogEmitter | None:
         return self._structured_logger
 
+    def emit_structured_log(
+        self,
+        *,
+        event: str,
+        level: StructuredLogLevel,
+        context: StructuredLogContext | None = None,
+    ) -> StructuredLogRecord | None:
+        logger = self._structured_logger
+        if logger is None:
+            return None
+        try:
+            return logger.emit(event=event, level=level, context=context)
+        except StructuredLogError:
+            try:
+                self._platform_metrics.increment(
+                    _platform_metrics.PlatformCountMetric.STRUCTURED_LOG_FAILURE_TOTAL
+                )
+            except Exception:
+                pass
+            return None
+
     @property
     def api_ports(self) -> RuntimeApiPorts:
         return self._api_ports
+
+    @property
+    def platform_api_mounts(self) -> PlatformApiMounts | None:
+        return self._platform_api_mounts
 
     @property
     def trusted_runner(self) -> TrustedRunnerPool | None:
@@ -664,10 +864,17 @@ class RuntimeGenerationResources:
             "database_initialized": (False if self._database_manager is None else self._database_manager.initialized),
             "redis_configured": self._redis_manager is not None,
             "redis_initialized": (False if self._redis_manager is None else self._redis_manager.initialized),
+            "redis_pending_actions_configured": self.pending_action_store
+            is not None,
+            "redis_cooldowns_configured": self.cooldown_store is not None,
+            "redis_admission_configured": self.admission_gate is not None,
+            "redis_single_instance_safe": self._settings.redis_failure_policy.single_instance_safe,
             "history_backend": self._settings.history_backend.value,
             "api_handler_count": len(self._api_ports.handlers),
+            "platform_api_mounted": self._platform_api_mounts is not None,
             "trusted_runner_configured": self._trusted_runner is not None,
             "parallel_tool_graph_configured": self._parallel_tool_graph is not None,
+            "local_spool_configured": self._spool_worker is not None,
         }
 
     async def start(self) -> RuntimeGenerationResources:
@@ -744,6 +951,7 @@ DatabaseManagerFactory = Callable[
     DatabaseEngineManager,
 ]
 RedisManagerFactory = Callable[[RedisClientSettings], RedisClientManager]
+SpoolWriterFactory = Callable[[DatabaseEngineManager], SpoolRecordWriter]
 LogSinkFactory = Callable[[RuntimeSnapshot], StructuredLogSink]
 ApiPortsFactory = Callable[
     [RuntimeSnapshot, FullMetricsRegistry],
@@ -771,6 +979,12 @@ def _default_redis_manager_factory(
     return RedisClientManager(settings)
 
 
+def _default_spool_writer_factory(
+    manager: DatabaseEngineManager,
+) -> SpoolRecordWriter:
+    return PostgresSpoolRecordWriter(manager)
+
+
 def _default_runner_pool_factory(
     snapshot: RuntimeSnapshot,
     tools: tuple[str, ...],
@@ -796,6 +1010,7 @@ class RuntimeResourceBuilder:
         *,
         database_manager_factory: DatabaseManagerFactory = (_default_database_manager_factory),
         redis_manager_factory: RedisManagerFactory = (_default_redis_manager_factory),
+        spool_writer_factory: SpoolWriterFactory = _default_spool_writer_factory,
         log_sink_factory: LogSinkFactory | None = None,
         api_ports_factory: ApiPortsFactory | None = None,
         lifecycle_ports_factory: LifecyclePortsFactory | None = None,
@@ -810,6 +1025,7 @@ class RuntimeResourceBuilder:
         for value, label in (
             (database_manager_factory, "database_manager_factory"),
             (redis_manager_factory, "redis_manager_factory"),
+            (spool_writer_factory, "spool_writer_factory"),
             (runner_pool_factory, "runner_pool_factory"),
             (pid_provider, "pid_provider"),
             (loop_provider, "loop_provider"),
@@ -825,12 +1041,15 @@ class RuntimeResourceBuilder:
         self._settings = settings
         self._database_manager_factory = database_manager_factory
         self._redis_manager_factory = redis_manager_factory
+        self._spool_writer_factory = spool_writer_factory
         self._log_sink_factory = log_sink_factory
         self._api_ports_factory = api_ports_factory
         self._lifecycle_ports_factory = lifecycle_ports_factory
         self._runner_pool_factory = runner_pool_factory
         self._pid_provider = pid_provider
         self._loop_provider = loop_provider
+        if self._settings.platform_api is not None and self._api_ports_factory is not None:
+            raise RuntimeResourceConfigurationError("platform_api 与 api_ports_factory 不得同时配置")
 
     @property
     def settings(self) -> RuntimeResourceSettings:
@@ -857,6 +1076,24 @@ class RuntimeResourceBuilder:
             redis_manager = self._redis_manager_factory(self._settings.redis)
             if not isinstance(redis_manager, RedisClientManager):
                 raise RuntimeResourceConfigurationError("Redis manager factory 返回非法对象")
+
+        redis_components: RedisComponentPorts | None = None
+        if (
+            self._settings.redis_pending_actions is not None
+            or self._settings.redis_cooldowns is not None
+            or self._settings.redis_admission is not None
+        ):
+            if redis_manager is None:
+                raise RuntimeResourceConfigurationError(
+                    "Redis component 缺少 Redis manager"
+                )
+            redis_components = build_redis_component_ports(
+                redis_manager,
+                pending_actions=self._settings.redis_pending_actions,
+                cooldowns=self._settings.redis_cooldowns,
+                admission=self._settings.redis_admission,
+                policy=self._settings.redis_failure_policy,
+            )
 
         if self._settings.history_backend is RuntimeResourceHistoryBackend.MEMORY:
             history_cache: HistoryHotCacheProtocol = MemoryHistoryHotCache(
@@ -895,10 +1132,32 @@ class RuntimeResourceBuilder:
             self._settings.audit_batch,
             pid_getter=self._pid_provider,
         )
-        metrics = FullMetricsRegistry(
+        platform_metrics = PlatformMetricsRegistry(
             generation=generation,
             pid_getter=self._pid_provider,
         )
+        metrics = platform_metrics.full
+
+        spool_worker: UsageAuditSpoolWorker | None = None
+        if self._settings.local_spool is not None:
+            if database_manager is None:
+                raise RuntimeResourceConfigurationError("local spool 缺少 PostgreSQL manager")
+            writer = self._spool_writer_factory(database_manager)
+            if not isinstance(writer, SpoolRecordWriter):
+                raise RuntimeResourceConfigurationError("spool writer factory 返回非法对象")
+            spool_worker = UsageAuditSpoolWorker(
+                generation=generation,
+                spool=LocalUsageAuditSpool(
+                    generation=generation,
+                    settings=self._settings.local_spool,
+                    pid_getter=self._pid_provider,
+                ),
+                usage_queue=usage_queue,
+                audit_queue=audit_queue,
+                writer=writer,
+                metrics=platform_metrics,
+                policy=self._settings.spool_worker,
+            )
 
         structured_logger: StructuredLogEmitter | None = None
         if self._log_sink_factory is not None:
@@ -907,8 +1166,16 @@ class RuntimeResourceBuilder:
                 raise RuntimeResourceConfigurationError("structured log sink factory 返回非法对象")
             structured_logger = StructuredLogEmitter(sink=sink)
 
+        platform_api_mounts: PlatformApiMounts | None = None
         api_ports = RuntimeApiPorts()
-        if self._api_ports_factory is not None:
+        if self._settings.platform_api is not None:
+            platform_api_mounts = build_platform_api_mounts(
+                snapshot=snapshot,
+                metrics=platform_metrics,
+                settings=self._settings.platform_api,
+            )
+            api_ports = RuntimeApiPorts((platform_api_mounts.router,))
+        elif self._api_ports_factory is not None:
             api_ports = self._api_ports_factory(snapshot, metrics)
             if not isinstance(api_ports, RuntimeApiPorts):
                 raise RuntimeResourceConfigurationError("API ports factory 返回非法对象")
@@ -934,6 +1201,8 @@ class RuntimeResourceBuilder:
                 _AuditQueueLifecyclePort(audit_queue),
             )
         )
+        if spool_worker is not None:
+            managed.append(_SpoolWorkerLifecyclePort(spool_worker))
         if trusted_runner is not None:
             managed.append(_TrustedRunnerLifecyclePort(trusted_runner))
         if self._lifecycle_ports_factory is not None:
@@ -947,6 +1216,7 @@ class RuntimeResourceBuilder:
             settings=self._settings,
             database_manager=database_manager,
             redis_manager=redis_manager,
+            redis_components=redis_components,
             repositories=repositories,
             history_cache=history_cache,
             tool_catalog_cache=tool_catalog_cache,
@@ -954,9 +1224,11 @@ class RuntimeResourceBuilder:
             classification_cache=classification_cache,
             usage_queue=usage_queue,
             audit_queue=audit_queue,
-            metrics=metrics,
+            platform_metrics=platform_metrics,
+            spool_worker=spool_worker,
             structured_logger=structured_logger,
             api_ports=api_ports,
+            platform_api_mounts=platform_api_mounts,
             trusted_runner=trusted_runner,
             parallel_tool_graph=self._settings.parallel_tool_graph,
             managed_ports=tuple(managed),
@@ -1075,6 +1347,67 @@ class RuntimeResourceManager:
         if resources.snapshot is not snapshot:
             raise RuntimeResourceConfigurationError("runtime resources 必须绑定调用方提供的 snapshot identity")
         return resources
+
+    async def _observe_reload(
+        self,
+        resources: RuntimeGenerationResources,
+        *,
+        previous_generation: int,
+        requested_generation: int,
+        success: bool,
+    ) -> asyncio.CancelledError | None:
+        try:
+            resources.metrics.observe_reload(success=success)
+        except Exception:
+            pass
+        resources.emit_structured_log(
+            event=("runtime.reload.succeeded" if success else "runtime.reload.failed"),
+            level=(StructuredLogLevel.INFO if success else StructuredLogLevel.ERROR),
+            context=StructuredLogContext(generation=resources.generation),
+        )
+
+        worker = resources.spool_worker
+        if worker is None:
+            return None
+        try:
+            record = AuditEventRecord(
+                event_id=None,
+                event_type=("runtime_reload" if success else "runtime_reload_failed"),
+                actor_user_id=None,
+                actor_type="system",
+                target_type="runtime",
+                target_id=f"generation-{requested_generation}",
+                run_id=None,
+                tool_call_id=None,
+                metadata_json={
+                    "from_generation": previous_generation,
+                    "to_generation": requested_generation,
+                    "success": success,
+                },
+                created_at=datetime.now(timezone.utc),
+            )
+        except Exception:
+            try:
+                resources.platform_metrics.increment(
+                    _platform_metrics.PlatformCountMetric.SPOOL_FAILURE_TOTAL
+                )
+            except Exception:
+                pass
+            return None
+
+        task = asyncio.create_task(
+            worker.enqueue_audit((record,)),
+            name=(f"moellm-runtime-reload-audit-{previous_generation}-{requested_generation}"),
+        )
+        _result, cancellation, error = await _settle_task(task)
+        if error is not None:
+            try:
+                resources.platform_metrics.increment(
+                    _platform_metrics.PlatformCountMetric.SPOOL_FAILURE_TOTAL
+                )
+            except Exception:
+                pass
+        return cancellation
 
     async def _finish_start_rollback(
         self,
@@ -1318,6 +1651,12 @@ class RuntimeResourceManager:
                         name=f"moellm-resource-candidate-rollback-{snapshot.generation}",
                     )
                     await _settle_task(rollback)
+                await self._observe_reload(
+                    previous,
+                    previous_generation=previous.generation,
+                    requested_generation=snapshot.generation,
+                    success=False,
+                )
                 raise cancellation
             except BaseException:
                 cleanup_cancellation: asyncio.CancelledError | None = None
@@ -1333,8 +1672,16 @@ class RuntimeResourceManager:
                         name=f"moellm-resource-candidate-rollback-{snapshot.generation}",
                     )
                     _result, cleanup_cancellation, _cleanup_error = await _settle_task(rollback)
+                observation_cancellation = await self._observe_reload(
+                    previous,
+                    previous_generation=previous.generation,
+                    requested_generation=snapshot.generation,
+                    success=False,
+                )
                 if cleanup_cancellation is not None:
                     raise cleanup_cancellation
+                if observation_cancellation is not None:
+                    raise observation_cancellation
                 raise RuntimeResourceReloadError("新 runtime generation 启动失败，旧代保持 active") from None
 
             finalization = asyncio.create_task(
@@ -1346,10 +1693,28 @@ class RuntimeResourceManager:
                 name=(f"moellm-resource-handoff-{previous.generation}-{candidate.generation}"),
             )
             result, cancellation, finalization_error = await _settle_task(finalization)
+            if finalization_error is not None or result is None:
+                observation_cancellation = await self._observe_reload(
+                    self._active if self._active is not None else previous,
+                    previous_generation=previous.generation,
+                    requested_generation=snapshot.generation,
+                    success=False,
+                )
+                if cancellation is not None:
+                    raise cancellation
+                if observation_cancellation is not None:
+                    raise observation_cancellation
+                raise RuntimeResourceReloadError("runtime resource generation handoff 失败") from None
+            observation_cancellation = await self._observe_reload(
+                result,
+                previous_generation=previous.generation,
+                requested_generation=snapshot.generation,
+                success=True,
+            )
             if cancellation is not None:
                 raise cancellation
-            if finalization_error is not None or result is None:
-                raise RuntimeResourceReloadError("runtime resource generation handoff 失败") from None
+            if observation_cancellation is not None:
+                raise observation_cancellation
             return result
 
     async def _finish_close(
@@ -1440,4 +1805,5 @@ __all__ = [
     "RuntimeResourceReloadError",
     "RuntimeResourceSettings",
     "RuntimeResourceStartupError",
+    "SpoolWriterFactory",
 ]

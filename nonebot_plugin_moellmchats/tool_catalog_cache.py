@@ -422,7 +422,10 @@ async def resolve_tool_catalog(
         raise TypeError("key 必须是 ToolCatalogCacheKey")
     if not callable(builder):
         raise TypeError("builder 必须可调用")
-    cached = await cache.lookup(key)
+    try:
+        cached = await cache.lookup(key)
+    except TimeoutError:
+        raise ToolCatalogCacheUnavailableError("tool catalog cache lookup 超时") from None
     if cached is not None:
         if not isinstance(cached, ToolCatalogRecord) or cached.key != key:
             raise ToolCatalogCacheUnavailableError("tool catalog cache 返回了错误 identity")
@@ -433,7 +436,10 @@ async def resolve_tool_catalog(
         raise TypeError("tool catalog builder 必须返回 ToolCatalogRecord")
     if record.key != key:
         raise ValueError("tool catalog builder 返回了错误 identity")
-    published = await cache.publish(record)
+    try:
+        published = await cache.publish(record)
+    except TimeoutError:
+        raise ToolCatalogCacheUnavailableError("tool catalog cache publish 超时") from None
     if not isinstance(published, ToolCatalogRecord) or published != record:
         raise ToolCatalogCacheUnavailableError("tool catalog cache 未确认精确发布结果")
     return published

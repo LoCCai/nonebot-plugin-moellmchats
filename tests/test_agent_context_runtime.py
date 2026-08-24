@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import hashlib
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -42,9 +45,11 @@ from nonebot_plugin_moellmchats.database_engine import (
 from nonebot_plugin_moellmchats.history_hot_cache import (
     HistoryCacheLoadToken,
     HistoryCacheLookup,
+    HistoryWindow,
 )
 from nonebot_plugin_moellmchats.llm_api import LlmApiMixin
 from nonebot_plugin_moellmchats.llm_state import token_usage_history
+from nonebot_plugin_moellmchats.local_spool import LocalSpoolSettings
 from nonebot_plugin_moellmchats.long_term_memory import (
     LongTermMemoryKind,
     LongTermMemoryMatch,
@@ -59,6 +64,7 @@ from nonebot_plugin_moellmchats.messages_handler import (
     MessagesHandler,
     messages_dict,
 )
+from nonebot_plugin_moellmchats.model_usage import ModelUsageRecord
 from nonebot_plugin_moellmchats.repositories import RepositoryPage
 from nonebot_plugin_moellmchats.runtime_resources import (
     RuntimeGenerationResources,
@@ -75,7 +81,7 @@ from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
 from nonebot_plugin_moellmchats.tool_providers import ToolSource
 
 if TYPE_CHECKING:
-    from nonebot_plugin_moellmchats.model_usage import ModelUsageRecord
+    from nonebot_plugin_moellmchats.audit_event import AuditEventRecord
 
 _NOW = datetime(2026, 8, 24, 6, 0, tzinfo=timezone.utc)
 
@@ -113,6 +119,21 @@ def _message(message_id: int, *, role: str = "user") -> MessageRecord:
         sender_id=_identity().user_id if role == "user" else None,
         content=f"message-{message_id}",
         created_at=_NOW + timedelta(seconds=message_id),
+    )
+
+
+def _usage_record(run_id: str = "run-usage") -> ModelUsageRecord:
+    return ModelUsageRecord(
+        usage_id=None,
+        run_id=run_id,
+        provider="provider",
+        model="model",
+        input_tokens=7,
+        output_tokens=3,
+        reasoning_tokens=1,
+        cached_tokens=2,
+        cost=Decimal("0.125"),
+        created_at=_NOW,
     )
 
 
@@ -166,6 +187,20 @@ class _RecordingSession(AsyncSession):
 
     async def close(self) -> None:
         self.events.append("close")
+
+
+class _RecordingSpoolWriter:
+    def __init__(self) -> None:
+        self.usage: list[tuple[ModelUsageRecord, ...]] = []
+        self.audit: list[tuple[AuditEventRecord, ...]] = []
+        self.usage_called = asyncio.Event()
+
+    async def write_usage(self, records: tuple[ModelUsageRecord, ...]) -> None:
+        self.usage.append(records)
+        self.usage_called.set()
+
+    async def write_audit(self, records: tuple[AuditEventRecord, ...]) -> None:
+        self.audit.append(records)
 
 
 class _FakeTransactions(PostgresTransactionFactory):
@@ -396,6 +431,120 @@ async def test_default_host_memory_request_has_zero_database_or_redis_io(
 
 
 @pytest.mark.asyncio
+async def test_agent_lifecycle_emits_payload_free_logs_and_fixed_metrics() -> None:
+    class Sink:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def emit(self, line: str, /) -> None:
+            self.lines.append(line)
+
+    sink = Sink()
+    resources = RuntimeResourceBuilder(
+        log_sink_factory=lambda _snapshot: sink,
+    ).build(_snapshot())
+    coordinator = AgentGenerationCoordinator(resources)
+    monotonic_values = iter((1.0, 1.0625, 1.125, 1.625, 1.75, 2.75, 3.25, 3.5))
+    runtime = await AgentRequestRuntime.begin(
+        coordinator,
+        _identity(),
+        request_id=42,
+        deadline=DeadlineContext.from_timeout(30),
+        wall_clock=lambda: _NOW.timestamp(),
+        monotonic_clock=lambda: next(monotonic_values),
+    )
+    await runtime.advance(AgentRunState.PLANNING, model="chat-model")
+    await runtime.advance(AgentRunState.EXECUTING)
+    await runtime.record_model_step(
+        model="chat-model",
+        status=AgentStepStatus.COMPLETED,
+        started_at=_NOW.timestamp(),
+        started_monotonic=1.75,
+        input_preview="private model prompt payload",
+        output_preview="private model response payload",
+    )
+    await runtime.record_tool_outcome(
+        tool_name="safe_tool",
+        source=ToolSource.REGISTERED,
+        bundle_id=None,
+        bundle_digest=None,
+        arguments={"query": "private tool argument payload"},
+        status=ToolCallStatus.FAILED,
+        created_at=_NOW.timestamp(),
+        started_monotonic=2.75,
+        error_type="PrivateToolBackendFailure",
+    )
+    runtime.capture_usage(
+        provider="provider",
+        model="chat-model",
+        input_tokens=7,
+        output_tokens=3,
+        reasoning_tokens=1,
+        cached_tokens=2,
+        cost=Decimal("0.125"),
+    )
+    await runtime.finish_exception(
+        AgentRunState.FAILED,
+        RuntimeError("private request exception payload"),
+    )
+
+    metrics = resources.metrics.snapshot()
+    assert metrics.classification_duration.count == 1
+    assert metrics.classification_duration.total_seconds == pytest.approx(0.5)
+    assert metrics.llm_request_duration.count == 1
+    assert metrics.llm_request_duration.total_seconds == pytest.approx(1.0)
+    assert metrics.tool_execution_duration.count == 1
+    assert metrics.tool_execution_duration.total_seconds == pytest.approx(0.5)
+    assert metrics.tool_failure_total == 1
+    assert metrics.token_input == 7
+    assert metrics.token_output == 3
+    assert metrics.cost == "0.125"
+
+    payloads = [json.loads(line) for line in sink.lines]
+    assert {payload["event"] for payload in payloads} >= {
+        "agent_run.created",
+        "agent_run.admitted",
+        "agent_run.classifying",
+        "agent_run.planning",
+        "agent_run.executing",
+        "agent_step.completed",
+        "agent_tool.failed",
+        "model_usage.captured",
+        "agent_run.failed",
+    }
+    assert all(
+        set(payload)
+        == {
+            "version",
+            "timestamp",
+            "level",
+            "event",
+            "request_id",
+            "run_id",
+            "step_id",
+            "tool_call_id",
+            "generation",
+            "user_id",
+            "group_id",
+            "model",
+            "tool",
+        }
+        for payload in payloads
+    )
+    rendered = "".join(sink.lines)
+    for forbidden in (
+        "private model prompt payload",
+        "private model response payload",
+        "private tool argument payload",
+        "PrivateToolBackendFailure",
+        "private request exception payload",
+        "10001",
+        "30001",
+    ):
+        assert forbidden not in rendered
+
+
+@pytest.mark.asyncio
 async def test_host_accepts_same_generation_patched_request_snapshot() -> None:
     host = RuntimeResourceHost()
     original = _snapshot(1)
@@ -431,6 +580,44 @@ async def test_postgres_transaction_is_short_and_commits_once() -> None:
 
     assert await factory.execute(operation) == "done"
     assert events == ["begin", "operation", "commit", "close"]
+    metrics = resources.platform_metrics.snapshot()
+    assert metrics.database_transaction_success == 1
+    assert metrics.database_transaction_failure == 0
+    assert metrics.database_transaction_duration.count == 1
+    assert metrics.database_pool_wait_duration.count == 1
+    assert metrics.database_pool_active == 0
+    assert metrics.database_pool_peak == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_transaction_metrics_clock_failure_never_breaks_persistence() -> None:
+    resources, engine = _database_resources()
+    events: list[str] = []
+    session = _RecordingSession(events)
+
+    def failing_clock() -> float:
+        raise RuntimeError("private metrics clock detail")
+
+    factory = PostgresTransactionFactory(
+        resources,
+        sessionmaker_factory=lambda *_args, **_kwargs: lambda: session,
+        monotonic_clock=failing_clock,
+    )
+
+    async def operation(_repositories) -> str:
+        events.append("operation")
+        return "done"
+
+    assert await factory.execute(operation) == "done"
+    assert events == ["begin", "operation", "commit", "close"]
+    metrics = resources.platform_metrics.snapshot()
+    assert metrics.database_transaction_success == 1
+    assert metrics.database_transaction_failure == 0
+    assert metrics.database_transaction_duration.count == 0
+    assert metrics.database_pool_wait_duration.count == 0
+    assert metrics.database_pool_active == 0
+    assert metrics.database_pool_peak == 1
     await engine.dispose()
 
 
@@ -459,6 +646,13 @@ async def test_commit_unknown_is_not_rolled_back_or_replayed() -> None:
     assert operation_calls == 1
     assert events == ["begin", "operation", "commit", "close"]
     assert "private commit detail" not in str(error.value)
+    metrics = resources.platform_metrics.snapshot()
+    assert metrics.database_transaction_success == 0
+    assert metrics.database_transaction_failure == 1
+    assert metrics.database_transaction_duration.count == 1
+    assert metrics.database_pool_wait_duration.count == 1
+    assert metrics.database_pool_active == 0
+    assert metrics.database_pool_peak == 1
     await engine.dispose()
 
 
@@ -514,6 +708,12 @@ async def test_transaction_write_failure_rolls_back_once_and_is_sanitized() -> N
     assert operation_calls == 1
     assert events == ["begin", "operation", "rollback", "close"]
     assert "private write detail" not in str(error.value)
+    metrics = resources.platform_metrics.snapshot()
+    assert metrics.database_transaction_success == 0
+    assert metrics.database_transaction_failure == 1
+    assert metrics.database_transaction_duration.count == 1
+    assert metrics.database_pool_wait_duration.count == 1
+    assert metrics.database_pool_active == 0
     await engine.dispose()
 
 
@@ -536,6 +736,92 @@ async def test_transaction_cancellation_rolls_back_closes_and_propagates() -> No
 
     assert events == ["begin", "operation", "rollback", "close"]
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_definite_usage_persistence_failure_is_durably_spooled(
+    tmp_path: Path,
+) -> None:
+    writer = _RecordingSpoolWriter()
+    resources = RuntimeResourceBuilder(
+        RuntimeResourceSettings(
+            database=DatabaseEngineSettings(
+                database_url="postgresql+asyncpg://local:local@db.invalid/local",
+            ),
+            local_spool=LocalSpoolSettings(root=tmp_path / "spool"),
+        ),
+        spool_writer_factory=lambda _manager: writer,
+    ).build(_snapshot())
+
+    class DefiniteFailureTransactions(PostgresTransactionFactory):
+        def __init__(self) -> None:
+            pass
+
+        async def execute(self, operation):
+            del operation
+            raise AgentContextPersistenceError("definite rollback")
+
+    coordinator = AgentGenerationCoordinator(
+        resources,
+        transaction_factory_factory=lambda _resources: DefiniteFailureTransactions(),
+    )
+    usage = _usage_record()
+    await resources.start()
+    try:
+        assert await coordinator.persist_usage((usage,)) is True
+        await asyncio.wait_for(writer.usage_called.wait(), timeout=1)
+    finally:
+        await resources.close()
+
+    assert writer.usage == [(usage,)]
+    metrics = resources.platform_metrics.snapshot()
+    assert metrics.spool_enqueued_records == 1
+    assert metrics.spool_committed_records == 1
+    assert metrics.spool_result_unknown_total == 0
+
+
+@pytest.mark.asyncio
+async def test_usage_commit_unknown_is_never_spooled_or_replayed(
+    tmp_path: Path,
+) -> None:
+    writer = _RecordingSpoolWriter()
+    resources = RuntimeResourceBuilder(
+        RuntimeResourceSettings(
+            database=DatabaseEngineSettings(
+                database_url="postgresql+asyncpg://local:local@db.invalid/local",
+            ),
+            local_spool=LocalSpoolSettings(root=tmp_path / "spool"),
+        ),
+        spool_writer_factory=lambda _manager: writer,
+    ).build(_snapshot())
+
+    class CommitUnknownTransactions(PostgresTransactionFactory):
+        def __init__(self) -> None:
+            pass
+
+        async def execute(self, operation):
+            del operation
+            raise AgentContextCommitUnknownError("commit unknown")
+
+    coordinator = AgentGenerationCoordinator(
+        resources,
+        transaction_factory_factory=lambda _resources: CommitUnknownTransactions(),
+    )
+    usage = _usage_record()
+    await resources.start()
+    try:
+        assert await coordinator.persist_usage((usage,)) is False
+        assert writer.usage == []
+        assert resources.spool_worker is not None
+        assert resources.spool_worker.safe_diagnostics()["ready_files"] == 0
+    finally:
+        await resources.close()
+
+    assert writer.usage == []
+    metrics = resources.platform_metrics.snapshot()
+    assert metrics.spool_enqueued_records == 0
+    assert metrics.spool_committed_records == 0
+    assert metrics.spool_result_unknown_total == 0
 
 
 @pytest.mark.asyncio
@@ -564,6 +850,9 @@ async def test_cache_failure_bypasses_entire_generation() -> None:
     assert first == second == (_message(1),)
     assert cache.lookup_calls == 1
     assert coordinator.cache_trusted is False
+    metrics = resources.metrics.snapshot()
+    assert metrics.cache_hit == 0
+    assert metrics.cache_miss == 1
     assert events == [
         "cache.lookup",
         "transaction.begin",
@@ -573,6 +862,55 @@ async def test_cache_failure_bypasses_entire_generation() -> None:
         "repository.list_recent",
         "transaction.commit",
     ]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_history_cache_hit_skips_database_and_is_observed() -> None:
+    resources, engine = _database_resources()
+    events: list[str] = []
+    cached = (_message(1), _message(2, role="assistant"))
+
+    class Cache:
+        async def lookup(self, conversation_id: str, *, limit: int) -> HistoryCacheLookup:
+            events.append("cache.lookup")
+            assert conversation_id == _identity().conversation_id
+            assert limit == 8
+            return HistoryCacheLookup(
+                window=HistoryWindow(
+                    conversation_id=conversation_id,
+                    messages=cached,
+                    has_older=False,
+                )
+            )
+
+        async def publish(self, load_token, window) -> bool:
+            del load_token, window
+            raise AssertionError("cache hit must not publish")
+
+        async def invalidate(self, conversation_id: str) -> None:
+            del conversation_id
+
+    resources._history_cache = Cache()
+
+    class Transactions(PostgresTransactionFactory):
+        def __init__(self) -> None:
+            pass
+
+        async def execute(self, operation):
+            del operation
+            raise AssertionError("cache hit must not query PostgreSQL")
+
+    coordinator = AgentGenerationCoordinator(
+        resources,
+        transaction_factory_factory=lambda _resources: Transactions(),
+    )
+
+    assert await coordinator.load_history(_identity().conversation_id, limit=8) == cached
+    assert events == ["cache.lookup"]
+    metrics = resources.metrics.snapshot()
+    assert metrics.cache_hit == 1
+    assert metrics.cache_miss == 0
     await engine.dispose()
 
 

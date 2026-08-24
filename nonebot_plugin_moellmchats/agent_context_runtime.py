@@ -17,6 +17,9 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from . import full_metrics as _full_metrics
+from . import platform_metrics as _platform_metrics
+from . import structured_logging as _structured_logging
 from .agent_runtime import (
     AgentRun,
     AgentRunState,
@@ -60,6 +63,7 @@ from .runtime_resources import (
     RuntimeResourceLifecycleError,
     RuntimeResourceManager,
     RuntimeResourceManagerState,
+    RuntimeResourceSettings,
 )
 from .runtime_snapshot import RuntimeSnapshot
 from .session_summary import (
@@ -411,6 +415,7 @@ class PostgresTransactionFactory:
         resources: RuntimeGenerationResources,
         *,
         sessionmaker_factory: SessionMakerFactory = async_sessionmaker,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not isinstance(resources, RuntimeGenerationResources):
             raise TypeError("resources 必须是 RuntimeGenerationResources")
@@ -420,6 +425,8 @@ class PostgresTransactionFactory:
             raise AgentContextConfigurationError("PostgreSQL transaction factory 缺少显式 generation resource")
         if not callable(sessionmaker_factory) or inspect.iscoroutinefunction(sessionmaker_factory):
             raise TypeError("sessionmaker_factory 必须是同步 callable")
+        if not callable(monotonic_clock) or inspect.iscoroutinefunction(monotonic_clock):
+            raise TypeError("monotonic_clock 必须是同步 callable")
         try:
             engine = manager.get_engine()
             session_factory = sessionmaker_factory(
@@ -432,6 +439,40 @@ class PostgresTransactionFactory:
             raise AgentContextConfigurationError("sessionmaker_factory 返回非法对象")
         self._repositories = repositories
         self._session_factory = session_factory
+        self._metrics = resources.platform_metrics
+        self._monotonic_clock = monotonic_clock
+
+    def _now(self) -> float:
+        try:
+            value = self._monotonic_clock()
+        except Exception as error:
+            raise AgentContextConfigurationError(f"PostgreSQL transaction clock 失败 ({_safe_error_type(error)})") from None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) < 0:
+            raise AgentContextConfigurationError("PostgreSQL transaction clock 返回非法值")
+        return float(value)
+
+    def _metric(self, operation: Callable[[], None]) -> None:
+        try:
+            operation()
+        except Exception:
+            return
+
+    def _metric_now(self) -> float | None:
+        try:
+            return self._now()
+        except AgentContextConfigurationError:
+            return None
+
+    def _observe_duration(
+        self,
+        metric: _platform_metrics.PlatformDurationMetric,
+        started_at: float | None,
+    ) -> None:
+        finished_at = self._metric_now()
+        if started_at is None or finished_at is None:
+            return
+        duration = max(0.0, finished_at - started_at)
+        self._metric(lambda: self._metrics.observe_duration(metric, duration))
 
     async def _close(self, session: AsyncSession) -> BaseException | None:
         try:
@@ -446,7 +487,7 @@ class PostgresTransactionFactory:
         except Exception:
             return
 
-    async def execute(
+    async def _execute_unobserved(
         self,
         operation: TransactionOperation[ResultT],
     ) -> ResultT:
@@ -459,8 +500,15 @@ class PostgresTransactionFactory:
         if not isinstance(session, AsyncSession):
             raise AgentContextConfigurationError("session factory 未返回 AsyncSession")
 
+        pool_started_at = self._metric_now()
         try:
-            await session.begin()
+            try:
+                await session.begin()
+            finally:
+                self._observe_duration(
+                    _platform_metrics.PlatformDurationMetric.DATABASE_POOL_WAIT_DURATION,
+                    pool_started_at,
+                )
             repositories = self._repositories.for_session(session)
             result = await operation(repositories)
         except asyncio.CancelledError:
@@ -491,6 +539,41 @@ class PostgresTransactionFactory:
                 f"PostgreSQL commit 已确认但 session 关闭失败 ({_safe_error_type(close_error)})"
             ) from None
         return result
+
+    async def execute(
+        self,
+        operation: TransactionOperation[ResultT],
+    ) -> ResultT:
+        started_at = self._metric_now()
+        self._metric(
+            lambda: self._metrics.adjust_gauge(
+                _platform_metrics.PlatformGaugeMetric.DATABASE_POOL_ACTIVE,
+                1,
+            )
+        )
+        self._metric(self._metrics.observe_pool_peak)
+        try:
+            result = await self._execute_unobserved(operation)
+        except AgentContextCleanupError:
+            self._metric(lambda: self._metrics.increment(_platform_metrics.PlatformCountMetric.DATABASE_TRANSACTION_SUCCESS))
+            raise
+        except BaseException:
+            self._metric(lambda: self._metrics.increment(_platform_metrics.PlatformCountMetric.DATABASE_TRANSACTION_FAILURE))
+            raise
+        else:
+            self._metric(lambda: self._metrics.increment(_platform_metrics.PlatformCountMetric.DATABASE_TRANSACTION_SUCCESS))
+            return result
+        finally:
+            self._observe_duration(
+                _platform_metrics.PlatformDurationMetric.DATABASE_TRANSACTION_DURATION,
+                started_at,
+            )
+            self._metric(
+                lambda: self._metrics.adjust_gauge(
+                    _platform_metrics.PlatformGaugeMetric.DATABASE_POOL_ACTIVE,
+                    -1,
+                )
+            )
 
 
 TransactionFactoryFactory = Callable[
@@ -582,6 +665,12 @@ class AgentGenerationCoordinator:
 
     def _bypass_cache(self) -> None:
         self._cache_trusted = False
+
+    def _observe_cache(self, *, hit: bool) -> None:
+        try:
+            self._resources.metrics.observe_cache(hit=hit)
+        except Exception:
+            return
 
     async def initialize_request(
         self,
@@ -769,10 +858,13 @@ class AgentGenerationCoordinator:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self._observe_cache(hit=False)
                 self._bypass_cache()
             else:
                 if lookup.window is not None:
+                    self._observe_cache(hit=True)
                     return lookup.window.messages
+                self._observe_cache(hit=False)
                 load_token = lookup.load_token
 
         messages, has_older = await self._execute(source_load)
@@ -911,10 +1003,21 @@ class AgentGenerationCoordinator:
             await self._execute(operation)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            # I-08 owns a durable spool.  I-06 makes exactly one attempt and never
-            # turns usage accounting into a replay loop or a chat failure.
+        except AgentContextCleanupError:
+            return True
+        except AgentContextCommitUnknownError:
             return False
+        except Exception:
+            worker = self._resources.spool_worker
+            if worker is None:
+                return False
+            try:
+                await worker.enqueue_usage(records)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return False
+            return True
         return True
 
     async def maybe_generate_summary(
@@ -1023,6 +1126,7 @@ class AgentRequestRuntime:
         self._usage_records: list[ModelUsageRecord] = []
         self._pending_usage_records: list[ModelUsageRecord] = []
         self._step_index = 0
+        self._state_started_monotonic = self._monotonic_clock()
         self.prompt_context = AgentPromptContext(
             conversation_id=conversation.conversation_id,
             history=(),
@@ -1065,6 +1169,7 @@ class AgentRequestRuntime:
             wall_clock=wall_clock,
             monotonic_clock=monotonic_clock,
         )
+        runtime._emit_run(runtime.run)
         await runtime.advance(AgentRunState.ADMITTED)
         await runtime.advance(AgentRunState.CLASSIFYING)
         return runtime
@@ -1093,6 +1198,71 @@ class AgentRequestRuntime:
     def usage_records(self) -> tuple[ModelUsageRecord, ...]:
         return tuple(self._usage_records)
 
+    def _metric(self, operation: Callable[[], None]) -> None:
+        try:
+            operation()
+        except Exception:
+            return
+
+    def _structured_failure(self) -> None:
+        self._metric(
+            lambda: self.coordinator.resources.platform_metrics.increment(
+                _platform_metrics.PlatformCountMetric.STRUCTURED_LOG_FAILURE_TOTAL
+            )
+        )
+
+    def _emit(
+        self,
+        *,
+        event: str,
+        level: _structured_logging.StructuredLogLevel,
+        step: AgentStep | None = None,
+        call: ToolCall | None = None,
+        model: str | None = None,
+        tool: str | None = None,
+    ) -> None:
+        if self.coordinator.resources.structured_logger is None:
+            return
+        try:
+            context = _structured_logging.StructuredLogContext.from_agent_run(
+                self.run,
+                model=model,
+                tool=tool,
+            )
+            if step is not None:
+                context = context.bind_step(step)
+            if call is not None:
+                context = context.bind_tool_call(call)
+            self.coordinator.resources.emit_structured_log(
+                event=event,
+                level=level,
+                context=context,
+            )
+        except (TypeError, ValueError):
+            self._structured_failure()
+
+    def _emit_run(self, run: AgentRun) -> None:
+        level = (
+            _structured_logging.StructuredLogLevel.ERROR
+            if run.state is AgentRunState.FAILED
+            else (
+                _structured_logging.StructuredLogLevel.WARNING
+                if run.state
+                in {
+                    AgentRunState.CANCELLED,
+                    AgentRunState.TIMED_OUT,
+                    AgentRunState.REJECTED,
+                    AgentRunState.WAITING_CONFIRMATION,
+                }
+                else _structured_logging.StructuredLogLevel.INFO
+            )
+        )
+        self._emit(
+            event=f"agent_run.{run.state.value}",
+            level=level,
+            model=run.model,
+        )
+
     async def advance(
         self,
         target: AgentRunState,
@@ -1103,6 +1273,7 @@ class AgentRequestRuntime:
         if self.run.is_terminal:
             return self.run
         previous = self.run
+        transition_finished_monotonic = self._monotonic_clock()
         candidate = previous
         if model is not None:
             candidate = replace(
@@ -1156,6 +1327,16 @@ class AgentRequestRuntime:
         self.run = current
         self._run_history.append(current)
         self._audits.append(audit)
+        if previous.state is AgentRunState.CLASSIFYING:
+            duration = max(0.0, transition_finished_monotonic - self._state_started_monotonic)
+            self._metric(
+                lambda: self.coordinator.resources.metrics.observe_duration(
+                    _full_metrics.FullDurationMetric.CLASSIFICATION_DURATION,
+                    duration,
+                )
+            )
+        self._state_started_monotonic = transition_finished_monotonic
+        self._emit_run(current)
         return current
 
     async def prepare_context(
@@ -1273,6 +1454,12 @@ class AgentRequestRuntime:
             return None
         self._usage_records.append(record)
         self._pending_usage_records.append(record)
+        self._metric(lambda: self.coordinator.resources.metrics.observe_usage(record))
+        self._emit(
+            event="model_usage.captured",
+            level=_structured_logging.StructuredLogLevel.INFO,
+            model=record.model,
+        )
         return record
 
     async def flush_usage(self) -> bool:
@@ -1320,6 +1507,28 @@ class AgentRequestRuntime:
         self._step_index += 1
         self._steps.append(step)
         self._audits.append(audit)
+        duration_ms = step.duration_ms
+        if duration_ms is not None:
+            self._metric(
+                lambda: self.coordinator.resources.metrics.observe_duration(
+                    _full_metrics.FullDurationMetric.LLM_REQUEST_DURATION,
+                    duration_ms / 1_000.0,
+                )
+            )
+        self._emit(
+            event=f"agent_step.{step.status.value}",
+            level=(
+                _structured_logging.StructuredLogLevel.ERROR
+                if step.status is AgentStepStatus.FAILED
+                else (
+                    _structured_logging.StructuredLogLevel.WARNING
+                    if step.status in {AgentStepStatus.CANCELLED, AgentStepStatus.TIMED_OUT}
+                    else _structured_logging.StructuredLogLevel.INFO
+                )
+            ),
+            step=step,
+            model=step.model,
+        )
         return step
 
     async def record_tool_outcome(
@@ -1411,6 +1620,42 @@ class AgentRequestRuntime:
         if call is not None:
             self._tool_calls.append(call)
         self._audits.append(audit)
+        duration_metric = (
+            _full_metrics.FullDurationMetric.TOOL_WAIT_DURATION
+            if status is ToolCallStatus.WAITING_CONFIRMATION
+            else _full_metrics.FullDurationMetric.TOOL_EXECUTION_DURATION
+        )
+        duration_ms = step.duration_ms
+        if duration_ms is not None:
+            self._metric(
+                lambda: self.coordinator.resources.metrics.observe_duration(
+                    duration_metric,
+                    duration_ms / 1_000.0,
+                )
+            )
+        if status in {ToolCallStatus.FAILED, ToolCallStatus.TIMED_OUT}:
+            self._metric(self.coordinator.resources.metrics.observe_tool_failure)
+        self._emit(
+            event=f"agent_tool.{status.value}",
+            level=(
+                _structured_logging.StructuredLogLevel.ERROR
+                if status is ToolCallStatus.FAILED
+                else (
+                    _structured_logging.StructuredLogLevel.WARNING
+                    if status
+                    in {
+                        ToolCallStatus.CANCELLED,
+                        ToolCallStatus.TIMED_OUT,
+                        ToolCallStatus.REJECTED,
+                        ToolCallStatus.WAITING_CONFIRMATION,
+                    }
+                    else _structured_logging.StructuredLogLevel.INFO
+                )
+            ),
+            step=step,
+            call=call,
+            tool=step.tool,
+        )
         return step
 
     async def finish_success(self) -> AgentRun:
@@ -1464,6 +1709,7 @@ class RuntimeResourceHost:
             builder = RuntimeResourceBuilder()
         if not isinstance(builder, RuntimeResourceBuilder):
             raise TypeError("builder 必须是 RuntimeResourceBuilder")
+        self._builder = builder
         self._manager = RuntimeResourceManager(builder)
         self._summary_generator = summary_generator
         self._summary_policy = summary_policy
@@ -1479,6 +1725,10 @@ class RuntimeResourceHost:
     @property
     def manager(self) -> RuntimeResourceManager:
         return self._manager
+
+    @property
+    def settings(self) -> RuntimeResourceSettings:
+        return self._builder.settings
 
     @property
     def current_generation(self) -> int | None:

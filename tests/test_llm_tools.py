@@ -30,6 +30,13 @@ from nonebot_plugin_moellmchats.pending_actions import (
     PendingActionStore,
     pending_action_store,
 )
+from nonebot_plugin_moellmchats.redis_client import (
+    RedisClientManager,
+    RedisClientSettings,
+)
+from nonebot_plugin_moellmchats.redis_pending_actions import (
+    RedisPendingActionSettings,
+)
 from nonebot_plugin_moellmchats.runtime_resources import (
     RuntimeGenerationResources,
     RuntimeResourceBuilder,
@@ -1279,6 +1286,100 @@ async def test_mutating_tool_always_requires_separate_nonce_confirmation() -> No
     assert executions == []
     assert "尚未执行" in messages[-1]["content"]
     await pending_action_store.clear()
+
+
+@pytest.mark.asyncio
+async def test_generation_redis_pending_failure_rejects_without_memory_fallback() -> None:
+    await pending_action_store.clear()
+    executions = 0
+    client_calls = 0
+
+    async def mutate() -> str:
+        nonlocal executions
+        executions += 1
+        return "changed"
+
+    def client_factory(*_args: object, **_kwargs: object):
+        nonlocal client_calls
+        client_calls += 1
+        raise RuntimeError("redis://user:private-secret@redis.invalid/0")
+
+    snapshot = RuntimeSnapshot(
+        generation=1,
+        config={},
+        model_state=None,
+        temperaments={},
+        temperament_assignments={},
+        replies={},
+        tool_snapshot=None,
+        emotions=(),
+        reloaded_at=1,
+    )
+    resources = RuntimeResourceBuilder(
+        RuntimeResourceSettings(
+            redis=RedisClientSettings(
+                redis_url="redis://user:private-secret@redis.invalid/0"
+            ),
+            redis_pending_actions=RedisPendingActionSettings(),
+        ),
+        redis_manager_factory=lambda settings: RedisClientManager(
+            settings,
+            client_factory=client_factory,
+        ),
+    ).build(snapshot)
+    runtime = await AgentRequestRuntime.begin(
+        AgentGenerationCoordinator(resources),
+        AgentRequestIdentity(
+            platform="onebot-v11",
+            platform_user_id="1",
+            group_id=None,
+            display_name="tester",
+        ),
+        request_id=1,
+        deadline=DeadlineContext.from_timeout(30),
+    )
+    await runtime.advance(AgentRunState.PLANNING, model="model")
+    await runtime.advance(AgentRunState.EXECUTING)
+    spec = ToolSpec(
+        name="mutate",
+        description="change",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
+        policy=ToolPolicy.configured(),
+    )
+    tool_snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={
+            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
+        },
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(1, registered=(spec,)),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+
+    try:
+        messages = await harness._execute_tools(
+            [_call(1, "mutate")],
+            "",
+            [],
+            "",
+        )
+    finally:
+        await resources.close()
+
+    assert executions == 0
+    assert client_calls == 1
+    assert "尚未执行" not in messages[-1]["content"]
+    assert "确认执行" not in messages[-1]["content"]
+    assert "private-secret" not in messages[-1]["content"]
+    assert "redis.invalid" not in messages[-1]["content"]
+    assert runtime.tool_calls[-1].status is ToolCallStatus.FAILED
+    assert runtime.tool_calls[-1].confirmation_id is None
+    assert await pending_action_store.size() == 0
 
 
 @pytest.mark.asyncio

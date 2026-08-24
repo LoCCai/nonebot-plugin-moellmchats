@@ -931,7 +931,10 @@ async def resolve_classification(
         raise TypeError("key 必须是 ClassificationCacheKey")
     if not callable(builder):
         raise TypeError("builder 必须可调用")
-    cached = await cache.lookup(key)
+    try:
+        cached = await cache.lookup(key)
+    except TimeoutError:
+        raise ClassificationCacheUnavailableError("classification cache lookup 超时") from None
     if cached is not None:
         if not isinstance(cached, ClassificationCacheRecord) or cached.key != key:
             raise ClassificationCacheUnavailableError("classification cache 返回了错误 identity")
@@ -945,7 +948,10 @@ async def resolve_classification(
         raise TypeError("classification builder 必须返回 ClassificationCacheRecord")
     if record.key != key:
         raise ValueError("classification builder 返回了错误 identity")
-    published = await cache.publish(record)
+    try:
+        published = await cache.publish(record)
+    except TimeoutError:
+        raise ClassificationCacheUnavailableError("classification cache publish 超时") from None
     if not isinstance(published, ClassificationCacheRecord) or published != record:
         raise ClassificationCacheUnavailableError("classification cache 未确认精确发布结果")
     return published

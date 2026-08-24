@@ -339,12 +339,25 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if len(parts) != 1:
         await confirm_action_matcher.finish("格式：确认执行 <6位确认码>")
     try:
-        action, result = await execute_pending_action(
-            parts[0],
-            bot=bot,
-            event=event,
-            runtime_snapshot=runtime_snapshots.current(),
-        )
+        snapshot = runtime_snapshots.current()
+        if snapshot is None:
+            raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
+        try:
+            async with runtime_resource_host.lease(snapshot) as coordinator:
+                action, result = await execute_pending_action(
+                    parts[0],
+                    bot=bot,
+                    event=event,
+                    runtime_snapshot=snapshot,
+                    store=coordinator.resources.pending_action_store,
+                )
+        except PendingActionError:
+            raise
+        except Exception as error:
+            raise PendingActionError(
+                "确认存储不可用，危险操作已拒绝 "
+                f"({type(error).__name__})"
+            ) from None
     except PendingActionError as error:
         await confirm_action_matcher.finish(f"确认失败：{error}")
 
@@ -373,7 +386,22 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if len(parts) != 1:
         await cancel_action_matcher.finish("格式：取消执行 <6位确认码>")
     try:
-        await pending_action_store.cancel(parts[0], bot=bot, event=event)
+        snapshot = runtime_snapshots.current()
+        if snapshot is None:
+            raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
+        try:
+            async with runtime_resource_host.lease(snapshot) as coordinator:
+                action_store = coordinator.resources.pending_action_store
+                if action_store is None:
+                    action_store = pending_action_store
+                await action_store.cancel(parts[0], bot=bot, event=event)
+        except PendingActionError:
+            raise
+        except Exception as error:
+            raise PendingActionError(
+                "确认存储不可用，危险操作已拒绝 "
+                f"({type(error).__name__})"
+            ) from None
     except PendingActionError as error:
         await cancel_action_matcher.finish(f"取消失败：{error}")
     await cancel_action_matcher.finish("已取消该待确认操作。")
@@ -1160,12 +1188,28 @@ llm_status_matcher = on_command(
 )
 
 
+async def _current_pending_action_count() -> int | str:
+    snapshot = runtime_snapshots.current()
+    if snapshot is None:
+        return await pending_action_store.size()
+    try:
+        async with runtime_resource_host.lease(snapshot) as coordinator:
+            action_store = coordinator.resources.pending_action_store
+            if action_store is None:
+                action_store = pending_action_store
+            return await action_store.size()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return "不可用"
+
+
 @llm_status_matcher.handle()
 async def _():
     metrics = runtime_metrics.snapshot()
     generated_status, pending_actions = await asyncio.gather(
         asyncio.to_thread(generated_tool_store.list_status),
-        pending_action_store.size(),
+        _current_pending_action_count(),
     )
     avg_category = metrics["classification_seconds"] / metrics["classification_count"] if metrics["classification_count"] else 0
     current_snapshot = runtime_snapshots.current()

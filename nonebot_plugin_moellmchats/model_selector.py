@@ -560,6 +560,72 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             return model_data
         return None
 
+    def get_model_for_capabilities(
+        self,
+        key: str,
+        capabilities,
+    ) -> dict:
+        """Select from an explicitly trusted catalog, or preserve legacy pins.
+
+        Capability routing is opt-in through a fully validated
+        ``model_config.capability_routing`` object.  Once enabled, malformed or
+        unavailable routes fail closed instead of silently falling back to a
+        credential-bearing legacy model entry.
+        """
+
+        from .model_capabilities import ModelCapability
+        from .model_routing import ModelRouteRole
+        from .model_routing_runtime import build_model_routing_runtime
+        from .runtime_snapshot import mutable_value, runtime_snapshots
+
+        if not isinstance(capabilities, ModelCapability):
+            raise TypeError("capabilities 必须是 ModelCapability")
+        role = {
+            "selected_model": ModelRouteRole.SELECTED,
+            "vision_model": ModelRouteRole.VISION,
+            "category_model": ModelRouteRole.CATEGORY,
+            "summary_model": ModelRouteRole.SUMMARY,
+        }.get(key)
+        if role is None:
+            raise ValueError("key 不是可路由的模型角色")
+
+        state = self._active_state()
+        snapshot = runtime_snapshots.active()
+        generation = (
+            snapshot.generation
+            if globals().get("model_selector") is self
+            and snapshot is not None
+            and snapshot.model_state is state
+            else 0
+        )
+        routing = build_model_routing_runtime(
+            generation=generation,
+            models=state.models,
+            model_config=state.model_config,
+        )
+        if routing is None:
+            return self.get_model(key)
+        decision = routing.select(role, capabilities=capabilities)
+        descriptor = decision.selected.descriptor
+        selected = state.models.get(descriptor.descriptor_id)
+        if not isinstance(selected, Mapping):
+            raise RuntimeError("capability routing model identity 已漂移")
+        model_data = mutable_value(selected)
+        if not isinstance(model_data, dict):
+            raise RuntimeError("capability routing model transport 配置非法")
+        model_data["key"] = self._get_random_key(model_data)
+        model_data["_capability_routing"] = {
+            "capabilities": descriptor.capabilities.as_dict(),
+            "decision_digest": decision.decision_digest,
+            "descriptor_digest": descriptor.descriptor_digest,
+            "generation": routing.generation,
+        }
+        if not descriptor.capabilities.streaming:
+            model_data["stream"] = False
+        if not descriptor.capabilities.tools:
+            model_data["no_tools"] = True
+        return model_data
+
     def get_moe_current_model(self, difficulty: str) -> dict:
         # 获取当前MOE模型的配置
         state = self._active_state()
@@ -572,6 +638,62 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
+
+    def get_moe_current_model_for_capabilities(
+        self,
+        difficulty: str,
+        capabilities,
+    ) -> dict:
+        from .model_capabilities import ModelCapability
+        from .model_routing import ModelRouteRole
+        from .model_routing_runtime import build_model_routing_runtime
+        from .runtime_snapshot import mutable_value, runtime_snapshots
+
+        if not isinstance(capabilities, ModelCapability):
+            raise TypeError("capabilities 必须是 ModelCapability")
+        role = {
+            "0": ModelRouteRole.MOE_0,
+            "1": ModelRouteRole.MOE_1,
+            "2": ModelRouteRole.MOE_2,
+        }.get(difficulty)
+        if role is None:
+            raise ValueError("difficulty 必须是 0、1、2")
+        state = self._active_state()
+        snapshot = runtime_snapshots.active()
+        generation = (
+            snapshot.generation
+            if globals().get("model_selector") is self
+            and snapshot is not None
+            and snapshot.model_state is state
+            else 0
+        )
+        routing = build_model_routing_runtime(
+            generation=generation,
+            models=state.models,
+            model_config=state.model_config,
+        )
+        if routing is None:
+            return self.get_moe_current_model(difficulty)
+        decision = routing.select(role, capabilities=capabilities)
+        descriptor = decision.selected.descriptor
+        selected = state.models.get(descriptor.descriptor_id)
+        if not isinstance(selected, Mapping):
+            raise RuntimeError("capability routing model identity 已漂移")
+        model_data = mutable_value(selected)
+        if not isinstance(model_data, dict):
+            raise RuntimeError("capability routing model transport 配置非法")
+        model_data["key"] = self._get_random_key(model_data)
+        model_data["_capability_routing"] = {
+            "capabilities": descriptor.capabilities.as_dict(),
+            "decision_digest": decision.decision_digest,
+            "descriptor_digest": descriptor.descriptor_digest,
+            "generation": routing.generation,
+        }
+        if not descriptor.capabilities.streaming:
+            model_data["stream"] = False
+        if not descriptor.capabilities.tools:
+            model_data["no_tools"] = True
+        return model_data
 
     def get_tool_blacklist(self) -> list:
         return list(self._active_state().model_config.get("tool_blacklist", []))

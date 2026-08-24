@@ -408,9 +408,178 @@ def _dispatch_modes(value: object) -> dict[str, int]:
     return dict(sorted(result.items()))
 
 
+def _duration_summary(value: object, *, label: str) -> dict[str, int | float | None]:
+    if not isinstance(value, Mapping):
+        raise RuntimeApiConfigurationError(f"{label} duration 非法")
+    expected = {
+        "buckets",
+        "count",
+        "maximum_seconds",
+        "minimum_seconds",
+        "total_seconds",
+    }
+    if set(value) != expected:
+        raise RuntimeApiConfigurationError(f"{label} duration 字段非法")
+    count = _safe_integer(value.get("count"), label=f"{label}.count")
+    total = _safe_float(value.get("total_seconds"), label=f"{label}.total_seconds")
+    minimum_value = value.get("minimum_seconds")
+    maximum_value = value.get("maximum_seconds")
+    minimum = None if minimum_value is None else _safe_float(minimum_value, label=f"{label}.minimum_seconds")
+    maximum = None if maximum_value is None else _safe_float(maximum_value, label=f"{label}.maximum_seconds")
+    if (minimum is None) is not (maximum is None):
+        raise RuntimeApiConfigurationError(f"{label} duration min/max 非法")
+    if count == 0:
+        if total != 0 or minimum is not None:
+            raise RuntimeApiConfigurationError(f"{label} empty duration 非法")
+    elif minimum is None or maximum is None or minimum > maximum:
+        raise RuntimeApiConfigurationError(f"{label} duration min/max 非法")
+    buckets = value.get("buckets")
+    if not isinstance(buckets, list) or not buckets:
+        raise RuntimeApiConfigurationError(f"{label} duration buckets 非法")
+    return {
+        "count": count,
+        "maximum_seconds": maximum,
+        "minimum_seconds": minimum,
+        "total_seconds": total,
+    }
+
+
+def _platform_metrics_payload(value: Mapping[str, Any], *, generation: int) -> dict[str, Any]:
+    platform_duration_names = (
+        "database_pool_wait_duration",
+        "database_transaction_duration",
+        "spool_flush_duration",
+    )
+    platform_count_names = (
+        "database_transaction_failure",
+        "database_transaction_success",
+        "spool_committed_records",
+        "spool_enqueued_records",
+        "spool_failure_total",
+        "spool_result_unknown_total",
+        "structured_log_failure_total",
+    )
+    platform_gauge_names = (
+        "database_pool_active",
+        "database_pool_peak",
+        "spool_leased_files",
+        "spool_ready_files",
+        "spool_result_unknown_files",
+    )
+    expected = {
+        "version",
+        "generation",
+        "full",
+        *platform_duration_names,
+        *platform_count_names,
+        *platform_gauge_names,
+    }
+    if set(value) != expected or value.get("version") != 1:
+        raise RuntimeApiConfigurationError("platform metrics schema 非法")
+    if _safe_integer(value.get("generation"), label="generation") != generation:
+        raise RuntimeApiConfigurationError("metrics/runtime generation 不一致")
+    full = value.get("full")
+    if not isinstance(full, Mapping):
+        raise RuntimeApiConfigurationError("full metrics schema 非法")
+    full_duration_names = (
+        "classification_duration",
+        "llm_request_duration",
+        "queue_duration",
+        "tool_execution_duration",
+        "tool_wait_duration",
+    )
+    full_count_names = (
+        "cache_hit",
+        "cache_miss",
+        "reload_failure",
+        "reload_success",
+        "token_input",
+        "token_output",
+        "tool_failure_total",
+    )
+    full_expected = {
+        "version",
+        "generation",
+        "cost",
+        *full_duration_names,
+        *full_count_names,
+    }
+    if set(full) != full_expected or full.get("version") != 1:
+        raise RuntimeApiConfigurationError("full metrics schema 非法")
+    if _safe_integer(full.get("generation"), label="full.generation") != generation:
+        raise RuntimeApiConfigurationError("full metrics/runtime generation 不一致")
+    cost = full.get("cost")
+    if not isinstance(cost, str) or re.fullmatch(r"(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,12})?", cost) is None:
+        raise RuntimeApiConfigurationError("full metrics cost 非法")
+
+    durations = {
+        name: _duration_summary(full.get(name), label=f"full.{name}")
+        for name in full_duration_names
+    }
+    platform_durations = {
+        name: _duration_summary(value.get(name), label=name)
+        for name in platform_duration_names
+    }
+    counts = {name: _safe_integer(full.get(name), label=f"full.{name}") for name in full_count_names}
+    platform_values = {
+        name: _safe_integer(value.get(name), label=name)
+        for name in (*platform_count_names, *platform_gauge_names)
+    }
+    return {
+        "api_version": RUNTIME_API_VERSION,
+        "cache": {
+            "hits": counts["cache_hit"],
+            "misses": counts["cache_miss"],
+        },
+        "classification": durations["classification_duration"],
+        "database": {
+            "pool": {
+                "active": platform_values["database_pool_active"],
+                "peak": platform_values["database_pool_peak"],
+                "wait_duration": platform_durations["database_pool_wait_duration"],
+            },
+            "transactions": {
+                "duration": platform_durations["database_transaction_duration"],
+                "failure": platform_values["database_transaction_failure"],
+                "success": platform_values["database_transaction_success"],
+            },
+        },
+        "generation": generation,
+        "llm": {
+            "cost": cost,
+            "request_duration": durations["llm_request_duration"],
+            "token_input": counts["token_input"],
+            "token_output": counts["token_output"],
+        },
+        "queue": durations["queue_duration"],
+        "reload": {
+            "failure": counts["reload_failure"],
+            "success": counts["reload_success"],
+        },
+        "spool": {
+            "committed_records": platform_values["spool_committed_records"],
+            "enqueued_records": platform_values["spool_enqueued_records"],
+            "failure_total": platform_values["spool_failure_total"],
+            "flush_duration": platform_durations["spool_flush_duration"],
+            "leased_files": platform_values["spool_leased_files"],
+            "ready_files": platform_values["spool_ready_files"],
+            "result_unknown_files": platform_values["spool_result_unknown_files"],
+            "result_unknown_total": platform_values["spool_result_unknown_total"],
+        },
+        "structured_log_failure_total": platform_values["structured_log_failure_total"],
+        "tools": {
+            "execution_duration": durations["tool_execution_duration"],
+            "failure_total": counts["tool_failure_total"],
+            "wait_duration": durations["tool_wait_duration"],
+        },
+    }
+
+
 def _metrics_payload(value: object, *, generation: int) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise RuntimeApiConfigurationError("metrics snapshot 必须是映射")
+    if "full" in value:
+        return _platform_metrics_payload(value, generation=generation)
     metrics = {name: _safe_integer(value.get(name), label=name) for name in _INTEGER_METRIC_FIELDS}
     if metrics["reload_generation"] != generation:
         raise RuntimeApiConfigurationError("metrics/runtime generation 不一致")

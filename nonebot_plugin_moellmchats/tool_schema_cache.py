@@ -585,7 +585,10 @@ async def resolve_tool_schema(
         raise TypeError("key 必须是 ToolSchemaCacheKey")
     if not callable(builder):
         raise TypeError("builder 必须可调用")
-    cached = await cache.lookup(key)
+    try:
+        cached = await cache.lookup(key)
+    except TimeoutError:
+        raise ToolSchemaCacheUnavailableError("tool schema cache lookup 超时") from None
     if cached is not None:
         if not isinstance(cached, ToolSchemaRecord) or cached.key != key:
             raise ToolSchemaCacheUnavailableError("tool schema cache 返回了错误 identity")
@@ -596,7 +599,10 @@ async def resolve_tool_schema(
         raise TypeError("tool schema builder 必须返回 ToolSchemaRecord")
     if record.key != key:
         raise ValueError("tool schema builder 返回了错误 identity")
-    published = await cache.publish(record)
+    try:
+        published = await cache.publish(record)
+    except TimeoutError:
+        raise ToolSchemaCacheUnavailableError("tool schema cache publish 超时") from None
     if not isinstance(published, ToolSchemaRecord) or published != record:
         raise ToolSchemaCacheUnavailableError("tool schema cache 未确认精确发布结果")
     return published

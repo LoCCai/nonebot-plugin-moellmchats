@@ -885,8 +885,16 @@ class LlmToolsMixin:
                                 error_type="PendingToolValidationRejected",
                             )
                             continue
+                        runtime = getattr(self, "agent_runtime", None)
+                        action_store = pending_action_store
+                        if runtime is not None:
+                            configured_store = (
+                                runtime.coordinator.resources.pending_action_store
+                            )
+                            if configured_store is not None:
+                                action_store = configured_store
                         try:
-                            action = await pending_action_store.create(
+                            action = await action_store.create(
                                 bot=self.bot,
                                 event=self.event,
                                 tool_name=func_name,
@@ -900,7 +908,7 @@ class LlmToolsMixin:
                             pending_error = "PendingActionError"
                             confirmation_id = None
                         else:
-                            remaining = pending_action_store.remaining_ttl_seconds(
+                            remaining = action_store.remaining_ttl_seconds(
                                 action
                             )
                             confirmation = (
@@ -923,7 +931,6 @@ class LlmToolsMixin:
                                 "content": tool_result,
                             }
                         )
-                        runtime = getattr(self, "agent_runtime", None)
                         if (
                             runtime is not None
                             and pending_status
