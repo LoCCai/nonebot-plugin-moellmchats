@@ -1,36 +1,157 @@
-name: Publish
+name: Promote verified release artifacts
 
 on:
-  push:
-    tags:
-      - '*'
   workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful push CI run ID whose exact dist artifact will be promoted
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
-  pypi-publish:
-    name: Upload release to PyPI
+  promote:
+    name: Re-export the CI-verified wheel and source archive
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@master
-    - name: Set up Python
-      uses: actions/setup-python@v1
-      with:
-        python-version: "3.x"
-    - name: Install pypa/build
-      run: >-
-        python -m
-        pip install
-        build
-        --user
-    - name: Build a binary wheel and a source tarball
-      run: >-
-        python -m
-        build
-        --sdist
-        --wheel
-        --outdir dist/
-        .
-    - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Validate the selected CI run
+        id: ci-run
+        shell: bash
+        env:
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID" > "$RUNNER_TEMP/ci-run.json"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/jobs?per_page=100" \
+            > "$RUNNER_TEMP/ci-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY" > "$RUNNER_TEMP/repository.json"
+          python - \
+            "$RUNNER_TEMP/ci-run.json" \
+            "$RUNNER_TEMP/ci-jobs.json" \
+            "$RUNNER_TEMP/repository.json" \
+            "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          run = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          jobs_payload = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          repository = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+          default_branch = repository.get("default_branch")
+          if not isinstance(default_branch, str) or not default_branch:
+              raise SystemExit("repository default branch is unavailable")
+          expected = {
+              "id": int(os.environ["CI_RUN_ID"]),
+              "path": ".github/workflows/ci.yml",
+              "event": "push",
+              "status": "completed",
+              "conclusion": "success",
+              "head_branch": default_branch,
+          }
+          mismatches = {
+              key: (run.get(key), value)
+              for key, value in expected.items()
+              if run.get(key) != value
+          }
+          head_repository = (run.get("head_repository") or {}).get("full_name")
+          if head_repository != os.environ["GITHUB_REPOSITORY"]:
+              mismatches["head_repository"] = (
+                  head_repository,
+                  os.environ["GITHUB_REPOSITORY"],
+              )
+          if mismatches:
+              raise SystemExit(f"selected run is not an eligible successful push CI run: {mismatches!r}")
+
+          jobs = jobs_payload.get("jobs")
+          total_count = jobs_payload.get("total_count")
+          if not isinstance(jobs, list) or total_count != len(jobs):
+              raise SystemExit(
+                  "selected CI run job listing is incomplete; "
+                  f"total_count={total_count!r}, returned={len(jobs) if isinstance(jobs, list) else None!r}"
+              )
+          release_gates = [job for job in jobs if job.get("name") == "release-gate"]
+          if len(release_gates) != 1:
+              raise SystemExit(
+                  "selected CI run must contain exactly one release-gate job; "
+                  f"found={len(release_gates)}"
+              )
+          release_gate = release_gates[0]
+          gate_identity = {
+              "status": release_gate.get("status"),
+              "conclusion": release_gate.get("conclusion"),
+          }
+          expected_gate_identity = {
+              "status": "completed",
+              "conclusion": "success",
+          }
+          if gate_identity != expected_gate_identity:
+              raise SystemExit(
+                  "selected CI run release-gate is not green: "
+                  f"{gate_identity!r}"
+              )
+          with Path(sys.argv[4]).open("a", encoding="utf-8") as output:
+              print(f"head_sha={run['head_sha']}", file=output)
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nonebot-plugin-moellmchats-dist
+          path: dist/
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.ci_run_id }}
+      - name: Verify artifact identity and checksums
+        shell: bash
+        env:
+          CI_HEAD_SHA: ${{ steps.ci-run.outputs.head_sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+        run: |
+          set -euo pipefail
+          (
+            cd dist
+            sha256sum -c SHA256SUMS
+          )
+          mapfile -t WHEELS < <(find dist -maxdepth 1 -type f -name '*.whl' -print | sort)
+          mapfile -t SDISTS < <(find dist -maxdepth 1 -type f -name '*.tar.gz' -print | sort)
+          test "${#WHEELS[@]}" -eq 1
+          test "${#SDISTS[@]}" -eq 1
+          python - dist/BUILD-METADATA.json <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {
+              "source_repository": os.environ["GITHUB_REPOSITORY"],
+              "source_sha": os.environ["CI_HEAD_SHA"],
+              "ci_run_id": os.environ["CI_RUN_ID"],
+          }
+          mismatches = {
+              key: (metadata.get(key), value)
+              for key, value in expected.items()
+              if metadata.get(key) != value
+          }
+          if mismatches:
+              raise SystemExit(f"artifact identity mismatch: {mismatches!r}")
+          print(
+              "RELEASE_ARTIFACT_OK "
+              f"{metadata['distribution']}=={metadata['version']} "
+              f"sha={metadata['source_sha']}"
+          )
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nonebot-plugin-moellmchats-dist-ci-${{ inputs.ci_run_id }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90

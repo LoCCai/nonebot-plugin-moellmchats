@@ -3,17 +3,25 @@ from asyncio import TimeoutError
 from collections import Counter
 import datetime
 import random
-import traceback
+import time
+from typing import Any
 
 import aiohttp
 from nonebot.log import logger
 
+from .agent_context_runtime import (
+    AgentContextRuntimeError,
+    AgentRequestRuntime,
+)
+from .agent_runtime import AgentRunState, AgentStepStatus, AgentStepType
+from .compat import timeout as timeout_scope
 from .config import config_parser
 from .llm_api import LlmApiMixin
 from .llm_payload import LlmPayloadMixin
 from .llm_state import context_dict, token_usage_history
 from .llm_tools import LlmToolsMixin
 from .messages_handler import MessagesHandler
+from .model_capabilities import ModelCapability
 from .model_selector import model_selector
 from .runtime_snapshot import runtime_snapshots
 from .temperament_manager import temperament_manager
@@ -31,6 +39,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         format_message_dict: dict,
         is_objective: bool = False,
         temperament="默认",
+        *,
+        agent_runtime: AgentRequestRuntime | None = None,
     ):
         self.bot = bot
         self.event = event
@@ -38,13 +48,26 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self.user_id = event.user_id
         self.is_objective = is_objective
         self.temperament = temperament
+        if agent_runtime is not None and not isinstance(
+            agent_runtime,
+            AgentRequestRuntime,
+        ):
+            raise TypeError("agent_runtime 必须是 AgentRequestRuntime 或 None")
+        self.agent_runtime = agent_runtime
         self.model_info = {}
         self.emotion_flag = False  # 判断本次对话是否发送表情包
         self.prompt = temperament_manager.get_temperament_prompt(temperament)
         self.dynamic_context = ""
         self._pending_vision_images: list = []  # 本轮工具调用返回的待处理图片
+        self._tool_schema_record = None
         self._current_tool_usage = Counter()
         self._last_api_error_non_retryable = False
+        bot_config = getattr(bot, "config", None)
+        superusers = {
+            str(user_id)
+            for user_id in getattr(bot_config, "superusers", set())
+        }
+        self.is_superuser = str(event.user_id) in superusers
         runtime_snapshot = runtime_snapshots.active()
         self.tool_snapshot = (
             runtime_snapshot.tool_snapshot
@@ -53,8 +76,20 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         )
 
     async def _validate_runtime_model_config(self) -> str | None:
-
-        if model_selector.get_model("selected_model") is None:
+        if (
+            model_selector.get_model_for_capabilities(
+                "selected_model",
+                ModelCapability(
+                    text=True,
+                    vision=False,
+                    tools=False,
+                    json_schema=False,
+                    reasoning=False,
+                    streaming=False,
+                ),
+            )
+            is None
+        ):
             return "当前没有可用聊天模型，请检查模型配置后重载 LLM。"
         return None
 
@@ -131,16 +166,180 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             await self.bot.send(self.event, content)
         return content
 
-    async def get_llm_chat(self) -> str:
+    def _remaining_request_seconds(self) -> float:
+        if self.agent_runtime is None:
+            value = config_parser.get_config("request_timeout_seconds", 180)
+            return float(value)
+        remaining = self.agent_runtime.deadline.remaining()
+        if remaining <= 0:
+            raise TimeoutError
+        return remaining
+
+    def _llm_request_timeout(self) -> aiohttp.ClientTimeout:
+        return aiohttp.ClientTimeout(total=self._remaining_request_seconds())
+
+    async def _call_model_with_trace(
+        self,
+        operation,
+        *,
+        input_preview: str,
+    ):
+        runtime = self.agent_runtime
+        if runtime is None:
+            return await operation()
+        started_at = time.time()
+        started_monotonic = time.monotonic()
+        model = self.model_info.get("model", "unknown")
+        try:
+            remaining = runtime.deadline.remaining()
+            if remaining <= 0:
+                raise TimeoutError
+            async with timeout_scope(remaining):
+                result = await operation()
+        except asyncio.CancelledError:
+            await runtime.record_model_step(
+                model=model,
+                status=AgentStepStatus.CANCELLED,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                input_preview=input_preview,
+                error_type="CancelledError",
+            )
+            raise
+        except TimeoutError:
+            await runtime.record_model_step(
+                model=model,
+                status=AgentStepStatus.TIMED_OUT,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                input_preview=input_preview,
+                error_type="TimeoutError",
+            )
+            raise
+        except Exception as error:
+            await runtime.record_model_step(
+                model=model,
+                status=AgentStepStatus.FAILED,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                input_preview=input_preview,
+                error_type=type(error).__name__,
+            )
+            raise
+        success = bool(result[0]) if isinstance(result, tuple) and result else True
+        await runtime.record_model_step(
+            model=model,
+            status=(
+                AgentStepStatus.COMPLETED
+                if success
+                else AgentStepStatus.FAILED
+            ),
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            input_preview=input_preview,
+            output_preview=(
+                "model response accepted"
+                if success
+                else "model response rejected"
+            ),
+            error_type=None if success else "ModelResponseError",
+        )
+        return result
+
+    async def get_llm_chat(self) -> str | bool:
         self.messages_handler = MessagesHandler(self.user_id)
+        if self.agent_runtime is not None:
+            history_exchanges = config_parser.get_config("max_user_history", 8)
+            if (
+                not isinstance(history_exchanges, int)
+                or isinstance(history_exchanges, bool)
+            ):
+                history_exchanges = 8
+            committed = await self.agent_runtime.load_committed_context(
+                history_limit=max(1, min(200, history_exchanges * 2)),
+            )
+            if self.agent_runtime.persistent:
+                self.messages_handler.bind_committed_history(committed.history)
         plain = self.messages_handler.pre_process(self.format_message_dict)
+        if self.agent_runtime is not None:
+            await self.agent_runtime.persist_user_message(plain)
         if validate_error := await self._validate_runtime_model_config():
             return validate_error
 
         # 1. 预处理模型信息
-        prep_result = await self._prepare_model_info(plain)
+        classification_started_at = time.time()
+        classification_started_monotonic = time.monotonic()
+        try:
+            if self.agent_runtime is None:
+                prep_result = await self._prepare_model_info(plain)
+            else:
+                remaining = self.agent_runtime.deadline.remaining()
+                if remaining <= 0:
+                    raise TimeoutError
+                async with timeout_scope(remaining):
+                    prep_result = await self._prepare_model_info(plain)
+        except asyncio.CancelledError:
+            if self.agent_runtime is not None:
+                await self.agent_runtime.record_model_step(
+                    model="classification",
+                    status=AgentStepStatus.CANCELLED,
+                    step_type=AgentStepType.CLASSIFICATION,
+                    started_at=classification_started_at,
+                    started_monotonic=classification_started_monotonic,
+                    error_type="CancelledError",
+                )
+            raise
+        except TimeoutError:
+            if self.agent_runtime is not None:
+                await self.agent_runtime.record_model_step(
+                    model="classification",
+                    status=AgentStepStatus.TIMED_OUT,
+                    step_type=AgentStepType.CLASSIFICATION,
+                    started_at=classification_started_at,
+                    started_monotonic=classification_started_monotonic,
+                    error_type="TimeoutError",
+                )
+            raise
+        except Exception as error:
+            if self.agent_runtime is not None:
+                await self.agent_runtime.record_model_step(
+                    model="classification",
+                    status=AgentStepStatus.FAILED,
+                    step_type=AgentStepType.CLASSIFICATION,
+                    started_at=classification_started_at,
+                    started_monotonic=classification_started_monotonic,
+                    error_type=type(error).__name__,
+                )
+            raise
+        if self.agent_runtime is not None:
+            await self.agent_runtime.record_model_step(
+                model="classification",
+                status=(
+                    AgentStepStatus.SKIPPED
+                    if isinstance(prep_result, str)
+                    else AgentStepStatus.COMPLETED
+                ),
+                step_type=AgentStepType.CLASSIFICATION,
+                started_at=classification_started_at,
+                started_monotonic=classification_started_monotonic,
+                output_preview=(
+                    None
+                    if isinstance(prep_result, str)
+                    else "classification prepared"
+                ),
+                error_type=(
+                    "ClassificationRejected"
+                    if isinstance(prep_result, str)
+                    else None
+                ),
+            )
         if isinstance(prep_result, str):
             return prep_result
+        if self.agent_runtime is not None:
+            await self.agent_runtime.advance(
+                AgentRunState.PLANNING,
+                model=self.model_info.get("model", "unknown"),
+            )
 
         self.prompt_handler()
         supports_tools = model_selector.get_use_tools() and not self.model_info.get(
@@ -152,6 +351,12 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         system_content = self.prompt
         if self.dynamic_context:
             system_content += "\n" + self.dynamic_context
+        if self.agent_runtime is not None:
+            untrusted_context = (
+                self.agent_runtime.prompt_context.render_untrusted_prompt()
+            )
+            if untrusted_context:
+                system_content += "\n" + untrusted_context
         # 将动态上下文追加到系统提示末尾，避免部分模型不支持多条 system 消息
         send_message_list.insert(0, {"role": "system", "content": system_content})
         # 2. 构建 Payload
@@ -161,6 +366,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             f"LLM payload: model={data.get('model')} messages={len(data.get('messages', []))} "
             f"tools={len(data.get('tools', []))} stream={data.get('stream', False)}"
         )
+        if self.agent_runtime is not None:
+            await self.agent_runtime.advance(AgentRunState.EXECUTING)
 
         headers = {
             "Authorization": self.model_info["key"],
@@ -175,14 +382,12 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         max_retry_times = config_parser.get_config("max_retry_times") or 3
 
         session = get_session()
-        llm_timeout = aiohttp.ClientTimeout(
-            total=config_parser.get_config("request_timeout_seconds", 180)
-        )
         # 修改：增加上限至 max_tool_rounds + 1，以容纳最后一次强制总结
         for tool_round in range(max_tool_rounds + 1):
             result_text = ""
             success = False
             tool_calls = None
+            reasoning_content = ""
 
             # 达到最大轮次时，移除工具强制总结
             if tool_round == max_tool_rounds:
@@ -206,43 +411,63 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                     await asyncio.sleep(2 ** (retry_times + 1))
                 try:
                     if current_stream_flag:
+                        async def model_operation():
+                            return await self.stream_llm_chat(
+                                session,
+                                self.model_info["url"],
+                                headers,
+                                data,
+                                self.model_info.get("proxy"),
+                                self.model_info.get("is_segment"),
+                                self._llm_request_timeout(),
+                            )
+
                         (
                             success,
                             result_text,
                             tool_calls,
                             reasoning_content,
-                        ) = await self.stream_llm_chat(
-                            session,
-                            self.model_info["url"],
-                            headers,
-                            data,
-                            self.model_info.get("proxy"),
-                            self.model_info.get("is_segment"),
-                            llm_timeout,
+                        ) = await self._call_model_with_trace(
+                            model_operation,
+                            input_preview=(
+                                f"chat model request with {len(data.get('messages', []))} messages"
+                            ),
                         )
                     else:
+                        async def model_operation():
+                            return await self.none_stream_llm_chat(
+                                session,
+                                self.model_info["url"],
+                                headers,
+                                data,
+                                self.model_info.get("proxy"),
+                                self._llm_request_timeout(),
+                            )
+
                         (
                             success,
                             result_text,
                             tool_calls,
                             reasoning_content,
-                        ) = await self.none_stream_llm_chat(
-                            session,
-                            self.model_info["url"],
-                            headers,
-                            data,
-                            self.model_info.get("proxy"),
-                            llm_timeout,
+                        ) = await self._call_model_with_trace(
+                            model_operation,
+                            input_preview=(
+                                f"chat model request with {len(data.get('messages', []))} messages"
+                            ),
                         )
+                    if self.agent_runtime is not None:
+                        await self.agent_runtime.flush_usage()
                     if success:
                         break
                     if self._last_api_error_non_retryable:
                         break
+                except AgentContextRuntimeError:
+                    raise
                 except TimeoutError:
                     result_text = "网络超时呐，多半是api反应太慢（"
                 except Exception:
                     logger.warning("LLM 请求异常；消息内容已从日志中省略")
-                    logger.error(traceback.format_exc())
+                    logger.error("LLM 请求失败，异常详情已安全省略")
                     continue
 
             if not success:
@@ -256,7 +481,17 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
 
                 # 若插件返回了图片，自动切换至视觉模型并注入图片消息
                 if self._pending_vision_images:
-                    vision_model_info = model_selector.get_model("vision_model")
+                    vision_model_info = model_selector.get_model_for_capabilities(
+                        "vision_model",
+                        ModelCapability(
+                            text=True,
+                            vision=True,
+                            tools=model_selector.get_use_tools(),
+                            json_schema=False,
+                            reasoning=False,
+                            streaming=False,
+                        ),
+                    )
                     if vision_model_info:
                         logger.info(
                             f"插件返回图片，自动切换至视觉模型: {vision_model_info['model']}"
@@ -273,7 +508,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         if vision_model_info.get("no_tools"):
                             data.pop("tools", None)
                         # 以 user 消息注入图片，视觉模型在下一轮可直接看到
-                        image_content = [
+                        image_content: list[dict[str, Any]] = [
                             {
                                 "type": "text",
                                 "text": "插件返回了以下图片，请结合上下文进行分析：",
@@ -306,12 +541,21 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             result_text_sent = False
             has_tool_messages = bool(self.messages_handler.messages_entity.tool_messages)
             if has_tool_messages and not (result_text or "").strip():
-                result_text = await self._request_tool_summary_retry(
-                    session,
-                    headers,
-                    send_message_list,
-                    llm_timeout,
+                async def summary_operation():
+                    return await self._request_tool_summary_retry(
+                        session,
+                        headers,
+                        send_message_list,
+                        self._llm_request_timeout(),
+                    )
+
+                result_text = await self._call_model_with_trace(
+                    summary_operation,
+                    input_preview="tool summary retry",
                 )
+                result_text = str(result_text or "")
+                if self.agent_runtime is not None:
+                    await self.agent_runtime.flush_usage()
                 if result_text:
                     await self.send_emotion_message(result_text)
                     result_text_sent = True
@@ -321,15 +565,25 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                     result_text_sent = True
 
             if not result_text_sent and not current_stream_flag and result_text:
-                result_text = await self.send_emotion_message(result_text)
+                result_text = await self.send_emotion_message(str(result_text))
 
             # 统一并完整保存上下文，用户说"继续"时大模型能够回想起历史工具调用记录
             if not self.is_objective:
-                self.messages_handler.post_process(
-                    assistant_msg=result_text,
-                    tool_messages=self.messages_handler.messages_entity.tool_messages
-                    or None,
+                tool_history = (
+                    self.messages_handler.messages_entity.tool_messages or None
                 )
+                self.messages_handler.post_process(
+                    assistant_msg=str(result_text or ""),
+                    tool_messages=tool_history,
+                )
+                if self.agent_runtime is not None:
+                    await self.agent_runtime.persist_assistant_message(
+                        str(result_text or ""),
+                        tool_messages=tool_history,
+                    )
+
+            if self.agent_runtime is not None:
+                await self.agent_runtime.finish_success()
 
             return True
 

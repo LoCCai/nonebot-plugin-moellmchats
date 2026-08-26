@@ -21,6 +21,14 @@ class RuntimeMetrics:
     member_lookup_timeouts: int = 0
     tool_steps: int = 0
     tool_timeouts: int = 0
+    generated_runner_active: int = 0
+    generated_runner_pending: int = 0
+    generated_runner_rejected: int = 0
+    generated_runner_timeouts: int = 0
+    generated_runner_killed: int = 0
+    generated_runner_orphan_cleanups: int = 0
+    generated_runner_failures: int = 0
+    generated_authoring_active: int = 0
     classification_count: int = 0
     classification_seconds: float = 0.0
     reload_generation: int = 0

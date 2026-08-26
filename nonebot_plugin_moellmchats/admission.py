@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Hashable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from typing import Protocol
 
 from .runtime_metrics import runtime_metrics
 
 
 class AdmissionRejected(RuntimeError):
     pass
+
+
+class AdmissionGateProtocol(Protocol):
+    """Backend-neutral context-manager boundary used by admission callers."""
+
+    def slot(
+        self,
+        key: Hashable | None = None,
+    ) -> AbstractAsyncContextManager[None]: ...
 
 
 @dataclass

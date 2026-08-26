@@ -4,12 +4,64 @@ from nonebot.log import logger
 import ujson as json
 
 from .categorize import Categorize
+from .model_capabilities import ModelCapability
 from .model_selector import model_selector
+from .tool_schema_cache import (
+    ToolSchemaCacheUnavailableError,
+    ToolSchemaRecord,
+    resolve_tool_schema,
+)
 
 
 class LlmPayloadMixin:
+    def _tool_schema_request_inputs(self) -> tuple[set[str], bool, bool]:
+        resident_plugins = set(model_selector.get_resident_plugins())
+        selected_plugins = (
+            set(getattr(self, "required_plugins", [])) | resident_plugins
+        )
+        model_supports_tools = (
+            model_selector.get_use_tools()
+            and not self.model_info.get("no_tools", False)
+        )
+        search_enabled = (
+            model_selector.get_web_search() if model_supports_tools else False
+        )
+        return selected_plugins, model_supports_tools, search_enabled
+
+    async def _prepare_tool_schema_record(self) -> None:
+        self._tool_schema_record = None
+        runtime = getattr(self, "agent_runtime", None)
+        if runtime is None:
+            return
+
+        resources = runtime.coordinator.resources
+        snapshot = self.tool_snapshot
+        if getattr(snapshot, "generation", None) != resources.generation:
+            raise ToolSchemaCacheUnavailableError(
+                "tool schema cache consumer generation 不一致"
+            )
+        selected_plugins, tools_enabled, search_enabled = (
+            self._tool_schema_request_inputs()
+        )
+        context = snapshot.capture_llm_payload_schema_context(
+            selected_plugins,
+            tools_enabled=tools_enabled,
+            search_enabled=search_enabled,
+            is_superuser=self.is_superuser,
+        )
+        if context.generation != resources.generation:
+            raise ToolSchemaCacheUnavailableError(
+                "tool schema cache context generation 漂移"
+            )
+        self._tool_schema_record = await resolve_tool_schema(
+            resources.tool_schema_cache,
+            context.cache_key,
+            lambda: snapshot.build_llm_payload_schema_record(context),
+        )
+
     async def _prepare_model_info(self, plain: str):
         """预处理：获取模型信息、处理难度分类与视觉判断"""
+        self._tool_schema_record = None
         self.required_plugins = []
         difficulty = "1"
         # 1. 绝对的客观事实：只要真实提取到了图片URL，就必定触发视觉处理，不再完全依赖大模型分类判断
@@ -19,7 +71,28 @@ class LlmPayloadMixin:
             or model_selector.get_web_search()
             or model_selector.get_use_tools()
         ):
-            category = Categorize(plain, self.tool_snapshot)
+            runtime = getattr(self, "agent_runtime", None)
+            resources = (
+                runtime.coordinator.resources if runtime is not None else None
+            )
+            category = Categorize(
+                plain,
+                self.tool_snapshot,
+                is_superuser=self.is_superuser,
+                tool_catalog_cache=(
+                    resources.tool_catalog_cache
+                    if resources is not None
+                    else None
+                ),
+                classification_cache=(
+                    resources.classification_cache
+                    if resources is not None
+                    else None
+                ),
+                runtime_generation=(
+                    resources.generation if resources is not None else None
+                ),
+            )
             category_result = await category.get_category()
             if isinstance(category_result, str):
                 return category_result
@@ -31,15 +104,32 @@ class LlmPayloadMixin:
                 self.required_plugins = required_plugins
                 has_image = has_image or vision_required
 
+        requires_tools = bool(
+            model_selector.get_use_tools()
+            and (
+                self.required_plugins
+                or model_selector.get_resident_plugins()
+                or model_selector.get_web_search()
+            )
+        )
+        required_capabilities = ModelCapability(
+            text=True,
+            vision=has_image,
+            tools=requires_tools,
+            json_schema=False,
+            reasoning=False,
+            streaming=False,
+        )
+
         # 视觉任务高于 MoE 与 selected_model：只要本轮有图片，就必须使用 vision_model。
         if has_image:
-            if not model_selector.get_config_value("vision_model"):
-                return "检测到图片消息，但未配置视觉模型。请先使用「设置视觉模型 <模型名或编号>」配置一个支持图片输入的模型。"
-
-            self.model_info = model_selector.get_model("vision_model")
+            self.model_info = model_selector.get_model_for_capabilities(
+                "vision_model",
+                required_capabilities,
+            )
             if not self.model_info:
                 return (
-                    "检测到图片消息，但视觉模型不可用。请使用「查看模型」确认模型可用后，"
+                    "检测到图片消息，但未配置可用的视觉模型。请使用「查看模型」确认模型能力后，"
                     "重新执行「设置视觉模型 <模型名或编号>」。"
                 )
 
@@ -47,11 +137,18 @@ class LlmPayloadMixin:
 
         # 纯文本任务，若开启了MoE，则分配对应难度的模型
         elif model_selector.get_moe():
-            self.model_info = model_selector.get_moe_current_model(difficulty)
+            self.model_info = model_selector.get_moe_current_model_for_capabilities(
+                difficulty,
+                required_capabilities,
+            )
 
         # 兜底：既没触发视觉，也没开启MoE，或者啥都没开启（原逻辑），使用默认模型
         if not self.model_info:
-            self.model_info = model_selector.get_model("selected_model")
+            self.model_info = model_selector.get_model_for_capabilities(
+                "selected_model",
+                required_capabilities,
+            )
+        await self._prepare_tool_schema_record()
         logger.info(f"模型选择为：{self.model_info['model']}")
         return None
 
@@ -119,33 +216,45 @@ class LlmPayloadMixin:
         if extra_payload := self.model_info.get("extra_payload"):
             if isinstance(extra_payload, dict):
                 data.update(extra_payload)
-        tools_schema = []
-        # 获取常驻插件并转为集合
-        resident_plugins = set(model_selector.get_resident_plugins())
-        # Only the current plan and explicit resident tools receive schemas.
-        all_plugins_set = set(getattr(self, "required_plugins", [])) | resident_plugins
-        all_plugins_set = self.tool_snapshot.expand_dependencies(all_plugins_set)
-        logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
-        all_plugins = list(all_plugins_set)
-
-        model_supports_tools = (
-            model_selector.get_use_tools()
-            and not self.model_info.get("no_tools", False)
+        selected_plugins, model_supports_tools, search_enabled = (
+            self._tool_schema_request_inputs()
         )
-        if all_plugins:
-            normal_plugins = [p for p in all_plugins if p != "web_search"]
-            if model_supports_tools and normal_plugins:
-                tools_schema.extend(
-                    self.tool_snapshot.get_tool_schema(normal_plugins, include_search=False)
+        schema_record = getattr(self, "_tool_schema_record", None)
+        if schema_record is None:
+            all_plugins_set, tools_schema = (
+                self.tool_snapshot.get_llm_payload_tools(
+                    selected_plugins,
+                    tools_enabled=model_supports_tools,
+                    search_enabled=search_enabled,
+                    is_superuser=self.is_superuser,
                 )
+            )
+        else:
+            if not isinstance(schema_record, ToolSchemaRecord):
+                raise ToolSchemaCacheUnavailableError(
+                    "tool schema cache consumer record 类型非法"
+                )
+            context = self.tool_snapshot.capture_llm_payload_schema_context(
+                selected_plugins,
+                tools_enabled=model_supports_tools,
+                search_enabled=search_enabled,
+                is_superuser=self.is_superuser,
+            )
+            runtime = getattr(self, "agent_runtime", None)
             if (
-                model_supports_tools
-                and model_selector.get_web_search()
-                and "web_search" in all_plugins
+                runtime is not None
+                and context.generation
+                != runtime.coordinator.resources.generation
             ):
-                tools_schema.extend(
-                    self.tool_snapshot.get_tool_schema([], include_search=True)
+                raise ToolSchemaCacheUnavailableError(
+                    "tool schema cache materialize generation 漂移"
                 )
+            if schema_record.key != context.cache_key:
+                raise ToolSchemaCacheUnavailableError(
+                    "tool schema cache materialize identity 漂移"
+                )
+            all_plugins_set, tools_schema = schema_record.materialize()
+        logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
 
         if tools_schema:
             data["tools"] = tools_schema

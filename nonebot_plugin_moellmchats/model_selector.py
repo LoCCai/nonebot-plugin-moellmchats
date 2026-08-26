@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import ujson as json
@@ -18,6 +19,12 @@ import aiohttp
 from nonebot.log import logger
 import nonebot_plugin_localstore as store
 
+from .private_files import (
+    atomic_write_private_text,
+    ensure_private_directory,
+    ensure_private_file,
+)
+
 config_path: Path = store.get_plugin_config_dir()
 
 
@@ -28,9 +35,23 @@ class ModelRuntimeState:
     global_default: Mapping[str, Any]
     model_config: Mapping[str, Any]
 
+    def __post_init__(self) -> None:
+        from .runtime_snapshot import immutable_mapping
+
+        for field_name in ("models", "providers", "global_default", "model_config"):
+            value = getattr(self, field_name)
+            if not isinstance(value, Mapping):
+                raise ValueError(f"ModelRuntimeState.{field_name} 必须是映射")
+            object.__setattr__(self, field_name, immutable_mapping(value))
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> ModelRuntimeState:
+        return self
+
 
 def _readonly(value: dict) -> Mapping:
-    return MappingProxyType(deepcopy(value))
+    from .runtime_snapshot import immutable_mapping
+
+    return immutable_mapping(value)
 
 
 # 模型选择类
@@ -41,6 +62,12 @@ class ModelSelector:
         self.providers_file = Path(config_path / "providers.toml")
         self.cache_file = Path(config_path / "model_cache.json")
         self.model_config_file = Path(config_path / "model_config.json")
+        self._ensure_private_storage(
+            self.models_file,
+            self.providers_file,
+            self.cache_file,
+            self.model_config_file,
+        )
 
         self.models = {}
         self.providers = {}
@@ -49,6 +76,16 @@ class ModelSelector:
         self.load_providers()
         self._load_all_models()
         self.model_config = self._load_model_config()
+
+    @staticmethod
+    def _ensure_private_storage(*paths: Path) -> None:
+        """Revalidate every runtime-read path instead of trusting startup state."""
+
+        normalized = tuple(Path(path) for path in paths)
+        for parent in {path.parent for path in normalized}:
+            ensure_private_directory(parent)
+        for path in normalized:
+            ensure_private_file(path)
 
     def capture_state(self) -> ModelRuntimeState:
         return ModelRuntimeState(
@@ -72,6 +109,12 @@ class ModelSelector:
 
     def build_candidate(self) -> ModelRuntimeState:
         """Parse and validate all model files without changing live state."""
+        self._ensure_private_storage(
+            self.providers_file,
+            self.models_file,
+            self.cache_file,
+            self.model_config_file,
+        )
         with self.providers_file.open("rb") as file:
             provider_data = tomllib.load(file)
         providers = provider_data.get("providers", {})
@@ -107,10 +150,12 @@ class ModelSelector:
         return candidate.capture_state()
 
     def commit_candidate(self, candidate: ModelRuntimeState) -> None:
-        self.models = deepcopy(dict(candidate.models))
-        self.providers = deepcopy(dict(candidate.providers))
-        self.global_default = deepcopy(dict(candidate.global_default))
-        self.model_config = deepcopy(dict(candidate.model_config))
+        from .runtime_snapshot import mutable_value
+
+        self.models = mutable_value(candidate.models)
+        self.providers = mutable_value(candidate.providers)
+        self.global_default = mutable_value(candidate.global_default)
+        self.model_config = mutable_value(candidate.model_config)
 
     def _normalize_url(self, base_url: str, endpoint: str = "/chat/completions") -> str:
         """自动处理末尾的反斜杠和补全路径"""
@@ -150,8 +195,9 @@ class ModelSelector:
         chosen_key = random.choice(valid_keys)
         return self._normalize_key(chosen_key)
 
-    def load_providers(self):
+    def load_providers(self, *, strict: bool = False):
         """初始化并读取 providers.toml，如果不存在则自动生成模板"""
+        self._ensure_private_storage(self.providers_file)
         if not self.providers_file.exists():
             template = """# AI服务商配置文件
 # base_url: 基础API地址（直接写Base URL即可，程序会自动补全 /chat/completions 及 /models）
@@ -201,9 +247,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                    # 设置后：本次请求不会注入 tool schema，历史中的工具消息也会自动转为普通文本传入
 # extra_payload = { extra_body = { google = { thinking_config = { thinking_level = "low" } } } } # <-- 示例：透传厂商私有参数
 """
-            self.providers_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.providers_file, "w", encoding="utf-8") as f:
-                f.write(template)
+            atomic_write_private_text(self.providers_file, template)
 
         try:
             with open(self.providers_file, "rb") as f:
@@ -211,10 +255,13 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 self.providers = config.get("providers", {})
                 self.global_default = config.get("global_default", {})
         except Exception as e:
+            if strict:
+                raise ValueError(f"解析 providers.toml 失败: {e}") from e
             logger.error(f"解析 providers.toml 失败: {e}")
 
     def _load_all_models(self, *, strict: bool = False):
         """合并加载：旧 models.json、缓存自动获取、TOML手动补充及模型独立配置"""
+        self._ensure_private_storage(self.models_file, self.cache_file)
         self.models.clear()
         # 1. 兼容加载老版 models.json
         if self.models_file.exists():
@@ -300,6 +347,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         from .utils import get_session
 
+        # Re-read the exact owner-private, no-follow checked provider file before
+        # any API request.  A startup-era in-memory copy is not sufficient after
+        # an editor may have replaced the file.
+        await asyncio.to_thread(self.load_providers, strict=True)
         session = get_session()
         timeout = aiohttp.ClientTimeout(total=15)
 
@@ -334,9 +385,26 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         results = await asyncio.gather(
             *[_fetch_one(p, i) for p, i in self.providers.items()]
         )
+        # Keep last-known-good provider entries on a transient /models failure.
+        # The cache is a separate runtime read: revalidate it immediately before
+        # opening rather than relying on startup checks or the later atomic write.
+        await asyncio.to_thread(self._ensure_private_storage, self.cache_file)
+        try:
+            with self.cache_file.open(encoding="utf-8") as file:
+                old_cache = json.load(file)
+            if not isinstance(old_cache, dict):
+                old_cache = {}
+        except (OSError, ValueError):
+            old_cache = {}
+        configured = set(self.providers)
         new_cache = {
-            provider: models for provider, models in results if models is not None
+            provider: models
+            for provider, models in old_cache.items()
+            if provider in configured and isinstance(models, list)
         }
+        for provider, models in results:
+            if models is not None:
+                new_cache[provider] = models
 
         # 持久化到缓存，避免在事件循环里同步写盘。
         await asyncio.to_thread(self._write_config, self.cache_file, new_cache)
@@ -416,6 +484,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def _load_model_config(self):
         # 读取model_config.json文件，获取是否使用MOE及MOE难度模型等配置
+        self._ensure_private_storage(self.model_config_file)
         if self.model_config_file.exists():
             with open(self.model_config_file, encoding="utf-8") as f:
                 self.model_config = json.load(f)
@@ -454,8 +523,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def _write_config(self, file_path, config_data):
         # 将配置写入文件
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=4)
+        atomic_write_private_text(
+            Path(file_path),
+            json.dumps(config_data, ensure_ascii=False, indent=4),
+        )
         if Path(file_path) == self.model_config_file and hasattr(
             self, "model_config"
         ):
@@ -482,10 +553,78 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         state = self._active_state()
         selected_model = state.model_config.get(key)
         if selected_model and selected_model in state.models:
-            model_data = state.models[selected_model].copy()
+            from .runtime_snapshot import mutable_value
+
+            model_data = mutable_value(state.models[selected_model])
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
+
+    def get_model_for_capabilities(
+        self,
+        key: str,
+        capabilities,
+    ) -> dict:
+        """Select from an explicitly trusted catalog, or preserve legacy pins.
+
+        Capability routing is opt-in through a fully validated
+        ``model_config.capability_routing`` object.  Once enabled, malformed or
+        unavailable routes fail closed instead of silently falling back to a
+        credential-bearing legacy model entry.
+        """
+
+        from .model_capabilities import ModelCapability
+        from .model_routing import ModelRouteRole
+        from .model_routing_runtime import build_model_routing_runtime
+        from .runtime_snapshot import mutable_value, runtime_snapshots
+
+        if not isinstance(capabilities, ModelCapability):
+            raise TypeError("capabilities 必须是 ModelCapability")
+        role = {
+            "selected_model": ModelRouteRole.SELECTED,
+            "vision_model": ModelRouteRole.VISION,
+            "category_model": ModelRouteRole.CATEGORY,
+            "summary_model": ModelRouteRole.SUMMARY,
+        }.get(key)
+        if role is None:
+            raise ValueError("key 不是可路由的模型角色")
+
+        state = self._active_state()
+        snapshot = runtime_snapshots.active()
+        generation = (
+            snapshot.generation
+            if globals().get("model_selector") is self
+            and snapshot is not None
+            and snapshot.model_state is state
+            else 0
+        )
+        routing = build_model_routing_runtime(
+            generation=generation,
+            models=state.models,
+            model_config=state.model_config,
+        )
+        if routing is None:
+            return self.get_model(key)
+        decision = routing.select(role, capabilities=capabilities)
+        descriptor = decision.selected.descriptor
+        selected = state.models.get(descriptor.descriptor_id)
+        if not isinstance(selected, Mapping):
+            raise RuntimeError("capability routing model identity 已漂移")
+        model_data = mutable_value(selected)
+        if not isinstance(model_data, dict):
+            raise RuntimeError("capability routing model transport 配置非法")
+        model_data["key"] = self._get_random_key(model_data)
+        model_data["_capability_routing"] = {
+            "capabilities": descriptor.capabilities.as_dict(),
+            "decision_digest": decision.decision_digest,
+            "descriptor_digest": descriptor.descriptor_digest,
+            "generation": routing.generation,
+        }
+        if not descriptor.capabilities.streaming:
+            model_data["stream"] = False
+        if not descriptor.capabilities.tools:
+            model_data["no_tools"] = True
+        return model_data
 
     def get_moe_current_model(self, difficulty: str) -> dict:
         # 获取当前MOE模型的配置
@@ -493,13 +632,71 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         moe_models = state.model_config["moe_models"]
         model_name = moe_models.get(difficulty)
         if model_name and model_name in state.models:
-            model_data = state.models[model_name].copy()
+            from .runtime_snapshot import mutable_value
+
+            model_data = mutable_value(state.models[model_name])
             model_data["key"] = self._get_random_key(model_data)
             return model_data
         return None
 
+    def get_moe_current_model_for_capabilities(
+        self,
+        difficulty: str,
+        capabilities,
+    ) -> dict:
+        from .model_capabilities import ModelCapability
+        from .model_routing import ModelRouteRole
+        from .model_routing_runtime import build_model_routing_runtime
+        from .runtime_snapshot import mutable_value, runtime_snapshots
+
+        if not isinstance(capabilities, ModelCapability):
+            raise TypeError("capabilities 必须是 ModelCapability")
+        role = {
+            "0": ModelRouteRole.MOE_0,
+            "1": ModelRouteRole.MOE_1,
+            "2": ModelRouteRole.MOE_2,
+        }.get(difficulty)
+        if role is None:
+            raise ValueError("difficulty 必须是 0、1、2")
+        state = self._active_state()
+        snapshot = runtime_snapshots.active()
+        generation = (
+            snapshot.generation
+            if globals().get("model_selector") is self
+            and snapshot is not None
+            and snapshot.model_state is state
+            else 0
+        )
+        routing = build_model_routing_runtime(
+            generation=generation,
+            models=state.models,
+            model_config=state.model_config,
+        )
+        if routing is None:
+            return self.get_moe_current_model(difficulty)
+        decision = routing.select(role, capabilities=capabilities)
+        descriptor = decision.selected.descriptor
+        selected = state.models.get(descriptor.descriptor_id)
+        if not isinstance(selected, Mapping):
+            raise RuntimeError("capability routing model identity 已漂移")
+        model_data = mutable_value(selected)
+        if not isinstance(model_data, dict):
+            raise RuntimeError("capability routing model transport 配置非法")
+        model_data["key"] = self._get_random_key(model_data)
+        model_data["_capability_routing"] = {
+            "capabilities": descriptor.capabilities.as_dict(),
+            "decision_digest": decision.decision_digest,
+            "descriptor_digest": descriptor.descriptor_digest,
+            "generation": routing.generation,
+        }
+        if not descriptor.capabilities.streaming:
+            model_data["stream"] = False
+        if not descriptor.capabilities.tools:
+            model_data["no_tools"] = True
+        return model_data
+
     def get_tool_blacklist(self) -> list:
-        return self._active_state().model_config.get("tool_blacklist", [])
+        return list(self._active_state().model_config.get("tool_blacklist", []))
 
     def set_moe_model(self, model_query: str, difficulty: str) -> str:
         model_name = self.resolve_model_name(model_query)
@@ -654,7 +851,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         return None
 
     def get_resident_plugins(self) -> list:
-        return self._active_state().model_config.get("resident_plugins", [])
+        return list(self._active_state().model_config.get("resident_plugins", []))
 
     def _get_resolve_error_msg(self, query: str) -> str:
         """根据查询内容返回准确的错误提示与对应列表"""

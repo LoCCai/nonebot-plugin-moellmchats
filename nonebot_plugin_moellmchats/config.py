@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-import os
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 import nonebot_plugin_localstore as store
 import ujson as json
+
+from .private_files import (
+    atomic_write_private_text,
+    ensure_private_directory,
+    ensure_private_file,
+    harden_private_tree,
+)
 
 config_path: Path = store.get_plugin_config_dir()
 
@@ -28,6 +34,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "request_timeout_seconds": 180,
     "classification_timeout_seconds": 20,
     "tool_timeout_seconds": 30,
+    "pending_action_ttl_seconds": 120,
+    "pending_action_max_entries": 256,
+    "pending_action_max_argument_bytes": 16_384,
+    "pending_action_failure_window_seconds": 60,
+    "pending_action_max_failures": 8,
+    "pending_action_max_failure_keys": 4_096,
     "llm_max_active": 4,
     "llm_max_pending": 32,
     "llm_max_per_user": 2,
@@ -39,6 +51,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "member_lookup_timeout_seconds": 2,
     "runtime_watch_enabled": True,
     "runtime_watch_interval_seconds": 2,
+    "provider_catalog_categorize_enabled": True,
+    "provider_catalog_llm_payload_enabled": True,
+    "provider_catalog_llm_tools_enabled": True,
+    "provider_catalog_pending_actions_enabled": True,
+    "provider_catalog_search_enabled": True,
+    "provider_catalog_management_enabled": True,
     "user_history_expire_seconds": 600,
     "cd_seconds": 120,
     "search_api": "your api",
@@ -49,6 +67,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "private_chat_enabled": False,
     "show_datetime": False,
     "poke_llm_rate": 0.3,
+    "generated_tools_enabled": True,
+    "generated_tool_max_pending": 4,
+    "generated_tool_timeout_seconds": 30,
+    "generated_tool_cpu_seconds": 10,
+    "generated_tool_memory_mb": 256,
+    "generated_tool_output_bytes": 65_536,
+    "generated_tool_workspace_mb": 64,
+    "generated_tool_workspace_max_files": 256,
+    "generated_tool_workspace_max_depth": 8,
+    "generated_tool_workspace_max_file_bytes": 8_388_608,
+    "generated_tool_max_processes": 16,
 }
 
 _POSITIVE_INTEGER_FIELDS = {
@@ -66,6 +95,12 @@ _POSITIVE_INTEGER_FIELDS = {
     "request_timeout_seconds",
     "classification_timeout_seconds",
     "tool_timeout_seconds",
+    "pending_action_ttl_seconds",
+    "pending_action_max_entries",
+    "pending_action_max_argument_bytes",
+    "pending_action_failure_window_seconds",
+    "pending_action_max_failures",
+    "pending_action_max_failure_keys",
     "llm_max_active",
     "llm_max_pending",
     "llm_max_per_user",
@@ -76,6 +111,16 @@ _POSITIVE_INTEGER_FIELDS = {
     "member_lookup_timeout_seconds",
     "runtime_watch_interval_seconds",
     "user_history_expire_seconds",
+    "generated_tool_max_pending",
+    "generated_tool_timeout_seconds",
+    "generated_tool_cpu_seconds",
+    "generated_tool_memory_mb",
+    "generated_tool_output_bytes",
+    "generated_tool_workspace_mb",
+    "generated_tool_workspace_max_files",
+    "generated_tool_workspace_max_depth",
+    "generated_tool_workspace_max_file_bytes",
+    "generated_tool_max_processes",
 }
 
 
@@ -97,16 +142,28 @@ class ConfigParser:
         self._config = MappingProxyType(deepcopy(dict(value)))
 
     def _load_initial(self) -> None:
+        self._harden_storage()
         if not self.filepath.exists():
-            self.filepath.parent.mkdir(parents=True, exist_ok=True)
             self._write(DEFAULT_CONFIG)
         self.commit_candidate(self.load_candidate())
+
+    def _harden_storage(self) -> None:
+        ensure_private_directory(self.filepath.parent)
+        # Approved versions are separately managed as owner-readable immutable
+        # artifacts. Do not accidentally add write bits while tightening config.
+        versions_dir = self.filepath.parent / "generated_tools" / "versions"
+        harden_private_tree(
+            self.filepath.parent,
+            skip_children=(versions_dir,),
+        )
 
     def parse_config(self) -> dict[str, Any]:
         """Compatibility alias returning a validated mutable copy."""
         return self.load_candidate()
 
     def load_candidate(self) -> dict[str, Any]:
+        self._harden_storage()
+        ensure_private_file(self.filepath)
         with self.filepath.open("r", encoding="utf-8") as file:
             loaded = json.load(file)
         if not isinstance(loaded, dict):
@@ -132,6 +189,16 @@ class ConfigParser:
             isinstance(item, str) and item.strip() for item in full_event_plugins
         ):
             raise ValueError("config.json: legacy_full_event_plugins 必须是字符串数组")
+        for field in (
+            "provider_catalog_categorize_enabled",
+            "provider_catalog_llm_payload_enabled",
+            "provider_catalog_llm_tools_enabled",
+            "provider_catalog_pending_actions_enabled",
+            "provider_catalog_search_enabled",
+            "provider_catalog_management_enabled",
+        ):
+            if type(candidate.get(field)) is not bool:
+                raise ValueError(f"config.json: {field} 必须是布尔值")
 
     def commit_candidate(self, candidate: Mapping[str, Any]) -> None:
         self._config = MappingProxyType(deepcopy(dict(candidate)))
@@ -159,13 +226,11 @@ class ConfigParser:
         runtime_snapshots.patch_current(config=immutable_mapping(candidate))
 
     def _write(self, config: Mapping[str, Any]) -> None:
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.filepath.with_suffix(f".json.tmp.{os.getpid()}")
-        with temporary.open("w", encoding="utf-8") as file:
-            json.dump(dict(config), file, indent=4, ensure_ascii=False)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary, self.filepath)
+        self._harden_storage()
+        atomic_write_private_text(
+            self.filepath,
+            json.dumps(dict(config), indent=4, ensure_ascii=False),
+        )
 
 
 config_parser = ConfigParser()

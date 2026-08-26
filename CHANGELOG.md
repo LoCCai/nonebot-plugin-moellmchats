@@ -2,6 +2,45 @@
 
 本项目的所有显著更改都将记录在此文件中。
 
+## [Unreleased]
+
+- Milestone A 将 `mutating` 工具改为真正的二阶段确认：首次调用只保存有界参数并生成 6 位大写十六进制 nonce，用户需在原 Bot/会话另发 `确认执行 <确认码>`；新增 `取消执行`，确认码受用户、会话、generation、工具版本、TTL 与一次性消费约束。
+- 新增 deny-by-default `ToolCapability` / `ToolPolicy`，严格限定 `network`、`process`、`workspace`、`host_filesystem`、`secrets` 五个布尔字段并按申请与管理上限取交集；Generated Tool 的有效上限仅允许私有 workspace，`secrets` 目前不注入宿主密钥。
+- Custom File Tool 支持静态 `TOOLS_REGISTRY.capabilities`；省略时默认仅启用私有 workspace，任何放宽都必须使用显式布尔字面量，未知 capability 会拒绝整个候选 generation。
+- Generated Tool 即使请求 `permission=user` 也默认以 `superuser` 生效；新增 `设置LLM功能权限 <包> <至少 8 位版本哈希前缀> <工具> user|superuser`，人工授权绑定精确 digest，且不能将 manifest 声明为 `superuser` 的工具降级；策略损坏时全部降级为超管专用。
+- LocalStore 配置树增加所有权和符号链接检查：配置目录收紧为 `0700`，凭据、配置、草稿和授权策略为 `0600`，已批准的不可变版本保持 `0500` / `0400`。
+- Milestone B 将正式 Custom File / Generated loader 接入 generation 固定的不可变 `ToolArtifact`；执行前复核 artifact digest，Generated Tool 额外复核由 manifest、源码和测试形成的 bundle digest，不再回读活动源文件。
+- runner 结果协议迁移到独立版本化 FD3，stdout/stderr 仅作为有界日志读取；该隔离避免普通输出意外污染结果，但不作为恶意子进程认证边界。
+- workspace 增加总字节、单文件、文件和目录条目数、目录深度四类预算，以及符号链接/特殊文件拒绝；扫描移到 event loop 外，并在进程组结束后强制最终扫描。
+- 新增结构化 AST Policy，按模块、handler 及可达 helper 输出 `ALLOW` / `DENY` / `CAPABILITY_REQUIRED` / `RISK`，并将文件/数据库/HTTP 写入和系统命令提升为 `mutating`；即使 Custom File 获准 process capability，也不能绕过二阶段确认。
+- 修复 Python 3.10 在 runner 输出洪泛或失败清理后延迟析构 subprocess transport 的问题，确定性关闭三路 pipe 并等待 connection-lost callback 收敛。
+- 修复部分 CPython 3.10/早期 3.11 把只读代理作为 frame builtins 执行 import 时触发内部 `SystemError` 的兼容问题；worker 在执行不可信源码前探测解释器能力，受影响版本使用拒绝公开变更入口的冻结映射，其余版本保持 `MappingProxyType`，Generated AST 与 OS 隔离边界不变。
+- runner 增加独立 PID/mount/IPC/UTS namespace、固定 hostname、递归只读根挂载和条件可写 workspace bind；`host_filesystem=false` 时使用 Landlock 读 allowlist，并拒绝 xattr 读取/枚举。禁网时拒绝全部 socket，只开放 IP 网络但无宿主文件权时仍拒绝 AF_UNIX/AF_VSOCK，受限 socketpair 仅保留 AF_UNIX/STREAM；keyring syscall 无条件拒绝。它不使用 cgroup，也不是容器或完整 syscall allowlist，`stat`/`readlink` 路径元数据仍可能可见，显式 `host_filesystem=true` 仍允许 DAC 范围内的宿主读取。
+- 文档安装地址改为当前 0.25 维护分支，避免误装尚未合并维护实现的远端 `master`。
+- 文档同步当前冷却、重试、分类、命令别名、总结模型与生成工具开关语义。
+- 补充文件工具权限声明、AI 工具包格式，以及 runner 的 Linux 前提和网络/文件系统隔离边界。
+- Milestone C 将 `lifecycle_state.json` canonical schema 升至 v3，以固定 `.lifecycle.lock`、revision/state digest CAS、durable replace 和严格 Draft/Version 状态机统一管理草稿、活动版本与精确权限；兼容读取 schema v2，并把旧状态转换为带 `schema-v2-migration` evidence 的 v3 内存状态，后续 canonical 写入持久化 v3。
+- 新增 canonical、draft-digest-bound `DraftEvidence`，严格校验 producer/outcome/summary/risks/时间/顺序；metadata 的 `lifecycle_evidence` 改为 canonical evidence 投影，原始 `metadata.review` 仍只是 best-effort 摘要。`create_draft()` 只创建 `Draft`，ToolAuthoring 使用专用 transition 入口逐步推进。
+- 草稿审阅扩展为 summary、manifest、source、tests、risks、capabilities、diff 七个无损分页区段；页头除 lifecycle revision/state digest 与区段 SHA-256 外，还包含绑定草稿 ID/digest、revision/state digest 和同 bundle active digest 的 64 位 review stamp 及完整三参数批准命令。审阅后的任一 lifecycle 变化都会要求重新查看。
+- 批准、拒绝、权限、停用和回滚统一通过 `RuntimeReloader` 的 typed prepare/commit transaction：先预构建 after-state 候选，再持久化 canonical CAS，最后发布当前进程 RuntimeSnapshot；Store 的 commit 方法降为内部实现，不再是生产 API。发布失败保留 canonical 新 revision 并交由 watcher 收敛，不盲写旧映射。
+- lifecycle directory fsync 增加 3 次有界重试；重试耗尽时即使 after-state 可见也保持 uncertain，只有 durability 已确认后的回读不确定才允许按完整 before/after identity 调和。回滚增加唯一/非 Archived、owner/no-follow、`0500` 目录、仅三个 `0400` 普通文件和完整内容 digest 校验。
+- RuntimeSnapshot 与 ToolSnapshot 增加 Generated lifecycle revision/state digest/active stamp；watcher 增加外层异常恢复、0.5～30 秒有界退避、意外退出日志，并把文件指纹 I/O 移出事件循环。
+- 修复 `刷新工具` 在原子重载失败时仍误报成功的问题；成功回显实际发布的 generation 与 Custom/MCP 数量，失败明确保留旧 generation。黑名单前置校验重载失败不写配置，写入后的同步失败则明确提示配置与运行快照暂时不一致。
+- `查看LLM状态` 增加 desired/applied lifecycle、converged 与 legacy projection stale/error；完整事件总线、跨进程 RuntimeSnapshot 与 legacy 审计投影仍遵守文档中的有限一致性边界。
+- CI 增加 Python 3.10～3.13 普通矩阵、mandatory root Sandbox 零 skip、单次 sdist/wheel 构建、四组 checkout 外 package smoke 与 fail-closed 聚合 `release-gate`，官方 Actions 均固定完整 SHA；最新本地总门禁已通过，首次远端 `release-gate` green 与 required-check 配置仍待取得。
+- 继承自上游的 tag 自动 PyPI 发布 workflow 改为手动提升默认分支已全绿 CI 的同一制品；promotion 会先验证 job 列表完整且恰好一个名称精确为 `release-gate` 的 job 已 `completed/success`，再下载原 CI artifact，不重新构建，也不发布 PyPI。
+
+## [0.25.0] - 2026-08-18
+
+- 修复非对象、缺字段及类型错误的工具参数导致对话中断的问题，并递归冻结 generation 数据。
+- 工具、NoneBot 插件、MCP 与生成工具重名时整代拒绝；重载提交失败恢复全部 Manager 状态。
+- Provider `/models` 临时失败时保留该 Provider 最后一次成功缓存。
+- 文件型 Python 工具改为 AST 读取元数据并在降权子进程执行；不再向文件工具注入 Bot、Event 或 ToolManager。
+- 增加超级管理员 AI 工具包草稿、双模型复核、哈希批准、停用、升级和回滚流程。
+- 批准工具包按 SHA-256 只读保存并切换，新请求使用新 generation，进行中的请求保持旧快照。
+- 生成工具 runner 增加 nobody、`no_new_privs`、资源上限、进程组清理、干净环境和有界队列；隔离不可用时 fail closed。
+- 普通用户无法看到或执行 `superuser` 工具；变更型工具继续要求文字和参数双重确认。
+
 ## [0.24.0] - 2026-08-18
 
 - LoCCai 接管维护，保留原包名、配置目录和命令兼容。
