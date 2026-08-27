@@ -6,14 +6,14 @@
 
 截至 2026-08-27：
 
-- 最后一个完成远端双门禁的基线提交是 `7705cdd46e8dffd29ee50440fcf8ede94e76dd7d`。
-- 该提交的 Python 3.10～3.13、mandatory root sandbox、wheel/sdist 构建与包外安装门禁均已通过；远端分支和 PR #2 也指向同一提交。
-- 2026-08-27 的开发工作树正在增加 PicMenu/QWeb 功能级意图发现和 OneBot 表情发送降级；这些增量已有定向本地测试，但尚无新的不可变提交 SHA、制品或远端门禁。`7705cdd…` 不包含这些增量。
-- PR #2 仍为 Open，尚未合并；仓库 `master` 尚不包含本页描述的版本。
+- 当前完成精确远端双门禁的候选提交是 `bbc3963a361259f4d98c29003937afb1cbe976f9`。
+- 该提交包含 PicMenu/QWeb 功能级意图发现、普通用户隐藏项过滤和 OneBot 表情发送降级；Python 3.10～3.13、mandatory root sandbox、wheel/sdist 构建与 Python 3.10/3.12 × wheel/sdist 包外 smoke 均已通过。
+- push run `33066587717` 与 PR run `33080256433` 各 11/11 success、`non_success=[]`，并各恰好一个 `completed/success release-gate`。
+- PR #2 已于 2026-08-26 合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支，merge commit 为 `c78ef06190d2df1d77c2ada6d9f06020ef6b37ca`；本轮 PR #3 以该分支为 base，当前为 Open/Clean。上游和默认 `master` 都不是本轮集成 base。
 - 包内版本号是 `0.25.0`，但 PyPI 当前最新正式版仍是 `0.22.3`。因此 `pip install nonebot-plugin-moellmchats` 不会得到本候选版。
 - 这些证据说明“开发制品可以进入隔离测试”，不等于它已经在七七或其他生产 Bot 中部署验证。
 
-只验证既有基线时，测试项目可把依赖固定到上面的完整提交 SHA。要验证 2026-08-27 增量，必须等它形成新的完整 SHA 并通过对应门禁；不要改用移动分支，也不要把本地脏工作树当作可恢复安装来源。
+隔离测试应把依赖固定到上面的完整提交 SHA；不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
 
 ## 运行前提
 
@@ -28,14 +28,14 @@
 
 完整 Python 包和系统依赖见[依赖与运行前提](./dependencies.md)。
 
-## 安装最后封存的精确基线提交
+## 安装当前双门禁候选提交
 
 以下命令会修改当前项目的依赖声明和锁文件，只应在测试分支或隔离副本中执行。
 
 ### 使用 uv（推荐）
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@7705cdd46e8dffd29ee50440fcf8ede94e76dd7d"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@bbc3963a361259f4d98c29003937afb1cbe976f9"
 ```
 
 然后确认锁文件中的 source 末尾确实是目标 SHA，而不是只有分支名：
@@ -53,7 +53,7 @@ grep -A3 'name = "nonebot-plugin-moellmchats"' uv.lock
 python3 -m venv .venv-test
 .venv-test/bin/python -m pip install --upgrade pip
 .venv-test/bin/python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@7705cdd46e8dffd29ee50440fcf8ede94e76dd7d"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@bbc3963a361259f4d98c29003937afb1cbe976f9"
 ```
 
 ## 让 NoneBot 加载插件
@@ -125,7 +125,7 @@ PY
 
 | 阶段 | 要验证的内容 | 通过标准 |
 | --- | --- | --- |
-| 1. 锁定 | 依赖和 source SHA | 锁文件明确解析到 `7705cdd…` |
+| 1. 锁定 | 依赖和 source SHA | 锁文件明确解析到 `bbc3963…` |
 | 2. 加载 | NoneBot 插件加载 | 无 import/config 权限错误，能生成独立配置目录 |
 | 3. 模型 | 测试服务商与模型 | `查看模型`、`查看配置` 正确；纯文本回复成功 |
 | 4. 调度 | 分类、视觉、MoE | 各角色使用预期模型；缺能力时明确拒绝或回退 |

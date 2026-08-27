@@ -12,7 +12,7 @@ lastmod: 2026-08-27T00:00:00+00:00
 
 > 状态续记（2026-08-25）：上述最终判据已经满足。最终文档 HEAD `7705cdd46e8dffd29ee50440fcf8ede94e76dd7d` 的 push run `32746463522` 与 PR run `32746468781` 各 11/11 success、各唯一 `release-gate` 为 `completed/success`；本地、origin、`ls-remote` 与 PR #2 head 一致，PR 仍为 `OPEN / MERGEABLE / CLEAN`。Plan 1～3 的开发态依赖链已闭环；PR 合并、正式发布、目标 Bot 安装、真实后端/migration 和 D-09 发布周期观察仍未发生。
 
-> 状态续记（2026-08-27）：七七隔离加载反馈暴露插件级目录无法召回“给我点个赞”，以及正文成功后 NapCat 表情发送 `ActionFailed(retcode=1200)` 拖垮整轮的问题。新增 [功能级意图发现与 OneBot 投递可靠性](./07-intent-discovery-onebot-reliability.md) J-01～J-07 依赖链；J-01～J-04 已在本地工作树实现，J-05 的文档、依赖、普通矩阵与临时制品核验已完成，但当前 Codex 外层沙箱不能执行真实 root mandatory sandbox，因此强隔离远端门禁仍未关闭。J-06 七七升级与 J-07 发布/生产继续锁定。该增量尚无新 SHA 或远端门禁，不能回写为 `7705cdd…` 已具备，也未操作七七配置、依赖、进程或真实 QQ。
+> 状态续记（2026-08-27）：七七隔离加载反馈暴露插件级目录无法召回“给我点个赞”，以及正文成功后 NapCat 表情发送 `ActionFailed(retcode=1200)` 拖垮整轮的问题。新增 [功能级意图发现与 OneBot 投递可靠性](./07-intent-discovery-onebot-reliability.md) J-01～J-07 依赖链；J-01～J-05 已在精确实现提交 `bbc3963a361259f4d98c29003937afb1cbe976f9` 完成。push `33066587717` / PR `33080256433` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，覆盖 mandatory root sandbox、四版本、单次制品构建与四组包外 smoke。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支；PR #3 以该分支为 base 且为 `OPEN / CLEAN`。J-06 前置已解除但尚未修改或重载七七；J-07 发布/生产继续锁定。
 
 > I-01 本地门禁（2026-08-23）：规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增纯 stdlib、深度不可变且无 transport/credential 字段的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability`；能力、limits、精确 `NUMERIC(24,12)` Decimal 成本、availability 与 generation 均有界，identity/capability/full descriptor 三类 canonical SHA-256 分离。四版本定向各 `98 passed`、相关联合各 `492 passed`、普通全量及 Python 3.10 最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品/同哈希重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/descriptor/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 继续锁定；未读取现有模型配置或凭据，未改变 `ModelSelector`，未发模型请求，未迁移、未连接真实服务、未部署。
 
@@ -256,7 +256,7 @@ lastmod: 2026-08-27T00:00:00+00:00
 | ----| ---------------------------------------------------|
 |`0.25.0-rc1`|修 P0 安全问题、Generated Tool 默认禁网、二阶段确认|
 |`0.25.0-rc2`|Source Snapshot、Runner IPC、AST Policy、Sandbox CI 定义与本地实测|
-|`0.25.x stable`|候选实现与本地/远端开发门禁已在 `7705cdd…` 闭环；仍需 PR 合并、正式制品发布和独立发布验收，不能把候选 SHA 或 CI green 称为 stable|
+|`0.25.x stable`|当前候选实现与本地/远端开发门禁已在 `bbc3963…` 闭环；仍需 PR #3 合并、正式制品发布和独立发布验收，不能把候选 SHA 或 CI green 称为 stable|
 |`0.26`|Provider discovery/source/trust 先 shadow 迁移，再版本化 Capabilities 与切换工具体系|
 |`0.27`|AgentRun / AgentStep / Tool Graph|
 |`0.28`|PostgreSQL + Redis 状态层|

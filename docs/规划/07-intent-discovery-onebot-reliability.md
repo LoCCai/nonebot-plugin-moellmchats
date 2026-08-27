@@ -28,12 +28,12 @@ lastmod: 2026-08-27T00:00:00+00:00
 
 | 节点 | 前置 | 状态 | 验收定义 |
 | --- | --- | --- | --- |
-| J-01 菜单规范化契约 | `7705cdd…` 基线 | 已完成（本地工作树） | 清理 `<ft>`/控制字符，拒绝错误类型；功能、触发、字段和总字符有界；固化进 `ToolSnapshot` |
-| J-02 权威目录桥接 | J-01 | 已完成（本地工作树） | 显式覆写 > PicMenu 内存目录 > Metadata menu > 普通 Metadata；未加载插件不能因菜单变成工具 |
-| J-03 两阶段展开 | J-02 | 已完成（本地工作树） | 分类目录按功能展开且返回插件 ID；命中后兼容 Schema 包含精确消息入口；Provider/legacy parity 保持一致 |
-| J-04 OneBot 表情降级 | J-01 | 已完成（本地工作树） | 正文失败传播；正文已成功后单个表情 `ActionFailed` 隔离且不重试正文；无成功投递时仍传播 |
-| J-05 文档、依赖与本地矩阵 | J-01～J-04 | 本地完成；强隔离远端门禁待关闭 | 用户文档、架构、依赖、定向/相关/普通全量、Ruff 与包制品已核验；当前外层沙箱不能替代 mandatory root sandbox |
-| J-06 七七隔离升级与真实行为 | J-05 强隔离门禁 + 新精确 SHA/制品 | 锁定 | 依赖固定到通过门禁的新 SHA，人工重载测试实例后验证分类、Matcher、OneBot；当前未授权执行 |
+| J-01 菜单规范化契约 | `7705cdd…` 基线 | 已完成（`bbc3963…`） | 清理 `<ft>`/控制字符，拒绝错误类型；功能、触发、字段和总字符有界；固化进 `ToolSnapshot` |
+| J-02 权威目录桥接 | J-01 | 已完成（`bbc3963…`） | 显式覆写 > PicMenu 内存目录 > Metadata menu > 普通 Metadata；未加载插件不能因菜单变成工具 |
+| J-03 两阶段展开 | J-02 | 已完成（`bbc3963…`） | 分类目录按功能展开且返回插件 ID；命中后兼容 Schema 包含精确消息入口；Provider/legacy parity 保持一致 |
+| J-04 OneBot 表情降级 | J-01 | 已完成（`bbc3963…`） | 正文失败传播；正文已成功后单个表情 `ActionFailed` 隔离且不重试正文；无成功投递时仍传播 |
+| J-05 文档、依赖与本地矩阵 | J-01～J-04 | 已完成（`bbc3963…` 双门禁） | 用户文档、架构、依赖、定向/相关/普通全量、Ruff、mandatory root sandbox 与包制品均已核验 |
+| J-06 七七隔离升级与真实行为 | J-05 + 精确 SHA/制品 | 前置已解除；尚未改七七 | 依赖固定到 `bbc3963…`，人工重载测试实例后验证分类、Matcher、OneBot |
 | J-07 发布/生产 | J-06 + 独立发布计划 | 锁定 | 合并、正式制品、发布观察与回退全部另行授权；本阶段不得推进 |
 
 ## 已实现契约
@@ -64,12 +64,15 @@ lastmod: 2026-08-27T00:00:00+00:00
 
 - 开发分支：`feat/generated-tool-bundles`。
 - 本阶段开始时基线 HEAD：`7705cdd46e8dffd29ee50440fcf8ede94e76dd7d`。
+- 本阶段实现提交：`bbc3963a361259f4d98c29003937afb1cbe976f9`。
 - 新增实现：`tool_discovery.py`、`test_tool_discovery.py`、`test_moe_llm.py`；并修改分类、工具管理、Provider parity、兼容 ToolSpec 和发送路径。
 - 文档机器核验通过：98 个本地链接/标题身份有效，5 个严格 JSON、8 个 TOML、8 个 Python 示例可解析或编译，58/58 个 `DEFAULT_CONFIG` 字段和 12/12 条直接运行依赖均有说明。源码顶层 import 与 `pyproject.toml` 交叉审计未发现漏声明包；PicMenu/QWeb 仍是可选内存发现源，不新增安装依赖。
 - 最后一次格式化后的受影响回归在 Python 3.10、3.11、3.12、3.13 各为 `124 + 40 + 9 = 173 passed`；其中仅 `ModelSelector` 9 项因当前 Codex 沙箱无法唤醒跨线程 selector，显式加载 checkout 外的临时 polling harness。Python 3.12 的 Classification/Tool Catalog/Tool Schema cache 另有 `226 passed`；权限过滤、Provider/legacy parity、点赞目录与 OneBot 表情降级均包含在上述集合中。
 - 实现完成后的普通全量在同一临时 harness 下为 `2870 passed, 1 skipped, 15 deselected`。15 个被排除用例及另行定义的 41 个 mandatory sandbox 用例需要真实 `setuid`/`chown`/namespace/socket 等 root 能力；当前外层沙箱虽显示 euid 0，但禁止这些能力，所以新工作树的强隔离门禁必须由具备真实能力的 CI/主机关闭，不能用 harness 冒充。
+- 精确实现 SHA 的 GitHub push run `33066587717` 与 PR run `33080256433` 各有 11 个 job、全部 `completed/success`、`non_success=[]`，并各恰好一个成功 `release-gate`。两者均覆盖 Mandatory root sandbox、Python 3.10～3.13、单次 wheel/sdist 构建，以及 Python 3.10/3.12 × wheel/sdist 四组包外 smoke；因此本地受限沙箱留下的强隔离远端门禁已经关闭。
 - Ruff 0.16.2 目标 lint 与 `git diff --check` 通过。fresh wheel/sdist 构建和 Twine 检查通过；两种制品都在 checkout 外安装、加载并完成 `generation=1` 原子重载 smoke。临时目录 `/tmp/moellm-j05-dist.q7PiJq` 中 wheel/sdist SHA-256 分别为 `d768e3d6f9c3495fc35c862a5f01cc8e790f680d21bf3bb9a705f71ad794e35a` / `80a75157db7c162fd766d66d1776809571b18799e5f886f67cc38b66c8a301e9`；它们来自脏工作树，不绑定提交，不能作为安装或发布制品。
 - 用户原有未跟踪 `uv.lock` 必须继续保留且不得修改、删除或纳入提交。
-- 当前增量尚无不可变提交 SHA、远端 CI 或发布制品；`7705cdd…` 不包含本阶段实现，七七当前安装版本也不能据此宣称已经修复。
+- PR #2 已于 2026-08-26 合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支，merge commit 为 `c78ef06190d2df1d77c2ada6d9f06020ef6b37ca`；本轮 PR #3 以该分支为 base，head 精确为 `bbc3963…`，当前 `OPEN / CLEAN`。上游和默认 `master` 都不是本轮集成 base。
+- `bbc3963…` 已可作为七七隔离升级的固定源码 SHA，但这不证明七七已经安装、重载或完成真实 QQ 验收。
 
-恢复时先只读检查 `git status --short` 和 HEAD，保留既有文档改动与 `uv.lock`；从具备真实 root 能力的 mandatory sandbox 门禁、新精确提交与远端双 `release-gate` 继续。三者未关闭前不得推进七七依赖变更或真实 QQ 验收。
+恢复时先只读检查 `git status --short`、HEAD、PR #3 与远端 run，保留用户未跟踪的 `uv.lock`；从本证据回填提交自身的双 `release-gate` 继续。证据提交闭环后，J-06 才可按七七隔离升级、人工重载和真实 QQ 验收顺序推进；不得跳到 J-07 发布/生产。
