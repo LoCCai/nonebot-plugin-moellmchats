@@ -33,7 +33,7 @@ lastmod: 2026-08-27T00:00:00+00:00
 | J-03 两阶段展开 | J-02 | 已完成（`bbc3963…`） | 分类目录按功能展开且返回插件 ID；命中后兼容 Schema 包含精确消息入口；Provider/legacy parity 保持一致 |
 | J-04 OneBot 表情降级 | J-01 | 已完成（`bbc3963…`） | 正文失败传播；正文已成功后单个表情 `ActionFailed` 隔离且不重试正文；无成功投递时仍传播 |
 | J-05 文档、依赖与本地矩阵 | J-01～J-04 | 已完成（`bbc3963…` 双门禁） | 用户文档、架构、依赖、定向/相关/普通全量、Ruff、mandatory root sandbox 与包制品均已核验 |
-| J-06 七七隔离升级与真实行为 | J-05 + 精确 SHA/制品 | 前置已解除；尚未改七七 | 依赖固定到 `bbc3963…`，人工重载测试实例后验证分类、Matcher、OneBot |
+| J-06 七七隔离升级与真实行为 | J-05 + 精确 SHA/制品 | 只读前置完成；升级/重载未执行 | 依赖固定到 `bbc3963…`，人工重载测试实例后验证分类、Matcher、OneBot |
 | J-07 发布/生产 | J-06 + 独立发布计划 | 锁定 | 合并、正式制品、发布观察与回退全部另行授权；本阶段不得推进 |
 
 ## 已实现契约
@@ -74,5 +74,9 @@ lastmod: 2026-08-27T00:00:00+00:00
 - 用户原有未跟踪 `uv.lock` 必须继续保留且不得修改、删除或纳入提交。
 - PR #2 已于 2026-08-26 合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支，merge commit 为 `c78ef06190d2df1d77c2ada6d9f06020ef6b37ca`；本轮 PR #3 以该分支为 base，head 精确为 `bbc3963…`，当前 `OPEN / CLEAN`。上游和默认 `master` 都不是本轮集成 base。
 - `bbc3963…` 已可作为七七隔离升级的固定源码 SHA，但这不证明七七已经安装、重载或完成真实 QQ 验收。
+- J-05 证据提交 `45f7a6e6d5d1017fd8f3d9dc4a65ed497a2862b9` 已推到本仓库的 `feat/generated-tool-bundles`。其 push run `33081113984` 与 PR run `33081119792` 也各为 11/11 success、`non_success=[]`，并各恰好一个成功 `release-gate`；因此证据回填自身的远端门禁已经关闭。
+- J-06 只读核查显示：七七工作区的声明仍引用本仓库可移动分支 `feat/generated-tool-bundles`，`uv.lock` 与已安装 `direct_url.json` 则同为 `0.25.0 @ 8e7f0547e72bb67bbdfbda937c7873b235e971e7`。`8e7f054…` 是 `bbc3963…` 的祖先，中间相隔 180 个提交；这不是上游来源，也不能把可移动声明等同于已安装分支头。
+- 临时目录 `/tmp/moellm-j06-lock.ULPyaQ` 中的独立演练把依赖声明固定到 `bbc3963…`，`uv lock --check` 通过且仍解析 186 个包；锁差异将插件从 `8e7f054…` 前移到 `bbc3963…`，并补齐该版本声明的 Alembic、asyncpg、Redis、SQLAlchemy 依赖边，这些包已经是七七项目的直接依赖。使用七七现有 Python 3.12 环境、临时 LocalStore、禁网钩子和 `DRIVER=~none` 加载候选源码成功，“给我点个赞”菜单样例被规范化为可调用功能。
+- 上述演练没有修改 `/app/qi-dev/pyproject.toml`、`uv.lock`、现有 `.venv`、配置或进程，也没有启动 driver、连接模型/数据库/Redis、发送 QQ 请求或操作生产。
 
-恢复时先只读检查 `git status --short`、HEAD、PR #3 与远端 run，保留用户未跟踪的 `uv.lock`；从本证据回填提交自身的双 `release-gate` 继续。证据提交闭环后，J-06 才可按七七隔离升级、人工重载和真实 QQ 验收顺序推进；不得跳到 J-07 发布/生产。
+恢复时先只读检查插件仓库 HEAD、PR #3、远端 run，以及七七依赖声明、锁 SHA、已安装 `direct_url.json` 三者是否仍一致；保留插件仓库中用户未跟踪的 `uv.lock`。J-06 下一步是把七七隔离测试依赖固定到 `bbc3963…`、重新锁定并核对实际安装元数据；随后由人工控制只重载测试实例，再验证分类、Matcher 与 OneBot。未取得具体运行时授权前不得修改七七工作树或进程，也不得跳到 J-07 发布/生产。
