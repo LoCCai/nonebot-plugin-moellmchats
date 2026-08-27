@@ -30,7 +30,7 @@ from .tool_catalog_cache import (
 from .tool_manager import tool_manager
 from .utils import get_session
 
-_CLASSIFICATION_POLICY_VERSION = "categorize-json-v1"
+_CLASSIFICATION_POLICY_VERSION = "categorize-json-v2-menu-discovery"
 _CategoryResult = tuple[str, bool, list[str]] | str | bool
 
 
@@ -136,6 +136,7 @@ class Categorize:
 - difficulty: "0"(简单常识/闲聊)、"1"(中等逻辑/计算)、"2"(高难度专业/深度分析)。
 - vision_required: 当用户输入中包含"[图片]"字样时必须为 true，否则为 false。
 - required_plugins: 字符串列表。根据下方插件目录，判断是否必须调用插件（可以多个）。
+  目录可能把同一插件拆成多条功能；只能返回每行第一列的插件标识，同一标识不要重复。
 【可用插件目录】：
 {catalog}
 注：若有对应插件请提供。若没有，则保持[]。不确定时倾向于返回可能插件；宁可多给，不要漏给。

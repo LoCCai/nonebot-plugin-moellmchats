@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档跟随 `feat/generated-tool-bundles` 的 **Unreleased** 开发状态。Milestone A、B 与 C-01～C-07 已在本地工作树实现；此前基线曾通过完整本地门禁，但最新 OS 隔离增量（UTS/socket/keyring/xattr）尚待全量复跑。这些增量仍未提交，也尚未取得首次远端聚合 `release-gate` green。安装和锁定方式以顶层 [README](../README.md#-安装) 为准。
+> 当前文档面向 0.25 候选实现。最后完成远端门禁的基线是 `7705cdd46e8dffd29ee50440fcf8ede94e76dd7d`；2026-08-27 的功能级菜单发现与表情投递降级仍是无新 SHA 的本地增量，不能通过安装该旧基线获得。PR #2 仍未合并，PyPI 最新正式版仍为 `0.22.3`。任何测试安装都必须固定与目标功能相符的完整 SHA，详见[安装与验收](./installation.md)。
 
 ---
 
@@ -10,13 +10,17 @@
 
 | 页面 | 内容 |
 |------|------|
+| [安装、升级与测试验收](./installation.md) | 精确 SHA 安装、NoneBot 加载、零外部 I/O smoke、隔离验收与回退 |
+| [依赖与运行前提](./dependencies.md) | 全部 Python 依赖用途、MCP/系统前提，以及哪些后端默认不会连接 |
 | [配置参考](./configuration.md) | 所有配置文件的完整字段说明（`config.json`、`providers.toml`、`model_config.json` 等） |
-| [自定义工具开发](./custom-tools.md) | 文件工具 capability、可信 `ToolSpec` 集成与 AI 工具包热插拔 |
-| [NoneBot 插件集成](./plugin-integration.md) | 通过 `custom_plugin_info.json` 覆写插件描述，提升 LLM 调用精准度 |
+| [调度链路与运行时架构](./runtime-architecture.md) | 从消息准入到 Agent、选模、工具、确认、缓存和默认资源的完整链路 |
+| [自定义工具开发](./custom-tools.md) | 隔离文件工具 capability、runner 边界与 AI 工具包热插拔 |
+| [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md) | 兼容已有 Matcher，或编写强类型函数供 AI 调用 |
 | [性格系统](./personality.md) | `temperaments.json` 性格预设配置与用户切换管理 |
 | [完整指令表](./commands.md) | 所有 Bot 指令的参数与权限说明，包括二阶段确认、生成工具权限与请求管理 |
 | [Plan 1 完成审计](./规划/05-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
 | [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
+| [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
 
 ---
 
@@ -50,6 +54,8 @@
 
 ## 快速跳转
 
-- [安装 → 回到 README](../README.md#-安装)
-- [处理流程 → 回到 README](../README.md#-处理流程)
+- [安装、升级与验收](./installation.md)
+- [配置 AI 模型](./configuration.md#五分钟最小配置)
+- [调度链路](./runtime-architecture.md)
+- [编写 ToolSpec 插件](./plugin-integration.md#方式二注册强类型-toolspec推荐)
 - [更新日志](../CHANGELOG.md)

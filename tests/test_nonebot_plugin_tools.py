@@ -147,7 +147,7 @@ def test_nonebot_plugin_legacy_schema_uses_canonical_spec_without_cutover(
                 "command": {
                     "type": "string",
                     "description": (
-                        "严格根据该插件的'原始用法说明'，"
+                        "严格根据该插件的原始用法说明和菜单功能提示，"
                         "生成可以直接触发该插件的机器人指令字符串。"
                     ),
                 }

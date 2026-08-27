@@ -20,6 +20,7 @@ from typing import (
 from .generated_tool_lifecycle import LifecycleState
 from .tool_artifacts import ToolArtifact
 from .tool_contracts import ToolEffect, ToolPolicy, ToolSpec
+from .tool_discovery import build_compatibility_description
 
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _BUNDLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -2045,11 +2046,7 @@ class NoneBotPluginProvider:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} source 不一致")
             if entry.get("tool_spec") is not spec:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} ToolSpec 不一致")
-            description = (
-                f"插件名称：{(entry.get('name') or name)!s}。"
-                f"功能描述：{(entry.get('description') or '无描述')!s}。"
-                f"原始用法说明：{(entry.get('usage') or '无用法说明')!s}"
-            )
+            description = build_compatibility_description(name, entry)
             if spec.description != description:
                 raise ValueError(
                     f"nonebot-plugin legacy 工具 {name} description 不一致"

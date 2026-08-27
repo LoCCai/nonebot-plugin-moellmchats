@@ -1,12 +1,76 @@
 # 配置参考
 
-所有配置文件均位于 `nonebot_plugin_localstore.get_plugin_config_dir()` 目录，具体路径参照 [NoneBot Plugin LocalStore](https://github.com/nonebot/plugin-localstore)。
+配置分为两层：NoneBot 自身的 `.env`，以及插件 LocalStore 中的 JSON/TOML 文件。模型 API Key 应写入 `providers.toml`，不要混进 `.env` 或提交到 Git。
+
+插件配置目录由 `nonebot_plugin_localstore.get_plugin_config_dir()` 决定。`LOCALSTORE_USE_CWD=true` 时通常是：
+
+```text
+<Bot 工作目录>/config/nonebot_plugin_moellmchats/
+```
+
+未启用该选项时使用操作系统的 NoneBot 用户配置目录，具体规则参照 [NoneBot Plugin LocalStore](https://github.com/nonebot/plugin-localstore)。
 
 插件启动和重载时会把其 LocalStore 配置目录收紧为 owner-only `0700`，普通配置、密钥、草稿和策略文件收紧为 `0600`；已批准的不可变版本使用 owner-only 只读权限。这依赖 POSIX 的 UID、mode bit 与安全 `chmod(..., follow_symlinks=False)` 语义；当前不支持 Windows，平台无法提供这些保证时会 fail closed。不是当前进程用户拥有的路径或符号链接也会拒绝处理，不会盲目 `chmod`。文件/生成工具的完整隔离路径进一步要求 Linux。
 
-**首次运行时自动生成**，建议先启动一次再停止，然后根据本文档手动修改。
+配置模板会在插件首次加载时自动生成。建议在隔离测试目录中完成首次加载，然后修改模板并执行 `重载LLM`。自动生成的 `providers.toml` 含有非空的 `sk-xxxxxx` 占位值；真实 driver 启动时，后台模型刷新会把它视为已配置 Key 并尝试访问示例 Provider 的 `/models`。若要求首次检查也完全不联网，请先按[零模型、零数据库的加载 smoke](./installation.md#零模型零数据库的加载-smoke)生成并修改模板，再启动测试 Bot。
 
 > **注意**：JSON 文件不支持注释，手动复制示例后记得删除 `//` 注释及末尾多余逗号。
+
+---
+
+## NoneBot `.env` 变量
+
+这些变量由 NoneBot 或 LocalStore 读取，不属于 `config.json`：
+
+| 变量 | 是否建议配置 | 通俗含义 | 示例 |
+| --- | --- | --- | --- |
+| `SUPERUSERS` | 必须 | 哪些 QQ 号可以执行模型、工具和生命周期管理指令 | `["123456789"]` |
+| `NICKNAME` | 必须 | 用户可以用哪些名字称呼并触发 Bot | `["七七", "机器人"]` |
+| `COMMAND_START` | 可选 | NoneBot 命令前缀；空字符串表示允许无前缀命令 | `["/", ""]` |
+| `LOCALSTORE_USE_CWD` | 测试推荐 | 为 true 时把 LocalStore 放在 Bot 当前工作目录，便于隔离和备份 | `true` |
+| `LOCALSTORE_CONFIG_DIR` | 高级 | 显式指定 LocalStore 配置根目录；不要让测试和生产指向同一路径 | `"/srv/test-bot/config"` |
+
+示例：
+
+```dotenv
+SUPERUSERS=["123456789"]
+NICKNAME=["七七", "机器人"]
+COMMAND_START=["/", ""]
+LOCALSTORE_USE_CWD=true
+```
+
+`SUPERUSERS`、`NICKNAME` 等数组应使用当前 NoneBot 能解析的 JSON 风格格式。不要把 PostgreSQL DSN、Redis URL 或模型 Key 填到猜测的变量名中：标准安装不会从环境变量自动组合这些高级后端。
+
+## 五分钟最小配置
+
+1. 按上节配置 `.env`，用独立工作目录加载插件一次。
+2. 在生成的 `providers.toml` 中只保留实际使用的服务商，填写 `base_url`、`api_key` 和必要的 `models`。
+3. 启动后发送 `刷新模型`，再发送 `查看模型`；复制列表里的精确模型 ID。
+4. 在 `model_config.json` 中设置 `selected_model`。图片需要 `vision_model`；MoE 才需要单独关注 `category_model` 与 `moe_models`。
+5. 执行 `重载LLM` 和 `查看配置`，先验证纯文本；随后再逐项开启工具、联网、MCP 或生成工具。
+
+一个最低风险的开始方式是：
+
+```json
+{
+  "use_moe": false,
+  "moe_models": {
+    "0": "your-model (your-provider)",
+    "1": "your-model (your-provider)",
+    "2": "your-model (your-provider)"
+  },
+  "selected_model": "your-model (your-provider)",
+  "category_model": "your-model (your-provider)",
+  "summary_model": "your-model (your-provider)",
+  "vision_model": "",
+  "use_web_search": false,
+  "use_tools": false,
+  "tool_blacklist": [],
+  "resident_plugins": []
+}
+```
+
+确认普通聊天稳定后，再把 `use_tools` 改为 true。JSON 文件不允许 `//` 注释；本页的 `json5` 代码块只是为了讲解字段，不能原样带注释复制。
 
 ---
 
@@ -23,7 +87,7 @@
 | `temperament_config.json` | 指令自动 | 用户↔性格绑定关系 | 指令实时生效 |
 | `replies.toml` | 手动 | 空白艾特与戳一戳回复 | 自动或 `重载LLM` |
 | `mcp_servers.toml` | 手动 | MCP Server 配置，启用后会作为 Function Calling 工具注入 | 自动、`刷新工具` 或 `重载LLM` |
-| `custom_plugin_info.json` | 手动 | 覆写插件描述，并可声明插件依赖工具 | 自动、`刷新工具` 或 `重载LLM` |
+| `custom_plugin_info.json` | 手动 | 仅在自动 PicMenu/Metadata 菜单不足时，完整覆写插件发现说明并可声明依赖 | 自动、`刷新工具` 或 `重载LLM` |
 | `custom_tools/` | 手动 | 原生 Python 工具函数 | 自动、`刷新工具` 或 `重载LLM` |
 | `generated_tools/lifecycle_state.json` | 系统/超管指令 | schema v3 canonical 生命周期、digest-bound evidence、活动版本、授权、revision 与 state digest；兼容读取 v2 | 生命周期指令提交后生效 |
 | `generated_tools/drafts/`、`versions/` | 系统/超管指令 | 草稿与内容寻址的只读版本 | 由生命周期指令管理 |
@@ -39,68 +103,104 @@
 
 📌 修改后会在约 2 秒内自动校验并原子重载，也可执行 `重载LLM`。Tavily 搜索 API Key：[获取地址](https://tavily.com/)。
 
-```json5
-{
-  "max_group_history": 10,        // 群组上下文最大保留条数
-  "max_user_history": 8,          // 每个用户上下文最大保留条数
-  "max_history_chars": 16000,     // 历史字符上限
-  "max_history_tokens": 4000,     // 历史 token 估算上限
-  "max_context_sessions": 1000,   // 每个群聊/用户/CD 状态表各自的最大键数（LRU）
-  "max_retry_times": 3,           // LLM 请求总尝试次数（包含首次调用）
-  "max_tool_rounds": 6,           // 兼容工具交互轮次上限；与 max_agent_steps 取较小值
-  "max_agent_steps": 6,           // Agent 总步骤上限；与 max_tool_rounds 取较小值，每步一个工具
-  "max_repeated_tool_calls": 2,   // 单任务同一工具最多执行次数
-  "max_tool_result_chars": 6000,  // 单工具结果字符上限
-  "max_tool_images": 4,           // 每轮待交给视觉模型的工具图片上限
-  "request_timeout_seconds": 180, // 整个 LLM 任务总预算（包含排队等待）
-  "classification_timeout_seconds": 20,
-  "tool_timeout_seconds": 30,
-  "pending_action_ttl_seconds": 120,       // 变更型工具一次性确认码 TTL（秒）
-  "pending_action_max_entries": 256,       // 全局内存 PendingAction 数量上限
-  "pending_action_max_argument_bytes": 16384, // 单个待确认参数的规范 JSON 字节上限
-  "pending_action_failure_window_seconds": 60, // 确认码失败尝试固定统计窗口（秒）
-  "pending_action_max_failures": 8,        // 单调用者每窗口最多失败次数
-  "pending_action_max_failure_keys": 4096, // 失败预算调用者键的内存上限
-  "llm_max_active": 4,
-  "llm_max_pending": 32,
-  "llm_max_per_user": 2,          // 1 个活动 + 1 个等待
-  "legacy_dispatch_max_pending": 16,
-  "legacy_dispatch_timeout_seconds": 20,
-  "legacy_full_event_plugins": [], // 只有这些遗留插件走完整事件总线
-  "member_cache_ttl_seconds": 600,
-  "member_cache_max_entries": 4096,
-  "member_lookup_timeout_seconds": 2,
-  "runtime_watch_enabled": true,
-  "runtime_watch_interval_seconds": 2,
-  "provider_catalog_categorize_enabled": true, // 分类目录使用 Provider catalog；false 只回滚该 consumer
-  "provider_catalog_llm_payload_enabled": true, // LLM schema 注入使用 Provider catalog；false 只回滚该 consumer
-  "provider_catalog_llm_tools_enabled": true, // 工具调用解析使用 Provider catalog；false 只回滚该 consumer
-  "provider_catalog_pending_actions_enabled": true, // 二阶段确认执行使用 Provider catalog；false 只回滚该 consumer
-  "provider_catalog_search_enabled": true, // 搜索结果中的网页提取器选择使用 Provider catalog；false 只回滚该 consumer
-  "provider_catalog_management_enabled": true, // 黑名单添加校验使用 Provider catalog；false 只回滚该 consumer
-  "user_history_expire_seconds": 600, // 群聊/用户上下文及 CD 临时状态的空闲 TTL（秒）
-  "cd_seconds": 120,              // 每个用户的对话冷却时间（秒，排队前检查）
-  "search_api": "Bearer your_tavily_key", // 联网搜索 Tavily API Key（开启搜索必填）
-  "fastai_enabled": false,        // 快速 AI 助手开关（无角色扮演、无分段、无表情包）
-  "emotions_enabled": false,      // 是否开启表情包功能
-  "emotion_rate": 0.1,            // 触发表情包的概率（0~1）
-  "emotions_dir": "/absolute/path/to/emotions", // 表情包根目录（绝对路径）
-  "private_chat_enabled": false,  // 是否允许超级管理员私聊 Bot
-  "show_datetime": false,         // 是否在 System Prompt 中注入当前时间
-  "poke_llm_rate": 0.3,           // 被戳一戳时走LLM对话的概率（0~1，0为关闭；仅群聊生效，cd中或概率外则回随机默认文案）
-  "generated_tools_enabled": true, // 是否允许“添加/创建LLM功能”；不自动停用已激活工具包
-  "generated_tool_max_pending": 4, // 文件/生成工具共用 runner 的最大等待数；另有 1 个活动任务
-  "generated_tool_timeout_seconds": 30, // runner 单次调用墙钟上限（秒）
-  "generated_tool_cpu_seconds": 10,     // 子进程 CPU 时间上限（秒）
-  "generated_tool_memory_mb": 256,      // 子进程地址空间上限（MiB）
-  "generated_tool_output_bytes": 65536, // stdout、stderr、FD3 协议各自的读取上限（字节）
-  "generated_tool_workspace_mb": 64,    // 私有工作目录总容量上限（MiB）
-  "generated_tool_workspace_max_files": 256, // 文件和目录条目总数上限
-  "generated_tool_workspace_max_depth": 8,   // 最大目录层级
-  "generated_tool_workspace_max_file_bytes": 8388608, // 单文件上限（字节）
-  "generated_tool_max_processes": 16    // 仅 process=true 工具使用；默认 process=false 时收紧为 1
-}
-```
+`config.json` 首次生成时已包含全部默认字段。下表与源码 `DEFAULT_CONFIG` 一一对应；一般只改确实理解的字段，不要为了“性能”盲目放大队列、结果或 runner 上限。
+
+### 上下文与记忆
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `max_group_history` | `10` | 每个群聊保留的最近环境消息条数 | 群聊上下文不足时小幅增加；会增加 prompt |
+| `max_user_history` | `8` | 每个用户保留的最近问答轮数 | 需要更长连续对话时调整 |
+| `max_history_chars` | `16000` | 一次注入历史的字符硬上限 | 模型上下文较小时降低 |
+| `max_history_tokens` | `4000` | 历史的 token 估算上限 | 配合模型 context window 调整 |
+| `max_context_sessions` | `1000` | 群聊、用户、CD 等内存状态表各自最多保存多少个 key，超出按 LRU 淘汰 | 多群实例才需增加 |
+| `user_history_expire_seconds` | `600` | 群聊/用户临时上下文和 CD 状态空闲多久过期 | 希望更快遗忘时降低 |
+
+### 请求、模型与工具预算
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `max_retry_times` | `3` | 一次模型步骤总尝试数，包含第一次；重试前等待 4 秒、8 秒 | 不稳定 API 可保留；总预算较小时降低 |
+| `max_tool_rounds` | `6` | 兼容工具闭环轮数上限 | 多步骤任务确有需要时调整 |
+| `max_agent_steps` | `6` | Agent 工具步骤上限；实际与 `max_tool_rounds` 取较小值 | 通常与上项保持一致 |
+| `max_repeated_tool_calls` | `2` | 同一任务内同一工具最多调用几次 | 防止模型循环，不建议放大 |
+| `max_tool_result_chars` | `6000` | 没有独立 `result_limit` 时，工具文本最多交给模型多少字符 | 控制上下文与数据暴露面 |
+| `max_tool_images` | `4` | 一轮工具结果最多交给视觉模型多少张图 | 视觉模型能力明确时再增加 |
+| `request_timeout_seconds` | `180` | 整个任务的单一墙钟预算，包含排队、分类、模型、工具和收尾 | 慢模型可增加，但队列会占更久 |
+| `classification_timeout_seconds` | `20` | 单次分类请求超时 | 分类服务慢且可靠时小幅增加 |
+| `tool_timeout_seconds` | `30` | 未在 ToolSpec 中单独声明时的可信工具超时 | 只读慢查询可按需调整 |
+
+### 冷却、准入、兼容投递与成员缓存
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `llm_max_active` | `4` | 全局同时执行的 LLM 任务数 | 按 API 配额和内存评估 |
+| `llm_max_pending` | `32` | 全局最多等待多少个任务 | 队列过长会消耗总预算，不宜盲目增加 |
+| `llm_max_per_user` | `2` | 单用户总槽位；默认表现为 1 个活动 + 1 个等待 | 防止单用户占满队列 |
+| `cd_seconds` | `120` | 用户成功占用对话后进入的冷却时间；排队前检查 | 测试实例可降低，生产按成本设置 |
+| `legacy_dispatch_max_pending` | `16` | 完整 NoneBot 事件总线兼容投递的等待上限 | 只有遗留插件确有需要时调整 |
+| `legacy_dispatch_timeout_seconds` | `20` | 兼容投递单次超时 | 遗留 Matcher 较慢时谨慎增加 |
+| `legacy_full_event_plugins` | `[]` | 必须走完整事件总线的插件包名数组；其他插件只定向执行 Matcher | 仅解决已确认的前处理器依赖 |
+| `member_cache_ttl_seconds` | `600` | QQ 群成员信息缓存多久 | 群名片频繁变化时降低 |
+| `member_cache_max_entries` | `4096` | 群成员缓存最大条目数 | 超大群/多群实例才需增加 |
+| `member_lookup_timeout_seconds` | `2` | OneBot 成员查询超时 | adapter 明显较慢时调整 |
+
+### 二阶段确认
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `pending_action_ttl_seconds` | `120` | 一次性确认码有效期 | 用户响应慢时小幅增加 |
+| `pending_action_max_entries` | `256` | 进程内最多保存多少个待确认操作 | 队列满应先查滥用，不要先放大 |
+| `pending_action_max_argument_bytes` | `16384` | 一个待确认参数的 canonical JSON 最大字节数 | 通常不改 |
+| `pending_action_failure_window_seconds` | `60` | 错误确认码尝试的固定统计窗口 | 安全策略调整时修改 |
+| `pending_action_max_failures` | `8` | 同一调用者在窗口内最多失败几次 | 遭枚举时降低 |
+| `pending_action_max_failure_keys` | `4096` | 失败预算最多跟踪多少个调用者 key | 多实例高流量时评估 |
+
+### 热重载与 Provider consumer 回滚开关
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `runtime_watch_enabled` | `true` | 是否监听配置文件变化并发布新 generation | 只想手动重载时设 false |
+| `runtime_watch_interval_seconds` | `2` | 文件变化检测间隔 | 慢存储可增加；过小会增加 I/O |
+| `provider_catalog_categorize_enabled` | `true` | 分类短目录使用 Provider Catalog | 仅诊断 Provider/legacy parity 时临时回滚 |
+| `provider_catalog_llm_payload_enabled` | `true` | 主模型 Tool Schema 使用 Provider Catalog | 同上 |
+| `provider_catalog_llm_tools_enabled` | `true` | 工具调用解析/执行使用 Provider Catalog | 同上 |
+| `provider_catalog_pending_actions_enabled` | `true` | 确认执行使用 Provider Catalog | 同上；不要长期关闭安全 consumer |
+| `provider_catalog_search_enabled` | `true` | 搜索网页提取器选择使用 Provider Catalog | 同上 |
+| `provider_catalog_management_enabled` | `true` | 黑名单管理校验使用 Provider Catalog | 同上 |
+
+六个 `provider_catalog_*` 字段是分 consumer 的兼容回滚开关，不是性能开关。默认保持 true；任何关闭都应记录原因、范围和恢复时间，且 D-09 完成前不能删除 legacy sidecar。
+
+### 互动、搜索与显示
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `search_api` | `"your api"` | Tavily 的完整 `Authorization` 值，例如 `Bearer tvly-...` | 仅在开启联网前填写 |
+| `fastai_enabled` | `false` | 是否开放 `ai <内容>` 快速助手 | 需要无角色、无表情快速问答时开启 |
+| `emotions_enabled` | `false` | 是否让普通角色回复可使用表情包 | 配好目录后再开启 |
+| `emotion_rate` | `0.1` | 每轮启用表情包提示的概率，范围 0～1 | 控制出现频率 |
+| `emotions_dir` | `"absolute path"` | 表情包根目录，必须是 Bot 可读的绝对路径 | 开启表情包前填写 |
+| `private_chat_enabled` | `false` | 是否允许超级管理员私聊 Bot；普通用户私聊仍不开放 | 需要管理私聊时开启 |
+| `show_datetime` | `false` | 是否在 system prompt 注入当前时间 | 需要时间感知时开启，会让缓存更易变化 |
+| `poke_llm_rate` | `0.3` | 群聊戳一戳走 LLM 的概率；0 表示关闭 | 控制成本和打扰程度 |
+
+### 文件/生成工具 runner
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `generated_tools_enabled` | `true` | 是否允许创建新的 AI 工具草稿；不会停用已批准工具 | 不允许生成新功能时关闭 |
+| `generated_tool_max_pending` | `4` | Custom File 与 Generated Tool 共用的等待数；另有 1 个活动任务 | 队列压力确认后再调整 |
+| `generated_tool_timeout_seconds` | `30` | runner 单次墙钟上限 | 工具确需更久时评估 |
+| `generated_tool_cpu_seconds` | `10` | 子进程 CPU 时间上限 | CPU 密集工具需专门审查 |
+| `generated_tool_memory_mb` | `256` | 子进程地址空间上限，MiB | 发生明确内存不足且代码可信时调整 |
+| `generated_tool_output_bytes` | `65536` | stdout、stderr、FD3 各自最多读取的字节数 | 防日志/协议输出失控，通常不改 |
+| `generated_tool_workspace_mb` | `64` | 私有 workspace 总容量，MiB | 明确需要临时大文件时调整 |
+| `generated_tool_workspace_max_files` | `256` | 文件和目录条目总数上限 | 防止小文件洪泛 |
+| `generated_tool_workspace_max_depth` | `8` | workspace 最大目录深度 | 通常不改 |
+| `generated_tool_workspace_max_file_bytes` | `8388608` | 单个 workspace 文件最大字节数（8 MiB） | 与总容量一起评估 |
+| `generated_tool_max_processes` | `16` | 仅显式 `process=true` 的 Custom File 使用；默认 `process=false` 时进程额度为 1 | 高权限工具经审查后才调整 |
+
+所有整数预算字段必须是正整数；`emotion_rate` 和 `poke_llm_rate` 必须在 0～1 之间。配置文件中缺少已知字段时会补入默认值；字段类型或安全约束不合法时，候选重载失败并保留上一代。
 
 `pending_action_*` 控制变更型工具的二阶段确认。首次工具调用只在内存中保存规范化参数及 SHA-256，并生成绑定 Bot/Adapter、用户、群组或私聊会话、工具、runtime generation 和 Generated bundle digest 的 6 位确认码；只有同一用户在同一会话内另发 `确认执行 <确认码>` 才会消费并执行。确认码一次性、默认 120 秒过期，重载后失效；待确认队列满或参数过大时直接拒绝，不会执行。
 
@@ -143,6 +243,8 @@ your_absolute_path/
 
 📌 首次运行后自动生成模板。程序会自动补全 API 路径（`/chat/completions`、`/models`）和 Bearer 鉴权头，并在启动时**自动抓取**可用模型列表。支持全局代理与四级参数继承。
 
+> 模板中的 `sk-xxxxxx` 只是示例，但因为它非空，真实 driver 首次启动仍会尝试请求示例地址。启动前应删除不使用的 Provider，并替换保留项的 `base_url`、`api_key` 和 `models`；隔离加载 smoke 不应运行 driver。
+
 ### 基本结构
 
 ```toml
@@ -150,8 +252,7 @@ your_absolute_path/
 # api_key: 你的API密钥（无需手动写 Bearer ，程序会自动补全）。支持填入单个字符串，或字符串列表实现随机轮询，如 ["sk-key1", "sk-key2"]
 # proxy: [可选] 该服务商的全局代理
 # models: [可选] 手动补充的模型列表。若API不支持 /models 自动获取，或获取不全时可在这里手动指定作为补充。
-# extra_payload: [可选] 字典格式。用于透传厂商特有参数（如 Gemini 的 thinking_config ）。
-#                该字典下的内容会直接合并到发送给 API 的请求根 JSON 中。
+# extra_payload 不是 provider 根字段；必须放在下文四个模型参数继承层之一。
 # 【全局默认配置】（所有供应商的所有模型均默认继承此设置，垫底优先级）
 [global_default]
 stream = true
@@ -168,6 +269,20 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-xxxxxx"
 proxy = "http://127.0.0.1:7890"
 ```
+
+### Provider 根字段
+
+| 字段 | 是否必需 | 通俗含义 |
+| --- | --- | --- |
+| `base_url` | 是 | OpenAI-compatible API 的 Base URL；插件补全 `/chat/completions` 和 `/models` |
+| `api_key` | 是 | 单个 Key，或用于随机轮询的字符串数组；插件自动补 `Bearer` |
+| `models` | 建议 | 手工补充的真实模型名；服务商不支持 `/models` 时必须填写 |
+| `proxy` | 可选 | 该 Provider 的 HTTP 代理 |
+| `default_config` | 可选 | 该 Provider 下所有模型共同继承的模型参数表 |
+| `config_groups` | 可选 | 按 `models` 数组批量套用参数的表数组 |
+| `model_configs` | 可选 | 按真实模型名配置的最高优先级参数表 |
+
+`api_key`、`base_url`、`proxy` 和 `models` 是连接/发现字段；它们不应放进 `extra_payload`。反过来，`temperature`、`stream`、`no_tools`、`extra_payload` 和 `capability_routing` 等是模型参数，应放进四级继承层，不要直接写在 `[providers.<名称>]` 根表中。
 
 ### 四级参数继承
 
@@ -188,11 +303,32 @@ temperature = 1.2
 stream = false      # 该模型不支持流式，单独关闭
 json_mode = true    # 开启 JSON 结构化输出（适用于分类模型）
 
+# 厂商私有字段必须放在某个模型参数继承层中；这里放在单模型层。
+extra_payload = { extra_body = { thinking = { level = "low" } } }
+
 # 【no_tools】标记该模型不支持工具调用格式
 # 设置后：本次请求不注入 tool schema，历史中的工具消息也自动转为普通文本
 [providers.some-provider.model_configs."some-cheap-model"]
 no_tools = true
 ```
+
+这四层使用**浅合并**：后一级的同名键整体覆盖前一级，不会递归合并嵌套对象。例如单模型层重新声明 `extra_payload` 时，会替换较低层的整个 `extra_payload`。
+
+常用模型参数如下：
+
+| 字段 | 含义 | 注意事项 |
+| --- | --- | --- |
+| `stream` | 是否请求流式响应 | 工具调用时会临时切成非流式；能力路由也会关闭不支持 streaming 的模型 |
+| `is_segment` | 流式文本是否分段发送 | 只影响消息呈现，不改变模型能力 |
+| `max_segments` | 最多发送多少段 | 防止过度刷屏 |
+| `max_tokens` | 请求的最大输出 token | 必须符合服务商接口约束 |
+| `temperature`、`top_p`、`top_k` | 采样参数 | 不是所有服务商都同时支持 |
+| `json_mode` | 分类请求是否附加 JSON object 响应格式 | 主要给分类角色使用；服务商不兼容时关闭 |
+| `no_tools` | 明确标记模型不支持 Function Calling | 为 true 时不注入 Tool Schema，并把历史工具消息转成普通文本 |
+| `extra_payload` | 浅合并到请求根 JSON 的厂商私有参数 | 只放厂商扩展字段；不要覆盖 `model`、`messages`、`tools` 或 `stream` |
+| `capability_routing` | 该模型的受信能力目录元数据 | 只有同时开启 `model_config.json` 的高级路由才会消费 |
+
+普通未知字段不会自动透传给 API；需要透传的厂商字段必须放入 `extra_payload`。API Key 不应出现在截图、日志或版本库中。
 
 ### 多 API Key 轮询
 
@@ -206,32 +342,53 @@ api_key = ["sk-key1", "sk-key2", "sk-key3"]  # 随机轮询
 
 ## `model_config.json` — 智能调度配置
 
-📌 支持 QQ 指令实时切换；手动修改会自动原子重载。**模型名称必须是 `providers.toml` 中可用的模型 ID**（可用`查看模型`指令查看）。
+📌 支持 QQ 指令实时切换；手动修改会自动原子重载。最稳妥的模型标识是 `查看模型` 显示的完整 `模型名 (provider)`。只写裸模型名时，插件仅在名称唯一时自动补全 Provider；同名冲突会拒绝或回退。
 
-```json5
+```json
 {
-  "use_moe": false,           // 是否按分类难度路由 MoE 模型；不是工具或联网搜索的前提
+  "use_moe": false,
   "moe_models": {
-    "0": "deepseek-chat",     // 简单问题对应的模型
-    "1": "deepseek-chat",     // 中等问题对应的模型
-    "2": "deepseek-reasoner"  // 复杂问题对应的模型
+    "0": "deepseek-chat (deepseek)",
+    "1": "deepseek-chat (deepseek)",
+    "2": "deepseek-reasoner (deepseek)"
   },
-  "vision_model": "gpt-4o",  // 视觉任务专用模型（有图片时强制使用；未配置则提示用户设置）
-  "selected_model": "deepseek-reasoner", // 不启用 MoE 时使用的模型（难度分级失败时也回滚至此）
-  "category_model": "glm-4-flash",       // MoE 开启时的分类模型；否则分类使用 selected_model
-  "summary_model": "deepseek-chat",      // 工具包独立复核等总结任务使用的模型
-  "use_web_search": false,    // 是否把联网搜索加入候选工具；仍需 use_tools=true 且模型支持工具调用
-  "use_tools": true,          // 是否启用全部函数调用（包括联网搜索）
-  "tool_blacklist": [         // 禁止 LLM 调用的插件黑名单
+  "vision_model": "gpt-4o (openai)",
+  "selected_model": "deepseek-reasoner (deepseek)",
+  "category_model": "glm-4-flash (zhipu)",
+  "summary_model": "deepseek-chat (deepseek)",
+  "use_web_search": false,
+  "use_tools": true,
+  "tool_blacklist": [
     "nonebot_plugin_orm",
     "nonebot_plugin_some_dangerous_plugin",
     "mcp__filesystem",
     "mcp__filesystem__read_file",
     "mcp__filesystem__*"
   ],
-  "resident_plugins": []      // 常驻插件：无视分类模型，强制每次注入给 LLM
+  "resident_plugins": [],
+  "capability_routing": {
+    "enabled": false
+  }
 }
 ```
+
+### 全部字段
+
+| 字段 | 默认/初始行为 | 通俗含义 |
+| --- | --- | --- |
+| `use_moe` | `false` | 是否按分类难度从 `moe_models` 选择纯文本聊天模型 |
+| `moe_models.0/1/2` | 首次校验后回退到可用模型 | 简单、中等、复杂任务各自绑定的模型；仅 `use_moe=true` 时用于聊天 |
+| `selected_model` | 首次校验后选择可用模型 | 未开启 MoE 时的聊天模型；未开启 MoE 但需要分类时也由它做分类 |
+| `category_model` | 缺失时回退到 `selected_model` | 只有 `use_moe=true` 时负责难度、视觉和工具分类 |
+| `summary_model` | 缺失时自动补为 `selected_model` | AI 工具包独立复核等总结任务使用的模型 |
+| `vision_model` | 空字符串 | 有真实图片或分类判定需要视觉时优先使用；未配置会明确提示，不悄悄交给文本模型 |
+| `use_web_search` | `false` | 把内置 `web_search` 加入候选；还要求 `use_tools=true` 且最终模型支持工具调用 |
+| `use_tools` | `true` | Function Calling 总开关；关闭后不向聊天模型注入任何工具 Schema |
+| `tool_blacklist` | 内置一组框架/基础插件 | 禁止目录展示、Schema 注入和管理释放的工具标识；支持精确名、MCP 服务名和尾部 `*` |
+| `resident_plugins` | `[]` | 管理员强制注入/诊断兜底；无视分类结果、每轮都尝试注入，仍受总开关、黑名单和权限约束 |
+| `capability_routing` | 缺失，等价于关闭 | 高级受信能力路由；关闭对象必须精确为 `{"enabled": false}` |
+
+只要 `use_moe`、`use_tools`、`use_web_search` 任一开启，就会先做一次分类。真实选模顺序和默认固定模式见[调度链路](./runtime-architecture.md#4-分类与模型选择)。
 `tool_blacklist` 现在同时支持：
 
 - NoneBot 插件包名
@@ -240,7 +397,83 @@ api_key = ["sk-key1", "sk-key2", "sk-key3"]  # 随机轮询
 - MCP 服务级禁用，如 `mcp__filesystem`
 - MCP 通配禁用，如 `mcp__filesystem__*`
 
-`resident_plugins` 也可以填写以上任意工具标识。
+`resident_plugins` 也可以填写以上任意工具标识。正常业务不需要把插件常驻：系统会优先读取 PicMenu Next 已安装的内存目录（可来自 QWeb Feature Catalog），否则读取 `PluginMetadata.extra.menu_data`，先按紧凑功能目录判断意图，命中后再展开详细 Schema。只有隔离验收、诊断漏选或确实要求每轮强制提供时才加入常驻。
+
+`custom_plugin_info.json` 是最高优先级的完整覆写，不会和自动菜单拼接。某插件一旦出现在该文件中，名称、描述、用法和可选 `menu_data` 都以覆写为准；如果只想使用插件原有 PicMenu/Metadata 菜单，就不要为它保留示例或空覆写条目。详细字段和安全边界见[插件集成](./plugin-integration.md#自动复用-picmenuqweb-菜单)。
+
+### 可选能力路由 `capability_routing`
+
+这是高级、显式 opt-in 功能。不开启时继续使用上面的固定角色绑定；不要为了普通聊天先启用它。
+
+启用分两步。第一步，为每个要参与路由的模型在 `providers.toml` 的模型参数层写入**完整且精确**的能力元数据：
+
+```toml
+[providers.openai.model_configs."gpt-4o-mini"]
+stream = true
+
+[providers.openai.model_configs."gpt-4o-mini".capability_routing]
+availability = "available"
+latency_ms = 800
+quality_score = 700
+
+[providers.openai.model_configs."gpt-4o-mini".capability_routing.capabilities]
+text = true
+vision = true
+tools = true
+json_schema = true
+reasoning = false
+streaming = true
+
+[providers.openai.model_configs."gpt-4o-mini".capability_routing.cost]
+input_per_million = "0.15"
+output_per_million = "0.60"
+
+[providers.openai.model_configs."gpt-4o-mini".capability_routing.limits]
+context_window = 128000
+max_output = 16384
+```
+
+第二步，在 `model_config.json` 顶层加入完整策略。以下对象是可直接解析的结构；模型绑定仍使用本页前面的字段：
+
+```json
+{
+  "enabled": true,
+  "policy": {
+    "allow_degraded": false,
+    "mode": "fixed_preferred",
+    "version": "operator-policy-v1"
+  },
+  "requirements": {
+    "input_tokens": 2048,
+    "maximum_latency_ms": 10000,
+    "maximum_unit_cost": null,
+    "minimum_context_window": 4096,
+    "minimum_quality": 0,
+    "output_tokens": 1024
+  }
+}
+```
+
+上面的对象应作为 `"capability_routing": {...}` 的值，不是整个 `model_config.json`。三个模式的区别：
+
+| `mode` | 行为 |
+| --- | --- |
+| `fixed_preferred` | 优先使用当前角色绑定；绑定模型不满足完整要求时，按能力目录选择其他合格模型，适合渐进启用 |
+| `fixed_only` | 只允许当前角色绑定；绑定不存在或能力不足时直接拒绝 |
+| `capability_only` | 忽略七个固定角色绑定，完全从合格目录中确定性选择 |
+
+字段规则必须完整满足以下契约：
+
+- 模型元数据只能且必须包含 `availability`、`capabilities`、`cost`、`latency_ms`、`limits`、`quality_score`。
+- `capabilities` 必须同时包含 `text`、`vision`、`tools`、`json_schema`、`reasoning`、`streaming` 六个布尔值。
+- `availability` 只接受 `unknown`、`available`、`degraded`、`unavailable`；`unknown` 和 `unavailable` 不参与选择，`degraded` 还需 `allow_degraded=true`。
+- 当前选择器要求候选具有可比较的 `cost`。免费模型也应明确写字符串 `"0"`；不要用二进制浮点数表示价格。所有候选应使用同一币种和计价口径。
+- `requirements.input_tokens` 是成本排序使用的预计输入量；`output_tokens` 同时受模型 `max_output` 约束，二者之和不能超过 `minimum_context_window`。
+- `maximum_unit_cost` 为 `null` 表示不设价格上限；需要限制时使用与模型 `cost` 相同的两个精确十进制字段。
+- 质量分是运维方自定义的相对整数分，候选之间必须使用同一标尺；延迟也应来自同一测量口径。
+- 开启对象和所有嵌套对象采用精确字段集合。缺字段、多字段、类型错误、目录漂移或没有合格模型都会 fail closed，不能回退到一个未声明能力的模型。
+
+建议先用 `fixed_preferred`、一到两个已核实模型和测试 Key 验证；图片、工具和分类分别要求 `vision`、`tools`、`json_schema`，不要仅凭模型名称猜能力。
 
 ---
 
@@ -319,6 +552,22 @@ poke = [
 MCP 工具会被并入现有函数调用系统，统一受 `use_tools`、`tool_blacklist`、`resident_plugins` 控制。
 任何启用的 MCP 在发现阶段不可达都会使本次重载失败，旧 generation 继续服务；状态可用 `查看LLM状态` 查询。
 
+| 字段 | 适用范围 | 默认/要求 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | 全部 | 缺失时为 `true` | 是否启用；新配置务必显式写 `false`，审查完成后再打开 |
+| `transport` | 全部 | 默认 `stdio` | `stdio`、`streamable_http` 或 `sse`；兼容别名会被规范化 |
+| `description` | 全部 | 可选 | 服务的人类可读说明，不改变权限 |
+| `command` | stdio | 必需 | 要由 Bot 宿主启动的可执行文件 |
+| `args` | stdio | `[]` | 传给命令的字符串参数数组 |
+| `env` | stdio | `{}` | 叠加到宿主完整环境上的变量表，不是隔离环境 |
+| `cwd` | stdio | 可选 | 工作目录；只有当前 MCP SDK 支持该参数时才应用，不能把它当安全边界 |
+| `url` | HTTP/SSE | 必需 | MCP endpoint；当前配置不提供自定义鉴权 header 字段 |
+| `timeout` | 全部 | `30` 秒 | 连接/通用超时基准，最小 1 秒 |
+| `discover_timeout` | 全部 | 回退到 `timeout` | 重载时 `list_tools` 的等待上限 |
+| `tool_timeout` | 全部 | 回退到 `timeout` | 每次 `call_tool` 的等待上限 |
+| `sse_read_timeout` | SSE | SDK 内部默认；可显式设置 | SSE 读取预算；外层发现/调用仍受对应超时约束 |
+| `result_limit` | 全部 | `6000` 字符 | MCP 文本结果交给模型前的截断上限 |
+
 ```toml
 [mcp.filesystem]
 enabled = false
@@ -345,6 +594,10 @@ description = "HTTP MCP 示例"
 # tool_timeout = 60
 # result_limit = 6000
 ```
+
+MCP 是外部信任边界，不走 Custom/Generated Tool 的 nobody、namespace、Landlock 或 seccomp runner。stdio 子进程会继承 Bot 的完整环境，再叠加 `env`；当前配置也不能给单个 MCP 工具声明 `permission` 或 `read_only`/`mutating`，因此不会自动获得精确的二阶段确认保护。只启用已经审查的 Server，并优先使用最小环境启动包装器；会写文件、发消息、删除数据或调用管理 API 的 MCP 应保持禁用/黑名单，或改写成能明确声明契约的可信 [`ToolSpec`](./plugin-integration.md#方式二注册强类型-toolspec推荐)。
+
+工具名规范为 `mcp__<服务名>__<工具名>`，超长名称会截断并附加摘要。配置后先执行 `刷新工具`，用 `查看LLM状态` 确认发现数量，再按精确工具名配置黑名单或常驻项。每次发现和调用都会建立会话并在完成后关闭；不要假设远端连接常驻。
 
 ## 热重载与兼容投递
 

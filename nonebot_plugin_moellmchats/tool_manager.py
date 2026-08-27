@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 import nonebot
@@ -25,6 +26,13 @@ from .runtime_snapshot import (
 from .tool_artifacts import ToolArtifact
 from .tool_catalog_cache import ToolCatalogRecord, ToolCatalogRenderContext
 from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
+from .tool_discovery import (
+    build_compatibility_description,
+    build_plugin_catalog_entries,
+    finalize_discovery_catalog,
+    project_picmenu_infos,
+    with_menu_discovery,
+)
 from .tool_providers import (
     DiscoveredTool,
     ProviderCatalogSnapshot,
@@ -1722,7 +1730,10 @@ class ToolManager:
         # 1. 生成自定义插件描述模板
         if not self.custom_info_file.exists():
             default_info = {
-                "_comment": "键名必须是你想修改的 nonebot 插件的真实包名（比如 nonebot_plugin_tarot）",
+                "_comment": (
+                    "仅在自动 PicMenu/PluginMetadata 菜单不足时覆写；"
+                    "键名必须是已加载 NoneBot 插件的真实包名（如 nonebot_plugin_tarot）"
+                ),
                 "nonebot_plugin_example": {
                     "name": "示例插件名称",
                     "description": "详细描述该插件的功能，告诉大模型在什么场景下应该调用它。",
@@ -2234,12 +2245,41 @@ async def extract_webpage(
                     queue.append(dependency)
         return expanded
 
+    @staticmethod
+    def _picmenu_plugin_info(loaded_plugins: list[object]) -> dict:
+        """Read PicMenu's already-installed memory snapshot when available."""
+
+        for plugin in loaded_plugins:
+            module_name = getattr(plugin, "module_name", "")
+            if not isinstance(module_name, str) or not (
+                getattr(plugin, "name", "") == "nonebot_plugin_picmenu_next"
+                or module_name.endswith(".nonebot_plugin_picmenu_next")
+            ):
+                continue
+            data_source = sys.modules.get(f"{module_name}.data_source")
+            get_infos = getattr(data_source, "get_infos", None)
+            if not callable(get_infos):
+                return {}
+            try:
+                projected = project_picmenu_infos(get_infos())
+            except Exception:
+                logger.warning("读取 PicMenu 内存功能目录失败，降级使用插件元数据")
+                return {}
+            if projected:
+                logger.debug(
+                    f"已读取 PicMenu 内存功能目录: {len(projected)} 个插件"
+                )
+            return projected
+        return {}
+
     def build_plugin_info(self) -> dict:
         plugin_info = {}
         # 读取自定义插件描述
         custom_info = self._load_custom_plugin_info()
+        loaded_plugins = list(nonebot.plugin.get_loaded_plugins())
+        picmenu_info = self._picmenu_plugin_info(loaded_plugins)
 
-        for plugin in nonebot.plugin.get_loaded_plugins():
+        for plugin in loaded_plugins:
             if "saa" in plugin.name:
                 continue
 
@@ -2247,13 +2287,44 @@ async def extract_webpage(
 
             # 优先使用用户的自定义配置
             if plugin.name in custom_info:
-                info = custom_info[plugin.name]
+                custom_entry = custom_info[plugin.name]
+                if isinstance(custom_entry, Mapping):
+                    info = with_menu_discovery(
+                        custom_entry,
+                        custom_entry.get("menu_data"),
+                    )
+                else:
+                    info = custom_entry
+            elif menu_entry := picmenu_info.get(plugin.name):
+                metadata = plugin.metadata
+                info = with_menu_discovery(
+                    {
+                        "name": menu_entry.get("name")
+                        or (metadata.name if metadata else plugin.name),
+                        "description": menu_entry.get("description")
+                        or (metadata.description if metadata else "无描述"),
+                        "usage": menu_entry.get("usage")
+                        or (metadata.usage if metadata else "无用法说明"),
+                        "discovery_source": "picmenu",
+                    },
+                    menu_entry.get("menu_data"),
+                )
             elif plugin.metadata:
-                info = {
-                    "name": plugin.metadata.name,
-                    "description": plugin.metadata.description,
-                    "usage": plugin.metadata.usage,
-                }
+                extra = getattr(plugin.metadata, "extra", None)
+                raw_menu = (
+                    extra.get("menu_data")
+                    if isinstance(extra, Mapping)
+                    else None
+                )
+                info = with_menu_discovery(
+                    {
+                        "name": plugin.metadata.name,
+                        "description": plugin.metadata.description,
+                        "usage": plugin.metadata.usage,
+                        "discovery_source": "plugin_metadata",
+                    },
+                    raw_menu,
+                )
 
             if info:
                 plugin_info[plugin.name] = info
@@ -2328,11 +2399,12 @@ async def extract_webpage(
             for name, info in plugin_info.items():
                 if is_blacklisted(name):
                     continue
-
-                plugin_name = info.get("name") or name
-                description = info.get("description") or "无描述"
-                catalog.append(
-                    f"- {name} | {plugin_name} | {str(description)[:160]}"
+                catalog.extend(
+                    build_plugin_catalog_entries(
+                        name,
+                        info,
+                        is_superuser=is_superuser,
+                    )
                 )
 
             # 2. 自定义函数 + MCP 工具
@@ -2362,7 +2434,7 @@ async def extract_webpage(
             )
 
         return (
-            "\n".join(catalog)
+            finalize_discovery_catalog(catalog)
             if catalog
             else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
         )
@@ -2422,10 +2494,12 @@ async def extract_webpage(
                 )
                 if not decision.allowed:
                     continue
-                plugin_name = info.get("name") or name
-                description = info.get("description") or "无描述"
-                catalog.append(
-                    f"- {name} | {plugin_name} | {str(description)[:160]}"
+                catalog.extend(
+                    build_plugin_catalog_entries(
+                        name,
+                        info,
+                        is_superuser=is_superuser,
+                    )
                 )
 
             for name in custom_tools:
@@ -2474,7 +2548,7 @@ async def extract_webpage(
                 )
 
         return (
-            "\n".join(catalog)
+            finalize_discovery_catalog(catalog)
             if catalog
             else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
         )
@@ -2814,7 +2888,15 @@ async def extract_webpage(
                     "type": "function",
                     "function": {
                         "name": item.spec.name,
-                        "description": item.spec.description,
+                        "description": (
+                            build_compatibility_description(
+                                name,
+                                plugin_info[name],
+                                is_superuser=is_superuser,
+                            )
+                            if item.source is ToolSource.NONEBOT_PLUGIN
+                            else item.spec.description
+                        ),
                         "parameters": parameters,
                     },
                 }
@@ -2883,12 +2965,10 @@ async def extract_webpage(
                         "type": "function",
                         "function": {
                             "name": name,
-                            "description": spec.description
-                            if spec is not None
-                            else (
-                                f"插件名称：{info.get('name') or name}。"
-                                f"功能描述：{info.get('description') or '无描述'}。"
-                                f"原始用法说明：{info.get('usage') or '无用法说明'}"
+                            "description": build_compatibility_description(
+                                name,
+                                info,
+                                is_superuser=is_superuser,
                             ),
                             "parameters": mutable_value(spec.parameters)
                             if spec is not None
@@ -2898,7 +2978,7 @@ async def extract_webpage(
                                     "command": {
                                         "type": "string",
                                         "description": (
-                                            "严格根据该插件的'原始用法说明'，"
+                                            "严格根据该插件的原始用法说明和菜单功能提示，"
                                             "生成可以直接触发该插件的机器人指令字符串。"
                                         ),
                                     }

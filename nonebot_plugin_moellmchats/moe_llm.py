@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 import aiohttp
+from nonebot.exception import ActionFailed
 from nonebot.log import logger
 
 from .agent_context_runtime import (
@@ -156,12 +157,31 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         """
         if self.emotion_flag:  # 本次对话发送表情包
             content, emotion_names_list = parse_emotion(content)
+            delivered = False
             if content:
                 await self.bot.send(self.event, content)
+                delivered = True
             for emotion_name in emotion_names_list:
                 # 发送
                 if emotion := get_emotion(emotion_name):
-                    await self.bot.send(self.event, emotion)
+                    try:
+                        await self.bot.send(self.event, emotion)
+                        delivered = True
+                    except ActionFailed as error:
+                        # 正文或前一个表情已经成功时，不重发不确定结果，
+                        # 只隔离这个可选附件，避免 NapCat 超时拖垮整轮 Matcher。
+                        if not delivered:
+                            raise
+                        info = getattr(error, "info", {})
+                        retcode = (
+                            info.get("retcode")
+                            if isinstance(info, dict)
+                            else None
+                        )
+                        logger.warning(
+                            "正文已发送，附加表情发送失败并已跳过："
+                            f"emotion={emotion_name[:80]!r}, retcode={retcode!r}"
+                        )
         else:  # 默认直接发送
             await self.bot.send(self.event, content)
         return content
@@ -557,11 +577,11 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 if self.agent_runtime is not None:
                     await self.agent_runtime.flush_usage()
                 if result_text:
-                    await self.send_emotion_message(result_text)
+                    result_text = await self.send_emotion_message(result_text)
                     result_text_sent = True
                 else:
                     result_text = self._build_empty_tool_summary_fallback()
-                    await self.send_emotion_message(result_text)
+                    result_text = await self.send_emotion_message(result_text)
                     result_text_sent = True
 
             if not result_text_sent and not current_stream_flag and result_text:
