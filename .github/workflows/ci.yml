@@ -71,7 +71,7 @@ jobs:
       - if: matrix.python-version == '3.12'
         run: python -m pip install nonebot2==2.4.4 nonebot-adapter-onebot==2.4.6
       - run: ruff check nonebot_plugin_moellmchats tests
-      - run: pytest -q --ignore=tests/test_sandbox_integration.py
+      - run: python -m pytest -q --ignore=tests/test_sandbox_integration.py
 
   sandbox:
     name: Mandatory root sandbox
