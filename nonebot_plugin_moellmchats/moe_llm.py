@@ -389,10 +389,14 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             for retry_times in range(max_retry_times):
                 self._last_api_error_non_retryable = False
                 if retry_times > 0:
-                    await self.bot.send(
-                        self.event,
-                        f"api又卡了呐！第 {retry_times + 1} 次尝试，请勿多次发送~",
-                    )
+                    try:
+                        await self.bot.send(
+                            self.event,
+                            f"api又卡了呐！第 {retry_times + 1} 次尝试，请勿多次发送~",
+                        )
+                    except (ActionFailed, ApiNotAvailable, NetworkError) as send_error:
+                        # 重试通知发不出去不应中断已执行到一半的请求轮次
+                        logger.warning("重试通知发送失败: {}", send_error)
                     await asyncio.sleep(2 ** (retry_times + 1))
                 try:
                     if current_stream_flag:
