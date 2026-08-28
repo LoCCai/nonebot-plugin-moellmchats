@@ -24,6 +24,8 @@
 | [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
 | [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
 | [全量 OneBot / NapCat 协议工具实施状态](./规划/08-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
+| [核心修复包：全库审查修复记录](./规划/09-code-review-fixes-20260829.md) | 2026-08-29 全库审查的 11 项修复、根因、回归测试与验证状态 |
+| [待修复问题清单](./规划/10-pending-issues-backlog.md) | 审查遗留的中低优先问题、建议批次与处理顺序 |
 
 ---
 
