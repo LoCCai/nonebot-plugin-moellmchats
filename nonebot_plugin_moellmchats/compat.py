@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+
+# 本模块的 timeout() 在所有支持的 Python 版本上都抛出内建 TimeoutError
+# （asyncio.TimeoutError 直到 3.11 才与内建类合一）。聊天链路必须捕获本别名，
+# 否则 3.10 上超时会落进 except Exception 分支，走错文案/遥测/重试路径。
+TimeoutError = builtins.TimeoutError
 
 if hasattr(asyncio, "timeout"):
     timeout = asyncio.timeout

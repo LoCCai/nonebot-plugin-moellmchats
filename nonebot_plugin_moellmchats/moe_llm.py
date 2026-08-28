@@ -1,5 +1,4 @@
 import asyncio
-from asyncio import TimeoutError
 from collections import Counter
 import datetime
 import random
@@ -15,7 +14,7 @@ from .agent_context_runtime import (
     AgentRequestRuntime,
 )
 from .agent_runtime import AgentRunState, AgentStepStatus, AgentStepType
-from .compat import timeout as timeout_scope
+from .compat import TimeoutError, timeout as timeout_scope
 from .config import config_parser
 from .llm_api import LlmApiMixin
 from .llm_payload import LlmPayloadMixin
