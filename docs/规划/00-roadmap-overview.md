@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-28T14:52:00+00:00
+lastmod: 2026-08-28T14:58:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -21,6 +21,8 @@ lastmod: 2026-08-28T14:52:00+00:00
 > 状态续记（2026-08-28 09:42 UTC）：七七随后安装并重启了 `20cfe44…`，现场 `/设置LLM冷却 0` 被日志记录但未进入冷却 Handler；同窗口的模型选择属于其他 @Bot 请求，不能误判成该命令进入 LLM。0.26.1 将该应急入口改成优先级 0 的全文固定 Matcher，当前隔离测试安装点更新为 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`。其 push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 为 12/12 success、唯一 `release-gate` 成功；未取得 PR run，也尚未把 0.26.1 安装到七七或声称线上验收。
 
 > 状态续记（2026-08-28 14:52 UTC）：新增 [K-08 业务路由与执行状态真实性](./09-business-routing-execution-truth.md)，按 PicMenu 快照竞态 → 唯一意图所有者 → generation 命令前缀 → Matcher/API 真实状态 → 重试审计 → 进度显示开关推进 0.26.2。主体实现、Python 3.10～3.13 普通全量、mandatory root sandbox、静态/文档/依赖检查、fresh 制品和四组包外加载均已通过；实现提交、远端 push 和新 PR 双门禁仍待关闭。七七只改 QWeb/PicMenu 目录桥接源码，不改依赖、锁、配置、已安装包或进程；没有发送真实 QQ 动作。
+
+> K-08 实现远端闭环（2026-08-28 14:58 UTC）：实现提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc` 的 push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success、各唯一 `release-gate` 成功。新 PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 的 base 为本仓库 `feat/llm-runtime-backpressure`，核验时 `OPEN / MERGEABLE / CLEAN`；未合并、未发布、未部署，七七依赖和进程未操作，也没有真实 QQ 动作。
 
 > I-01 本地门禁（2026-08-23）：规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增纯 stdlib、深度不可变且无 transport/credential 字段的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability`；能力、limits、精确 `NUMERIC(24,12)` Decimal 成本、availability 与 generation 均有界，identity/capability/full descriptor 三类 canonical SHA-256 分离。四版本定向各 `98 passed`、相关联合各 `492 passed`、普通全量及 Python 3.10 最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品/同哈希重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/descriptor/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 继续锁定；未读取现有模型配置或凭据，未改变 `ModelSelector`，未发模型请求，未迁移、未连接真实服务、未部署。
 

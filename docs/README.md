@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.1。隔离测试应固定到精确提交 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`，其 push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 已 12/12 成功；PR #3 已在此前合并旧 head，因此该补丁提交没有 PR run，不能写成“双门禁”。`20cfe44…` 是会漏接现场冷却指令的 0.26.0 历史点，`79d2268…` 只用于回退到 0.25.0。完整边界见[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，PyPI 与七七实际安装状态仍需分别核对。
+> 当前文档面向 0.26.2。隔离测试应固定到精确提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`；push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success，且各只有一个成功 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。`5d7f795…` 是 0.26.1 历史点，`79d2268…` 只用于回退到 0.25.0。完整边界见[K-08 实施状态](./规划/09-business-routing-execution-truth.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 

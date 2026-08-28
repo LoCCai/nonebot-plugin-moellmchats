@@ -53,7 +53,7 @@
 
 ## 📦 安装
 
-截至 2026-08-28，当前推荐进入隔离测试的 0.26.1 精确 Git 提交是 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`。它继承全量 OneBot/NapCat 协议工具和工具生成模型 HTTP 400 兼容处理，并将冷却管理入口改为优先级 0 的全文固定 Matcher，可靠识别 `/设置LLM冷却 0`；push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 的 12 个 job 全部成功，且只有一个成功的 `release-gate`。PR #3 早已合并并固定在旧 head `348293c…`，所以该补丁提交没有 PR run，不能称为“双门禁提交”。`20cfe44…` 是会漏接该现场指令的 0.26.0 历史安装点，`79d2268…` 是 0.25.0 回退基线。详细状态见 [K 阶段实施状态](docs/规划/08-onebot-napcat-protocol-tools.md)；PyPI 和七七实际安装状态必须分别核对。
+截至 2026-08-28，当前推荐进入隔离测试的 0.26.2 精确 Git 提交是 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`。它在 0.26.1 基础上增加 PicMenu 快照身份、唯一业务意图所有者、真实命令前缀、九种 Matcher/API 执行状态、失败重放拦截和进度消息开关；push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success，且各只有一个成功的 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 在核验时为 `OPEN / MERGEABLE / CLEAN`，本任务不会合并。`5d7f795…` 是 0.26.1 历史安装点，`20cfe44…` 是会漏接现场冷却指令的 0.26.0 历史点，`79d2268…` 是 0.25.0 回退基线。详细状态见 [K-08 实施状态](docs/规划/09-business-routing-execution-truth.md)；PyPI 和七七实际安装状态必须分别核对。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
@@ -62,7 +62,7 @@
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@5d7f7958e9535f97c7b977d5fbe0fb57d68352ba"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e340fb77d9c215316c9d4afd69799aedbfcf34fc"
 ```
 
 ### 项目使用 pip/venv 时
@@ -71,7 +71,7 @@ uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugi
 
 ```bash
 python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@5d7f7958e9535f97c7b977d5fbe0fb57d68352ba"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e340fb77d9c215316c9d4afd69799aedbfcf34fc"
 ```
 
 

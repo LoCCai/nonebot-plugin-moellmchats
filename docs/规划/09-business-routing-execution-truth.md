@@ -1,7 +1,7 @@
 ---
 title: 09-business-routing-execution-truth
 date: 2026-08-28T14:20:00+00:00
-lastmod: 2026-08-28T14:20:00+00:00
+lastmod: 2026-08-28T14:58:00+00:00
 ---
 
 # K-08 业务路由与执行状态真实性（0.26.2）
@@ -24,7 +24,7 @@ lastmod: 2026-08-28T14:20:00+00:00
 | K-08D Matcher/API 真实状态 | K-08C | 已实现，v11/v12 定向回归已通过 | 九种 `PluginDispatchResult`；Adapter 成功后才捕获；`send_like` 副作用、空命中、部分成功、结果不确定均不伪造成文本成功 |
 | K-08E 重试与安全审计 | K-08D | 已实现，定向回归已通过 | generation/工具/参数摘要指纹；相同失败不重放；部分/不确定封锁工具；日志只有摘要和计数 |
 | K-08F 显示开关、文档与版本 | K-08E | 已实现，本地全量通过 | 0.26.2；`tool_progress_messages_enabled=true`；确认/结果/最终反馈/日志不受开关影响；安装、配置、架构、接入和排错文档同步 |
-| K-08G 本地与远端门禁 | K-08F | 本地已关闭，远端待提交 | 四版本、sandbox、制品与包外 smoke 已全绿；新 PR 以 `feat/llm-runtime-backpressure` 为 base；push/PR 各唯一成功 `release-gate` 后关闭 |
+| K-08G 本地与远端门禁 | K-08F | 实现提交双门禁已关闭 | 四版本、sandbox、制品与包外 smoke 全绿；PR #5 以 `feat/llm-runtime-backpressure` 为 base；实现 push/PR 各唯一成功 `release-gate` |
 
 ## 目录与所有者契约
 
@@ -73,12 +73,20 @@ QWeb/PicMenu 目录契约版本升为 `2026.08.28.1`：
 
 以上是本地隔离证据，不证明七七已安装 0.26.2、重载或完成真实 QQ 验收。
 
-## 恢复点与待关闭项
+## 实现提交与远端证据
+
+实现提交为 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`，只推送到本仓库 `origin/feat/generated-tool-bundles`。该提交的远端证据为：
+
+- push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178)：12/12 job 为 `completed/success`，唯一 `release-gate` 成功；
+- pull_request run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186)：12/12 job 为 `completed/success`，唯一 `release-gate` 成功；
+- PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5)：base 为 `feat/llm-runtime-backpressure`，head 为上述实现 SHA，核验时为 `OPEN / MERGEABLE / CLEAN`，没有合并。
+
+本文件所在的证据提交无法在自身内容中写入自己的 SHA 或由自身触发的 run ID，否则会形成无穷自引用；其身份继续由 Git 历史、远端引用和对应 Actions 外部绑定。证据提交也必须满足 push/PR 各全部 job 成功、各恰好一个成功 `release-gate`，但不会因此自动获得合并或发布权限。
+
+## 恢复点与边界
 
 1. 保留未跟踪 `uv.lock`，核对分支和工作树；
-2. 完成 K-08F 文档和 0.26.2 版本一致性；
-3. 串行运行 Python 3.10～3.13 普通全量、NoneBot 2.4.4 兼容、mandatory root sandbox、Ruff、格式、Pyright、仓库/依赖/文档检查、fresh build、Twine 与包外 wheel/sdist smoke；
-4. 形成实现提交并推送自有 `origin`；不得推送上游、安装七七或触发真实 QQ；
-5. PR #3 已合并，创建新 PR，head 为 `feat/generated-tool-bundles`，base 为 `feat/llm-runtime-backpressure`；
-6. 核对本地 HEAD、remote-tracking、`ls-remote`、PR head，以及 push/PR 两类 Actions；每类必须恰好一个 `release-gate` 且全部 job 成功；
-7. 最终证据提交只记录真实 SHA/run/PR 状态，不合并、不 promotion、不发布 PyPI。
+2. 当前隔离测试安装点固定为实现提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`，不得改用移动分支；
+3. 核对本地 HEAD、remote-tracking、`ls-remote`、PR #5 head，以及实现/证据提交各自的 push/PR Actions；
+4. 不合并 PR，不 promotion，不发布 PyPI，不安装或重启七七，不发送真实 QQ 动作；
+5. 若后续进入七七隔离升级，另行取得明确授权，并把依赖安装、进程重载和真实 QQ 行为分别验收，不能复用本阶段本地/CI 结论。
