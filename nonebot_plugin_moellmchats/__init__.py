@@ -814,7 +814,9 @@ reset_mine_matcher = on_command(
 
 @reset_mine_matcher.handle()
 async def _(event: MessageEvent):
-    user_id = event.user_id
+    from .onebot_facade import event_user_id
+
+    user_id = event_user_id(event)
     if user_id in messages_dict:
         messages_dict[user_id].clear()  # 清空个人记忆
 
