@@ -52,6 +52,9 @@ class FakeMatcher:
         self.messages.append(str(message))
         raise MatcherFinished
 
+    async def send(self, message: str) -> None:
+        self.messages.append(str(message))
+
 
 def _event(*, user_id: int = 42, timestamp: int = 1_000):
     return SimpleNamespace(
@@ -483,7 +486,9 @@ async def test_chat_cancellation_records_cancelled_terminal_before_finish(
     task.cancel()
 
     try:
-        with pytest.raises(MatcherFinished):
+        # 取消必须以 CancelledError 收场（不能被 FinishedException 吞掉），
+        # 终止提示改经 matcher.send 送达
+        with pytest.raises(asyncio.CancelledError):
             await task
     finally:
         await host.close()

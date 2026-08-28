@@ -52,3 +52,22 @@ async def test_member_lookup_timeout_falls_back_to_qq(monkeypatch) -> None:
     bot = SlowBot()
     assert await asyncio.wait_for(cache.get(bot, 1, 9988), 0.2) == "9988"
     assert bot.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_member_lookup_failure_is_not_cached() -> None:
+    # 回归：查询失败的降级名（裸 QQ 号）此前会按正常结果缓存整个 TTL
+    cache = MemberNameCache()
+
+    class FlakyBot(FakeBot):
+        async def get_group_member_info(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("瞬时故障")
+            return {"card": "群友"}
+
+    bot = FlakyBot()
+    assert await asyncio.wait_for(cache.get(bot, 1, 9988), 0.2) == "9988"
+    # 失败结果不写缓存，第二次请求重新查询并拿到真实昵称
+    assert await asyncio.wait_for(cache.get(bot, 1, 9988), 0.2) == "群友"
+    assert bot.calls == 2
