@@ -6,15 +6,15 @@
 
 截至 2026-08-28：
 
-- 进入 0.26.0 协议阶段前，最后一个完成精确远端双门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`。
-- 该基线包含 PicMenu/QWeb 功能级意图发现、普通用户隐藏项过滤，以及 v11 正文/可选表情降级；push run `33134760223` 与 PR run `33134761967` 已完成双门禁。
-- `bbc3963…` 是更早的 J 阶段实现点，不再是“当前候选”。
-- 0.26.0 新增的全量 OneBot/NapCat 协议工具必须使用 [K 阶段状态页](./规划/08-onebot-napcat-protocol-tools.md) 最终记录的精确实现 SHA；在其四版本、制品和远端双门禁完成前，不要仅为尝试新功能安装移动分支头。
-- PR #2 已于 2026-08-26 合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支，merge commit 为 `c78ef06190d2df1d77c2ada6d9f06020ef6b37ca`；本轮 PR #3 以该分支为 base，当前为 Open/Clean。上游和默认 `master` 都不是本轮集成 base。
+- 当前推荐进入隔离测试的 0.26.0 精确 Git 提交是 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`。
+- 该提交包含全量 OneBot/NapCat 协议工具、固定超管命令 `设置LLM冷却`（支持 `0`）以及工具生成模型 HTTP 400 最小参数兼容重试。
+- push run [`33155319608`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33155319608) 的 12 个 job 全部成功，且恰好一个 `release-gate` 成功。
+- PR #3 在该修复推送前已经合并并固定在旧 head `348293c…`；因此 `20cfe44…` 没有 PR run，不能称为“双门禁提交”。若上线规则强制要求 PR 门禁，应另开 PR 并等待其 CI，而不是复用 #3 的历史结果。
+- `79d2268930251773cb4e91cdd9b13a9ec36a7d14` 是 0.25.0 回退基线，不包含 0.26.0 协议工具或上述后续修复；`bbc3963…` 是更早的历史实现点。
 - 开发工作树包内版本号是 `0.26.0`，但这不表示 PyPI 已发布该版本。`pip install nonebot-plugin-moellmchats` 得到什么必须以实际索引为准。
 - 这些证据说明“开发制品可以进入隔离测试”，不等于它已经在七七或其他生产 Bot 中部署验证。
 
-只需验证 0.25 基线时可固定到上面的 `79d2268…`；验证 0.26.0 协议工具时应等待状态页给出本阶段精确实现 SHA。不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
+安装 0.26.0 时必须固定到完整的 `20cfe44…` SHA。只有明确回退到 0.25.0 时才使用 `79d2268…`。不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
 
 ## 运行前提
 
@@ -29,14 +29,14 @@
 
 完整 Python 包和系统依赖见[依赖与运行前提](./dependencies.md)。
 
-## 安装当前双门禁候选提交
+## 安装当前精确候选提交
 
-以下命令会修改当前项目的依赖声明和锁文件，只应在测试分支或隔离副本中执行。
+请选择与项目现有依赖管理方式一致的命令。`uv add` 会修改项目依赖声明和锁文件；`pip` 只修改目标 Python 环境。不要在同一次升级里混用两套流程。
 
-### 使用 uv（推荐）
+### 项目使用 uv 时
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
 ```
 
 然后确认锁文件中的 source 末尾确实是目标 SHA，而不是只有分支名：
@@ -46,7 +46,7 @@ uv tree | grep nonebot-plugin-moellmchats
 grep -A3 'name = "nonebot-plugin-moellmchats"' uv.lock
 ```
 
-### 使用 pip
+### 项目使用 pip/venv 时
 
 建议先创建专用虚拟环境，再安装精确提交：
 
@@ -54,8 +54,39 @@ grep -A3 'name = "nonebot-plugin-moellmchats"' uv.lock
 python3 -m venv .venv-test
 .venv-test/bin/python -m pip install --upgrade pip
 .venv-test/bin/python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
 ```
+
+已有虚拟环境且依赖已经满足时，可以只替换插件本体。例如项目虚拟环境位于 `.venv`：
+
+```bash
+.venv/bin/python -m pip install \
+  --upgrade \
+  --force-reinstall \
+  --no-deps \
+  --no-cache-dir \
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
+```
+
+`--no-deps` 不会检查或补装依赖，也不会更新项目的依赖声明或锁文件；只有确认当前环境已经满足[依赖清单](./dependencies.md)时才使用。安装完成后，在重启 Bot 前核对包版本和来源：
+
+```bash
+.venv/bin/python - <<'PY'
+from importlib.metadata import distribution
+import json
+
+expected = "20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
+dist = distribution("nonebot-plugin-moellmchats")
+source = json.loads(dist.read_text("direct_url.json") or "{}")
+actual = source.get("vcs_info", {}).get("commit_id")
+print("version:", dist.version)
+print("commit:", actual)
+assert dist.version == "0.26.0", dist.version
+assert actual == expected, actual
+PY
+```
+
+预期输出中的版本是 `0.26.0`，提交是完整的 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`。如果仍显示 `0.25.0` 或 `79d2268…`，说明装的是回退基线，应停止重启并重新执行上面的精确安装命令。
 
 ## 让 NoneBot 加载插件
 
@@ -126,7 +157,7 @@ PY
 
 | 阶段 | 要验证的内容 | 通过标准 |
 | --- | --- | --- |
-| 1. 锁定 | 依赖和 source SHA | 锁文件明确解析到计划验收的完整 SHA；0.25 基线是 `79d2268…`，0.26 以 K 状态页为准 |
+| 1. 锁定 | 依赖和 source SHA | 0.26.0 隔离测试必须解析到完整 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`；`79d2268…` 仅是 0.25.0 回退基线 |
 | 2. 加载 | NoneBot 插件加载 | 无 import/config 权限错误，能生成独立配置目录 |
 | 3. 模型 | 测试服务商与模型 | `查看模型`、`查看配置` 正确；纯文本回复成功 |
 | 4. 调度 | 分类、视觉、MoE | 各角色使用预期模型；缺能力时明确拒绝或回退 |

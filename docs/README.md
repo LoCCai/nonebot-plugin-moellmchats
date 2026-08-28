@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.0 开发候选。进入本阶段前最后一个已完成双远端门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，push/PR run 为 `33134760223` / `33134761967`；它不包含本页新增的全量协议工具。0.26.0 的精确实现 SHA 和门禁证据记录在[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，未完成前不得把分支名当成可复现版本。PyPI 与七七安装状态是独立结论。
+> 当前文档面向 0.26.0。隔离测试应固定到精确提交 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`，其 push run [`33155319608`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33155319608) 已 12/12 成功；PR #3 已在此前合并旧 head，因此该后续提交没有 PR run，不能写成“双门禁”。旧 `79d2268…` 只用于回退到 0.25.0。完整边界见[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 

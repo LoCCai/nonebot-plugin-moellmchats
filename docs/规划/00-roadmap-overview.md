@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-28T00:00:00+00:00
+lastmod: 2026-08-28T09:17:11+00:00
 ---
 
 # 00-roadmap-overview
@@ -15,6 +15,8 @@ lastmod: 2026-08-28T00:00:00+00:00
 > 状态续记（2026-08-27）：七七隔离加载反馈暴露插件级目录无法召回“给我点个赞”，以及正文成功后 NapCat 表情发送 `ActionFailed(retcode=1200)` 拖垮整轮的问题。新增 [功能级意图发现与 OneBot 投递可靠性](./07-intent-discovery-onebot-reliability.md) J-01～J-07 依赖链；J-01～J-05 已在精确实现提交 `bbc3963a361259f4d98c29003937afb1cbe976f9` 完成。实现 push `33066587717` / PR `33080256433` 与证据提交 `45f7a6e6d5d1017fd8f3d9dc4a65ed497a2862b9` 的 push `33081113984` / PR `33081119792` 均为 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支；PR #3 以该分支为 base 且为 `OPEN / CLEAN`。J-06 已完成只读依赖、拓扑、临时锁解析与禁网无 driver 加载前置；七七当前仍是同仓库 `8e7f054…`，尚未修改依赖、`.venv` 或重载进程。J-07 发布/生产继续锁定。
 
 > 状态续记（2026-08-28）：J 阶段在 `bbc3963…` 后继续修复可选表情边界，进入新阶段前的最终 0.25 基线为 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`；其 push/PR run `33134760223` / `33134761967` 是当前前置双门禁。新增 [全量 OneBot / NapCat 协议工具实施状态](./08-onebot-napcat-protocol-tools.md) K-01～K-08 依赖链：固定收录 v11 38、v12 31、NapCat 175 项，默认总开关关闭，完整收录与允许执行分离。K-01～K-07 已完成本地实现与 Python 3.12 普通全量/Ruff 首轮验证，四版本、制品、包外加载和远端双门禁仍待关闭；K-08 继续锁定，七七依赖/进程、真实 QQ、合并与发布均未操作。
+
+> 状态续记（2026-08-28 09:17 UTC）：上段是 K 阶段实施中的历史快照，K-01～K-08 随后已经完成。PR #3 后续已由本任务之外的操作合并；0.26.0 的当前隔离测试安装点是 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`，其 push run `33155319608` 为 12/12 success、唯一 `release-gate` 成功。该提交没有 PR run，旧 `79d2268…` 只用于回退到 0.25.0；安装命令与校验方式以[安装页](../installation.md)为准。
 
 > I-01 本地门禁（2026-08-23）：规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增纯 stdlib、深度不可变且无 transport/credential 字段的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability`；能力、limits、精确 `NUMERIC(24,12)` Decimal 成本、availability 与 generation 均有界，identity/capability/full descriptor 三类 canonical SHA-256 分离。四版本定向各 `98 passed`、相关联合各 `492 passed`、普通全量及 Python 3.10 最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品/同哈希重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/descriptor/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 继续锁定；未读取现有模型配置或凭据，未改变 `ModelSelector`，未发模型请求，未迁移、未连接真实服务、未部署。
 
