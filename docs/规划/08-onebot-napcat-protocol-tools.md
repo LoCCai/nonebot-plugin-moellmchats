@@ -1,7 +1,7 @@
 ---
 title: 08-onebot-napcat-protocol-tools
 date: 2026-08-28T00:00:00+00:00
-lastmod: 2026-08-28T00:00:00+00:00
+lastmod: 2026-08-28T06:37:54+00:00
 ---
 
 # 全量 OneBot / NapCat 协议工具实施状态
@@ -25,7 +25,7 @@ lastmod: 2026-08-28T00:00:00+00:00
 | K-05 权限、确认和 Broker | K-04 | 已实现并本地验证 | 永久拒绝、SUPERUSER、二阶段确认、单次副作用、`result_unknown`、限额、截断、脱敏和审计 |
 | K-06 点赞、消息与表情 | K-05 | 已实现并本地验证 | 真 NoneBot Matcher 隔离点赞一次；v11/v12 消息捕获；正文/可选表情分离；v12 无 file_id 跳过 |
 | K-07 配置、文档与包 | K-06 | 已实现并完成本地发布门禁 | 0.26.0、四开关、支持/权限/动作总表、模型/调度/插件说明、wheel/sdist 资源与 MIT 归属 |
-| K-08 GitHub 交付 | K-07 全部本地门禁 | 已解锁，待实现/证据提交与远端双门禁 | 实现/证据两提交，自有 origin 和 PR #3；push/PR 各唯一成功 release-gate；不合并/发布/部署 |
+| K-08 GitHub 交付 | K-07 全部本地门禁 | 已完成；实现 SHA 双门禁与本文件所在证据提交自证 | 自有 origin 和 PR #3；push/PR 各唯一成功 release-gate；不合并/发布/部署 |
 
 ## 固定来源与确定性身份
 
@@ -68,17 +68,27 @@ NapCat OpenAPI SHA-256 为 `905ff1faa265cdfa6401a91e8ed832ab15c9e32a7683c42dc11b
 - fresh wheel/sdist 通过 Twine、校验和和包内容门禁；wheel SHA-256 为 `a085a5929fef95ed3eba8d7f76cb49eb78fab5c3ea51f24e6f5e975f94263938`，sdist 为 `70dcd47113b0b6ee32855adeeb1798f3d1f3d82742729ead1cb0f31cca891097`；两者均含 244 项动作、244 项策略、3 个安全封装、固定来源和完整 MIT NOTICE，且不含 `uv.lock`、cache 或 bytecode；
 - Python 3.10 × wheel/sdist 使用 NoneBot 2.5.0、Python 3.12 × wheel/sdist 使用最低 NoneBot 2.4.4，四组均在仓库外同时加载 v11/v12、验证 38 / 31 / 175 清单并发布 runtime generation 1。
 
-这些只证明本地隔离实现和制品可加载，不证明七七已经安装或发送过真实 QQ 动作。下一步只创建实现提交、推送自有 `origin` 并关闭实现 SHA 的 push/PR 双门禁；随后再以证据提交记录精确远端状态。
+这些只证明本地隔离实现和制品可加载，不证明七七已经安装或发送过真实 QQ 动作。实现提交和 CI 启动方式修复均已推送自有 `origin`，实现 SHA 的 push/PR 双门禁已经关闭；本文件所在提交只负责固化证据，不改变运行时实现。
 
 ## GitHub 交付与恢复点
 
-实现提交、证据提交、`origin`/`ls-remote`/PR #3 head，以及 push/PR 两类 Actions 的精确 SHA 和 run ID 将只在实际完成后回填。每个被验收 run 必须全部 job 成功且恰好一个 `release-gate` 为 `completed/success`。任何失败只在本分支修复重跑；不合并 PR、不 promotion、不发布 PyPI。
+0.26.0 协议实现提交为 `1bc42a0ac7ff6e006c9ba71367c6fe4fc9f0c84f`。它的 push run `33147881907` 和 PR run `33147883585` 均因普通矩阵使用裸 `pytest`、无法从仓库根导入 `scripts.generate_protocol_manifests` 而失败；其余质量、构建、sandbox 和四组包外安装 job 已成功，这两条失败 run 不作为放行证据。
+
+最小 CI 修复提交为 `cf6946881de79cd6501792d9d70c62f253d8499f`，只把普通矩阵入口从 `pytest` 改为 `python -m pytest`。同一干净 Python 3.12 环境已复现前者因 `ModuleNotFoundError` 退出、后者取得 `2935 passed, 1 skipped`。推送后已核对本地 HEAD、`origin/feat/generated-tool-bundles`、`git ls-remote` 和 PR #3 head 均为该 SHA。
+
+该实现 SHA 的合格远端证据为：
+
+- push run [`33148454431`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33148454431)：12/12 job 为 `completed/success`，唯一 `release-gate` job `98774828064` 成功；
+- pull_request run [`33148456661`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33148456661)：12/12 job 为 `completed/success`，唯一 `release-gate` job `98774850043` 成功；
+- PR [#3](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/3)：`OPEN`、非 Draft、head 为上述 SHA；核验时 `mergeStateStatus=CLEAN`，未执行合并。
+
+本文件所在提交是证据提交。提交无法在自身内容中写入自己的 SHA 或由自身触发的 run ID，否则会形成无穷自引用；因此其精确 SHA、`origin`/`ls-remote`/PR head 和 push/PR 双门禁由 Git 历史、GitHub check 与最终交付共同绑定。每个最终被验收 run 仍必须全部 job 成功，且恰好一个 `release-gate` 为 `completed/success`。任何失败只在本分支修复重跑；不合并 PR、不 promotion、不发布 PyPI。
 
 恢复时先执行只读核查：
 
 1. `git status --short --branch`，确认仍在 `feat/generated-tool-bundles`；
 2. 保留未跟踪 `uv.lock`，不得提交、修改或删除；
 3. 核对本地 HEAD、`origin/feat/generated-tool-bundles` 和 PR #3 head；
-4. K-07 本地门禁已完成；若代码又发生变化，必须从受影响定向测试开始并重跑完整发布门禁；
-5. K-08 当前从创建实现提交开始；若实现提交已推送，则从精确 SHA 的 push/PR run 核验继续；
+4. K-07 本地门禁和实现 SHA `cf69468…` 的远端双门禁已完成；若代码又发生变化，必须从受影响定向测试开始并重跑完整发布门禁；
+5. K-08 已完成；恢复时核对本文件所在提交的 push/PR 双门禁仍成功，若分支继续前进则重新关闭新 SHA 的双门禁；
 6. 不检查或修改七七依赖/进程，除非用户另行明确授权新的部署阶段。
