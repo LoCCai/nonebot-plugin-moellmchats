@@ -7,6 +7,7 @@ import pytest
 
 from nonebot_plugin_moellmchats.builtin_tools import (
     WEB_SEARCH_TOOL_SPEC,
+    builtin_protocol_specs,
     builtin_tool_specs,
     execute_web_search,
 )
@@ -17,9 +18,13 @@ from nonebot_plugin_moellmchats.tool_manager import ToolManager, tool_manager
 def test_builtin_registry_is_stable_immutable_and_code_defined() -> None:
     first = builtin_tool_specs()
     second = builtin_tool_specs()
+    protocol_specs = builtin_protocol_specs()
 
     assert first is second
-    assert first == (WEB_SEARCH_TOOL_SPEC,)
+    assert len(first) == 125
+    assert first == (WEB_SEARCH_TOOL_SPEC, *protocol_specs)
+    assert len(protocol_specs) == 124
+    assert len({spec.name for spec in first}) == len(first)
     assert deepcopy(first) is first
     assert WEB_SEARCH_TOOL_SPEC.name == "web_search"
     assert WEB_SEARCH_TOOL_SPEC.effect is ToolEffect.READ_ONLY

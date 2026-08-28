@@ -218,6 +218,7 @@ class ToolSchemaCacheKey:
     search_enabled: bool
     blacklist_digest: str
     selected_plugins_digest: str
+    protocol_scope_digest: str = "0" * 64
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -230,7 +231,11 @@ class ToolSchemaCacheKey:
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise TypeError(f"tool schema {field_name} 必须是布尔值")
-        for field_name in ("blacklist_digest", "selected_plugins_digest"):
+        for field_name in (
+            "blacklist_digest",
+            "selected_plugins_digest",
+            "protocol_scope_digest",
+        ):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
                 raise ValueError(f"tool schema {field_name} 必须是 SHA-256")
@@ -241,6 +246,7 @@ class ToolSchemaCacheKey:
             "blacklist_digest": self.blacklist_digest,
             "permission": self.permission.value,
             "provider_cutover": self.provider_cutover,
+            "protocol_scope_digest": self.protocol_scope_digest,
             "search_enabled": self.search_enabled,
             "selected_plugins_digest": self.selected_plugins_digest,
             "tools_enabled": self.tools_enabled,
@@ -269,6 +275,7 @@ class ToolSchemaRenderContext:
     search_enabled: bool
     selected_plugins: tuple[str, ...] = field(repr=False)
     blacklist_patterns: tuple[str, ...] = field(repr=False)
+    protocol_scope_digest: str = "0" * 64
     selected_plugins_digest: str = field(init=False)
     blacklist_digest: str = field(init=False)
 
@@ -295,6 +302,7 @@ class ToolSchemaRenderContext:
             tools_enabled=self.tools_enabled,
             web_search_enabled=self.search_enabled,
             blacklist_patterns=self.blacklist_patterns,
+            protocol_scope_digest=self.protocol_scope_digest,
         )
         object.__setattr__(self, "selected_plugins", selected)
         object.__setattr__(self, "selected_plugins_digest", selected_digest)
@@ -312,6 +320,7 @@ class ToolSchemaRenderContext:
         tools_enabled: bool,
         search_enabled: bool,
         blacklist_patterns: tuple[str, ...],
+        protocol_scope_digest: str = "0" * 64,
     ) -> ToolSchemaRenderContext:
         if not isinstance(selected_plugins, AbstractSet) or not all(isinstance(name, str) for name in selected_plugins):
             raise TypeError("tool schema selected_plugins 必须是字符串集合")
@@ -323,6 +332,7 @@ class ToolSchemaRenderContext:
             search_enabled=search_enabled,
             selected_plugins=tuple(selected_plugins),
             blacklist_patterns=blacklist_patterns,
+            protocol_scope_digest=protocol_scope_digest,
         )
 
     @property
@@ -339,6 +349,7 @@ class ToolSchemaRenderContext:
             search_enabled=self.search_enabled,
             blacklist_digest=self.blacklist_digest,
             selected_plugins_digest=self.selected_plugins_digest,
+            protocol_scope_digest=self.protocol_scope_digest,
         )
 
     def is_blacklisted(self, tool_name: str) -> bool:

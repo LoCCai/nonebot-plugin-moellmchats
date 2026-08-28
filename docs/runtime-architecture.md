@@ -108,7 +108,7 @@ created → admitted → classifying → planning → executing
 
 | 来源 | 执行边界 | 典型用途 |
 | --- | --- | --- |
-| Builtin | 主进程；结果可能来自外网 | `web_search` |
+| Builtin | 主进程；结果可能来自外网或当前 Bot | `web_search`、固定 OneBot/NapCat 协议工具 |
 | Registered `ToolSpec` | 可信主进程 | 访问 Bot/Event 或应用服务的强类型工具 |
 | Custom File | nobody 隔离 artifact | 管理员手写、无需 Bot 对象的 Python 工具 |
 | Generated Tool | 最严格的生成代码 sandbox | AI 生成、人工复核批准的工具包 |
@@ -123,7 +123,7 @@ PicMenu/QWeb/PluginMetadata 菜单
   → 分类模型从完整紧凑目录选择插件标识
   → 只展开命中插件的 ToolSpec 或兼容 command Schema
   → handler / 定向 Matcher
-  → OneBot V11 adapter / NapCat
+  → OneBot V11 / NapCat V11 / OneBot V12 adapter
 ```
 
 菜单只回答“用户可能想做什么”。`ToolSpec` 或兼容适配器回答“参数是什么、由谁执行、有什么副作用”；目标插件和 adapter 才执行真实动作。系统不会根据菜单自动生成任意 `bot.call_api`，也不会把 NapCat 的完整 API 面交给模型。
@@ -142,6 +142,10 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 这就是“完整紧凑索引、命中后展开”：日常闲聊不用携带全部 Tool Schema，也不要求把业务插件常驻。`resident_plugins` 只是显式强制注入/诊断兜底。不同来源的工具名必须全局唯一；冲突会拒绝整代候选，不会按加载顺序静默覆盖。
 
 菜单字段会清理展示标签与控制字符，拒绝错误类型，并限制每插件功能数、每功能触发数、字段长度和总字符数；PicMenu 隐藏功能既不进入普通用户分类目录，也不会在插件命中后的普通用户详细 Schema 中展开。它们与 plugin info、ToolSpec 一起固化到同代不可变快照；分类缓存策略版本和目录 digest 共同防止旧分类结果跨目录复用。选中的兼容插件会收到完整但有界的消息触发用法；真实事件/定时功能只作发现提示，不能由合成 command 伪造。菜单可见性只是前置过滤，执行端仍必须复核真实权限。
+
+协议工具在请求进入 Agent generation 后另外建立一次不可变能力快照。v11 调用 `get_version_info`，只有 `app_name=NapCat.Onebot` 才增加 NapCat 扩展；v12 调用 `get_supported_actions`，只取 Bot 声明支持与包内标准清单的交集。探测失败只让当前请求看不到协议工具，不会中止普通聊天。
+
+协议短目录还会按普通用户/`SUPERUSER`、群聊/私聊、当前用户、当前群、当前消息和回复消息过滤。若用户原话命中已加载业务插件的规范化菜单触发词，默认先保留业务插件并抑制同意图协议动作。选中协议动作后才展开严格 Schema；handler 已在构造时固定 API 名，模型不能传入另一个 action。缓存身份还包含协议、实现/版本、支持动作摘要、Adapter、Bot、用户、消息和 runtime generation，禁止跨 Bot 或跨协议复用。完整规则见 [OneBot / NapCat 协议工具](./protocol-tools.md)。
 
 ### 6. 工具执行、确认和闭环
 
@@ -163,6 +167,8 @@ Registered `ToolSpec`、Custom File 和 Generated Tool 中显式标为 `mutating
 - Generated bundle digest（如适用）。
 
 用户必须另发 `确认执行 <确认码>`。过期、重放、换用户、换会话、重载后 generation 改变或工具版本改变都会拒绝。同步 `mutating` `ToolSpec` 因线程在 asyncio 超时后不可杀死，会在启动前拒绝；应使用可取消的 async handler 或隔离文件工具。
+
+协议 Broker 使用独立但同样一次性的确认记录，额外绑定协议、实现/版本、支持动作摘要和人工策略摘要；确认前重新探测 Bot 能力。只有三个包内固定当前目标的低风险协议封装可以按配置在限额内免确认，Custom、Generated、MCP 和普通 Registered 工具不能声明这种绕过。协议副作用最多调用一次；响应不确定时返回 `result_unknown`、保留额度并禁止自动重试。
 
 兼容的 NoneBot Matcher 插件和当前 MCP 配置无法表达同等精细的逐工具确认契约。NoneBot 兼容适配器会保守记录为 `mutating`，但当前为保留既有命令行为使用有界兼容执行；MCP 工具也没有逐工具 effect/permission 配置。两者都只应开放已经审查、原本就允许对应用户直接调用的能力。可能产生副作用的新能力应改写为 `ToolSpec(effect=ToolEffect.MUTATING, ...)`，详见[插件集成](./plugin-integration.md)。
 

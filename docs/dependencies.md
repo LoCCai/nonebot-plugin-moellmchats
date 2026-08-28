@@ -8,7 +8,7 @@
 | --- | --- |
 | Python | `>=3.10,<4.0`；当前 CI 实测 3.10～3.13 |
 | NoneBot | `>=2.4.4,<3.0.0` |
-| Adapter | OneBot V11，`nonebot-adapter-onebot>=2.4.6,<3.0.0` |
+| Adapter | OneBot V11 / V12，`nonebot-adapter-onebot>=2.4.6,<3.0.0` |
 | 操作系统 | POSIX 权限语义；当前不支持 Windows |
 | 文件/生成工具 | 额外要求完整 Linux 隔离能力，见下文 |
 
@@ -24,7 +24,7 @@ Python 3.14 及更高版本虽然可能满足元数据范围，但尚未进入�
 | `alembic>=1.13.0,<2.0.0` | 内置 PostgreSQL migration graph 与离线/显式迁移接口 | 否；默认不会运行 migration |
 | `asyncpg>=0.30.0,<1.0.0` | SQLAlchemy PostgreSQL async driver | 否；默认资源设置没有数据库 DSN |
 | `nonebot2>=2.4.4,<3.0.0` | NoneBot 插件生命周期、Matcher、权限和事件接口 | 由宿主 Bot 使用 |
-| `nonebot-adapter-onebot>=2.4.6,<3.0.0` | OneBot V11 消息、Bot/Event 类型和 QQ API | 由宿主 adapter 使用 |
+| `nonebot-adapter-onebot>=2.4.6,<3.0.0` | OneBot V11/V12 消息、Bot/Event 类型、能力探测和 QQ API | 由宿主 adapter 使用 |
 | `ujson>=5.12.0,<6.0.0` | 兼容既有配置和模型 payload JSON 路径 | 否 |
 | `nonebot-plugin-localstore>=0.7.0,<0.8.0` | 确定配置目录并创建插件私有文件 | 只访问本地配置目录 |
 | `python-dotenv>=1.2.2,<2.0.0` | 保留 NoneBot `.env` 配置链的显式安全版本下限 | 否；插件源码不直接 import 它 |
@@ -64,6 +64,12 @@ args = ["mcp-server-filesystem", "/tmp"]
 MoEllmChats 可以读取“已经加载的 PicMenu Next 当前内存目录”，用其中的菜单补充 NoneBot 插件意图。该桥接只按公开字段做类型受限的 duck typing：不会 import PicMenu SDK，不会读取 QWeb/PicMenu 文件路径，也不会为了发现目录发起网络或数据库请求。
 
 因此无需把 `nonebot-plugin-picmenu-next`、QWeb 或七七项目包加入本项目 `pyproject.toml`。宿主没有 PicMenu 时直接使用 `PluginMetadata.extra.menu_data`；PicMenu 存在但内存目录未就绪时也安全回退。只有 PicMenu 已把目录安装到内存、且目标 NoneBot 插件真实加载时，该目录才会进入下一次 `刷新工具`/`重载LLM` 候选快照。
+
+### 协议清单不是新运行依赖
+
+OneBot v11 的 38 项、OneBot v12 的 31 项和 NapCat 4.18.19 的 175 项动作以规范化 JSON 随 wheel/sdist 安装。运行时和普通构建不访问协议文档站，也不需要安装 NapCatDocs、Git 或 OpenAPI 解析器。
+
+维护者只有在固定上游版本变更时才运行 `scripts/generate_protocol_manifests.py`。生成器会校验四个固定 Git commit、NapCat OpenAPI SHA-256、动作数量、工具名碰撞和人工策略完整性；这些上游 checkout 不是用户依赖。来源、许可证和完整权限边界见 [OneBot / NapCat 协议工具](./protocol-tools.md)。
 
 ## 系统与能力依赖
 
@@ -126,6 +132,9 @@ MCP 不经过文件/生成工具的 nobody sandbox：
 | `filelock` | 开发/测试辅助锁语义 |
 | `nonemoji` | 开发辅助工具 |
 | `pre-commit` | 本地提交前检查 |
+| `build>=1.3.0,<2.0.0` | fresh wheel/sdist 构建 |
+| `pyright==1.1.411` | 新增及安全关键模块的静态类型门禁；项目遗留模块仍按规划逐步收口 |
+| `twine>=6.1.0,<8.0.0` | wheel/sdist 元数据与长描述检查；不会自动上传制品 |
 
 安装开发依赖时应使用项目现有的 Poetry/uv 流程，不要把它们手工写入生产依赖。
 
@@ -137,5 +146,6 @@ MCP 不经过文件/生成工具的 nobody sandbox：
 2. 确认 `asyncpg` 是 SQLAlchemy PostgreSQL dialect 的运行驱动，`tomli` 是 Python 3.10 回退，`python-dotenv` 是保留的 `.env` 安全下限，而不是误删候选。
 3. 保留 `mcp[cli]` 的现有兼容声明；MCP server 可执行文件仍需独立管理，不能把 SDK extra 当成 server 清单。
 4. 新增的 PicMenu/QWeb 菜单发现只消费已加载模块的内存投影，不新增 Python、系统或服务依赖。
+5. 协议清单生成器、文档/依赖检查和制品检查只使用 Python 标准库；`build`、`pyright`、`ruff`、`twine` 只属于开发门禁，不会进入普通安装依赖或在运行时联网。
 
 依赖约束本身只说明 resolver 允许的范围。最终可安装性还要由 fresh wheel/sdist 构建和包外安装 smoke 验证，见[安装验收](./installation.md#隔离功能验收清单)。

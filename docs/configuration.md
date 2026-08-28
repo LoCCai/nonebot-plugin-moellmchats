@@ -171,6 +171,19 @@ LOCALSTORE_USE_CWD=true
 
 六个 `provider_catalog_*` 字段是分 consumer 的兼容回滚开关，不是性能开关。默认保持 true；任何关闭都应记录原因、范围和恢复时间，且 D-09 完成前不能删除 legacy sidecar。
 
+### OneBot / NapCat 协议工具
+
+| 字段 | 默认值 | 通俗含义 | 何时调整 |
+| --- | ---: | --- | --- |
+| `protocol_tools_enabled` | `false` | 协议工具总开关；关闭时不探测 Bot，也不向模型显示协议动作 | 只在隔离测试确认权限和限额后显式开启 |
+| `protocol_tools_napcat_extensions_enabled` | `true` | 精确识别到 `NapCat.Onebot` 后，是否加入审核允许的 NapCat 扩展 | 只想保留通用 v11 动作时关闭 |
+| `protocol_tools_low_risk_direct_enabled` | `true` | 固定当前目标的点赞、戳一戳和消息表情回应是否可在限额内直执 | 希望三者也必须另发确认码时关闭 |
+| `protocol_tools_business_first` | `true` | 用户原话命中已加载业务插件菜单时，优先业务 Matcher 并抑制冲突协议动作 | 仅在诊断菜单冲突策略时临时关闭 |
+
+四项都必须是 JSON 布尔值。`protocol_tools_enabled=false` 时其余三项不会单独开放任何动作；安装或升到 0.26.0 也不会自动改成 true。协议工具还要求 `model_config.json` 的 `use_tools=true` 和支持 Function Calling 的当前模型。
+
+开启后的完整权限、确认、限额、NapCat 识别和排错说明见 [OneBot / NapCat 协议工具](./protocol-tools.md)。不要把 244 项清单理解成全部可执行：永久拒绝动作只留在离线审计总表，普通用户也看不到超级管理员动作。
+
 ### 互动、搜索与显示
 
 | 字段 | 默认值 | 通俗含义 | 何时调整 |

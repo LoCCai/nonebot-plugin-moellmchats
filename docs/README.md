@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.25 候选实现。包含功能级菜单发现、隐藏项过滤与表情投递降级的精确候选是 `bbc3963a361259f4d98c29003937afb1cbe976f9`，其 push/PR 双 `release-gate` 已通过。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支，本轮 PR #3 仍为 Open/Clean；PyPI 最新正式版仍为 `0.22.3`。任何测试安装都必须固定与目标功能相符的完整 SHA，详见[安装与验收](./installation.md)。
+> 当前文档面向 0.26.0 开发候选。进入本阶段前最后一个已完成双远端门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，push/PR run 为 `33134760223` / `33134761967`；它不包含本页新增的全量协议工具。0.26.0 的精确实现 SHA 和门禁证据记录在[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，未完成前不得把分支名当成可复现版本。PyPI 与七七安装状态是独立结论。
 
 ---
 
@@ -14,6 +14,8 @@
 | [依赖与运行前提](./dependencies.md) | 全部 Python 依赖用途、MCP/系统前提，以及哪些后端默认不会连接 |
 | [配置参考](./configuration.md) | 所有配置文件的完整字段说明（`config.json`、`providers.toml`、`model_config.json` 等） |
 | [调度链路与运行时架构](./runtime-architecture.md) | 从消息准入到 Agent、选模、工具、确认、缓存和默认资源的完整链路 |
+| [OneBot / NapCat 协议工具](./protocol-tools.md) | v11/v12/NapCat 支持矩阵、四个开关、权限确认、限额、回退和排错 |
+| [244 项协议动作总表](./protocol-actions.md) | 固定版本离线清单、逐动作暴露策略、请求字段与永久拒绝原因 |
 | [自定义工具开发](./custom-tools.md) | 隔离文件工具 capability、runner 边界与 AI 工具包热插拔 |
 | [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md) | 兼容已有 Matcher，或编写强类型函数供 AI 调用 |
 | [性格系统](./personality.md) | `temperaments.json` 性格预设配置与用户切换管理 |
@@ -21,6 +23,7 @@
 | [Plan 1 完成审计](./规划/05-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
 | [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
 | [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
+| [全量 OneBot / NapCat 协议工具实施状态](./规划/08-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
 
 ---
 
@@ -57,5 +60,6 @@
 - [安装、升级与验收](./installation.md)
 - [配置 AI 模型](./configuration.md#五分钟最小配置)
 - [调度链路](./runtime-architecture.md)
+- [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [编写 ToolSpec 插件](./plugin-integration.md#方式二注册强类型-toolspec推荐)
 - [更新日志](../CHANGELOG.md)

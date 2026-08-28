@@ -57,7 +57,9 @@ PicMenu 桥接是可选的 duck-typed 读取，不是 Python 包依赖，也不�
 
 因此“给我点个赞”应先召回 `qi_group_admin`，再生成插件本来支持的“点赞/赞我”消息，最终仍走该插件的 `bot.send_like` 与每日次数逻辑。不要注册一个允许模型任意填写 API 名和参数的 `bot.call_api` 工具，那会绕过业务层。
 
-兼容 Matcher 的消息输出钩子覆盖 OneBot V11 的 `send_msg`、`send_group_msg` 和 `send_private_msg` 三种发送动作，用于把目标插件的文本/图片结果收回工具 observation；`send_like` 不属于消息输出，不会被钩子吞掉或伪造成文本结果，仍由目标插件真实调用。这里的“覆盖全部接口”只指该链路实际使用的消息发送与点赞接口，不表示向模型开放踢人、禁言、删消息或任意 NapCat API。
+兼容 Matcher 的消息输出钩子覆盖 OneBot V11 的 `send_msg`、`send_group_msg`、`send_private_msg`，以及 OneBot V12 的 `send_message`，用于把目标插件的文本/图片结果收回工具 observation；`send_like` 不属于消息输出，不会被钩子吞掉或伪造成文本结果，仍由目标插件真实调用。
+
+0.26.0 另有默认关闭的[固定 OneBot / NapCat 协议工具](./protocol-tools.md)。它把 244 项接口完整收入离线审计清单，但只给模型展示人工策略允许、当前 Bot 支持且当前调用者有权使用的固定动作；永久拒绝项不会生成 Schema。业务菜单和协议动作发生意图冲突时默认仍以本节 Matcher 为先，不会用协议 Broker 绕过已有业务检查。
 
 PicMenu/QWeb 在 MoEllmChats 初始 generation 之后才完成内存同步时，在隔离测试实例执行一次 `刷新工具` 即可发布新目录，无需把全部插件加入常驻，也无需重启 NoneBot。QWeb 后续目录 generation 变化同样需要触发一次工具重载，才能进入新的不可变 `RuntimeSnapshot`。
 
@@ -191,6 +193,7 @@ ToolSpec(
     result_limit=None,
     dependencies=(),
     policy=None,
+    confirmation_mode=ToolConfirmationMode.DEFAULT,
 )
 ```
 
@@ -206,6 +209,7 @@ ToolSpec(
 | `result_limit` | 本工具文本呈现的正整数字符上限；省略时使用全局上限 |
 | `dependencies` | 需要一并注入的其他工具名元组；不是调用顺序 |
 | `policy` | 高级 `ToolPolicy`；普通可信插件保持 `None`，不要伪造隔离能力 |
+| `confirmation_mode` | 公开确认契约；普通插件保持 `DEFAULT`，变更工具仍自动二阶段确认；`REQUIRED` 可显式记录同一要求，但不会把只读工具改成变更工具 |
 
 模型只控制 `parameters` 声明的公开参数。若 handler 签名中显式包含 `_tool_context`，执行器会注入：
 
@@ -218,6 +222,8 @@ ToolContext(bot, event, request_id=None, confirmed=False)
 - `confirmed` 只有二阶段确认通过后的变更执行才为 `True`。
 
 不要把 `_tool_context` 写进模型 JSON Schema，也不要相信模型传来的同名字段。执行器还会校验模型提供的 URL 参数，拒绝环回、私网、保留地址和云元数据地址。
+
+`ToolConfirmationMode.TRUSTED_LOW_RISK_DIRECT` 不是插件作者的通用开关。Provider 信任层只接受包内 canonical 协议 Builtin 的精确 `ToolSpec` 对象；Registered、Custom File、Generated、MCP 和兼容 Matcher 即使伪造同名枚举也会 fail closed。普通变更工具继续使用默认二阶段确认。
 
 ### 正确区分只读与变更
 

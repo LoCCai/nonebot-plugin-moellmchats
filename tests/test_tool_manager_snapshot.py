@@ -519,7 +519,13 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
         provider_catalog=catalog,
     )
 
-    assert snapshot.provider_catalog.tools_for_provider("builtin") == (record,)
+    builtin_records = snapshot.provider_catalog.tools_for_provider("builtin")
+    assert len(builtin_records) == len(builtin_tool_specs())
+    assert record in builtin_records
+    assert all(
+        snapshot.provider_catalog.tools[spec.name].spec is spec
+        for spec in builtin_tool_specs()
+    )
     assert record.spec is builtin_spec
     assert builtin_spec.name not in snapshot.custom_tools
 
@@ -530,7 +536,7 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
     drifted_catalog = ProviderCatalogSnapshot(
         generation=14,
         registrations=catalog.registrations,
-        tools={builtin_spec.name: drifted},
+        tools={**catalog.tools, builtin_spec.name: drifted},
     )
     with pytest.raises(ValueError, match="ToolSpec"):
         ToolSnapshot(

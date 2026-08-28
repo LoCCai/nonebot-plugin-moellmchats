@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "napcat_docs": {
+      "commit": "14ad6896579abf17c761cdf8d9dfb7c3ea396305",
+      "count": 175,
+      "file": "src/api/4.18.19/openapi.json",
+      "license": "MIT",
+      "repository": "https://github.com/NapNeko/NapCatDocs",
+      "sha256": "905ff1faa265cdfa6401a91e8ed832ab15c9e32a7683c42dc11bb6752682ae39",
+      "version": "4.18.19"
+    },
+    "nonebot_adapter_onebot": {
+      "commit": "3ac943fc4470d851219f368cacadf3dcdd649ee7",
+      "license": "MIT",
+      "repository": "https://github.com/nonebot/adapter-onebot",
+      "version": "2.4.6"
+    },
+    "onebot_v11": {
+      "commit": "d4456ee706f9ada9c2dfde56a2bcfc69752600e4",
+      "count": 38,
+      "file": "api/public.md",
+      "license": "MIT",
+      "repository": "https://github.com/botuniverse/onebot-11"
+    },
+    "onebot_v12": {
+      "commit": "d533f0fca3bd14781d4461776dba8d907d9de253",
+      "count": 31,
+      "files": "specs/interface/*/actions.md",
+      "license": "MIT",
+      "repository": "https://github.com/botuniverse/onebot"
+    }
+  }
+}

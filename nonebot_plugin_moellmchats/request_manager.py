@@ -3,14 +3,16 @@ from dataclasses import dataclass
 import itertools
 import time
 
-from nonebot.adapters.onebot.v11 import MessageEvent
+from nonebot.adapters import Event as MessageEvent
+
+from .onebot_facade import event_sender_name, event_user_id
 
 
 @dataclass
 class ActiveRequest:
     request_id: int
     task: asyncio.Task
-    user_id: int
+    user_id: int | str
     sender_name: str
     target: str
     preview: str
@@ -55,11 +57,11 @@ def register_request(
         raise RuntimeError("无法获取当前请求任务")
 
     request_id = next(_request_ids)
-    sender_name = getattr(event.sender, "card", None) or event.sender.nickname
+    sender_name = event_sender_name(event)
     _active_requests[request_id] = ActiveRequest(
         request_id=request_id,
         task=task,
-        user_id=event.user_id,
+        user_id=event_user_id(event),
         sender_name=sender_name,
         target=_extract_target(event),
         preview=_extract_preview(format_message_dict),
@@ -108,8 +110,7 @@ def format_active_requests() -> str:
         elapsed = int(now - request.started_at)
         mode = "ai" if request.is_ai else "chat"
         lines.append(
-            f"[{request_id}] {request.target} | 用户 {request.sender_name}({request.user_id}) | "
-            f"模式 {mode} | 已运行 {elapsed}s"
+            f"[{request_id}] {request.target} | 用户 {request.sender_name}({request.user_id}) | 模式 {mode} | 已运行 {elapsed}s"
         )
         lines.append(f"    内容：{request.preview}")
     return "\n".join(lines)

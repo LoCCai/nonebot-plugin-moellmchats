@@ -1,26 +1,27 @@
 # 安装、升级与测试验收
 
-本文说明如何安装 0.25 候选版、让 NoneBot 正确加载插件，以及怎样在不触碰生产的前提下做隔离验收。
+本文说明如何安装精确候选提交、让 NoneBot 正确加载插件，以及怎样在不触碰生产的前提下做隔离验收。
 
 ## 先看版本状态
 
-截至 2026-08-27：
+截至 2026-08-28：
 
-- 当前完成精确远端双门禁的候选提交是 `bbc3963a361259f4d98c29003937afb1cbe976f9`。
-- 该提交包含 PicMenu/QWeb 功能级意图发现、普通用户隐藏项过滤和 OneBot 表情发送降级；Python 3.10～3.13、mandatory root sandbox、wheel/sdist 构建与 Python 3.10/3.12 × wheel/sdist 包外 smoke 均已通过。
-- push run `33066587717` 与 PR run `33080256433` 各 11/11 success、`non_success=[]`，并各恰好一个 `completed/success release-gate`。
+- 进入 0.26.0 协议阶段前，最后一个完成精确远端双门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`。
+- 该基线包含 PicMenu/QWeb 功能级意图发现、普通用户隐藏项过滤，以及 v11 正文/可选表情降级；push run `33134760223` 与 PR run `33134761967` 已完成双门禁。
+- `bbc3963…` 是更早的 J 阶段实现点，不再是“当前候选”。
+- 0.26.0 新增的全量 OneBot/NapCat 协议工具必须使用 [K 阶段状态页](./规划/08-onebot-napcat-protocol-tools.md) 最终记录的精确实现 SHA；在其四版本、制品和远端双门禁完成前，不要仅为尝试新功能安装移动分支头。
 - PR #2 已于 2026-08-26 合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支，merge commit 为 `c78ef06190d2df1d77c2ada6d9f06020ef6b37ca`；本轮 PR #3 以该分支为 base，当前为 Open/Clean。上游和默认 `master` 都不是本轮集成 base。
-- 包内版本号是 `0.25.0`，但 PyPI 当前最新正式版仍是 `0.22.3`。因此 `pip install nonebot-plugin-moellmchats` 不会得到本候选版。
+- 开发工作树包内版本号是 `0.26.0`，但这不表示 PyPI 已发布该版本。`pip install nonebot-plugin-moellmchats` 得到什么必须以实际索引为准。
 - 这些证据说明“开发制品可以进入隔离测试”，不等于它已经在七七或其他生产 Bot 中部署验证。
 
-隔离测试应把依赖固定到上面的完整提交 SHA；不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
+只需验证 0.25 基线时可固定到上面的 `79d2268…`；验证 0.26.0 协议工具时应等待状态页给出本阶段精确实现 SHA。不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
 
 ## 运行前提
 
 普通聊天至少需要：
 
 - Python 3.10 或更高版本；当前门禁实际覆盖 3.10、3.11、3.12、3.13。
-- NoneBot 2.4.4+ 与 OneBot V11 adapter 2.4.6+。
+- NoneBot 2.4.4+ 与 OneBot V11/V12 adapter 2.4.6+。
 - 能访问所配置的 OpenAI Chat Completions 兼容 API。
 - 支持 owner、mode bit 和 no-follow 检查的 POSIX 文件系统；当前不支持 Windows。
 
@@ -35,7 +36,7 @@
 ### 使用 uv（推荐）
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@bbc3963a361259f4d98c29003937afb1cbe976f9"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
 ```
 
 然后确认锁文件中的 source 末尾确实是目标 SHA，而不是只有分支名：
@@ -53,7 +54,7 @@ grep -A3 'name = "nonebot-plugin-moellmchats"' uv.lock
 python3 -m venv .venv-test
 .venv-test/bin/python -m pip install --upgrade pip
 .venv-test/bin/python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@bbc3963a361259f4d98c29003937afb1cbe976f9"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
 ```
 
 ## 让 NoneBot 加载插件
@@ -125,16 +126,17 @@ PY
 
 | 阶段 | 要验证的内容 | 通过标准 |
 | --- | --- | --- |
-| 1. 锁定 | 依赖和 source SHA | 锁文件明确解析到 `bbc3963…` |
+| 1. 锁定 | 依赖和 source SHA | 锁文件明确解析到计划验收的完整 SHA；0.25 基线是 `79d2268…`，0.26 以 K 状态页为准 |
 | 2. 加载 | NoneBot 插件加载 | 无 import/config 权限错误，能生成独立配置目录 |
 | 3. 模型 | 测试服务商与模型 | `查看模型`、`查看配置` 正确；纯文本回复成功 |
 | 4. 调度 | 分类、视觉、MoE | 各角色使用预期模型；缺能力时明确拒绝或回退 |
 | 5. 发现目录 | PicMenu/QWeb、Metadata 菜单、覆写优先级 | `刷新工具` 后自然语言能召回菜单功能；未加载插件不进入工具目录 |
 | 6. 工具 | Custom File、ToolSpec、MCP、Matcher 兼容 | 只暴露预期工具；黑名单、权限、结果上限生效；不提供任意 `bot.call_api` |
 | 7. 确认 | `mutating` ToolSpec/文件工具 | 首次只给确认码；原用户在原会话另发确认后才执行 |
-| 8. OneBot 投递 | `send_msg`/`send_group_msg`/`send_private_msg`、正文与可选表情 | 三种消息动作均可捕获；正文失败可见；正文成功后单个表情的 `ActionFailed`/`NetworkError`/`ApiNotAvailable` 不重发正文、不拖垮整轮；`send_like` 仍实际进入业务 Matcher |
-| 9. 隔离 | 文件/生成工具 runner | `查看LLM状态` 显示 `isolation=ready`，隔离探针无跳过 |
-| 10. 运维 | 重载、取消、退回 | 坏配置保留旧 generation；请求可停止；回退路径已演练 |
+| 8. OneBot 投递 | v11 三种发送、v12 `send_message`、正文与可选表情 | 正文失败可见；正文成功后表情失败不重发；v12 无可用 `file_id` 时跳过本地表情；业务 `send_like` 真实调用一次 |
+| 9. 协议工具 | v11/NapCat/v12 能力、权限、确认和限额 | 默认关闭；开启后只出现当前 Bot/权限动作；永久拒绝项无 Schema；副作用不确定时不重试 |
+| 10. 隔离 | 文件/生成工具 runner | `查看LLM状态` 显示 `isolation=ready`，隔离探针无跳过 |
+| 11. 运维 | 重载、取消、退回 | 坏配置保留旧 generation；请求可停止；回退路径已演练 |
 
 必须区分以下结论：
 
@@ -172,5 +174,6 @@ PY
 
 - [五分钟模型配置](./configuration.md#五分钟最小配置)
 - [调度链路与运行时边界](./runtime-architecture.md)
+- [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [自定义工具开发](./custom-tools.md)
 - [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md)

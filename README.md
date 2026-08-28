@@ -11,7 +11,7 @@
 
 - [🚀 核心特性](#-核心特性)
 - [📦 安装](#-安装)
-- [⚙️ 配置](#️-配置)
+- [⚙️ 配置](#-配置)
 - [🎮 使用](#-使用)
 - [🔄 处理流程](#-处理流程)
 - [更新日志](#更新日志)
@@ -35,6 +35,8 @@
 
 - **完整紧凑目录 + 命中后展开（Function Calling）**：优先复用 PicMenu/QWeb 内存目录或 `PluginMetadata.extra.menu_data` 判断功能意图，只把命中插件的详细 Tool Schema 注入主模型；`resident_plugins` 仅作强制注入/诊断兜底，也支持原生 Python 工具与人工覆写
 
+- **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
+
 - **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
 
 - **运行快照热重载**：配置、模型、人设、回复、工具描述、自定义工具、MCP 与表情索引支持 2 秒低频检测和 `重载LLM`；候选先完整校验，再原子发布到当前进程，坏文件会继续沿用上一代快照
@@ -49,7 +51,7 @@
 
 ## 📦 安装
 
-截至 2026-08-27，当前完成精确 push/PR 双门禁的 0.25 候选提交是 `bbc3963a361259f4d98c29003937afb1cbe976f9`：Python 3.10～3.13、mandatory root sandbox、fresh wheel/sdist 与 Python 3.10/3.12 × wheel/sdist 包外 smoke 均已通过；push run `33066587717` 与 PR run `33080256433` 各 11/11 success、各恰好一个成功 `release-gate`。该提交包含 PicMenu/QWeb 功能级发现、普通用户隐藏项过滤和 OneBot 表情投递降级。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支；本轮 PR #3 以该同仓库分支为 base，当前为 Open/Clean。不要把上游或默认 `master` 当成本轮集成 base；PyPI 最新正式版仍是 `0.22.3`。
+截至 2026-08-28，进入 0.26.0 协议阶段前最后一个完成精确 push/PR 双门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，对应 run `33134760223` / `33134761967`；`bbc3963…` 只是更早的历史实现点。0.26.0 的精确源码提交和门禁状态以 [K 阶段实施状态](docs/规划/08-onebot-napcat-protocol-tools.md) 为准，不能把移动分支或本地脏工作树称为候选制品。不要把上游或默认 `master` 当成本轮集成 base；PyPI 是否已有 0.26.0 也必须独立核对。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
@@ -58,7 +60,7 @@
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@bbc3963a361259f4d98c29003937afb1cbe976f9"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
 ```
 
 ### 使用 pip 安装
@@ -66,7 +68,7 @@ uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugi
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-pip install "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@bbc3963a361259f4d98c29003937afb1cbe976f9"
+pip install "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
 ```
 
 

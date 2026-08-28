@@ -48,6 +48,15 @@ class _ScriptedBot:
             raise outcome
 
 
+class _V12ScriptedBot(_ScriptedBot):
+    class Adapter:
+        @staticmethod
+        def get_name() -> str:
+            return "OneBot V12"
+
+    adapter = Adapter()
+
+
 def _llm(bot: _ScriptedBot) -> MoeLlm:
     llm = object.__new__(MoeLlm)
     llm.bot = bot
@@ -69,7 +78,11 @@ async def test_emotion_failure_is_isolated_after_body_delivery(
         "parse_emotion",
         lambda _content: ("正文", ["微笑", "挥手"]),
     )
-    monkeypatch.setattr(module, "get_emotion", lambda name: f"图片:{name}")
+    monkeypatch.setattr(
+        module,
+        "get_emotion",
+        lambda name, *, protocol: f"图片:{name}",
+    )
 
     result = await llm.send_emotion_message("正文[微笑][挥手]")
 
@@ -91,7 +104,11 @@ async def test_body_delivery_failure_still_propagates(
         "parse_emotion",
         lambda _content: ("正文", ["微笑"]),
     )
-    monkeypatch.setattr(module, "get_emotion", lambda _name: "图片")
+    monkeypatch.setattr(
+        module,
+        "get_emotion",
+        lambda _name, *, protocol: "图片",
+    )
 
     with pytest.raises(type(failure)) as captured:
         await llm.send_emotion_message("正文[微笑]")
@@ -114,7 +131,11 @@ async def test_emotion_only_failure_propagates_when_nothing_was_delivered(
         "parse_emotion",
         lambda _content: ("", ["微笑"]),
     )
-    monkeypatch.setattr(module, "get_emotion", lambda _name: "图片")
+    monkeypatch.setattr(
+        module,
+        "get_emotion",
+        lambda _name, *, protocol: "图片",
+    )
 
     with pytest.raises(type(failure)) as captured:
         await llm.send_emotion_message("[微笑]")
@@ -135,4 +156,30 @@ async def test_plain_body_failure_is_never_downgraded(failure_factory) -> None:
         await llm.send_emotion_message("正文")
 
     assert captured.value is failure
+    assert bot.sent == ["正文"]
+
+
+@pytest.mark.asyncio
+async def test_v12_body_succeeds_and_local_optional_emotion_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = _V12ScriptedBot([None])
+    llm = _llm(bot)
+    protocols: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "parse_emotion",
+        lambda _content: ("正文", ["微笑"]),
+    )
+
+    def no_v12_local_file(_name: str, *, protocol: str):
+        protocols.append(protocol)
+        return None
+
+    monkeypatch.setattr(module, "get_emotion", no_v12_local_file)
+
+    result = await llm.send_emotion_message("正文[微笑]")
+
+    assert result == "正文"
+    assert protocols == ["onebot_v12"]
     assert bot.sent == ["正文"]

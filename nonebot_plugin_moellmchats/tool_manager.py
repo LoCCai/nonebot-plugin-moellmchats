@@ -12,12 +12,23 @@ import nonebot
 from nonebot.log import logger
 import ujson as json
 
-from .builtin_tools import WEB_SEARCH_TOOL_SPEC, builtin_tool_specs
+from .builtin_tools import (
+    WEB_SEARCH_TOOL_SPEC,
+    builtin_protocol_spec,
+    builtin_protocol_specs,
+    builtin_tool_specs,
+)
 from .custom_tool_loader import load_file_tools
 from .generated_tools import generated_tool_store
 from .mcp_manager import mcp_manager
 from .model_selector import config_path, model_selector
 from .nonebot_plugin_tools import build_nonebot_plugin_candidate
+from .protocol_context import (
+    available_protocol_tool_names,
+    business_conflicting_protocol_tools,
+    current_protocol_cache_digest,
+    protocol_tool_available,
+)
 from .runtime_snapshot import (
     immutable_mapping,
     mutable_value,
@@ -76,6 +87,7 @@ class ProviderConsumerParityError(RuntimeError):
 
 class LlmToolExecutionRoute(str, Enum):
     BUILTIN_SEARCH = "builtin_search"
+    BUILTIN_PROTOCOL = "builtin_protocol"
     CUSTOM_TOOL = "custom_tool"
     NONEBOT_PLUGIN = "nonebot_plugin"
 
@@ -104,11 +116,7 @@ class LlmToolExecutionView:
     def __post_init__(self) -> None:
         if not isinstance(self.tool_name, str) or not self.tool_name:
             raise ValueError("llm_tools 执行视图工具名不能为空")
-        if (
-            not isinstance(self.generation, int)
-            or isinstance(self.generation, bool)
-            or self.generation < 0
-        ):
+        if not isinstance(self.generation, int) or isinstance(self.generation, bool) or self.generation < 0:
             raise ValueError("llm_tools 执行视图 generation 非法")
         if not isinstance(self.route, LlmToolExecutionRoute):
             raise TypeError("llm_tools 执行视图 route 非法")
@@ -116,7 +124,11 @@ class LlmToolExecutionView:
             raise TypeError("llm_tools 执行视图 source 非法")
         if self.source is not None:
             expected_route = (
-                LlmToolExecutionRoute.BUILTIN_SEARCH
+                (
+                    LlmToolExecutionRoute.BUILTIN_SEARCH
+                    if self.tool_name == WEB_SEARCH_TOOL_SPEC.name
+                    else LlmToolExecutionRoute.BUILTIN_PROTOCOL
+                )
                 if self.source is ToolSource.BUILTIN
                 else LlmToolExecutionRoute.NONEBOT_PLUGIN
                 if self.source is ToolSource.NONEBOT_PLUGIN
@@ -132,7 +144,10 @@ class LlmToolExecutionView:
             Mapping,
         ):
             raise TypeError("llm_tools 执行视图 legacy entry 必须是映射")
-        if self.route is LlmToolExecutionRoute.BUILTIN_SEARCH:
+        if self.route in {
+            LlmToolExecutionRoute.BUILTIN_SEARCH,
+            LlmToolExecutionRoute.BUILTIN_PROTOCOL,
+        }:
             if self.legacy_entry is not None:
                 raise ValueError("builtin llm_tools 执行视图不得携带 sidecar entry")
         elif self.legacy_entry is None:
@@ -157,8 +172,7 @@ class LlmToolExecutionView:
             if (
                 self.trust_decision.tool_name != self.tool_name
                 or self.trust_decision.generation != self.generation
-                or self.trust_decision.operation
-                is not ToolTrustOperation.EXECUTION
+                or self.trust_decision.operation is not ToolTrustOperation.EXECUTION
                 or self.trust_decision.source is not self.source
                 or self.trust_decision.effect is not self.spec.effect
                 or self.trust_decision.permission != self.spec.permission
@@ -190,11 +204,7 @@ class PendingActionExecutionView:
     def __post_init__(self) -> None:
         if not isinstance(self.tool_name, str) or not self.tool_name:
             raise ValueError("PendingAction 执行视图工具名不能为空")
-        if (
-            not isinstance(self.generation, int)
-            or isinstance(self.generation, bool)
-            or self.generation < 0
-        ):
+        if not isinstance(self.generation, int) or isinstance(self.generation, bool) or self.generation < 0:
             raise ValueError("PendingAction 执行视图 generation 非法")
         if self.source is not None and self.source not in {
             ToolSource.REGISTERED,
@@ -203,10 +213,7 @@ class PendingActionExecutionView:
             ToolSource.MCP,
         }:
             raise ValueError("PendingAction 执行视图 source 非法")
-        if self.spec is not None and (
-            not isinstance(self.spec, ToolSpec)
-            or self.spec.name != self.tool_name
-        ):
+        if self.spec is not None and (not isinstance(self.spec, ToolSpec) or self.spec.name != self.tool_name):
             raise ValueError("PendingAction 执行视图 ToolSpec identity 不一致")
         if not isinstance(self.execution_entry, Mapping) or not isinstance(
             self.legacy_entry,
@@ -233,8 +240,7 @@ class PendingActionExecutionView:
             if (
                 self.trust_decision.tool_name != self.tool_name
                 or self.trust_decision.generation != self.generation
-                or self.trust_decision.operation
-                is not ToolTrustOperation.EXECUTION
+                or self.trust_decision.operation is not ToolTrustOperation.EXECUTION
                 or self.trust_decision.source is not self.source
                 or self.trust_decision.effect is not self.spec.effect
                 or self.trust_decision.permission != self.spec.permission
@@ -268,11 +274,7 @@ class SearchExtractorView:
     def __post_init__(self) -> None:
         if self.tool_name != "extract_webpage":
             raise ValueError("Search extractor 执行视图工具名非法")
-        if (
-            not isinstance(self.generation, int)
-            or isinstance(self.generation, bool)
-            or self.generation < 0
-        ):
+        if not isinstance(self.generation, int) or isinstance(self.generation, bool) or self.generation < 0:
             raise ValueError("Search extractor 执行视图 generation 非法")
         if self.source is not None and self.source not in {
             ToolSource.REGISTERED,
@@ -281,10 +283,7 @@ class SearchExtractorView:
             ToolSource.MCP,
         }:
             raise ValueError("Search extractor 执行视图 source 非法")
-        if self.spec is not None and (
-            not isinstance(self.spec, ToolSpec)
-            or self.spec.name != self.tool_name
-        ):
+        if self.spec is not None and (not isinstance(self.spec, ToolSpec) or self.spec.name != self.tool_name):
             raise ValueError("Search extractor ToolSpec identity 不一致")
         if not isinstance(self.legacy_entry, Mapping):
             raise TypeError("Search extractor legacy adapter 必须是映射")
@@ -298,8 +297,7 @@ class SearchExtractorView:
             if (
                 self.trust_decision.tool_name != self.tool_name
                 or self.trust_decision.generation != self.generation
-                or self.trust_decision.operation
-                is not ToolTrustOperation.SELECTION
+                or self.trust_decision.operation is not ToolTrustOperation.SELECTION
                 or self.trust_decision.source is not self.source
                 or self.trust_decision.effect is not self.spec.effect
                 or self.trust_decision.permission != self.spec.permission
@@ -341,11 +339,7 @@ class ToolManagementView:
     def __post_init__(self) -> None:
         if not isinstance(self.identifier, str) or not self.identifier:
             raise ValueError("工具管理视图标识不能为空")
-        if (
-            not isinstance(self.generation, int)
-            or isinstance(self.generation, bool)
-            or self.generation < 0
-        ):
+        if not isinstance(self.generation, int) or isinstance(self.generation, bool) or self.generation < 0:
             raise ValueError("工具管理视图 generation 非法")
         if not isinstance(self.kind, ToolManagementTargetKind):
             raise TypeError("工具管理视图 target kind 非法")
@@ -353,10 +347,7 @@ class ToolManagementView:
             raise ValueError("工具管理视图 label 不能为空")
         if self.source is not None and not isinstance(self.source, ToolSource):
             raise TypeError("工具管理视图 source 非法")
-        if self.spec is not None and (
-            not isinstance(self.spec, ToolSpec)
-            or self.spec.name != self.identifier
-        ):
+        if self.spec is not None and (not isinstance(self.spec, ToolSpec) or self.spec.name != self.identifier):
             raise ValueError("工具管理视图 ToolSpec identity 不一致")
         if self.legacy_entry is not None and not isinstance(
             self.legacy_entry,
@@ -365,19 +356,14 @@ class ToolManagementView:
             raise TypeError("工具管理 legacy entry 必须是映射")
         if (
             not isinstance(self.matched_tool_names, tuple)
-            or tuple(sorted(set(self.matched_tool_names)))
-            != self.matched_tool_names
-            or not all(
-                isinstance(name, str) and name
-                for name in self.matched_tool_names
-            )
+            or tuple(sorted(set(self.matched_tool_names))) != self.matched_tool_names
+            or not all(isinstance(name, str) and name for name in self.matched_tool_names)
         ):
             raise ValueError("工具管理匹配工具名必须是有序唯一字符串元组")
         if type(self.provider_authoritative) is not bool:
             raise TypeError("工具管理 authority 标志必须是布尔值")
         if not isinstance(self.trust_decisions, tuple) or not all(
-            isinstance(decision, ToolTrustDecision)
-            for decision in self.trust_decisions
+            isinstance(decision, ToolTrustDecision) for decision in self.trust_decisions
         ):
             raise TypeError("工具管理 trust decisions 必须是不可变元组")
         if type(self.selector_allowed) is not bool:
@@ -398,23 +384,16 @@ class ToolManagementView:
                 raise ValueError("MCP 服务管理视图不得携带工具 sidecar")
 
         if self.provider_authoritative:
-            decision_names = tuple(
-                sorted(decision.tool_name for decision in self.trust_decisions)
-            )
+            decision_names = tuple(sorted(decision.tool_name for decision in self.trust_decisions))
             if decision_names != self.matched_tool_names:
                 raise ValueError("Provider 工具管理 trust decision 集合不一致")
             if self.kind is ToolManagementTargetKind.EXACT_TOOL and (
-                self.source is None
-                or self.spec is None
-                or len(self.trust_decisions) != 1
+                self.source is None or self.spec is None or len(self.trust_decisions) != 1
             ):
                 raise ValueError("Provider 精确工具管理视图缺少 canonical identity")
             exact_spec = self.spec
             for decision in self.trust_decisions:
-                if (
-                    decision.generation != self.generation
-                    or decision.operation is not ToolTrustOperation.MANAGEMENT
-                ):
+                if decision.generation != self.generation or decision.operation is not ToolTrustOperation.MANAGEMENT:
                     raise ValueError("Provider 工具管理 trust decision identity 不一致")
                 if self.kind is ToolManagementTargetKind.EXACT_TOOL:
                     assert exact_spec is not None
@@ -423,12 +402,8 @@ class ToolManagementView:
                         or decision.effect is not exact_spec.effect
                         or decision.permission != exact_spec.permission
                     ):
-                        raise ValueError(
-                            "Provider 精确工具管理 decision/spec 不一致"
-                        )
-                if self.kind is ToolManagementTargetKind.MCP_SERVICE and (
-                    decision.source is not ToolSource.MCP
-                ):
+                        raise ValueError("Provider 精确工具管理 decision/spec 不一致")
+                if self.kind is ToolManagementTargetKind.MCP_SERVICE and (decision.source is not ToolSource.MCP):
                     raise ValueError("MCP 服务管理 decision source 不一致")
         else:
             if self.trust_decisions:
@@ -438,20 +413,14 @@ class ToolManagementView:
 
     @property
     def allowed(self) -> bool:
-        return self.selector_allowed and all(
-            decision.allowed for decision in self.trust_decisions
-        )
+        return self.selector_allowed and all(decision.allowed for decision in self.trust_decisions)
 
     @property
     def denial_reason(self) -> str | None:
         if not self.selector_allowed:
             return self.selector_reason
         return next(
-            (
-                decision.reason
-                for decision in self.trust_decisions
-                if not decision.allowed
-            ),
+            (decision.reason for decision in self.trust_decisions if not decision.allowed),
             None,
         )
 
@@ -490,18 +459,14 @@ class ToolSnapshot:
             if not isinstance(value, Mapping):
                 raise ValueError(f"ToolSnapshot.{field_name} 必须是映射")
             object.__setattr__(self, field_name, immutable_mapping(value))
-        if not isinstance(self.mcp_tool_names, AbstractSet) or not all(
-            isinstance(name, str) for name in self.mcp_tool_names
-        ):
+        if not isinstance(self.mcp_tool_names, AbstractSet) or not all(isinstance(name, str) for name in self.mcp_tool_names):
             raise ValueError("ToolSnapshot.mcp_tool_names 必须是工具名集合")
         object.__setattr__(self, "mcp_tool_names", frozenset(self.mcp_tool_names))
         for field_name in ("legacy_plugin_names", "mcp_server_identifiers"):
             value = getattr(self, field_name)
             if value is None:
                 continue
-            if not isinstance(value, AbstractSet) or not all(
-                isinstance(name, str) and name for name in value
-            ):
+            if not isinstance(value, AbstractSet) or not all(isinstance(name, str) and name for name in value):
                 raise ValueError(f"ToolSnapshot.{field_name} 必须是字符串集合")
             object.__setattr__(self, field_name, frozenset(value))
         provider_catalog = self.provider_catalog
@@ -514,9 +479,7 @@ class ToolSnapshot:
         object.__setattr__(self, "provider_catalog", provider_catalog)
         registered = provider_catalog.registrations.get("registered")
         if registered is not None:
-            expected = ProviderRegistration.from_provider(
-                registered_tool_provider
-            )
+            expected = ProviderRegistration.from_provider(registered_tool_provider)
             if registered != expected:
                 raise ValueError("ToolSnapshot registered provider identity 不一致")
             registered_tool_provider.validate_legacy_parity(
@@ -540,9 +503,7 @@ class ToolSnapshot:
             )
         generated = provider_catalog.registrations.get("generated")
         if generated is not None:
-            expected = ProviderRegistration.from_provider(
-                generated_tool_provider
-            )
+            expected = ProviderRegistration.from_provider(generated_tool_provider)
             if generated != expected:
                 raise ValueError("ToolSnapshot generated provider identity 不一致")
             generated_tool_provider.validate_legacy_parity(
@@ -579,13 +540,9 @@ class ToolSnapshot:
             )
         nonebot_plugin = provider_catalog.registrations.get("nonebot-plugin")
         if nonebot_plugin is not None:
-            expected = ProviderRegistration.from_provider(
-                nonebot_plugin_provider
-            )
+            expected = ProviderRegistration.from_provider(nonebot_plugin_provider)
             if nonebot_plugin != expected:
-                raise ValueError(
-                    "ToolSnapshot nonebot-plugin provider identity 不一致"
-                )
+                raise ValueError("ToolSnapshot nonebot-plugin provider identity 不一致")
             nonebot_plugin_provider.validate_legacy_parity(
                 provider_catalog.tools_for_provider("nonebot-plugin"),
                 self.plugin_info,
@@ -615,9 +572,7 @@ class ToolSnapshot:
             if not isinstance(render_context, ToolSchemaRenderContext):
                 raise TypeError("render_context 必须是 ToolSchemaRenderContext")
             if render_context.generation != self.generation:
-                raise ValueError(
-                    "tool schema render_context generation 与 ToolSnapshot 不一致"
-                )
+                raise ValueError("tool schema render_context generation 与 ToolSnapshot 不一致")
             is_blacklisted = render_context.is_blacklisted
         expanded = {p for p in plugins if not is_blacklisted(p)}
         queue = deque(expanded)
@@ -626,9 +581,7 @@ class ToolSnapshot:
             for dependency in self.tool_dependencies.get(current, set()):
                 if is_blacklisted(dependency):
                     continue
-                if dependency not in expanded and (
-                    dependency in self.custom_tools or dependency in self.plugin_info
-                ):
+                if dependency not in expanded and (dependency in self.custom_tools or dependency in self.plugin_info):
                     expanded.add(dependency)
                     queue.append(dependency)
         return expanded
@@ -659,9 +612,7 @@ class ToolSnapshot:
     ) -> tuple[set[str], list[dict[str, Any]]]:
         """Resolve one LLM payload tool view with Provider/legacy parity."""
 
-        if not isinstance(plugin_names, AbstractSet) or not all(
-            isinstance(name, str) for name in plugin_names
-        ):
+        if not isinstance(plugin_names, AbstractSet) or not all(isinstance(name, str) for name in plugin_names):
             raise TypeError("llm_payload plugin_names 必须是字符串集合")
         for field_name, value in (
             ("tools_enabled", tools_enabled),
@@ -697,9 +648,7 @@ class ToolSnapshot:
             not provider_cutover
             or not tools_enabled
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return legacy_plugins, legacy_schema
 
@@ -708,9 +657,7 @@ class ToolSnapshot:
             plugin_names=initial_plugins,
         )
         if provider_plugins != legacy_plugins:
-            raise ProviderConsumerParityError(
-                "llm_payload Provider 依赖视图与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("llm_payload Provider 依赖视图与 legacy rollback view 不一致")
         provider_schema = ToolManager.build_provider_llm_payload_schema(
             provider_catalog=provider_catalog,
             plugin_names=list(legacy_plugins),
@@ -720,9 +667,7 @@ class ToolSnapshot:
             is_superuser=is_superuser,
         )
         if provider_schema != legacy_schema:
-            raise ProviderConsumerParityError(
-                "llm_payload Provider schema 与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("llm_payload Provider schema 与 legacy rollback view 不一致")
         return provider_plugins, provider_schema
 
     def capture_llm_payload_schema_context(
@@ -736,9 +681,7 @@ class ToolSnapshot:
     ) -> ToolSchemaRenderContext:
         """Capture every mutable input before schema cache lookup or rendering."""
 
-        if not isinstance(plugin_names, AbstractSet) or not all(
-            isinstance(name, str) for name in plugin_names
-        ):
+        if not isinstance(plugin_names, AbstractSet) or not all(isinstance(name, str) for name in plugin_names):
             raise TypeError("llm_payload plugin_names 必须是字符串集合")
         for field_name, value in (
             ("tools_enabled", tools_enabled),
@@ -764,6 +707,7 @@ class ToolSnapshot:
             tools_enabled=tools_enabled,
             search_enabled=search_enabled,
             blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
+            protocol_scope_digest=current_protocol_cache_digest(),
         )
 
     def build_llm_payload_schema_record(
@@ -798,9 +742,7 @@ class ToolSnapshot:
             not context.provider_cutover
             or not context.tools_enabled
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return ToolSchemaRecord.from_schema(
                 context.cache_key,
@@ -814,9 +756,7 @@ class ToolSnapshot:
             render_context=context,
         )
         if provider_plugins != legacy_plugins:
-            raise ProviderConsumerParityError(
-                "llm_payload Provider 依赖视图与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("llm_payload Provider 依赖视图与 legacy rollback view 不一致")
         provider_schema = ToolManager.build_provider_llm_payload_schema(
             provider_catalog=provider_catalog,
             plugin_names=ordered_plugins,
@@ -827,9 +767,7 @@ class ToolSnapshot:
             render_context=context,
         )
         if provider_schema != legacy_schema:
-            raise ProviderConsumerParityError(
-                "llm_payload Provider schema 与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("llm_payload Provider schema 与 legacy rollback view 不一致")
         return ToolSchemaRecord.from_schema(
             context.cache_key,
             provider_plugins,
@@ -869,6 +807,20 @@ class ToolSnapshot:
                 provider_authoritative=False,
             )
 
+        protocol_spec = builtin_protocol_spec(tool_name)
+        if protocol_spec is not None:
+            if not protocol_tool_available(tool_name):
+                return None
+            return LlmToolExecutionView(
+                tool_name=tool_name,
+                generation=self.generation,
+                route=LlmToolExecutionRoute.BUILTIN_PROTOCOL,
+                source=ToolSource.BUILTIN,
+                spec=protocol_spec,
+                legacy_entry=None,
+                provider_authoritative=False,
+            )
+
         custom_entry = self.custom_tools.get(tool_name)
         if custom_entry is not None:
             raw_source = custom_entry.get("source")
@@ -885,16 +837,8 @@ class ToolSnapshot:
             if tool_name in self.mcp_tool_names:
                 source = ToolSource.MCP
             spec = custom_entry.get("tool_spec")
-            bundle_id = (
-                custom_entry.get("bundle_id")
-                if source is ToolSource.GENERATED
-                else None
-            )
-            bundle_digest = (
-                custom_entry.get("bundle_digest")
-                if source is ToolSource.GENERATED
-                else None
-            )
+            bundle_id = custom_entry.get("bundle_id") if source is ToolSource.GENERATED else None
+            bundle_digest = custom_entry.get("bundle_digest") if source is ToolSource.GENERATED else None
             return LlmToolExecutionView(
                 tool_name=tool_name,
                 generation=self.generation,
@@ -939,6 +883,9 @@ class ToolSnapshot:
             raise TypeError("llm_tools tool_name 必须是非空字符串")
         if type(is_superuser) is not bool:
             raise TypeError("llm_tools is_superuser 必须是布尔值")
+        protocol_spec = builtin_protocol_spec(tool_name)
+        if protocol_spec is not None and not protocol_tool_available(tool_name):
+            return None
         legacy_view = self._legacy_llm_tool_execution_view(tool_name)
         if provider_cutover is None:
             from .config import config_parser
@@ -955,71 +902,51 @@ class ToolSnapshot:
         if (
             not provider_cutover
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return legacy_view
 
         item = provider_catalog.tools.get(tool_name)
         if item is None:
             if legacy_view is not None:
-                raise ProviderConsumerParityError(
-                    f"llm_tools Provider identity 缺失: {tool_name}"
-                )
+                raise ProviderConsumerParityError(f"llm_tools Provider identity 缺失: {tool_name}")
             return None
         if legacy_view is None:
-            raise ProviderConsumerParityError(
-                f"llm_tools legacy rollback identity 缺失: {tool_name}"
-            )
+            raise ProviderConsumerParityError(f"llm_tools legacy rollback identity 缺失: {tool_name}")
 
         route = (
-            LlmToolExecutionRoute.BUILTIN_SEARCH
+            (
+                LlmToolExecutionRoute.BUILTIN_SEARCH
+                if tool_name == WEB_SEARCH_TOOL_SPEC.name
+                else LlmToolExecutionRoute.BUILTIN_PROTOCOL
+            )
             if item.source is ToolSource.BUILTIN
             else LlmToolExecutionRoute.NONEBOT_PLUGIN
             if item.source is ToolSource.NONEBOT_PLUGIN
             else LlmToolExecutionRoute.CUSTOM_TOOL
         )
-        if item.source is ToolSource.BUILTIN and tool_name != WEB_SEARCH_TOOL_SPEC.name:
-            raise ProviderConsumerParityError(
-                f"llm_tools 未知 builtin 执行工具: {tool_name}"
-            )
-        spec_matches = legacy_view.spec is item.spec
         if (
-            item.source is ToolSource.MCP
-            and legacy_view.spec is None
-            and legacy_view.legacy_entry is not None
+            item.source is ToolSource.BUILTIN
+            and tool_name != WEB_SEARCH_TOOL_SPEC.name
+            and builtin_protocol_spec(tool_name) is None
         ):
+            raise ProviderConsumerParityError(f"llm_tools 未知 builtin 执行工具: {tool_name}")
+        spec_matches = legacy_view.spec is item.spec
+        if item.source is ToolSource.MCP and legacy_view.spec is None and legacy_view.legacy_entry is not None:
             entry = legacy_view.legacy_entry
             spec_matches = (
                 entry.get("name", tool_name) == tool_name
                 and entry.get("func") is item.spec.handler
                 and entry.get("description") == item.spec.description
-                and mutable_value(entry.get("parameters"))
-                == mutable_value(item.spec.parameters)
+                and mutable_value(entry.get("parameters")) == mutable_value(item.spec.parameters)
             )
-        if (
-            legacy_view.route is not route
-            or legacy_view.source is not item.source
-            or not spec_matches
-        ):
-            raise ProviderConsumerParityError(
-                f"llm_tools Provider 执行视图与 legacy rollback view 不一致: {tool_name}"
-            )
+        if legacy_view.route is not route or legacy_view.source is not item.source or not spec_matches:
+            raise ProviderConsumerParityError(f"llm_tools Provider 执行视图与 legacy rollback view 不一致: {tool_name}")
 
-        provider_bundle_id = (
-            item.artifact.bundle_id if item.artifact is not None else None
-        )
-        provider_bundle_digest = (
-            item.artifact.bundle_digest if item.artifact is not None else None
-        )
-        if (
-            legacy_view.bundle_id != provider_bundle_id
-            or legacy_view.bundle_digest != provider_bundle_digest
-        ):
-            raise ProviderConsumerParityError(
-                f"llm_tools Provider bundle identity 与 legacy view 不一致: {tool_name}"
-            )
+        provider_bundle_id = item.artifact.bundle_id if item.artifact is not None else None
+        provider_bundle_digest = item.artifact.bundle_digest if item.artifact is not None else None
+        if legacy_view.bundle_id != provider_bundle_id or legacy_view.bundle_digest != provider_bundle_digest:
+            raise ProviderConsumerParityError(f"llm_tools Provider bundle identity 与 legacy view 不一致: {tool_name}")
 
         decision = provider_catalog.decide_trust(
             tool_name,
@@ -1063,9 +990,7 @@ class ToolSnapshot:
         spec = legacy_entry.get("tool_spec")
         bundle_digest = legacy_entry.get("bundle_digest")
         if bundle_digest is not None and not isinstance(bundle_digest, str):
-            raise ProviderConsumerParityError(
-                f"PendingAction legacy bundle digest 非法: {tool_name}"
-            )
+            raise ProviderConsumerParityError(f"PendingAction legacy bundle digest 非法: {tool_name}")
         return PendingActionExecutionView(
             tool_name=tool_name,
             generation=self.generation,
@@ -1106,18 +1031,14 @@ class ToolSnapshot:
         if (
             not provider_cutover
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return legacy_view
 
         item = provider_catalog.tools.get(tool_name)
         if item is None:
             if legacy_view is not None:
-                raise ProviderConsumerParityError(
-                    f"PendingAction Provider identity 缺失: {tool_name}"
-                )
+                raise ProviderConsumerParityError(f"PendingAction Provider identity 缺失: {tool_name}")
             return None
         if item.source not in {
             ToolSource.REGISTERED,
@@ -1125,13 +1046,9 @@ class ToolSnapshot:
             ToolSource.GENERATED,
             ToolSource.MCP,
         }:
-            raise ProviderConsumerParityError(
-                f"PendingAction Provider source 不可确认执行: {tool_name}"
-            )
+            raise ProviderConsumerParityError(f"PendingAction Provider source 不可确认执行: {tool_name}")
         if legacy_view is None:
-            raise ProviderConsumerParityError(
-                f"PendingAction legacy rollback identity 缺失: {tool_name}"
-            )
+            raise ProviderConsumerParityError(f"PendingAction legacy rollback identity 缺失: {tool_name}")
 
         spec_matches = legacy_view.spec is item.spec
         if item.source is ToolSource.MCP and legacy_view.spec is None:
@@ -1140,21 +1057,11 @@ class ToolSnapshot:
                 entry.get("name", tool_name) == tool_name
                 and entry.get("func") is item.spec.handler
                 and entry.get("description") == item.spec.description
-                and mutable_value(entry.get("parameters"))
-                == mutable_value(item.spec.parameters)
+                and mutable_value(entry.get("parameters")) == mutable_value(item.spec.parameters)
             )
-        provider_bundle_digest = (
-            item.artifact.bundle_digest if item.artifact is not None else None
-        )
-        if (
-            legacy_view.source is not item.source
-            or not spec_matches
-            or legacy_view.bundle_digest != provider_bundle_digest
-        ):
-            raise ProviderConsumerParityError(
-                "PendingAction Provider 执行视图与 legacy rollback view 不一致: "
-                f"{tool_name}"
-            )
+        provider_bundle_digest = item.artifact.bundle_digest if item.artifact is not None else None
+        if legacy_view.source is not item.source or not spec_matches or legacy_view.bundle_digest != provider_bundle_digest:
+            raise ProviderConsumerParityError(f"PendingAction Provider 执行视图与 legacy rollback view 不一致: {tool_name}")
 
         decision = provider_catalog.decide_trust(
             tool_name,
@@ -1229,18 +1136,14 @@ class ToolSnapshot:
         if (
             not provider_cutover
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return legacy_view
 
         item = provider_catalog.tools.get(tool_name)
         if item is None:
             if legacy_view is not None:
-                raise ProviderConsumerParityError(
-                    "Search extractor Provider identity 缺失"
-                )
+                raise ProviderConsumerParityError("Search extractor Provider identity 缺失")
             return None
         if item.source not in {
             ToolSource.REGISTERED,
@@ -1248,13 +1151,9 @@ class ToolSnapshot:
             ToolSource.GENERATED,
             ToolSource.MCP,
         }:
-            raise ProviderConsumerParityError(
-                "Search extractor Provider source 非法"
-            )
+            raise ProviderConsumerParityError("Search extractor Provider source 非法")
         if legacy_view is None:
-            raise ProviderConsumerParityError(
-                "Search extractor legacy rollback identity 缺失"
-            )
+            raise ProviderConsumerParityError("Search extractor legacy rollback identity 缺失")
 
         spec_matches = legacy_view.spec is item.spec
         if item.source is ToolSource.MCP and legacy_view.spec is None:
@@ -1263,13 +1162,10 @@ class ToolSnapshot:
                 entry.get("name", tool_name) == tool_name
                 and entry.get("func") is item.spec.handler
                 and entry.get("description") == item.spec.description
-                and mutable_value(entry.get("parameters"))
-                == mutable_value(item.spec.parameters)
+                and mutable_value(entry.get("parameters")) == mutable_value(item.spec.parameters)
             )
         if legacy_view.source is not item.source or not spec_matches:
-            raise ProviderConsumerParityError(
-                "Search extractor Provider 选择视图与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("Search extractor Provider 选择视图与 legacy rollback view 不一致")
 
         decision = provider_catalog.decide_trust(
             tool_name,
@@ -1312,9 +1208,7 @@ class ToolSnapshot:
     def _legacy_management_plugin_names(self) -> frozenset[str]:
         if self.legacy_plugin_names is not None:
             return frozenset(self.legacy_plugin_names)
-        return frozenset(
-            plugin.name for plugin in nonebot.plugin.get_loaded_plugins()
-        )
+        return frozenset(plugin.name for plugin in nonebot.plugin.get_loaded_plugins())
 
     def _legacy_management_mcp_server_identifiers(self) -> frozenset[str]:
         if self.mcp_server_identifiers is not None:
@@ -1344,11 +1238,7 @@ class ToolSnapshot:
 
         if identifier in self._legacy_management_plugin_names():
             legacy_entry = self.plugin_info.get(identifier)
-            raw_spec = (
-                legacy_entry.get("tool_spec")
-                if legacy_entry is not None
-                else None
-            )
+            raw_spec = legacy_entry.get("tool_spec") if legacy_entry is not None else None
             return ToolManagementView(
                 identifier=identifier,
                 generation=self.generation,
@@ -1381,11 +1271,7 @@ class ToolSnapshot:
                 identifier=identifier,
                 generation=self.generation,
                 kind=ToolManagementTargetKind.EXACT_TOOL,
-                label=(
-                    "MCP 工具"
-                    if source is ToolSource.MCP
-                    else "自定义函数工具"
-                ),
+                label=("MCP 工具" if source is ToolSource.MCP else "自定义函数工具"),
                 source=source,
                 spec=raw_spec if isinstance(raw_spec, ToolSpec) else None,
                 legacy_entry=legacy_entry,
@@ -1397,18 +1283,8 @@ class ToolSnapshot:
         if server_token is None:
             return None
         prefix = f"mcp__{server_token}__"
-        matched_tool_names = tuple(
-            sorted(
-                name
-                for name in self.mcp_tool_names
-                if name.startswith(prefix)
-            )
-        )
-        if (
-            server_token
-            not in self._legacy_management_mcp_server_identifiers()
-            and not matched_tool_names
-        ):
+        matched_tool_names = tuple(sorted(name for name in self.mcp_tool_names if name.startswith(prefix)))
+        if server_token not in self._legacy_management_mcp_server_identifiers() and not matched_tool_names:
             return None
         return ToolManagementView(
             identifier=identifier,
@@ -1431,25 +1307,19 @@ class ToolSnapshot:
             legacy_view.kind is not ToolManagementTargetKind.EXACT_TOOL
             or legacy_view.identifier != item.spec.name
             or legacy_view.source is not item.source
-            or legacy_view.label
-            != ToolSnapshot._management_label_for_source(item.source)
+            or legacy_view.label != ToolSnapshot._management_label_for_source(item.source)
         ):
             return False
         if legacy_view.spec is item.spec:
             return True
-        if (
-            item.source is not ToolSource.MCP
-            or legacy_view.spec is not None
-            or legacy_view.legacy_entry is None
-        ):
+        if item.source is not ToolSource.MCP or legacy_view.spec is not None or legacy_view.legacy_entry is None:
             return False
         entry = legacy_view.legacy_entry
         return (
             entry.get("name", item.spec.name) == item.spec.name
             and entry.get("func") is item.spec.handler
             and entry.get("description") == item.spec.description
-            and mutable_value(entry.get("parameters"))
-            == mutable_value(item.spec.parameters)
+            and mutable_value(entry.get("parameters")) == mutable_value(item.spec.parameters)
         )
 
     def resolve_tool_management(
@@ -1482,23 +1352,16 @@ class ToolSnapshot:
         if (
             not provider_cutover
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return legacy_view
 
         item = provider_catalog.tools.get(identifier)
         if item is not None:
             if legacy_view is None:
-                raise ProviderConsumerParityError(
-                    f"工具管理 legacy rollback identity 缺失: {identifier}"
-                )
+                raise ProviderConsumerParityError(f"工具管理 legacy rollback identity 缺失: {identifier}")
             if not self._management_exact_identity_matches(legacy_view, item):
-                raise ProviderConsumerParityError(
-                    "工具管理 Provider identity 与 legacy rollback view 不一致: "
-                    f"{identifier}"
-                )
+                raise ProviderConsumerParityError(f"工具管理 Provider identity 与 legacy rollback view 不一致: {identifier}")
             decision = provider_catalog.decide_trust(
                 identifier,
                 ToolTrustOperation.MANAGEMENT,
@@ -1524,25 +1387,15 @@ class ToolSnapshot:
                 sorted(
                     name
                     for name, provider_item in provider_catalog.tools.items()
-                    if provider_item.source is ToolSource.MCP
-                    and name.startswith(prefix)
+                    if provider_item.source is ToolSource.MCP and name.startswith(prefix)
                 )
             )
             if legacy_view is None:
                 if provider_names:
-                    raise ProviderConsumerParityError(
-                        "工具管理 MCP Provider selector 缺少 legacy rollback view: "
-                        f"{identifier}"
-                    )
+                    raise ProviderConsumerParityError(f"工具管理 MCP Provider selector 缺少 legacy rollback view: {identifier}")
                 return None
-            if (
-                legacy_view.kind is not ToolManagementTargetKind.MCP_SERVICE
-                or legacy_view.matched_tool_names != provider_names
-            ):
-                raise ProviderConsumerParityError(
-                    "工具管理 MCP Provider selector 与 legacy rollback view "
-                    f"不一致: {identifier}"
-                )
+            if legacy_view.kind is not ToolManagementTargetKind.MCP_SERVICE or legacy_view.matched_tool_names != provider_names:
+                raise ProviderConsumerParityError(f"工具管理 MCP Provider selector 与 legacy rollback view 不一致: {identifier}")
 
             decisions: list[ToolTrustDecision] = []
             for tool_name in provider_names:
@@ -1552,10 +1405,7 @@ class ToolSnapshot:
                     legacy_member,
                     provider_item,
                 ):
-                    raise ProviderConsumerParityError(
-                        "工具管理 MCP selector member 与 legacy rollback view "
-                        f"不一致: {tool_name}"
-                    )
+                    raise ProviderConsumerParityError(f"工具管理 MCP selector member 与 legacy rollback view 不一致: {tool_name}")
                 decisions.append(
                     provider_catalog.decide_trust(
                         tool_name,
@@ -1575,15 +1425,11 @@ class ToolSnapshot:
                 provider_authoritative=True,
                 trust_decisions=tuple(decisions),
                 selector_allowed=is_superuser,
-                selector_reason=(
-                    None if is_superuser else "工具管理只允许超级用户"
-                ),
+                selector_reason=(None if is_superuser else "工具管理只允许超级用户"),
             )
 
         if legacy_view is not None:
-            raise ProviderConsumerParityError(
-                f"工具管理 Provider identity 缺失: {identifier}"
-            )
+            raise ProviderConsumerParityError(f"工具管理 Provider identity 缺失: {identifier}")
         return None
 
     def get_brief_catalog(
@@ -1612,9 +1458,7 @@ class ToolSnapshot:
         if (
             not provider_cutover
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return legacy_catalog
         catalog = ToolManager.build_provider_brief_catalog(
@@ -1624,9 +1468,7 @@ class ToolSnapshot:
             is_superuser=is_superuser,
         )
         if catalog != legacy_catalog:
-            raise ProviderConsumerParityError(
-                "categorize Provider catalog 与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("categorize Provider catalog 与 legacy rollback view 不一致")
         return catalog
 
     def capture_brief_catalog_context(
@@ -1655,6 +1497,7 @@ class ToolSnapshot:
             tools_enabled=model_selector.get_use_tools(),
             web_search_enabled=model_selector.get_web_search(),
             blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
+            protocol_scope_digest=current_protocol_cache_digest(),
         )
 
     def build_brief_catalog_record(
@@ -1679,9 +1522,7 @@ class ToolSnapshot:
         if (
             not context.provider_cutover
             or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(
-                provider_catalog.registrations
-            )
+            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
         ):
             return ToolCatalogRecord(context.cache_key, legacy_catalog)
         catalog = ToolManager.build_provider_brief_catalog(
@@ -1692,9 +1533,7 @@ class ToolSnapshot:
             render_context=context,
         )
         if catalog != legacy_catalog:
-            raise ProviderConsumerParityError(
-                "categorize Provider catalog 与 legacy rollback view 不一致"
-            )
+            raise ProviderConsumerParityError("categorize Provider catalog 与 legacy rollback view 不一致")
         return ToolCatalogRecord(context.cache_key, catalog)
 
     def get_brief_catalog_record(
@@ -1738,9 +1577,7 @@ class ToolManager:
                     "name": "示例插件名称",
                     "description": "详细描述该插件的功能，告诉大模型在什么场景下应该调用它。",
                     "usage": "严格写明该插件的触发指令格式。例如：发送'塔罗牌'或'抽牌'",
-                    "dependencies": [
-                        "可选：需要一并注入的工具标识，例如 mcp__danbooru_searcher__search_tags"
-                    ],
+                    "dependencies": ["可选：需要一并注入的工具标识，例如 mcp__danbooru_searcher__search_tags"],
                 },
             }
             with open(self.custom_info_file, "w", encoding="utf-8") as f:
@@ -1905,9 +1742,7 @@ async def extract_webpage(
         candidate: object,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]]]:
         if not isinstance(candidate, tuple) or len(candidate) != 2:
-            raise TypeError(
-                "generated_tool_candidate 必须是 tools/dependencies 元组"
-            )
+            raise TypeError("generated_tool_candidate 必须是 tools/dependencies 元组")
         raw_tools, raw_dependencies = candidate
         if not isinstance(raw_tools, Mapping) or not isinstance(
             raw_dependencies,
@@ -1927,9 +1762,7 @@ async def extract_webpage(
                 or not isinstance(items, AbstractSet)
                 or not all(isinstance(item, str) for item in items)
             ):
-                raise TypeError(
-                    "generated_tool_candidate dependencies 结构非法"
-                )
+                raise TypeError("generated_tool_candidate dependencies 结构非法")
             dependencies[name] = set(items)
         return tools, dependencies
 
@@ -1948,11 +1781,7 @@ async def extract_webpage(
         generated_discovery: tuple[DiscoveredTool, ...] | None = None,
     ):
         """Parse file tools without importing them into the NoneBot process."""
-        if (
-            not isinstance(generation, int)
-            or isinstance(generation, bool)
-            or generation < 0
-        ):
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
             raise ValueError("generation 必须是非负整数")
         if registered_tools is None:
             registered_tools = tool_registry.snapshot()
@@ -1960,22 +1789,13 @@ async def extract_webpage(
             raise TypeError("registered_tools 必须是 ToolSpec 映射")
         registered_tools = dict(registered_tools)
         if any(
-            not isinstance(name, str)
-            or not isinstance(spec, ToolSpec)
-            or name != spec.name
+            not isinstance(name, str) or not isinstance(spec, ToolSpec) or name != spec.name
             for name, spec in registered_tools.items()
         ):
             raise ValueError("registered_tools 必须按精确工具名映射 ToolSpec")
-        new_tools = {
-            name: {**spec.as_legacy_schema(), "source": "registered"}
-            for name, spec in registered_tools.items()
-        }
+        new_tools = {name: {**spec.as_legacy_schema(), "source": "registered"} for name, spec in registered_tools.items()}
         # 每次重载前清空旧的依赖，防止热重载时叠加死循环
-        new_dependencies = {
-            name: set(spec.dependencies)
-            for name, spec in registered_tools.items()
-            if spec.dependencies
-        }
+        new_dependencies = {name: set(spec.dependencies) for name, spec in registered_tools.items() if spec.dependencies}
         if registered_discovery is not None:
             registered_tool_provider.validate_legacy_parity(
                 registered_discovery,
@@ -1985,17 +1805,11 @@ async def extract_webpage(
             )
         candidate_was_provided = file_tool_candidate is not None
         if file_tool_candidate is None:
-            file_tool_candidate = self.load_file_tools_candidate(
-                generation=generation
-            )
-        file_tools, file_dependencies = self._copy_file_tool_candidate(
-            file_tool_candidate
-        )
+            file_tool_candidate = self.load_file_tools_candidate(generation=generation)
+        file_tools, file_dependencies = self._copy_file_tool_candidate(file_tool_candidate)
         if file_discovery is not None:
             if not candidate_was_provided:
-                raise ValueError(
-                    "file discovery 必须复用显式 transaction file candidate"
-                )
+                raise ValueError("file discovery 必须复用显式 transaction file candidate")
             file_tool_provider.validate_legacy_parity(
                 file_discovery,
                 file_tools,
@@ -2013,14 +1827,10 @@ async def extract_webpage(
                 generated_state=generated_state,
                 generated_source_overrides=generated_source_overrides,
             )
-        generated_tools, generated_dependencies = (
-            self._copy_generated_tool_candidate(generated_tool_candidate)
-        )
+        generated_tools, generated_dependencies = self._copy_generated_tool_candidate(generated_tool_candidate)
         if generated_discovery is not None:
             if not generated_candidate_was_provided:
-                raise ValueError(
-                    "generated discovery 必须复用显式 transaction candidate"
-                )
+                raise ValueError("generated discovery 必须复用显式 transaction candidate")
             generated_tool_provider.validate_legacy_parity(
                 generated_discovery,
                 generated_tools,
@@ -2045,16 +1855,12 @@ async def extract_webpage(
             if name in target:
                 old_source = target[name].get("source", "unknown")
                 new_source = schema.get("source", "unknown")
-                raise ValueError(
-                    f"工具名冲突: {name} ({old_source} vs {new_source})"
-                )
+                raise ValueError(f"工具名冲突: {name} ({old_source} vs {new_source})")
             target[name] = schema
 
     @staticmethod
     def validate_dependencies(dependencies: dict, known_tools: set[str]) -> None:
-        known = set(known_tools) | {
-            spec.name for spec in builtin_tool_specs()
-        }
+        known = set(known_tools) | {spec.name for spec in builtin_tool_specs()}
         for trigger, items in dependencies.items():
             if trigger not in known:
                 # custom_plugin_info.json may describe an optional plugin that is
@@ -2099,29 +1905,17 @@ async def extract_webpage(
             if artifact.artifact_version == 2:
                 expected_capability_fields = {
                     "artifact_digest_version": artifact.artifact_version,
-                    "tool_contract_version": (
-                        artifact.contract.contract_version
-                    ),
-                    "requested_capabilities": (
-                        artifact.contract.requested_capabilities
-                    ),
-                    "detected_capabilities": (
-                        artifact.contract.detected_capabilities
-                    ),
+                    "tool_contract_version": (artifact.contract.contract_version),
+                    "requested_capabilities": (artifact.contract.requested_capabilities),
+                    "detected_capabilities": (artifact.contract.detected_capabilities),
                     "admin_capabilities": artifact.contract.admin_capabilities,
-                    "effective_capabilities": (
-                        artifact.contract.effective_capabilities
-                    ),
+                    "effective_capabilities": (artifact.contract.effective_capabilities),
                     "capability_policy": policy.capability_contract(),
                 }
             elif source == "generated":
                 expected_capability_fields = {
-                    "requested_capabilities": (
-                        artifact.contract.requested_capabilities
-                    ),
-                    "effective_capabilities": (
-                        artifact.contract.effective_capabilities
-                    ),
+                    "requested_capabilities": (artifact.contract.requested_capabilities),
+                    "effective_capabilities": (artifact.contract.effective_capabilities),
                 }
                 unexpected = {
                     "artifact_digest_version",
@@ -2131,9 +1925,7 @@ async def extract_webpage(
                     "capability_policy",
                 } & set(schema)
                 if unexpected:
-                    raise ValueError(
-                        f"工具 {name} v1 Schema 混入 v2 字段: {sorted(unexpected)}"
-                    )
+                    raise ValueError(f"工具 {name} v1 Schema 混入 v2 字段: {sorted(unexpected)}")
             else:
                 unexpected = {
                     "artifact_digest_version",
@@ -2145,9 +1937,7 @@ async def extract_webpage(
                     "capability_policy",
                 } & set(schema)
                 if unexpected:
-                    raise ValueError(
-                        f"工具 {name} v1 Schema 混入 v2 字段: {sorted(unexpected)}"
-                    )
+                    raise ValueError(f"工具 {name} v1 Schema 混入 v2 字段: {sorted(unexpected)}")
             for field_name, expected in expected_capability_fields.items():
                 if schema.get(field_name) != expected:
                     raise ValueError(f"工具 {name} {field_name} 不一致")
@@ -2182,9 +1972,7 @@ async def extract_webpage(
                             f"plugin_info: {dep in getattr(self, 'plugin_info', {})}"
                         )
 
-                        if dep in getattr(self, "custom_tools", {}) or dep in getattr(
-                            self, "plugin_info", {}
-                        ):
+                        if dep in getattr(self, "custom_tools", {}) or dep in getattr(self, "plugin_info", {}):
                             expanded.add(dep)
                             queue.append(dep)
 
@@ -2202,9 +1990,7 @@ async def extract_webpage(
 
         if not isinstance(provider_catalog, ProviderCatalogSnapshot):
             raise TypeError("llm_payload provider_catalog 非法")
-        if not isinstance(plugin_names, AbstractSet) or not all(
-            isinstance(name, str) for name in plugin_names
-        ):
+        if not isinstance(plugin_names, AbstractSet) or not all(isinstance(name, str) for name in plugin_names):
             raise TypeError("llm_payload plugin_names 必须是字符串集合")
 
         if render_context is None:
@@ -2213,16 +1999,10 @@ async def extract_webpage(
             if not isinstance(render_context, ToolSchemaRenderContext):
                 raise TypeError("render_context 必须是 ToolSchemaRenderContext")
             if render_context.generation != provider_catalog.generation:
-                raise ValueError(
-                    "tool schema render_context generation 与 Provider catalog 不一致"
-                )
+                raise ValueError("tool schema render_context generation 与 Provider catalog 不一致")
             is_blacklisted = render_context.is_blacklisted
 
-        expanded = {
-            name
-            for name in plugin_names
-            if not is_blacklisted(name)
-        }
+        expanded = {name for name in plugin_names if not is_blacklisted(name)}
         queue = deque(expanded)
         while queue:
             current = queue.popleft()
@@ -2234,10 +2014,7 @@ async def extract_webpage(
                 continue
             for dependency in item.spec.dependencies:
                 if dependency not in provider_catalog.tools:
-                    raise ProviderConsumerParityError(
-                        "llm_payload Provider 依赖缺少 catalog 工具: "
-                        f"{current} -> {dependency}"
-                    )
+                    raise ProviderConsumerParityError(f"llm_payload Provider 依赖缺少 catalog 工具: {current} -> {dependency}")
                 if is_blacklisted(dependency):
                     continue
                 if dependency not in expanded:
@@ -2266,9 +2043,7 @@ async def extract_webpage(
                 logger.warning("读取 PicMenu 内存功能目录失败，降级使用插件元数据")
                 return {}
             if projected:
-                logger.debug(
-                    f"已读取 PicMenu 内存功能目录: {len(projected)} 个插件"
-                )
+                logger.debug(f"已读取 PicMenu 内存功能目录: {len(projected)} 个插件")
             return projected
         return {}
 
@@ -2299,23 +2074,16 @@ async def extract_webpage(
                 metadata = plugin.metadata
                 info = with_menu_discovery(
                     {
-                        "name": menu_entry.get("name")
-                        or (metadata.name if metadata else plugin.name),
-                        "description": menu_entry.get("description")
-                        or (metadata.description if metadata else "无描述"),
-                        "usage": menu_entry.get("usage")
-                        or (metadata.usage if metadata else "无用法说明"),
+                        "name": menu_entry.get("name") or (metadata.name if metadata else plugin.name),
+                        "description": menu_entry.get("description") or (metadata.description if metadata else "无描述"),
+                        "usage": menu_entry.get("usage") or (metadata.usage if metadata else "无用法说明"),
                         "discovery_source": "picmenu",
                     },
                     menu_entry.get("menu_data"),
                 )
             elif plugin.metadata:
                 extra = getattr(plugin.metadata, "extra", None)
-                raw_menu = (
-                    extra.get("menu_data")
-                    if isinstance(extra, Mapping)
-                    else None
-                )
+                raw_menu = extra.get("menu_data") if isinstance(extra, Mapping) else None
                 info = with_menu_discovery(
                     {
                         "name": plugin.metadata.name,
@@ -2334,14 +2102,10 @@ async def extract_webpage(
     def loaded_plugin_names() -> frozenset[str]:
         """Capture the legacy management namespace for one reload candidate."""
 
-        return frozenset(
-            plugin.name for plugin in nonebot.plugin.get_loaded_plugins()
-        )
+        return frozenset(plugin.name for plugin in nonebot.plugin.get_loaded_plugins())
 
     def refresh_plugins(self):
-        self.plugin_info = build_nonebot_plugin_candidate(
-            self.build_plugin_info()
-        )[0]
+        self.plugin_info = build_nonebot_plugin_candidate(self.build_plugin_info())[0]
 
     def snapshot(self) -> ToolSnapshot:
         from .runtime_snapshot import runtime_snapshots
@@ -2414,30 +2178,27 @@ async def extract_webpage(
                 if not ToolManager.is_tool_allowed(info, is_superuser=is_superuser):
                     continue
 
-                tool_type = (
-                    "MCP工具"
-                    if name in mcp_tool_names
-                    else "自定义函数"
-                )
+                tool_type = "MCP工具" if name in mcp_tool_names else "自定义函数"
 
                 description = info.get("description") or "无描述"
 
-                catalog.append(
-                    f"- {name} | {tool_type} | {str(description)[:160]}"
-                )
+                catalog.append(f"- {name} | {tool_type} | {str(description)[:160]}")
+
+            protocol_names = available_protocol_tool_names(
+                is_superuser=is_superuser,
+            )
+            protocol_names -= business_conflicting_protocol_tools(plugin_info)
+            for spec in builtin_protocol_specs():
+                if spec.name not in protocol_names or is_blacklisted(spec.name):
+                    continue
+                tool_type = "QQ安全封装" if spec.name.startswith("qq__") else "OneBot协议动作"
+                catalog.append(f"- {spec.name} | {tool_type} | {spec.description[:160]}")
 
         # 3. 联网搜索
         if web_search_enabled and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
-            catalog.append(
-                f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | "
-                "回答实时问题、新闻、天气与近期信息"
-            )
+            catalog.append(f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | 回答实时问题、新闻、天气与近期信息")
 
-        return (
-            finalize_discovery_catalog(catalog)
-            if catalog
-            else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
-        )
+        return finalize_discovery_catalog(catalog) if catalog else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
 
     @staticmethod
     def build_provider_brief_catalog(
@@ -2468,9 +2229,7 @@ async def extract_webpage(
             if not isinstance(render_context, ToolCatalogRenderContext):
                 raise TypeError("render_context 必须是 ToolCatalogRenderContext")
             if render_context.generation != provider_catalog.generation:
-                raise ValueError(
-                    "render_context generation 与 Provider catalog 不一致"
-                )
+                raise ValueError("render_context generation 与 Provider catalog 不一致")
             if render_context.is_superuser is not is_superuser:
                 raise ValueError("render_context permission 与 is_superuser 不一致")
             tools_enabled = render_context.tools_enabled
@@ -2482,9 +2241,7 @@ async def extract_webpage(
             for name, info in plugin_info.items():
                 item = provider_catalog.tools.get(name)
                 if item is None or item.source is not ToolSource.NONEBOT_PLUGIN:
-                    raise ProviderConsumerParityError(
-                        f"categorize NoneBot Provider identity 缺失: {name}"
-                    )
+                    raise ProviderConsumerParityError(f"categorize NoneBot Provider identity 缺失: {name}")
                 if is_blacklisted(name):
                     continue
                 decision = provider_catalog.decide_trust(
@@ -2508,9 +2265,7 @@ async def extract_webpage(
                     ToolSource.BUILTIN,
                     ToolSource.NONEBOT_PLUGIN,
                 }:
-                    raise ProviderConsumerParityError(
-                        f"categorize Tool Provider identity 缺失: {name}"
-                    )
+                    raise ProviderConsumerParityError(f"categorize Tool Provider identity 缺失: {name}")
                 if is_blacklisted(name):
                     continue
                 decision = provider_catalog.decide_trust(
@@ -2520,38 +2275,42 @@ async def extract_webpage(
                 )
                 if not decision.allowed:
                     continue
-                tool_type = (
-                    "MCP工具"
-                    if item.source is ToolSource.MCP
-                    else "自定义函数"
+                tool_type = "MCP工具" if item.source is ToolSource.MCP else "自定义函数"
+                catalog.append(f"- {name} | {tool_type} | {item.spec.description[:160]}")
+
+            protocol_names = available_protocol_tool_names(
+                is_superuser=is_superuser,
+            )
+            protocol_names -= business_conflicting_protocol_tools(plugin_info)
+            for spec in builtin_protocol_specs():
+                if spec.name not in protocol_names or is_blacklisted(spec.name):
+                    continue
+                item = provider_catalog.tools.get(spec.name)
+                if item is None or item.source is not ToolSource.BUILTIN:
+                    raise ProviderConsumerParityError(f"categorize builtin protocol identity 缺失: {spec.name}")
+                decision = provider_catalog.decide_trust(
+                    spec.name,
+                    ToolTrustOperation.SELECTION,
+                    is_superuser=is_superuser,
                 )
-                catalog.append(
-                    f"- {name} | {tool_type} | "
-                    f"{item.spec.description[:160]}"
-                )
+                if not decision.allowed:
+                    continue
+                tool_type = "QQ安全封装" if spec.name.startswith("qq__") else "OneBot协议动作"
+                catalog.append(f"- {spec.name} | {tool_type} | {spec.description[:160]}")
 
         if web_search_enabled and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)
             if item is None or item.source is not ToolSource.BUILTIN:
-                raise ProviderConsumerParityError(
-                    "categorize builtin web_search Provider identity 缺失"
-                )
+                raise ProviderConsumerParityError("categorize builtin web_search Provider identity 缺失")
             decision = provider_catalog.decide_trust(
                 WEB_SEARCH_TOOL_SPEC.name,
                 ToolTrustOperation.SELECTION,
                 is_superuser=is_superuser,
             )
             if decision.allowed:
-                catalog.append(
-                    f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | "
-                    "回答实时问题、新闻、天气与近期信息"
-                )
+                catalog.append(f"- {WEB_SEARCH_TOOL_SPEC.name} | 联网搜索 | 回答实时问题、新闻、天气与近期信息")
 
-        return (
-            finalize_discovery_catalog(catalog)
-            if catalog
-            else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
-        )
+        return finalize_discovery_catalog(catalog) if catalog else "当前工具调用与联网功能均已关闭，无需返回任何插件。"
 
     def is_tool_blacklisted(self, tool_name: str) -> bool:
         """统一判断普通插件、自定义函数、MCP 工具是否被黑名单禁用。"""
@@ -2577,19 +2336,13 @@ async def extract_webpage(
         return False
 
     @staticmethod
-    def is_tool_allowed(
-        schema: Mapping[str, Any], *, is_superuser: bool
-    ) -> bool:
+    def is_tool_allowed(schema: Mapping[str, Any], *, is_superuser: bool) -> bool:
         if not isinstance(schema, Mapping):
             return False
         spec = schema.get("tool_spec")
         if spec is not None and not isinstance(spec, ToolSpec):
             return False
-        return not (
-            spec is not None
-            and spec.permission == "superuser"
-            and not is_superuser
-        )
+        return not (spec is not None and spec.permission == "superuser" and not is_superuser)
 
     @staticmethod
     def tool_identifier_not_found_message(tool_name: str) -> str:
@@ -2621,11 +2374,7 @@ async def extract_webpage(
         from .runtime_snapshot import runtime_snapshots
 
         runtime_snapshot = runtime_snapshots.active()
-        snapshot = (
-            runtime_snapshot.tool_snapshot
-            if runtime_snapshot is not None
-            else self.snapshot()
-        )
+        snapshot = runtime_snapshot.tool_snapshot if runtime_snapshot is not None else self.snapshot()
         if provider_cutover is None and runtime_snapshot is not None:
             provider_cutover = runtime_snapshot.config.get(
                 "provider_catalog_management_enabled",
@@ -2663,9 +2412,7 @@ async def extract_webpage(
             return True
 
         prefix = f"mcp__{server_token}__"
-        return any(
-            name.startswith(prefix) for name in getattr(self, "mcp_tool_names", set())
-        )
+        return any(name.startswith(prefix) for name in getattr(self, "mcp_tool_names", set()))
 
     async def load_mcp_tools(self) -> int:
         """
@@ -2734,23 +2481,17 @@ async def extract_webpage(
                 deps = [deps]
 
             if not isinstance(deps, list):
-                logger.warning(
-                    f"custom_plugin_info.json 中 {plugin_name}.dependencies 格式错误，应为字符串列表"
-                )
+                logger.warning(f"custom_plugin_info.json 中 {plugin_name}.dependencies 格式错误，应为字符串列表")
                 continue
 
-            clean_deps = {
-                str(dep).strip() for dep in deps if isinstance(dep, str) and dep.strip()
-            }
+            clean_deps = {str(dep).strip() for dep in deps if isinstance(dep, str) and dep.strip()}
 
             if not clean_deps:
                 continue
 
             dependencies.setdefault(plugin_name, set()).update(clean_deps)
 
-            logger.debug(
-                f"custom_plugin_info.json 注入依赖: {plugin_name} -> {list(clean_deps)}"
-            )
+            logger.debug(f"custom_plugin_info.json 注入依赖: {plugin_name} -> {list(clean_deps)}")
 
     @staticmethod
     def build_llm_payload_schema(
@@ -2777,9 +2518,7 @@ async def extract_webpage(
 
         if not tools_enabled or not plugin_names:
             return []
-        normal_plugins = [
-            name for name in plugin_names if name != WEB_SEARCH_TOOL_SPEC.name
-        ]
+        normal_plugins = [name for name in plugin_names if name != WEB_SEARCH_TOOL_SPEC.name]
         tools = ToolManager.build_tool_schema(
             normal_plugins,
             include_search=False,
@@ -2816,9 +2555,7 @@ async def extract_webpage(
 
         if not isinstance(provider_catalog, ProviderCatalogSnapshot):
             raise TypeError("llm_payload provider_catalog 非法")
-        if not isinstance(plugin_names, list) or not all(
-            isinstance(name, str) for name in plugin_names
-        ):
+        if not isinstance(plugin_names, list) or not all(isinstance(name, str) for name in plugin_names):
             raise TypeError("llm_payload plugin_names 必须是字符串列表")
         if type(search_enabled) is not bool or type(is_superuser) is not bool:
             raise TypeError("llm_payload feature/actor 标志必须是布尔值")
@@ -2828,13 +2565,8 @@ async def extract_webpage(
             if not isinstance(render_context, ToolSchemaRenderContext):
                 raise TypeError("render_context 必须是 ToolSchemaRenderContext")
             if render_context.generation != provider_catalog.generation:
-                raise ValueError(
-                    "tool schema render_context generation 与 Provider catalog 不一致"
-                )
-            if (
-                render_context.search_enabled is not search_enabled
-                or render_context.is_superuser is not is_superuser
-            ):
+                raise ValueError("tool schema render_context generation 与 Provider catalog 不一致")
+            if render_context.search_enabled is not search_enabled or render_context.is_superuser is not is_superuser:
                 raise ValueError("tool schema render_context 与 Provider 标志不一致")
             is_blacklisted = render_context.is_blacklisted
 
@@ -2847,23 +2579,22 @@ async def extract_webpage(
             item = provider_catalog.tools.get(name)
             if item is None:
                 if name in plugin_info or name in custom_tools:
-                    raise ProviderConsumerParityError(
-                        f"llm_payload Provider identity 缺失: {name}"
-                    )
+                    raise ProviderConsumerParityError(f"llm_payload Provider identity 缺失: {name}")
                 continue
             if item.source is ToolSource.NONEBOT_PLUGIN:
                 if name not in plugin_info:
-                    raise ProviderConsumerParityError(
-                        f"llm_payload NoneBot rollback identity 缺失: {name}"
-                    )
+                    raise ProviderConsumerParityError(f"llm_payload NoneBot rollback identity 缺失: {name}")
             elif item.source is ToolSource.BUILTIN:
-                raise ProviderConsumerParityError(
-                    f"llm_payload 未知 builtin payload 工具: {name}"
-                )
+                protocol_spec = builtin_protocol_spec(name)
+                if protocol_spec is None:
+                    raise ProviderConsumerParityError(f"llm_payload 未知 builtin payload 工具: {name}")
+                if not protocol_tool_available(
+                    name,
+                    is_superuser=is_superuser,
+                ) or name in business_conflicting_protocol_tools(plugin_info):
+                    continue
             elif name not in custom_tools:
-                raise ProviderConsumerParityError(
-                    f"llm_payload Tool rollback identity 缺失: {name}"
-                )
+                raise ProviderConsumerParityError(f"llm_payload Tool rollback identity 缺失: {name}")
             decision = provider_catalog.decide_trust(
                 name,
                 ToolTrustOperation.SELECTION,
@@ -2881,6 +2612,8 @@ async def extract_webpage(
                 # JSON-Schema `required` field to an empty list. Reproduce the
                 # wire contract from the canonical spec, not from the sidecar.
                 parameters = item.spec.as_legacy_schema()["parameters"]
+            elif item.source is ToolSource.BUILTIN:
+                parameters = mutable_value(item.spec.parameters)
             else:
                 parameters = mutable_value(item.spec.parameters)
             tools.append(
@@ -2902,16 +2635,10 @@ async def extract_webpage(
                 }
             )
 
-        if (
-            search_enabled
-            and WEB_SEARCH_TOOL_SPEC.name in plugin_names
-            and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name)
-        ):
+        if search_enabled and WEB_SEARCH_TOOL_SPEC.name in plugin_names and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)
             if item is None or item.source is not ToolSource.BUILTIN:
-                raise ProviderConsumerParityError(
-                    "llm_payload builtin web_search Provider identity 缺失"
-                )
+                raise ProviderConsumerParityError("llm_payload builtin web_search Provider identity 缺失")
             decision = provider_catalog.decide_trust(
                 WEB_SEARCH_TOOL_SPEC.name,
                 ToolTrustOperation.SELECTION,
@@ -2991,9 +2718,7 @@ async def extract_webpage(
 
             elif name in custom_tools:
                 info = custom_tools[name]
-                if not ToolManager.is_tool_allowed(
-                    info, is_superuser=is_superuser
-                ):
+                if not ToolManager.is_tool_allowed(info, is_superuser=is_superuser):
                     continue
                 tools.append(
                     {
@@ -3012,6 +2737,28 @@ async def extract_webpage(
                     }
                 )
 
+            else:
+                protocol_spec = builtin_protocol_spec(name)
+                if protocol_spec is None:
+                    continue
+                if not protocol_tool_available(
+                    name,
+                    is_superuser=is_superuser,
+                ):
+                    continue
+                if name in business_conflicting_protocol_tools(plugin_info):
+                    continue
+                tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": protocol_spec.name,
+                            "description": protocol_spec.description,
+                            "parameters": mutable_value(protocol_spec.parameters),
+                        },
+                    }
+                )
+
         if include_search and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             tools.append(
                 {
@@ -3019,9 +2766,7 @@ async def extract_webpage(
                     "function": {
                         "name": WEB_SEARCH_TOOL_SPEC.name,
                         "description": WEB_SEARCH_TOOL_SPEC.description,
-                        "parameters": mutable_value(
-                            WEB_SEARCH_TOOL_SPEC.parameters
-                        ),
+                        "parameters": mutable_value(WEB_SEARCH_TOOL_SPEC.parameters),
                     },
                 }
             )
