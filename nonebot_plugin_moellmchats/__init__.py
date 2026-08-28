@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 import time
 
 from nonebot import get_driver
@@ -17,7 +18,7 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata, require
-from nonebot.plugin.on import on_command, on_fullmatch, on_message, on_notice
+from nonebot.plugin.on import on_command, on_fullmatch, on_message, on_notice, on_regex
 from nonebot.rule import to_me
 
 require("nonebot_plugin_localstore")
@@ -772,21 +773,36 @@ def _parse_llm_cooldown_seconds(raw: str) -> int:
     return seconds
 
 
-set_llm_cooldown_matcher = on_command(
-    "设置LLM冷却",
-    aliases={"设置LLMCD", "设置对话冷却"},
+_LLM_COOLDOWN_COMMAND_PATTERN = re.compile(
+    r"^\s*(?:[/!！])?(?:设置LLM冷却|设置LLMCD|设置对话冷却)(?:\s+(?P<seconds>.*?))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_llm_cooldown_command(raw: str) -> int | None:
+    match = _LLM_COOLDOWN_COMMAND_PATTERN.fullmatch(raw)
+    if match is None:
+        return None
+    return _parse_llm_cooldown_seconds(match.group("seconds") or "")
+
+
+set_llm_cooldown_matcher = on_regex(
+    _LLM_COOLDOWN_COMMAND_PATTERN.pattern,
+    flags=re.IGNORECASE,
     permission=SUPERUSER,
-    priority=10,
+    priority=0,
     block=True,
 )
 
 
 @set_llm_cooldown_matcher.handle()
-async def _(args: Message = CommandArg()):
+async def _(event: MessageEvent):
     try:
-        seconds = _parse_llm_cooldown_seconds(args.extract_plain_text())
+        seconds = _parse_llm_cooldown_command(event.get_plaintext())
     except ValueError as error:
-        await set_llm_cooldown_matcher.finish(f"参数错误：{error}。格式：设置LLM冷却 <秒数>")
+        await set_llm_cooldown_matcher.finish(f"参数错误：{error}。格式：/设置LLM冷却 <秒数>")
+    if seconds is None:  # pragma: no cover - on_regex guarantees this invariant
+        return
 
     previous = config_parser.get_config("cd_seconds", 120)
     try:
