@@ -54,7 +54,10 @@ class MemberNameCache:
         except asyncio.CancelledError:
             raise
         except Exception:
+            # 查询失败不写缓存：否则一次瞬时故障会让成员以裸 QQ 号
+            # 显示整个 TTL 周期，下次请求应直接重试
             name = user_id_text
+            return name
         finally:
             if task.done():
                 async with self._lock:
@@ -91,18 +94,17 @@ class MemberNameCache:
                 if protocol == "onebot_v11":
                     parameters["no_cache"] = False
                 member = await bot.get_group_member_info(**parameters)
-            return str(
-                member.get("card")
-                or member.get("nickname")
-                or member.get("user_displayname")
-                or member.get("user_name")
-                or user_id
-            )
         except TimeoutError:
             runtime_metrics.member_lookup_timeouts += 1
-            return str(user_id)
-        except Exception:
-            return str(user_id)
+            raise
+        # 失败向上抛出，由 get() 返回降级名且不写缓存
+        return str(
+            member.get("card")
+            or member.get("nickname")
+            or member.get("user_displayname")
+            or member.get("user_name")
+            or user_id
+        )
 
     def clear(self) -> None:
         self._cache.clear()
