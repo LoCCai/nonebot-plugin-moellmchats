@@ -5,6 +5,7 @@ import time
 
 from nonebot.adapters import Bot
 from nonebot.adapters import Event as MessageEvent
+from nonebot.log import logger
 
 from . import full_metrics as _full_metrics
 from . import moe_llm as llm
@@ -259,7 +260,13 @@ async def handle_llm(
                 cooldown_claim.lease,
                 user_id=user_id,
             )
-            await matcher.finish("当前 LLM 请求已被超级管理员终止。")
+            # 不能用 matcher.finish 吞掉取消：FinishedException 会替换
+            # CancelledError，破坏上层取消语义。先尽力通知，再重新抛出。
+            try:
+                await matcher.send("当前 LLM 请求已被超级管理员终止。")
+            except Exception:
+                logger.debug("取消通知发送失败，忽略")
+            raise
         except Exception:
             await _release_cooldown(
                 action_store,
