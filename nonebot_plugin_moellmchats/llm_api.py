@@ -189,6 +189,32 @@ class LlmApiMixin:
 
         return None
 
+    @staticmethod
+    def _is_sse_done(line: bytes) -> bool:
+        """识别 SSE 结束标记，兼容 ``data: [DONE]`` 与无空格 ``data:[DONE]``。"""
+
+        payload = line.strip()
+        if payload.startswith(b"data:"):
+            payload = payload[5:].strip()
+        return payload == b"[DONE]"
+
+    @staticmethod
+    def _decode_sse_payload(line: bytes) -> str | None:
+        """提取单条 SSE 行中的 JSON 负载。
+
+        ``event:``/``id:``/``retry:``/``:comment`` 行返回 None；个别网关会省略
+        ``data:`` 前缀直接输出裸 JSON 行（ndjson），这类行原样放行以保持兼容。
+        """
+
+        payload = line.strip()
+        if payload.startswith(b"data:"):
+            payload = payload[5:].strip()
+        if not payload or payload.startswith(b":"):
+            return None
+        if not payload.startswith(b"{") and not payload.startswith(b"["):
+            return None
+        return payload.decode("utf-8", errors="replace")
+
     async def stream_llm_chat(
         self, session, url, headers, data, proxy, is_segment=False, timeout=None
     ) -> tuple[bool, str, list, str]:
@@ -215,22 +241,17 @@ class LlmApiMixin:
                 current_segment = 0
                 jump_out = False  # 判断是否跳出循环
                 async for line in resp.content:
-                    if (
-                        not line
-                        or line.startswith(b"data: [DONE]")
-                        or line.startswith(b"[DONE]")
-                        or jump_out
-                    ):
+                    if not line or jump_out or self._is_sse_done(line):
                         break  # 结束标记，退出循环
 
-                    if line.startswith(b"data:"):
-                        decoded = line[5:].decode("utf-8")
-                    elif line.startswith(b""):
-                        decoded = line.decode("utf-8")
-                    if not decoded.strip() or decoded.startswith(":"):
+                    payload = self._decode_sse_payload(line)
+                    if payload is None:
                         continue
-
-                    json_data = json.loads(decoded)
+                    try:
+                        json_data = json.loads(payload)
+                    except ValueError:
+                        logger.debug("忽略无法解析的 SSE 数据行: {}", payload[:120])
+                        continue
                     if usage := json_data.get("usage"):
                         self._record_token_usage(usage)
                     content = ""
