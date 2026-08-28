@@ -315,10 +315,13 @@ async def format_message(event, bot) -> dict:
             pass
         elif msgseg.type == "text":
             if plain := msgseg.data.get("text", ""):
-                if plain.startswith("ai"):
-                    text_message.append(plain[2:])
-                else:
-                    text_message.append(plain)
+                # 仅剥离独立的 ai 唤醒词，"airpods" 这类以 ai 开头的普通单词必须原样保留
+                lowered = plain.lower()
+                if lowered == "ai":
+                    plain = ""
+                elif lowered.startswith("ai ") or lowered.startswith("ai\u3000"):
+                    plain = plain[3:].lstrip()
+                text_message.append(plain)
 
     return {
         "text": text_message,
