@@ -5,10 +5,18 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from nonebot_plugin_moellmchats import nonebot_plugin_tools as module
+from nonebot_plugin_moellmchats.event_simulator import (
+    PluginDispatchResult,
+    PluginDispatchStatus,
+)
 from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
+    PluginDispatchError,
     build_nonebot_plugin_candidate,
 )
 from nonebot_plugin_moellmchats.tool_contracts import ToolEffect, ToolResult
+from nonebot_plugin_moellmchats.tool_discovery import (
+    COMPAT_COMMAND_PREFIXES_KEY,
+)
 from nonebot_plugin_moellmchats.tool_manager import ToolManager, tool_manager
 
 
@@ -59,6 +67,14 @@ def test_nonebot_plugin_candidate_rejects_malformed_or_reserved_legacy_info() ->
         build_nonebot_plugin_candidate(
             {"plugin_demo": {"source": "spoofed"}}
         )
+    with pytest.raises(ValueError, match="保留 Provider 字段"):
+        build_nonebot_plugin_candidate(
+            {
+                "plugin_demo": {
+                    COMPAT_COMMAND_PREFIXES_KEY: ("!",),
+                }
+            }
+        )
     with pytest.raises(ValueError, match="工具名"):
         build_nonebot_plugin_candidate(
             {"plugin.name": {"description": "invalid function name"}}
@@ -84,7 +100,16 @@ async def test_nonebot_plugin_adapter_uses_bounded_event_simulator(
         calls.append(
             (received_bot, received_event, command, source, plugin_name)
         )
-        return "visible plugin output", ["image:one"]
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="visible plugin output",
+            images=("image:one",),
+            matcher_checked=2,
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=1,
+            duration_ms=12,
+        )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
 
@@ -102,9 +127,19 @@ async def test_nonebot_plugin_adapter_uses_bounded_event_simulator(
         text="visible plugin output",
         images=("image:one",),
         metadata={
-            "provider_id": "nonebot-plugin",
-            "plugin_name": "plugin_demo",
-            "compatibility_adapter": True,
+            "plugin_dispatch": {
+                "status": "matched_with_output",
+                "matcher_checked": 2,
+                "matcher_matched": 1,
+                "matcher_failed": 0,
+                "matcher_blocked": 0,
+                "successful_captures": 1,
+                "api_succeeded": 1,
+                "api_failed": 0,
+                "api_unknown": 0,
+                "mutating_api_succeeded": 0,
+                "duration_ms": 12,
+            }
         },
     )
     assert calls == [
@@ -150,10 +185,109 @@ def test_nonebot_plugin_legacy_schema_uses_canonical_spec_without_cutover(
                         "严格根据该插件的原始用法说明和菜单功能提示，"
                         "生成可以直接触发该插件的机器人指令字符串。"
                     ),
+                    "minLength": 1,
+                    "maxLength": 1024,
                 }
             },
             "required": ["command"],
+            "additionalProperties": False,
         },
     }
     schemas[0]["function"]["parameters"]["required"].clear()
     assert specs[0].parameters["required"] == ("command",)
+
+
+def test_nonebot_plugin_schema_keeps_generation_frozen_command_prefixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_demo": {
+                "name": "Demo",
+                "usage": "<命令前缀>demo",
+            }
+        },
+        command_prefixes=("##", "!"),
+    )
+    monkeypatch.setattr(tool_manager, "is_tool_blacklisted", lambda _name: False)
+
+    schemas = ToolManager.build_tool_schema(
+        ["plugin_demo"],
+        plugin_info=legacy,
+        custom_tools={},
+    )
+
+    description = schemas[0]["function"]["description"]
+    assert description == specs[0].description
+    assert "!demo" in description
+    assert "当前首选命令前缀为 '!'" in description
+    assert "其他有效前缀：'##'" in description
+    assert "<命令前缀>" not in description
+
+
+@pytest.mark.asyncio
+async def test_nonebot_plugin_adapter_accepts_only_verified_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _legacy, specs = build_nonebot_plugin_candidate(
+        {"plugin_demo": {"description": "demo"}}
+    )
+
+    async def side_effect(*_args, **_kwargs):
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_SIDE_EFFECT,
+            matcher_checked=1,
+            matcher_matched=1,
+            api_succeeded=1,
+            mutating_api_succeeded=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", side_effect)
+    result = await specs[0].handler(
+        "/demo", _bot=object(), _event=object()
+    )
+    assert "副作用动作" in result.text
+    assert result.metadata["plugin_dispatch"]["status"] == (
+        "matched_side_effect"
+    )
+
+    async def empty(*_args, **_kwargs):
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_EMPTY,
+            matcher_checked=1,
+            matcher_matched=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", empty)
+    with pytest.raises(PluginDispatchError) as captured:
+        await specs[0].handler("/demo", _bot=object(), _event=object())
+    assert captured.value.result.status is PluginDispatchStatus.MATCHED_EMPTY
+
+
+@pytest.mark.parametrize(
+    ("prefixes", "preferred", "alternatives"),
+    [
+        (("!", "/"), "/帮助", "'!'"),
+        (("!!", "!"), "!帮助", "'!!'"),
+        (("",), "帮助", None),
+    ],
+)
+def test_nonebot_plugin_description_uses_real_command_start(
+    prefixes: tuple[str, ...],
+    preferred: str,
+    alternatives: str | None,
+) -> None:
+    _legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_demo": {
+                "description": "demo",
+                "usage": "<命令前缀>帮助",
+            }
+        },
+        command_prefixes=prefixes,
+    )
+    description = specs[0].description
+    assert preferred in description
+    assert "<命令前缀>" not in description
+    if alternatives is not None:
+        assert alternatives in description

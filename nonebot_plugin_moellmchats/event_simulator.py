@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from contextlib import AsyncExitStack
 from contextvars import ContextVar
+from dataclasses import dataclass
+from enum import Enum
+import hashlib
 import re
 import time
-import traceback
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 import uuid
@@ -39,13 +42,20 @@ from nonebot.adapters.onebot.v12 import (
     PrivateMessageEvent as V12PrivateMessageEvent,
 )
 from nonebot.compat import model_dump
-from nonebot.exception import StopPropagation
+from nonebot.exception import (
+    ActionFailed,
+    ApiNotAvailable,
+    NetworkError,
+    StopPropagation,
+)
 from nonebot.internal.matcher import matchers
 from nonebot.log import logger
 from nonebot.message import (
     _apply_event_postprocessors,
     _apply_event_preprocessors,
-    check_and_run_matcher,
+    _check_matcher,
+    _run_matcher,
+    run_postprocessor,
 )
 from nonebot.plugin import get_plugin
 from nonebot.rule import TrieRule
@@ -54,6 +64,7 @@ from .admission import AdmissionRejected, get_dispatch_controller
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .onebot_facade import onebot_protocol
+from .protocol_registry import protocol_registry
 from .runtime_metrics import runtime_metrics
 
 if TYPE_CHECKING:
@@ -69,6 +80,63 @@ _SEND_ACTIONS = {
     "send_message",
 }
 _AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all)\]")
+
+
+class PluginDispatchStatus(str, Enum):
+    MATCHED_WITH_OUTPUT = "matched_with_output"
+    MATCHED_SIDE_EFFECT = "matched_side_effect"
+    PARTIAL_SUCCESS = "partial_success"
+    MATCHED_EMPTY = "matched_empty"
+    NOT_MATCHED = "not_matched"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    ADMISSION_REJECTED = "admission_rejected"
+    RESULT_UNKNOWN = "result_unknown"
+
+
+@dataclass(frozen=True)
+class PluginDispatchResult:
+    status: PluginDispatchStatus
+    text: str = ""
+    images: tuple[str, ...] = ()
+    matcher_checked: int = 0
+    matcher_matched: int = 0
+    matcher_failed: int = 0
+    matcher_blocked: int = 0
+    successful_captures: int = 0
+    api_succeeded: int = 0
+    api_failed: int = 0
+    api_unknown: int = 0
+    mutating_api_succeeded: int = 0
+    duration_ms: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, PluginDispatchStatus):
+            raise TypeError("PluginDispatchResult.status 非法")
+        if not isinstance(self.text, str) or not isinstance(self.images, tuple):
+            raise TypeError("PluginDispatchResult 输出类型非法")
+        for field_name in (
+            "matcher_checked",
+            "matcher_matched",
+            "matcher_failed",
+            "matcher_blocked",
+            "successful_captures",
+            "api_succeeded",
+            "api_failed",
+            "api_unknown",
+            "mutating_api_succeeded",
+            "duration_ms",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"PluginDispatchResult.{field_name} 必须是非负整数")
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status in {
+            PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            PluginDispatchStatus.MATCHED_SIDE_EFFECT,
+        }
 
 
 def is_synthetic_event() -> bool:
@@ -137,31 +205,100 @@ def _extract_send_data(message, *, protocol: str) -> dict:
     return {"text": full_text, "images": images[:image_limit]}
 
 
+def _api_effect(protocol: str, api: str) -> str | None:
+    protocol_ids = ("onebot_v12",) if protocol == "onebot_v12" else ("onebot_v11", "napcat_v11")
+    for protocol_id in protocol_ids:
+        action = protocol_registry.by_id.get(f"{protocol_id}:{api}")
+        if action is not None:
+            return protocol_registry.policy_for(action).effect
+    return None
+
+
+def _unknown_api_result(exception: Exception) -> bool:
+    if isinstance(exception, (ActionFailed, ApiNotAvailable)):
+        return False
+    return isinstance(
+        exception,
+        (NetworkError, TimeoutError, asyncio.TimeoutError, ConnectionError),
+    )
+
+
 async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
-    """Capture target-plugin output through NoneBot's supported API hook."""
+    """Stage API evidence; only ``on_called_api`` may commit success."""
     key = _capture_key.get()
-    if key is None or api not in _SEND_ACTIONS:
+    if key is None:
         return
     context = _captures.get(key)
-    message = data.get("message")
-    if context is None or message is None:
+    if context is None:
         return
     protocol = onebot_protocol(bot) or context.get(
         "protocol",
         "onebot_v11",
     )
-    fixed = _rewrite_reply_id(
-        message,
-        context["original_id"],
-        context["fake_id"],
-        protocol=protocol,
-    )
-    data["message"] = fixed
-    context["messages"].append(_extract_send_data(fixed, protocol=protocol))
+    output = None
+    message = data.get("message")
+    if api in _SEND_ACTIONS and message is not None:
+        fixed = _rewrite_reply_id(
+            message,
+            context["original_id"],
+            context["fake_id"],
+            protocol=protocol,
+        )
+        data["message"] = fixed
+        output = _extract_send_data(fixed, protocol=protocol)
+    context["pending_api"][id(data)] = {
+        "api": api,
+        "effect": _api_effect(protocol, api),
+        "output": output,
+    }
+
+
+async def _confirm_outgoing_api(
+    bot: Bot,
+    exception: Exception | None,
+    api: str,
+    data: dict,
+    result: Any,
+) -> None:
+    """Commit captured output/effect only after the adapter confirms success."""
+
+    del bot, result
+    key = _capture_key.get()
+    if key is None:
+        return
+    context = _captures.get(key)
+    if context is None:
+        return
+    staged = context["pending_api"].pop(id(data), None)
+    if staged is None:
+        staged = {"api": api, "effect": None, "output": None}
+    if exception is not None:
+        context["api_failed"] += 1
+        if _unknown_api_result(exception):
+            context["api_unknown"] += 1
+        return
+    context["api_succeeded"] += 1
+    if staged.get("effect") == "mutating":
+        context["mutating_api_succeeded"] += 1
+    output = staged.get("output")
+    if isinstance(output, dict):
+        context["messages"].append(output)
 
 
 V11Bot.on_calling_api(_capture_outgoing_api)
 V12Bot.on_calling_api(_capture_outgoing_api)
+V11Bot.on_called_api(_confirm_outgoing_api)
+V12Bot.on_called_api(_confirm_outgoing_api)
+
+
+@run_postprocessor
+async def _observe_synthetic_matcher_exception(exception: Exception | None) -> None:
+    key = _capture_key.get()
+    if key is None or exception is None:
+        return
+    context = _captures.get(key)
+    if context is not None:
+        context["matcher_failed"] += 1
 
 
 def _build_fake_message(
@@ -254,6 +391,56 @@ def _build_event(original: Any, command: str, source: dict | None) -> tuple[Any,
     raise TypeError(f"不支持的事件类型: {type(original).__name__}")
 
 
+async def _observe_and_run_matcher(
+    matcher,
+    bot: Bot,
+    event,
+    state: dict,
+    stack: AsyncExitStack | None,
+    dependency_cache: dict,
+) -> bool:
+    key = _capture_key.get()
+    context = _captures.get(key) if key is not None else None
+    if context is not None:
+        context["matcher_checked"] += 1
+    try:
+        matched = await _check_matcher(
+            matcher,
+            bot,
+            event,
+            state,
+            stack,
+            dependency_cache,
+        )
+    except Exception:
+        if context is not None:
+            context["matcher_failed"] += 1
+        logger.error("目标 Matcher 规则检查失败，异常详情已安全省略")
+        return False
+    if not matched:
+        return False
+    if context is not None:
+        context["matcher_matched"] += 1
+    try:
+        await _run_matcher(
+            matcher,
+            bot,
+            event,
+            state,
+            stack,
+            dependency_cache,
+        )
+    except StopPropagation:
+        if context is not None:
+            context["matcher_blocked"] += 1
+        raise
+    except Exception:
+        if context is not None:
+            context["matcher_failed"] += 1
+        raise
+    return True
+
+
 async def _dispatch_targeted(bot: Bot, event, plugin_name: str) -> None:
     plugin = get_plugin(plugin_name)
     if plugin is None:
@@ -266,12 +453,13 @@ async def _dispatch_targeted(bot: Bot, event, plugin_name: str) -> None:
         logger.exception("解析目标插件指令失败")
     for matcher in sorted(plugin.matcher, key=lambda item: item.priority):
         try:
-            await check_and_run_matcher(
+            await _observe_and_run_matcher(
                 matcher,
                 bot,
                 event,
                 state.copy(),
-                dependency_cache=dependency_cache,
+                None,
+                dependency_cache,
             )
         except StopPropagation:
             break
@@ -292,7 +480,7 @@ async def _dispatch_full_bus(bot: Bot, event) -> None:
         for priority in sorted(matchers):
             for matcher in list(matchers[priority]):
                 try:
-                    await check_and_run_matcher(
+                    await _observe_and_run_matcher(
                         matcher,
                         bot,
                         event,
@@ -308,6 +496,83 @@ async def _dispatch_full_bus(bot: Bot, event) -> None:
         await _apply_event_postprocessors(bot, event, state, stack, dependency_cache, show_log=False)
 
 
+def _dispatch_result(
+    context: dict[str, Any],
+    *,
+    started_monotonic: float,
+    forced_status: PluginDispatchStatus | None = None,
+) -> PluginDispatchResult:
+    pending = context.get("pending_api", {})
+    if pending:
+        context["api_unknown"] += len(pending)
+        context["api_failed"] += len(pending)
+        pending.clear()
+    captured = context.get("messages", [])
+    texts = [item["text"] for item in captured if item.get("text")]
+    images = [url for item in captured for url in item.get("images", [])]
+    has_verified_effect = bool(captured or context.get("mutating_api_succeeded", 0))
+    if forced_status is not None:
+        status = forced_status
+        if (
+            forced_status
+            in {
+                PluginDispatchStatus.FAILED,
+                PluginDispatchStatus.TIMED_OUT,
+                PluginDispatchStatus.RESULT_UNKNOWN,
+            }
+            and has_verified_effect
+        ):
+            status = PluginDispatchStatus.PARTIAL_SUCCESS
+        elif context.get("api_unknown", 0) and forced_status in {
+            PluginDispatchStatus.FAILED,
+            PluginDispatchStatus.TIMED_OUT,
+        }:
+            status = PluginDispatchStatus.RESULT_UNKNOWN
+    elif context.get("api_unknown", 0):
+        status = PluginDispatchStatus.PARTIAL_SUCCESS if has_verified_effect else PluginDispatchStatus.RESULT_UNKNOWN
+    elif context.get("matcher_failed", 0) or context.get("api_failed", 0):
+        status = PluginDispatchStatus.PARTIAL_SUCCESS if has_verified_effect else PluginDispatchStatus.FAILED
+    elif captured:
+        status = PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    elif context.get("mutating_api_succeeded", 0):
+        status = PluginDispatchStatus.MATCHED_SIDE_EFFECT
+    elif context.get("matcher_matched", 0):
+        status = PluginDispatchStatus.MATCHED_EMPTY
+    else:
+        status = PluginDispatchStatus.NOT_MATCHED
+
+    return PluginDispatchResult(
+        status=status,
+        text="\n".join(texts),
+        images=tuple(images),
+        matcher_checked=int(context.get("matcher_checked", 0)),
+        matcher_matched=int(context.get("matcher_matched", 0)),
+        matcher_failed=int(context.get("matcher_failed", 0)),
+        matcher_blocked=int(context.get("matcher_blocked", 0)),
+        successful_captures=len(captured),
+        api_succeeded=int(context.get("api_succeeded", 0)),
+        api_failed=int(context.get("api_failed", 0)),
+        api_unknown=int(context.get("api_unknown", 0)),
+        mutating_api_succeeded=int(context.get("mutating_api_succeeded", 0)),
+        duration_ms=max(0, int((time.monotonic() - started_monotonic) * 1000)),
+    )
+
+
+def _empty_dispatch_context() -> dict[str, Any]:
+    return {
+        "messages": [],
+        "pending_api": {},
+        "matcher_checked": 0,
+        "matcher_matched": 0,
+        "matcher_failed": 0,
+        "matcher_blocked": 0,
+        "api_succeeded": 0,
+        "api_failed": 0,
+        "api_unknown": 0,
+        "mutating_api_succeeded": 0,
+    }
+
+
 class EventSimulator:
     async def dispatch_event(
         self,
@@ -316,24 +581,38 @@ class EventSimulator:
         command_str: str,
         format_message_dict: dict | None = None,
         plugin_name: str | None = None,
-    ) -> tuple[str, list[str]]:
-        if not command_str or not plugin_name:
-            return "执行失败：缺少目标插件或指令参数", []
+    ) -> PluginDispatchResult:
+        started_monotonic = time.monotonic()
+        if (
+            not isinstance(command_str, str)
+            or not 1 <= len(command_str) <= 1024
+            or not isinstance(plugin_name, str)
+            or not plugin_name
+        ):
+            return _dispatch_result(
+                _empty_dispatch_context(),
+                started_monotonic=started_monotonic,
+                forced_status=PluginDispatchStatus.FAILED,
+            )
         try:
             async with get_dispatch_controller().slot():
                 fake_event, fake_id = _build_event(original_event, command_str, format_message_dict)
                 capture_id = uuid.uuid4().hex
-                _captures[capture_id] = {
-                    "messages": [],
-                    "original_id": original_event.message_id,
-                    "fake_id": fake_id,
-                    "protocol": onebot_protocol(bot, original_event) or "onebot_v11",
-                }
+                context = _empty_dispatch_context()
+                context.update(
+                    {
+                        "original_id": original_event.message_id,
+                        "fake_id": fake_id,
+                        "protocol": onebot_protocol(bot, original_event) or "onebot_v11",
+                    }
+                )
+                _captures[capture_id] = context
                 capture_token = _capture_key.set(capture_id)
                 event_token = _synthetic_plugin.set(plugin_name)
                 full_plugins = set(config_parser.get_config("legacy_full_event_plugins", []))
                 mode = "full" if plugin_name in full_plugins else "targeted"
                 runtime_metrics.dispatch_modes[mode] += 1
+                forced_status = None
                 try:
                     timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 20)
                     async with timeout_scope(timeout):
@@ -343,19 +622,49 @@ class EventSimulator:
                             await _dispatch_targeted(bot, fake_event, plugin_name)
                 except TimeoutError:
                     runtime_metrics.dispatch_timeouts += 1
-                    return "执行失败：调用的插件处理超时", []
+                    forced_status = PluginDispatchStatus.TIMED_OUT
+                except Exception:
+                    forced_status = PluginDispatchStatus.FAILED
+                    logger.error("NoneBot 插件兼容执行失败，异常详情已安全省略")
                 finally:
                     _synthetic_plugin.reset(event_token)
                     _capture_key.reset(capture_token)
-                    captured = _captures.pop(capture_id, {"messages": []})["messages"]
-                texts = [item["text"] for item in captured if item["text"]]
-                images = [url for item in captured for url in item["images"]]
-                return "\n".join(texts), images
+                    context = _captures.pop(
+                        capture_id,
+                        _empty_dispatch_context(),
+                    )
+                result = _dispatch_result(
+                    context,
+                    started_monotonic=started_monotonic,
+                    forced_status=forced_status,
+                )
+                command_digest = hashlib.sha256(command_str.encode("utf-8")).hexdigest()
+                logger.info(
+                    "NoneBot 插件兼容调度完成: "
+                    f"plugin={plugin_name} command_digest={command_digest[:12]} "
+                    f"status={result.status.value} "
+                    f"matcher_checked={result.matcher_checked} "
+                    f"matcher_matched={result.matcher_matched} "
+                    f"matcher_failed={result.matcher_failed} "
+                    f"capture_success={result.successful_captures} "
+                    f"api_success={result.api_succeeded} "
+                    f"api_failed={result.api_failed} "
+                    f"duration_ms={result.duration_ms}"
+                )
+                return result
         except AdmissionRejected:
-            return "执行失败：插件兼容队列已满，请稍后重试", []
-        except Exception as error:
-            logger.error(traceback.format_exc())
-            return f"插件执行出错: {type(error).__name__} - {error}", []
+            return _dispatch_result(
+                _empty_dispatch_context(),
+                started_monotonic=started_monotonic,
+                forced_status=PluginDispatchStatus.ADMISSION_REJECTED,
+            )
+        except Exception:
+            logger.error("NoneBot 插件兼容调度构造失败，异常详情已安全省略")
+            return _dispatch_result(
+                _empty_dispatch_context(),
+                started_monotonic=started_monotonic,
+                forced_status=PluginDispatchStatus.FAILED,
+            )
 
 
 event_simulator = EventSimulator()

@@ -68,6 +68,10 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self._pending_vision_images: list = []  # 本轮工具调用返回的待处理图片
         self._tool_schema_record = None
         self._current_tool_usage = Counter()
+        self._tool_call_fingerprints: dict[tuple[int, str, str], str] = {}
+        self._tool_retry_blocked_tools: set[str] = set()
+        self.tool_selection_source = "classification_model"
+        self.tool_intent_digest = ""
         self._last_api_error_non_retryable = False
         bot_config = getattr(bot, "config", None)
         superusers = {str(user_id) for user_id in getattr(bot_config, "superusers", set())}

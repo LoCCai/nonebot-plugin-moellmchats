@@ -444,6 +444,8 @@ class ClassificationCacheKey:
     classifier_digest: str
     policy_version: str
     ttl_seconds: float
+    directory_digest: str = "0" * 64
+    scene: str = "unknown"
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -464,11 +466,14 @@ class ClassificationCacheKey:
             "normalized_prompt_hash",
             "capability_digest",
             "classifier_digest",
+            "directory_digest",
         ):
             _validate_digest(
                 getattr(self, field_name),
                 label=f"classification {field_name}",
             )
+        if self.scene not in {"group", "private", "channel", "unknown"}:
+            raise ValueError("classification scene 非法")
         if not isinstance(self.policy_version, str) or not _POLICY_VERSION_RE.fullmatch(self.policy_version):
             raise ValueError("classification policy_version 必须是安全版本标识")
         ttl_seconds = _validate_seconds(
@@ -487,6 +492,7 @@ class ClassificationCacheKey:
                 "capability_digest": self.capability_digest,
                 "catalog_digest": self.catalog_digest,
                 "classifier_digest": self.classifier_digest,
+                "directory_digest": self.directory_digest,
                 "generation": self.generation,
                 "normalization_version": _NORMALIZATION_VERSION,
                 "normalized_prompt_hash": self.normalized_prompt_hash,
@@ -495,6 +501,7 @@ class ClassificationCacheKey:
                 "provider_cutover": self.provider_cutover,
                 "tools_enabled": self.tools_enabled,
                 "ttl_seconds": self.ttl_seconds,
+                "scene": self.scene,
                 "web_search_enabled": self.web_search_enabled,
             },
             ensure_ascii=True,
@@ -515,6 +522,7 @@ class ClassificationCacheKey:
             "provider_cutover": self.provider_cutover,
             "tools_enabled": self.tools_enabled,
             "ttl_seconds": self.ttl_seconds,
+            "scene": self.scene,
             "web_search_enabled": self.web_search_enabled,
         }
 
@@ -564,6 +572,7 @@ class ClassificationRenderContext:
         policy_version: str,
         additional_capabilities: tuple[str, ...] = (),
         ttl_seconds: float = 60.0,
+        scene: str = "unknown",
     ) -> ClassificationRenderContext:
         if not isinstance(catalog_record, ToolCatalogRecord):
             raise TypeError("catalog_record 必须是 ToolCatalogRecord")
@@ -591,6 +600,8 @@ class ClassificationRenderContext:
             classifier_digest=model_identity.digest,
             policy_version=policy_version,
             ttl_seconds=ttl_seconds,
+            directory_digest=catalog_key.directory_digest,
+            scene=scene,
         )
         return cls(
             key=key,

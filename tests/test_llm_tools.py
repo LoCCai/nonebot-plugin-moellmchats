@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
 
+from nonebot.adapters.onebot.v11 import Message
 import pytest
 
 from nonebot_plugin_moellmchats.agent_context_runtime import (
@@ -22,6 +23,10 @@ from nonebot_plugin_moellmchats.agent_runtime import (
 )
 from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
 from nonebot_plugin_moellmchats.config import config_parser
+from nonebot_plugin_moellmchats.event_simulator import (
+    PluginDispatchResult,
+    PluginDispatchStatus,
+)
 from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
 from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
     build_nonebot_plugin_candidate,
@@ -30,6 +35,7 @@ from nonebot_plugin_moellmchats.pending_actions import (
     PendingActionStore,
     pending_action_store,
 )
+from nonebot_plugin_moellmchats.protocol_context import protocol_request_scope
 from nonebot_plugin_moellmchats.redis_client import (
     RedisClientManager,
     RedisClientSettings,
@@ -922,8 +928,11 @@ async def test_parallel_first_error_cancels_and_drains_sibling_without_leak() ->
     entered: set[str] = set()
     both_entered = asyncio.Event()
     peer_drained = asyncio.Event()
+    failing_attempts = 0
 
     async def failing() -> str:
+        nonlocal failing_attempts
+        failing_attempts += 1
         entered.add("failing")
         if len(entered) == 2:
             both_entered.set()
@@ -987,6 +996,17 @@ async def test_parallel_first_error_cancels_and_drains_sibling_without_leak() ->
         assert runner_state.pending == 0
         assert runner_state.failed == 1
         assert runner_state.cancelled == 1
+
+        retried = await harness._execute_tools(
+            [_call(3, "failing"), _call(4, "peer")],
+            "",
+            [],
+            "",
+        )
+        assert failing_attempts == 1
+        assert "禁止原样重复" in retried[-2]["content"]
+        assert "已跳过" in retried[-1]["content"]
+        assert resources.trusted_runner.snapshot().failed == 1
     finally:
         await resources.close()
 
@@ -1577,7 +1597,14 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
 
     async def dispatch(bot, event, command, source, *, plugin_name):
         calls.append((bot, event, command, source, plugin_name))
-        return "visible output", []
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="visible output",
+            matcher_checked=1,
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=1,
+        )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     harness = Harness({}, plugins=legacy)
@@ -1599,6 +1626,167 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
         )
     ]
     assert "visible output" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_failure_fingerprint_blocks_only_identical_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {"plugin_demo": {"description": "demo", "usage": "/demo"}}
+    )
+    commands: list[str] = []
+
+    async def dispatch(_bot, _event, command, _source, *, plugin_name):
+        assert plugin_name == "plugin_demo"
+        commands.append(command)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.NOT_MATCHED,
+            matcher_checked=2,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+
+    first = await harness._execute_tools(
+        [_call(1, "plugin_demo", '{"command":"/demo bad"}')],
+        "",
+        [],
+        "",
+    )
+    repeated = await harness._execute_tools(
+        [_call(2, "plugin_demo", '{"command":"/demo bad"}')],
+        "",
+        [],
+        "",
+    )
+    changed = await harness._execute_tools(
+        [_call(3, "plugin_demo", '{"command":"/demo good"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert commands == ["/demo bad", "/demo good"]
+    assert "没有 Matcher 命中" in first[-1]["content"]
+    assert "禁止原样重复" in repeated[-1]["content"]
+    assert "没有 Matcher 命中" in changed[-1]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        PluginDispatchStatus.RESULT_UNKNOWN,
+        PluginDispatchStatus.PARTIAL_SUCCESS,
+    ],
+)
+async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    status: PluginDispatchStatus,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {"plugin_demo": {"description": "demo", "usage": "/demo"}}
+    )
+    calls = 0
+
+    async def dispatch(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return PluginDispatchResult(
+            status=status,
+            matcher_checked=1,
+            matcher_matched=1,
+            api_failed=1,
+            api_unknown=(1 if status is PluginDispatchStatus.RESULT_UNKNOWN else 0),
+            successful_captures=(
+                1 if status is PluginDispatchStatus.PARTIAL_SUCCESS else 0
+            ),
+            text=("已发送部分内容" if status is PluginDispatchStatus.PARTIAL_SUCCESS else ""),
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    first = await harness._execute_tools(
+        [_call(1, "plugin_demo", '{"command":"/demo one"}')],
+        "",
+        [],
+        "",
+    )
+    second = await harness._execute_tools(
+        [_call(2, "plugin_demo", '{"command":"/demo two"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert calls == 1
+    assert (
+        "结果不确定" in first[-1]["content"]
+        or "部分可验证结果" in first[-1]["content"]
+    )
+    assert "禁止再次调用" in second[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_progress_switch_hides_only_pre_execution_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def query() -> ToolResult:
+        nonlocal calls
+        calls += 1
+        return ToolResult(text="最终工具结果")
+
+    spec = ToolSpec(
+        name="query_once",
+        description="query",
+        parameters={"type": "object", "properties": {}},
+        handler=query,
+    )
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            False
+            if key == "tool_progress_messages_enabled"
+            else original_get_config(key, default)
+        ),
+    )
+    harness = Harness({"query_once": spec.as_legacy_schema()})
+    messages = await harness._execute_tools(
+        [_call(1, "query_once")],
+        "我来查询一下",
+        [],
+        "",
+    )
+
+    assert calls == 1
+    assert harness.sent == []
+    assert harness.bot.sent == []
+    assert "最终工具结果" in messages[-1]["content"]
+
+
+def test_command_audit_preview_never_exposes_arguments_or_locations() -> None:
+    preview = LlmToolsMixin._safe_command_preview(
+        "/排行 123456 https://example.invalid/path?token=secret"
+    )
+    assert preview.startswith("/排行 <args> [tokens=3,chars=")
+    assert "123456" not in preview
+    assert "example.invalid" not in preview
+    assert "secret" not in preview
+    assert "secret" not in LlmToolsMixin._safe_command_preview(
+        "Authorization secret-token"
+    )
+    assert LlmToolsMixin._safe_command_preview(
+        "/var/private/config.json token"
+    ).startswith("<redacted>")
 
 
 @pytest.mark.asyncio
@@ -1690,7 +1878,14 @@ async def test_provider_catalog_nonebot_execution_uses_canonical_handler(
 
     async def canonical_dispatch(bot, event, command, source, *, plugin_name):
         calls.append((bot, event, command, source, plugin_name))
-        return "canonical visible output", []
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="canonical visible output",
+            matcher_checked=1,
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=1,
+        )
 
     monkeypatch.setattr(module, "event_simulator", ForbiddenRollbackSimulator())
     monkeypatch.setattr(
@@ -1786,9 +1981,21 @@ async def test_provider_catalog_execution_enforces_trust_permission() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_mutating_execution_still_creates_pending_action() -> None:
+async def test_provider_mutating_confirmation_remains_visible_when_progress_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     await pending_action_store.clear()
     executions = 0
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            False
+            if key == "tool_progress_messages_enabled"
+            else original_get_config(key, default)
+        ),
+    )
 
     async def mutate() -> str:
         nonlocal executions
@@ -1834,6 +2041,97 @@ async def test_provider_mutating_execution_still_creates_pending_action() -> Non
         run.state for run in runtime.run_history
     }
     assert runtime.run.state is AgentRunState.EXECUTING
+    assert harness.sent == []
+    assert len(harness.bot.sent) == 1
+    assert "确认执行" in harness.bot.sent[0]
+    await pending_action_store.clear()
+
+
+@pytest.mark.asyncio
+async def test_protocol_confirmation_remains_visible_when_progress_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await pending_action_store.clear()
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            False
+            if key == "tool_progress_messages_enabled"
+            else True
+            if key == "protocol_tools_enabled"
+            else original_get_config(key, default)
+        ),
+    )
+
+    class ProtocolBot(FakeBot):
+        self_id = "10000"
+        adapter = SimpleNamespace(get_name=lambda: "OneBot V11")
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.api_calls: list[tuple[str, dict]] = []
+
+        async def call_api(self, api: str, **data):
+            self.api_calls.append((api, data))
+            if api == "get_version_info":
+                return {
+                    "app_name": "Lagrange.OneBot",
+                    "app_version": "1.0.0",
+                    "protocol_version": "11",
+                }
+            raise AssertionError("确认前不得执行真实协议动作")
+
+    event = SimpleNamespace(
+        time=1,
+        user_id=1,
+        group_id=456,
+        message_id=789,
+        message=Message("踢出成员"),
+        sender=SimpleNamespace(user_id=1, card="tester", nickname="tester"),
+        reply=None,
+    )
+    snapshot = ToolSnapshot(
+        generation=1,
+        plugin_info={},
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(1),
+    )
+    harness = Harness({}, snapshot=snapshot)
+    harness.bot = ProtocolBot()
+    harness.event = event
+    harness.agent_runtime = await _agent_request_runtime()
+
+    async with protocol_request_scope(
+        harness.bot,
+        event,
+        generation=1,
+        is_superuser=True,
+    ):
+        messages = await harness._execute_tools(
+            [
+                _call(
+                    1,
+                    "onebot_v11__set_group_kick",
+                    '{"group_id":456,"user_id":2}',
+                )
+            ],
+            "",
+            [],
+            "",
+        )
+
+    assert harness.sent == []
+    assert harness.bot.api_calls == [("get_version_info", {})]
+    assert len(harness.bot.sent) == 1
+    assert "确认" in harness.bot.sent[0]
+    assert "尚未执行" in messages[-1]["content"]
+    runtime = harness.agent_runtime
+    assert runtime is not None
+    assert runtime.tool_calls[-1].status is ToolCallStatus.WAITING_CONFIRMATION
     await pending_action_store.clear()
 
 
@@ -1873,7 +2171,14 @@ async def test_llm_tools_config_rollback_keeps_legacy_nonebot_adapter(
             plugin_name,
         ):
             rollback_calls.append((command, plugin_name))
-            return "rollback output", []
+            return PluginDispatchResult(
+                status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+                text="rollback output",
+                matcher_checked=1,
+                matcher_matched=1,
+                successful_captures=1,
+                api_succeeded=1,
+            )
 
     async def forbidden_provider_dispatch(*_args, **_kwargs):
         raise AssertionError("rollback switch must not use Provider handler")

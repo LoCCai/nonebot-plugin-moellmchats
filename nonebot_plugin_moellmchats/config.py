@@ -62,6 +62,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "protocol_tools_napcat_extensions_enabled": True,
     "protocol_tools_low_risk_direct_enabled": True,
     "protocol_tools_business_first": True,
+    "tool_progress_messages_enabled": True,
     "user_history_expire_seconds": 600,
     "cd_seconds": 120,
     "search_api": "your api",
@@ -212,6 +213,7 @@ class ConfigParser:
             "protocol_tools_napcat_extensions_enabled",
             "protocol_tools_low_risk_direct_enabled",
             "protocol_tools_business_first",
+            "tool_progress_messages_enabled",
         ):
             if type(candidate.get(field)) is not bool:
                 raise ValueError(f"config.json: {field} 必须是布尔值")

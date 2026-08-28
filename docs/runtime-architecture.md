@@ -12,7 +12,8 @@ flowchart TD
     D --> E[固定 RuntimeSnapshot 与单一 Deadline]
     E --> F[创建 AgentRun 并准备历史上下文]
     F --> G{MoE / 工具 / 联网<br/>任一开启?}
-    G -->|是| H[一次分类：难度、视觉、候选工具]
+    G -->|是| H0[规范化原话并解析唯一业务意图所有者]
+    H0 --> H[一次分类：难度、视觉、候选工具<br/>唯一所有者可纠正插件选择]
     G -->|否| I[跳过模型分类]
     H --> J[按视觉 > MoE > selected 选择模型]
     I --> J
@@ -100,6 +101,8 @@ created → admitted → classifying → planning → executing
 
 分类模型有一个容易误解的兼容规则：只有 `use_moe=true` 时才使用 `category_model`；未开启 MoE、但因为工具或联网需要分类时，分类请求使用 `selected_model`。
 
+工具候选还有一个先于分类结果的确定性所有者检查。功能目录可为一个功能声明最多 16 个 `llm_intents`；用户原话经过 NFKC、casefold、去空白和标点后做精确别名匹配。唯一、可见、未拉黑且已加载的所有者会纠正分类模型返回的插件；别名重复、所有者不可见、被拉黑或未加载时 fail closed，不会猜测另一个“意思相近”的插件。分类缓存策略为 v3，并绑定目录摘要、runtime generation、群/私聊场景和超级用户身份。
+
 默认是固定模型模式。只有显式、完整配置 `capability_routing` 后，模型选择才会按 text/vision/tools/json_schema/reasoning/streaming 能力、上下文、输出、质量、延迟和成本约束重新路由。配置方法见[能力路由](./configuration.md#可选能力路由-capability_routing)。
 
 ### 5. 工具目录与最小 Schema
@@ -120,7 +123,7 @@ created → admitted → classifying → planning → executing
 ```text
 PicMenu/QWeb/PluginMetadata 菜单
   → 有界 discovery hints：意图、别名、示例、条件提示
-  → 分类模型从完整紧凑目录选择插件标识
+  → 唯一 llm_intents 所有者，或分类模型从完整紧凑目录选择插件标识
   → 只展开命中插件的 ToolSpec 或兼容 command Schema
   → handler / 定向 Matcher
   → OneBot V11 / NapCat V11 / OneBot V12 adapter
@@ -128,7 +131,7 @@ PicMenu/QWeb/PluginMetadata 菜单
 
 菜单只回答“用户可能想做什么”。`ToolSpec` 或兼容适配器回答“参数是什么、由谁执行、有什么副作用”；目标插件和 adapter 才执行真实动作。系统不会根据菜单自动生成任意 `bot.call_api`，也不会把 NapCat 的完整 API 面交给模型。
 
-NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.json` 覆写、PicMenu Next 已安装的内存目录、`PluginMetadata.extra.menu_data`、普通 Metadata。七七的 PicMenu 内存目录已经合并 QWeb Feature Catalog；通用插件不读取七七文件路径，也不依赖 PicMenu 包。菜单尚未就绪时回退 Metadata，完成同步后执行 `刷新工具` 才会进入新 generation。
+NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.json` 覆写、PicMenu Next 已安装的内存目录、`PluginMetadata.extra.menu_data`、普通 Metadata。七七的 PicMenu 内存目录已经合并 QWeb Feature Catalog；通用插件不读取七七文件路径，也不依赖 PicMenu 包。每次候选构建只读取一次分离的 PicMenu 投影，并计算插件数、功能数和 SHA-256。即使启动时先发布了空 PicMenu generation，完整目录稍后安装也会在一个 watcher 周期内自动触发新 generation；摘要不变不重载，读取异常保留上一有效投影。
 
 分类模型看到的是完整但有界的紧凑目录：普通强类型工具一工具一行；带菜单的兼容插件一功能一行，但每行第一列仍是同一个可执行插件标识。模型只返回这些标识，不返回菜单标题。主模型只接收“分类选中 + 依赖闭包 + `resident_plugins`”中的详细 Schema，并再次应用：
 
@@ -141,7 +144,7 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 
 这就是“完整紧凑索引、命中后展开”：日常闲聊不用携带全部 Tool Schema，也不要求把业务插件常驻。`resident_plugins` 只是显式强制注入/诊断兜底。不同来源的工具名必须全局唯一；冲突会拒绝整代候选，不会按加载顺序静默覆盖。
 
-菜单字段会清理展示标签与控制字符，拒绝错误类型，并限制每插件功能数、每功能触发数、字段长度和总字符数；PicMenu 隐藏功能既不进入普通用户分类目录，也不会在插件命中后的普通用户详细 Schema 中展开。它们与 plugin info、ToolSpec 一起固化到同代不可变快照；分类缓存策略版本和目录 digest 共同防止旧分类结果跨目录复用。选中的兼容插件会收到完整但有界的消息触发用法；真实事件/定时功能只作发现提示，不能由合成 command 伪造。菜单可见性只是前置过滤，执行端仍必须复核真实权限。
+菜单字段会清理展示标签与控制字符，拒绝错误类型，并限制每插件功能数、每功能触发数、字段长度和总字符数；PicMenu 隐藏功能既不进入普通用户分类目录，也不会在插件命中后的普通用户详细 Schema 中展开。它们与 plugin info、ToolSpec、`command_start` 和目录摘要一起固化到同代不可变快照；分类和 Schema 缓存共同防止空目录/完整目录、不同 generation、场景或权限交叉复用。兼容 `command` Schema 禁止额外字段，字符串长度为 1～1024；说明列出当前 generation 的首选及其他真实命令前缀，不要求模型猜 `<命令前缀>`。真实事件/定时功能只作发现提示，不能由合成 command 伪造。菜单可见性只是前置过滤，执行端仍必须复核真实权限。
 
 协议工具在请求进入 Agent generation 后另外建立一次不可变能力快照。v11 调用 `get_version_info`，只有 `app_name=NapCat.Onebot` 才增加 NapCat 扩展；v12 调用 `get_supported_actions`，只取 Bot 声明支持与包内标准清单的交集。探测失败只让当前请求看不到协议工具，不会中止普通聊天。
 
@@ -172,6 +175,12 @@ Registered `ToolSpec`、Custom File 和 Generated Tool 中显式标为 `mutating
 
 兼容的 NoneBot Matcher 插件和当前 MCP 配置无法表达同等精细的逐工具确认契约。NoneBot 兼容适配器会保守记录为 `mutating`，但当前为保留既有命令行为使用有界兼容执行；MCP 工具也没有逐工具 effect/permission 配置。两者都只应开放已经审查、原本就允许对应用户直接调用的能力。可能产生副作用的新能力应改写为 `ToolSpec(effect=ToolEffect.MUTATING, ...)`，详见[插件集成](./plugin-integration.md)。
 
+NoneBot 兼容适配器不会再用“有 metadata”推断成功。规则检查和 Matcher 运行由兼容 NoneBot 2.4.4～2.5.x 的观察包装器记录；发送内容只在 Adapter 的成功回调后提交。最终状态是 `matched_with_output`、`matched_side_effect`、`partial_success`、`matched_empty`、`not_matched`、`failed`、`timed_out`、`admission_rejected` 或 `result_unknown`。只有前两种进入成功 `ToolResult`；超时映射为 `TIMED_OUT`、准入拒绝映射为 `REJECTED`，其余非成功/不确定状态映射为 `FAILED` 并把具体原因交回模型。
+
+每次工具尝试绑定 `(generation, tool_name, canonical_arguments_digest)`。`not_matched`、`matched_empty`、`failed`、`timed_out` 的相同指纹在本任务内禁止原样重放，但仍允许不同工具或实质不同参数；`partial_success` 和 `result_unknown` 会封锁本任务内的整个同名工具。外部副作用不因超时、断连或响应不确定而自动重试。
+
+`tool_progress_messages_enabled` 只控制模型前置话术和“正在执行”类用户可见提示。默认 `true` 保持原表现；设为 `false` 后内部分类、调用、确认、结果、最终总结和日志不变。进度消息不是执行证据，真实状态只以上述类型化结果和 Adapter 成功回调为准。
+
 最终回复和可选表情分开投递。正文发送失败会原样传播，因为不能假定用户收到回复；正文已经成功后，附加表情若被 OneBot/NapCat 以 `ActionFailed`（动作失败）、`NetworkError`（HTTP/WebSocket 超时或传输失败）或 `ApiNotAvailable`（连接刚失效）拒绝，只记录不含正文的 warning 并跳过该表情，不重发正文，也不重试结果不确定的 QQ 发送。没有任何正文或前序表情成功时，同样三类表情发送失败仍会原样传播。保存到上下文的是去掉表情标记后的正文。
 
 ### 7. 只读并行为何默认关闭
@@ -197,7 +206,7 @@ Registered `ToolSpec`、Custom File 和 Generated Tool 中显式标为 `mutating
 
 generation、权限、模型 identity、策略或 key 漂移都会导致 miss/拒绝；timeout、解析回退和内容拦截不会被缓存。默认实现是进程内 Memory，不需要 Redis。
 
-每轮模型和工具步骤会产生低基数 metrics、payload-free structured log、Usage 和 Audit 记录。标准安装没有 PostgreSQL/local spool/platform API，因此这些高级持久化和管理挂载不会自动启用；现有内存 token 使用查询仍保持兼容。
+每轮模型和工具步骤会产生低基数 metrics、payload-free structured log、Usage 和 Audit 记录。工具安全日志只保存 request/tool-call 摘要、generation、目录摘要、选择来源、插件、意图摘要、脱敏 command 形状及摘要、Matcher/API 计数、最终状态、耗时和重试决策；不记录完整工具/API 参数、Token、Cookie、URL 查询或本地路径。标准安装没有 PostgreSQL/local spool/platform API，因此这些高级持久化和管理挂载不会自动启用；现有内存 token 使用查询仍保持兼容。
 
 ## 默认模式与程序化资源接口
 
@@ -226,7 +235,7 @@ RuntimeResourceBuilder(RuntimeResourceSettings())
 ## 热重载链路
 
 ```text
-文件指纹变化 / 重载LLM / 刷新工具
+文件指纹或 PicMenu 内存摘要变化 / 重载LLM / 刷新工具
   → 读取 owner-private 文件
   → 解析并构建候选模型、工具、MCP、策略和 artifact
   → 校验依赖、冲突、digest、generation 与 Provider parity

@@ -10,6 +10,9 @@ from nonebot.adapters.onebot.v11 import Bot as V11Bot
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 from nonebot.adapters.onebot.v12 import (
+    Bot as V12Bot,
+)
+from nonebot.adapters.onebot.v12 import (
     BotSelf,
 )
 from nonebot.adapters.onebot.v12 import (
@@ -21,6 +24,7 @@ from nonebot.adapters.onebot.v12 import (
 from nonebot.adapters.onebot.v12 import (
     MessageSegment as V12MessageSegment,
 )
+from nonebot.exception import ActionFailed, NetworkError
 from nonebot.internal.matcher import matchers
 import pytest
 
@@ -80,8 +84,9 @@ async def test_targeted_dispatch_only_checks_selected_plugin(monkeypatch) -> Non
 
     async def check(matcher, *args, **kwargs):
         checked.append(matcher)
+        return False
 
-    monkeypatch.setattr(simulator_module, "check_and_run_matcher", check)
+    monkeypatch.setattr(simulator_module, "_observe_and_run_matcher", check)
     await simulator_module._dispatch_targeted(object(), _event(1), "selected")
     assert checked == selected
 
@@ -101,8 +106,12 @@ async def test_capture_contexts_do_not_cross_talk(monkeypatch) -> None:
 
     async def dispatch(bot, event, plugin_name):
         await asyncio.sleep(0.02 if "first" in str(event.message) else 0)
+        data = {"message": Message(str(event.message))}
         await simulator_module._capture_outgoing_api(
-            bot, "send_group_msg", {"message": Message(str(event.message))}
+            bot, "send_group_msg", data
+        )
+        await simulator_module._confirm_outgoing_api(
+            bot, None, "send_group_msg", data, {"message_id": 1}
         )
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
@@ -114,7 +123,11 @@ async def test_capture_contexts_do_not_cross_talk(monkeypatch) -> None:
             object(), _event(2), "second", plugin_name="b"
         ),
     )
-    assert results == [("first", []), ("second", [])]
+    assert [result.status for result in results] == [
+        simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+        simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+    ]
+    assert [result.text for result in results] == ["first", "second"]
     assert simulator_module._captures == {}
 
 
@@ -125,15 +138,20 @@ async def test_capture_contexts_do_not_cross_talk(monkeypatch) -> None:
 )
 async def test_capture_supports_every_onebot_message_send_action(api: str) -> None:
     capture_id = uuid.uuid4().hex
-    simulator_module._captures[capture_id] = {
-        "messages": [],
+    context = simulator_module._empty_dispatch_context()
+    context.update({
         "original_id": 10,
         "fake_id": 20,
-    }
+    })
+    simulator_module._captures[capture_id] = context
     token = simulator_module._capture_key.set(capture_id)
     data = {"message": Message("正文")}
     try:
         await simulator_module._capture_outgoing_api(object(), api, data)
+        assert simulator_module._captures[capture_id]["messages"] == []
+        await simulator_module._confirm_outgoing_api(
+            object(), None, api, data, {"message_id": 1}
+        )
         assert simulator_module._captures[capture_id]["messages"] == [
             {"text": "正文", "images": []}
         ]
@@ -145,12 +163,13 @@ async def test_capture_supports_every_onebot_message_send_action(api: str) -> No
 @pytest.mark.asyncio
 async def test_capture_supports_v12_send_message_and_file_id() -> None:
     capture_id = uuid.uuid4().hex
-    simulator_module._captures[capture_id] = {
-        "messages": [],
+    context = simulator_module._empty_dispatch_context()
+    context.update({
         "original_id": "original-message",
         "fake_id": "fake-message",
         "protocol": "onebot_v12",
-    }
+    })
+    simulator_module._captures[capture_id] = context
     token = simulator_module._capture_key.set(capture_id)
     data = {
         "message": V12Message(
@@ -169,6 +188,10 @@ async def test_capture_supports_v12_send_message_and_file_id() -> None:
             data,
         )
         assert data["message"][0].data["message_id"] == "original-message"
+        assert simulator_module._captures[capture_id]["messages"] == []
+        await simulator_module._confirm_outgoing_api(
+            object(), None, "send_message", data, {"message_id": "sent"}
+        )
         assert simulator_module._captures[capture_id]["messages"] == [
             {
                 "text": "正文[提及:actor-2][图片]",
@@ -178,6 +201,172 @@ async def test_capture_supports_v12_send_message_and_file_id() -> None:
     finally:
         simulator_module._capture_key.reset(token)
         simulator_module._captures.pop(capture_id, None)
+
+
+@pytest.mark.asyncio
+async def test_v12_matcher_send_message_is_verified_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        @staticmethod
+        def get_name() -> str:
+            return "OneBot V12"
+
+        @staticmethod
+        def get_send(_impl: str, _platform: str):
+            async def send(bot, event, message, **_kwargs):
+                return await bot.call_api(
+                    "send_message",
+                    detail_type=event.detail_type,
+                    group_id=event.group_id,
+                    message=V12Message(message),
+                )
+
+            return send
+
+        async def _call_api(self, _bot, api: str, **data):
+            self.calls.append((api, data))
+            return {"message_id": "sent-v12"}
+
+    matcher = on_fullmatch("v12发送", priority=1, block=True)
+
+    @matcher.handle()
+    async def send_v12(bot: V12Bot, event: V12GroupMessageEvent) -> None:
+        await bot.send(
+            event,
+            V12Message(
+                [
+                    V12MessageSegment.text("v12正文"),
+                    V12MessageSegment.image("result-file"),
+                ]
+            ),
+        )
+
+    monkeypatch.setattr(
+        simulator_module,
+        "get_plugin",
+        lambda _name: SimpleNamespace(matcher={matcher}),
+    )
+    adapter = Adapter()
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V12Bot(adapter, "bot-v12", "test-impl", "qq"),
+            _v12_event("original-v12", "v12发送"),
+            "v12发送",
+            plugin_name="v12_demo",
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+
+    assert [api for api, _data in adapter.calls] == ["send_message"]
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    assert result.text == "v12正文[图片]"
+    assert result.images == ("result-file",)
+    assert result.matcher_matched == 1
+    assert result.successful_captures == 1
+    assert result.api_succeeded == 1
+
+
+@pytest.mark.asyncio
+async def test_verified_output_then_handler_failure_is_partial_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        @staticmethod
+        def get_name() -> str:
+            return "OneBot V11"
+
+        async def _call_api(self, _bot, api: str, **data):
+            self.calls.append((api, data))
+            return {"message_id": 1}
+
+    matcher = on_fullmatch("部分成功", priority=1, block=True)
+
+    @matcher.handle()
+    async def send_then_fail(bot: V11Bot, event: GroupMessageEvent) -> None:
+        await bot.send(event, "已经发送")
+        raise RuntimeError("private handler detail")
+
+    monkeypatch.setattr(
+        simulator_module,
+        "get_plugin",
+        lambda _name: SimpleNamespace(matcher={matcher}),
+    )
+    adapter = Adapter()
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V11Bot(adapter, "10000"),
+            _event(103, "部分成功"),
+            "部分成功",
+            plugin_name="partial_demo",
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+
+    assert [api for api, _data in adapter.calls] == ["send_msg"]
+    assert result.status is simulator_module.PluginDispatchStatus.PARTIAL_SUCCESS
+    assert result.text == "已经发送"
+    assert result.matcher_matched == 1
+    assert result.matcher_failed == 1
+    assert result.successful_captures == 1
+    assert result.api_succeeded == 1
+
+
+@pytest.mark.asyncio
+async def test_read_only_api_without_output_remains_matched_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        @staticmethod
+        def get_name() -> str:
+            return "OneBot V11"
+
+        async def _call_api(self, _bot, api: str, **_data):
+            self.calls.append(api)
+            return {"online": True, "good": True}
+
+    matcher = on_fullmatch("读取状态", priority=1, block=True)
+
+    @matcher.handle()
+    async def read_status(bot: V11Bot) -> None:
+        await bot.get_status()
+
+    monkeypatch.setattr(
+        simulator_module,
+        "get_plugin",
+        lambda _name: SimpleNamespace(matcher={matcher}),
+    )
+    adapter = Adapter()
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V11Bot(adapter, "10000"),
+            _event(104, "读取状态"),
+            "读取状态",
+            plugin_name="read_demo",
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+
+    assert adapter.calls == ["get_status"]
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_EMPTY
+    assert result.api_succeeded == 1
+    assert result.mutating_api_succeeded == 0
+    assert result.successful_captures == 0
 
 
 def test_v12_synthetic_event_preserves_protocol_and_string_identity() -> None:
@@ -207,19 +396,25 @@ def test_v12_synthetic_event_preserves_protocol_and_string_identity() -> None:
 @pytest.mark.asyncio
 async def test_capture_does_not_consume_send_like_side_effect() -> None:
     capture_id = uuid.uuid4().hex
-    simulator_module._captures[capture_id] = {
-        "messages": [],
+    context = simulator_module._empty_dispatch_context()
+    context.update({
         "original_id": 10,
         "fake_id": 20,
-    }
+    })
+    simulator_module._captures[capture_id] = context
     token = simulator_module._capture_key.set(capture_id)
     try:
-        await simulator_module._capture_outgoing_api(
-            object(),
-            "send_like",
-            {"user_id": 123, "times": 1},
+        data = {"user_id": 123, "times": 1}
+        await simulator_module._capture_outgoing_api(object(), "send_like", data)
+        await simulator_module._confirm_outgoing_api(
+            object(), None, "send_like", data, {"ok": True}
         )
         assert simulator_module._captures[capture_id]["messages"] == []
+        assert simulator_module._captures[capture_id]["api_succeeded"] == 1
+        assert (
+            simulator_module._captures[capture_id]["mutating_api_succeeded"]
+            == 1
+        )
     finally:
         simulator_module._capture_key.reset(token)
         simulator_module._captures.pop(capture_id, None)
@@ -230,16 +425,14 @@ async def test_natural_language_like_runs_real_business_matcher_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
         @staticmethod
         def get_name() -> str:
             return "OneBot V11"
 
-    class LikeBot(V11Bot):
-        def __init__(self) -> None:
-            super().__init__(Adapter(), "10000")
-            self.calls: list[tuple[str, dict]] = []
-
-        async def call_api(self, api: str, **data):
+        async def _call_api(self, _bot, api: str, **data):
             self.calls.append((api, data))
             return {"ok": True}
 
@@ -262,19 +455,25 @@ async def test_natural_language_like_runs_real_business_matcher_once(
             else None
         ),
     )
-    bot = LikeBot()
+    adapter = Adapter()
+    bot = V11Bot(adapter, "10000")
     try:
-        await simulator_module._dispatch_targeted(
+        result = await simulator_module.event_simulator.dispatch_event(
             bot,
             _event(100, "给我点赞"),
-            "qi_group_admin",
+            "给我点赞",
+            plugin_name="qi_group_admin",
         )
     finally:
         for priority_matchers in matchers.values():
             if business_matcher in priority_matchers:
                 priority_matchers.remove(business_matcher)
 
-    assert bot.calls == [("send_like", {"user_id": 123, "times": 1})]
+    assert adapter.calls == [("send_like", {"user_id": 123, "times": 1})]
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT
+    assert result.matcher_matched == 1
+    assert result.api_succeeded == 1
+    assert result.mutating_api_succeeded == 1
 
 
 @pytest.mark.asyncio
@@ -308,5 +507,113 @@ async def test_dispatch_timeout_cancels_target(monkeypatch) -> None:
     result = await simulator_module.event_simulator.dispatch_event(
         object(), _event(3), "slow", plugin_name="slow"
     )
-    assert "超时" in result[0]
+    assert result.status is simulator_module.PluginDispatchStatus.TIMED_OUT
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_called_api_failure_never_commits_staged_output() -> None:
+    capture_id = uuid.uuid4().hex
+    context = simulator_module._empty_dispatch_context()
+    context.update({"original_id": 10, "fake_id": 20})
+    simulator_module._captures[capture_id] = context
+    token = simulator_module._capture_key.set(capture_id)
+    data = {"message": Message("不应成为成功输出")}
+    try:
+        await simulator_module._capture_outgoing_api(
+            object(), "send_group_msg", data
+        )
+        await simulator_module._confirm_outgoing_api(
+            object(),
+            ActionFailed("OneBot V11", "failed"),
+            "send_group_msg",
+            data,
+            None,
+        )
+        assert context["messages"] == []
+        assert context["api_failed"] == 1
+        assert context["api_unknown"] == 0
+    finally:
+        simulator_module._capture_key.reset(token)
+        simulator_module._captures.pop(capture_id, None)
+
+
+def test_dispatch_result_distinguishes_all_execution_truth_states() -> None:
+    def status(**updates):
+        context = simulator_module._empty_dispatch_context()
+        context.update(updates)
+        return simulator_module._dispatch_result(
+            context,
+            started_monotonic=0,
+        ).status
+
+    assert status() is simulator_module.PluginDispatchStatus.NOT_MATCHED
+    assert status(matcher_matched=1) is simulator_module.PluginDispatchStatus.MATCHED_EMPTY
+    assert status(messages=[{"text": "正文", "images": []}]) is (
+        simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    )
+    assert status(matcher_matched=1, mutating_api_succeeded=1) is (
+        simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT
+    )
+    assert status(matcher_matched=1, matcher_failed=1) is (
+        simulator_module.PluginDispatchStatus.FAILED
+    )
+    assert status(matcher_matched=1, api_unknown=1) is (
+        simulator_module.PluginDispatchStatus.RESULT_UNKNOWN
+    )
+    assert status(
+        matcher_matched=1,
+        api_failed=1,
+        messages=[{"text": "已发送", "images": []}],
+    ) is simulator_module.PluginDispatchStatus.PARTIAL_SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_network_failure_after_api_call_is_result_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Adapter:
+        @staticmethod
+        def get_name() -> str:
+            return "OneBot V11"
+
+        async def _call_api(self, _bot, _api: str, **_data):
+            raise NetworkError("OneBot V11", "disconnected")
+
+    matcher = on_fullmatch("未知结果", priority=1, block=True)
+
+    @matcher.handle()
+    async def send_once(bot: V11Bot, event: GroupMessageEvent) -> None:
+        await bot.send(event, "可能已发送")
+
+    monkeypatch.setattr(
+        simulator_module,
+        "get_plugin",
+        lambda _name: SimpleNamespace(matcher={matcher}),
+    )
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V11Bot(Adapter(), "10000"),
+            _event(101, "未知结果"),
+            "未知结果",
+            plugin_name="demo",
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+
+    assert result.status is simulator_module.PluginDispatchStatus.RESULT_UNKNOWN
+    assert result.api_failed == 1
+    assert result.api_unknown == 1
+    assert result.successful_captures == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_admission_rejection_is_typed(monkeypatch) -> None:
+    gate = AdmissionController(name="dispatch", max_active=1, max_pending=0)
+    monkeypatch.setattr(simulator_module, "get_dispatch_controller", lambda: gate)
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(), _event(102), "test", plugin_name="demo"
+    )
+    assert result.status is simulator_module.PluginDispatchStatus.ADMISSION_REJECTED

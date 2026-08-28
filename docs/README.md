@@ -18,12 +18,14 @@
 | [244 项协议动作总表](./protocol-actions.md) | 固定版本离线清单、逐动作暴露策略、请求字段与永久拒绝原因 |
 | [自定义工具开发](./custom-tools.md) | 隔离文件工具 capability、runner 边界与 AI 工具包热插拔 |
 | [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md) | 兼容已有 Matcher，或编写强类型函数供 AI 调用 |
+| [故障排查](./troubleshooting.md) | 选错插件、Matcher 未命中、空结果、部分成功、结果不确定、重复拦截和进度提示 |
 | [性格系统](./personality.md) | `temperaments.json` 性格预设配置与用户切换管理 |
 | [完整指令表](./commands.md) | 所有 Bot 指令的参数与权限说明，包括二阶段确认、生成工具权限与请求管理 |
 | [Plan 1 完成审计](./规划/05-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
 | [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
 | [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
 | [全量 OneBot / NapCat 协议工具实施状态](./规划/08-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
+| [业务路由与执行状态真实性](./规划/09-business-routing-execution-truth.md) | 0.26.2 K-08 的目录竞态、唯一所有者、命令、真实状态、重试和门禁 |
 
 ---
 
@@ -62,4 +64,5 @@
 - [调度链路](./runtime-architecture.md)
 - [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [编写 ToolSpec 插件](./plugin-integration.md#方式二注册强类型-toolspec推荐)
+- [排查选错插件或调用失败](./troubleshooting.md)
 - [更新日志](../CHANGELOG.md)

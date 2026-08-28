@@ -170,13 +170,14 @@ PY
 | 2. 加载 | NoneBot 插件加载 | 无 import/config 权限错误，能生成独立配置目录 |
 | 3. 模型 | 测试服务商与模型 | `查看模型`、`查看配置` 正确；纯文本回复成功 |
 | 4. 调度 | 分类、视觉、MoE | 各角色使用预期模型；缺能力时明确拒绝或回退 |
-| 5. 发现目录 | PicMenu/QWeb、Metadata 菜单、覆写优先级 | `刷新工具` 后自然语言能召回菜单功能；未加载插件不进入工具目录 |
-| 6. 工具 | Custom File、ToolSpec、MCP、Matcher 兼容 | 只暴露预期工具；黑名单、权限、结果上限生效；不提供任意 `bot.call_api` |
+| 5. 发现目录 | PicMenu/QWeb、Metadata 菜单、`llm_intents` 与覆写优先级 | 目录晚于初始 generation 安装时在一个 watcher 周期内自动更新；唯一别名选中正确插件；重复/隐藏/黑名单/未加载 fail closed |
+| 6. 工具 | Custom File、ToolSpec、MCP、Matcher 兼容 | 只暴露预期工具；真实命令前缀、严格 command Schema、黑名单、权限、结果上限生效；不提供任意 `bot.call_api` |
 | 7. 确认 | `mutating` ToolSpec/文件工具 | 首次只给确认码；原用户在原会话另发确认后才执行 |
-| 8. OneBot 投递 | v11 三种发送、v12 `send_message`、正文与可选表情 | 正文失败可见；正文成功后表情失败不重发；v12 无可用 `file_id` 时跳过本地表情；业务 `send_like` 真实调用一次 |
+| 8. OneBot 投递 | v11 三种发送、v12 `send_message`、正文与可选表情 | 只有 Adapter 成功回调才计入捕获；正文失败可见；正文成功后表情失败不重发；v12 无可用 `file_id` 时跳过本地表情；业务 `send_like` 真实调用一次 |
 | 9. 协议工具 | v11/NapCat/v12 能力、权限、确认和限额 | 默认关闭；开启后只出现当前 Bot/权限动作；永久拒绝项无 Schema；副作用不确定时不重试 |
 | 10. 隔离 | 文件/生成工具 runner | `查看LLM状态` 显示 `isolation=ready`，隔离探针无跳过 |
 | 11. 运维 | 重载、取消、退回 | 坏配置保留旧 generation；请求可停止；回退路径已演练 |
+| 12. 状态与显示 | 九种插件调度状态、失败重试、进度开关 | 只有输出/已确认副作用为成功；相同失败不重放；部分/不确定不重试；关闭进度仍保留确认、结果、最终反馈和日志 |
 
 必须区分以下结论：
 
@@ -207,6 +208,8 @@ PY
 - 需要文件/生成工具，但 `isolation` 不是 `ready`；
 - 启用的 MCP 无法发现、工具名冲突或候选重载失败；
 - 变更型工具没有走独立确认消息；
+- 日志只能看到模型“正在执行”话术，却没有类型化工具状态或 Adapter 成功证据；
+- `result_unknown` / `partial_success` 后系统或人工准备原样重放同一副作用工具；
 - 测试实例意外读取了生产 LocalStore、API Key、PostgreSQL DSN 或 Redis URL；
 - 只能通过放宽目录权限、跳过 sandbox 测试或复用生产进程才能继续。
 
@@ -217,3 +220,4 @@ PY
 - [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [自定义工具开发](./custom-tools.md)
 - [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md)
+- [故障排查](./troubleshooting.md)

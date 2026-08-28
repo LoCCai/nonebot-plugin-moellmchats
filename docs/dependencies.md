@@ -63,7 +63,9 @@ args = ["mcp-server-filesystem", "/tmp"]
 
 MoEllmChats 可以读取“已经加载的 PicMenu Next 当前内存目录”，用其中的菜单补充 NoneBot 插件意图。该桥接只按公开字段做类型受限的 duck typing：不会 import PicMenu SDK，不会读取 QWeb/PicMenu 文件路径，也不会为了发现目录发起网络或数据库请求。
 
-因此无需把 `nonebot-plugin-picmenu-next`、QWeb 或七七项目包加入本项目 `pyproject.toml`。宿主没有 PicMenu 时直接使用 `PluginMetadata.extra.menu_data`；PicMenu 存在但内存目录未就绪时也安全回退。只有 PicMenu 已把目录安装到内存、且目标 NoneBot 插件真实加载时，该目录才会进入下一次 `刷新工具`/`重载LLM` 候选快照。
+因此无需把 `nonebot-plugin-picmenu-next`、QWeb 或七七项目包加入本项目 `pyproject.toml`。宿主没有 PicMenu 时直接使用 `PluginMetadata.extra.menu_data`；PicMenu 初始内存目录为空时先发布 Metadata 目录。watcher 会把 PicMenu 投影的插件数、功能数和 SHA-256 纳入指纹，目录稍后安装完整内容时自动发布新 generation；读取异常保留上一有效投影，不会为了恢复发现功能而安装或更新任何额外依赖。
+
+0.26.2 的目录摘要、NFKC 意图规范化、参数摘要和状态对象只使用 Python 标准库 `hashlib`、`json`、`unicodedata`、`dataclasses` 与现有 NoneBot Adapter 钩子，没有增加运行依赖、数据库表或 migration。七七侧的 QWeb/PicMenu 字段桥接属于宿主源码契约，不会打进本插件 wheel，也不是本插件的 pip 依赖。
 
 ### 协议清单不是新运行依赖
 

@@ -30,7 +30,7 @@ from .tool_catalog_cache import (
 from .tool_manager import tool_manager
 from .utils import get_session
 
-_CLASSIFICATION_POLICY_VERSION = "categorize-json-v2-menu-discovery"
+_CLASSIFICATION_POLICY_VERSION = "categorize-json-v3-business-owner"
 _CategoryResult = tuple[str, bool, list[str]] | str | bool
 
 
@@ -55,6 +55,7 @@ class Categorize:
         tool_catalog_cache: ToolCatalogCacheProtocol | None = None,
         classification_cache: ClassificationCacheProtocol | None = None,
         runtime_generation: int | None = None,
+        scene: str = "unknown",
     ):
         if tool_catalog_cache is not None and not isinstance(
             tool_catalog_cache,
@@ -81,6 +82,10 @@ class Categorize:
         self.tool_catalog_cache = tool_catalog_cache
         self.classification_cache = classification_cache
         self.runtime_generation = runtime_generation
+        if scene not in {"group", "private", "channel", "unknown"}:
+            raise ValueError("categorize scene 非法")
+        self.scene = scene
+        self.selection_source = "classification_model"
 
     async def get_category(self) -> _CategoryResult:
         started = time.monotonic()
@@ -256,6 +261,41 @@ class Categorize:
         return False
 
     async def _get_category(self) -> _CategoryResult:
+        if model_selector.get_use_tools() and self.tool_snapshot is not None:
+            resolution = self.tool_snapshot.resolve_business_intent(
+                self.plain,
+                is_superuser=self.is_superuser,
+            )
+            if resolution.status == "unique":
+                self.selection_source = "business_intent_owner"
+                owner = resolution.owner
+                assert owner is not None
+                logger.info(
+                    "业务意图所有者命中: "
+                    f"generation={getattr(self.tool_snapshot, 'generation', 0)} "
+                    f"directory_digest={getattr(self.tool_snapshot, 'directory_digest', '')[:12]} "
+                    f"scene={self.scene} plugin={owner}"
+                )
+                return "0", "[图片]" in self.plain, [owner]
+            if resolution.status == "ambiguous":
+                self.selection_source = "business_intent_ambiguous"
+                logger.warning(
+                    "业务意图存在重复所有者，已拒绝猜测: "
+                    f"generation={getattr(self.tool_snapshot, 'generation', 0)} "
+                    f"directory_digest={getattr(self.tool_snapshot, 'directory_digest', '')[:12]} "
+                    f"scene={self.scene} owner_count={len(resolution.owners)}"
+                )
+                return "这个说法同时对应多个已登记功能，请补充更具体的功能名或指令。"
+            if resolution.status == "unavailable":
+                self.selection_source = "business_intent_unavailable"
+                logger.warning(
+                    "业务意图所有者当前不可执行，已禁止降级到其他插件: "
+                    f"generation={getattr(self.tool_snapshot, 'generation', 0)} "
+                    f"directory_digest={getattr(self.tool_snapshot, 'directory_digest', '')[:12]} "
+                    f"scene={self.scene}"
+                )
+                return "这个功能当前不可用或你没有可见权限，已停止执行，未改用其他插件。"
+
         catalog, catalog_record = await self._resolve_catalog()
         logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
         prompt = self._build_prompt(catalog)
@@ -302,6 +342,7 @@ class Categorize:
             model_identity=model_identity,
             request_scope=ClassificationRequestScope.standard_prompt(),
             policy_version=_CLASSIFICATION_POLICY_VERSION,
+            scene=self.scene,
         )
 
         async def build_record() -> ClassificationCacheRecord:

@@ -188,6 +188,7 @@ LOCALSTORE_USE_CWD=true
 
 | 字段 | 默认值 | 通俗含义 | 何时调整 |
 | --- | ---: | --- | --- |
+| `tool_progress_messages_enabled` | `true` | 是否发送模型在工具前给出的过渡话术，以及“正在搜索/调用/执行”提示；它只是显示策略，不是执行状态 | 希望群里更安静时设为 false；确认、插件结果、最终总结和后台日志仍保留 |
 | `search_api` | `"your api"` | Tavily 的完整 `Authorization` 值，例如 `Bearer tvly-...` | 仅在开启联网前填写 |
 | `fastai_enabled` | `false` | 是否开放 `ai <内容>` 快速助手 | 需要无角色、无表情快速问答时开启 |
 | `emotions_enabled` | `false` | 是否让普通角色回复可使用表情包 | 配好目录后再开启 |
@@ -196,6 +197,8 @@ LOCALSTORE_USE_CWD=true
 | `private_chat_enabled` | `false` | 是否允许超级管理员私聊 Bot；普通用户私聊仍不开放 | 需要管理私聊时开启 |
 | `show_datetime` | `false` | 是否在 system prompt 注入当前时间 | 需要时间感知时开启，会让缓存更易变化 |
 | `poke_llm_rate` | `0.3` | 群聊戳一戳走 LLM 的概率；0 表示关闭 | 控制成本和打扰程度 |
+
+`tool_progress_messages_enabled=false` 不会跳过分类、工具调用、Matcher、权限检查、二阶段确认或结果回填，也不会把失败变成静默成功。模型工具消息、最终失败说明和安全审计照常产生；只有用户可见的前置过渡消息被隐藏。需要确认的协议工具和自定义 `mutating` 工具仍会直接向原会话发送确认指令。
 
 ### 文件/生成工具 runner
 

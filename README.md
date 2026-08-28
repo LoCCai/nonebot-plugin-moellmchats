@@ -35,6 +35,8 @@
 
 - **完整紧凑目录 + 命中后展开（Function Calling）**：优先复用 PicMenu/QWeb 内存目录或 `PluginMetadata.extra.menu_data` 判断功能意图，只把命中插件的详细 Tool Schema 注入主模型；`resident_plugins` 仅作强制注入/诊断兜底，也支持原生 Python 工具与人工覆写
 
+- **0.26.2 业务所有者与真实执行状态**：功能可声明有界 `llm_intents` 精确别名，唯一可用所有者纠正分类模型，重复/隐藏/黑名单/未加载均 fail closed；NoneBot 兼容调用只有在 Adapter 成功回调后才确认输出或副作用，并区分未命中、空命中、部分成功与结果不确定，避免“模型说做了”被误当成真实成功
+
 - **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
 
 - **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
@@ -115,7 +117,7 @@ COMMAND_START=["/",""]   # 可选
 
 **[→ 完整配置参考（含所有字段说明与示例）](docs/configuration.md)**
 
-文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)
+文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [故障排查](docs/troubleshooting.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)
 
 ## 🎮 使用
 

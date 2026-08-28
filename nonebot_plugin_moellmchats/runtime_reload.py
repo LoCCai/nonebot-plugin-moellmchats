@@ -23,6 +23,11 @@ from .runtime_snapshot import (
 )
 from .temperament_manager import temperament_manager
 from .tool_contracts import tool_registry
+from .tool_discovery import (
+    PicMenuProjectionSnapshot,
+    build_intent_owner_index,
+    discovery_directory_identity,
+)
 from .tool_manager import ToolSnapshot, tool_manager
 from .tool_providers import (
     BuiltinToolResources,
@@ -81,6 +86,21 @@ class RuntimeReloader:
         self._lock = asyncio.Lock()
         self._fingerprint: tuple = ()
         self._watch_task: asyncio.Task | None = None
+        self._last_picmenu_projection = PicMenuProjectionSnapshot.empty()
+
+    def _capture_picmenu_projection(self) -> PicMenuProjectionSnapshot:
+        try:
+            projection = tool_manager.capture_picmenu_projection()
+        except Exception as error:
+            projection = self._last_picmenu_projection
+            logger.warning(
+                "读取 PicMenu 内存目录失败，保留上一有效快照："
+                f"error_type={type(error).__name__} "
+                f"digest={projection.digest[:12]}"
+            )
+            return projection
+        self._last_picmenu_projection = projection
+        return projection
 
     def watched_paths(
         self,
@@ -112,15 +132,26 @@ class RuntimeReloader:
         self,
         *,
         generated_state: LifecycleState | None = None,
+        picmenu_projection: PicMenuProjectionSnapshot | None = None,
     ) -> tuple:
         if generated_state is None:
             generated_state = generated_tool_store.read_lifecycle_state()
+        if picmenu_projection is None:
+            picmenu_projection = self._capture_picmenu_projection()
+        if not isinstance(picmenu_projection, PicMenuProjectionSnapshot):
+            raise TypeError("picmenu_projection 必须是 PicMenuProjectionSnapshot")
         values = [
             (
                 "generated-lifecycle",
                 generated_state.revision,
                 generated_state.state_digest,
-            )
+            ),
+            (
+                "picmenu-memory",
+                picmenu_projection.digest,
+                picmenu_projection.plugin_count,
+                picmenu_projection.feature_count,
+            ),
         ]
         for path in self.watched_paths(generated_state=generated_state):
             try:
@@ -136,11 +167,18 @@ class RuntimeReloader:
         *,
         generated_state: LifecycleState | None = None,
         generated_source_overrides=None,
+        picmenu_projection: PicMenuProjectionSnapshot | None = None,
     ) -> _RuntimeCandidate:
         if generated_state is None:
             generated_state = await asyncio.to_thread(
                 generated_tool_store.read_lifecycle_state
             )
+        if picmenu_projection is None:
+            picmenu_projection = await asyncio.to_thread(
+                self._capture_picmenu_projection
+            )
+        if not isinstance(picmenu_projection, PicMenuProjectionSnapshot):
+            raise TypeError("picmenu_projection 必须是 PicMenuProjectionSnapshot")
         registered_tools = tool_registry.snapshot()
         builtin_specs = builtin_tool_specs()
         (
@@ -157,7 +195,10 @@ class RuntimeReloader:
             asyncio.to_thread(model_selector.build_candidate),
             asyncio.to_thread(temperament_manager.load_candidate),
             asyncio.to_thread(load_replies_candidate),
-            asyncio.to_thread(tool_manager.build_plugin_info),
+            asyncio.to_thread(
+                tool_manager.build_plugin_info,
+                picmenu_projection=picmenu_projection,
+            ),
             asyncio.to_thread(
                 tool_manager.load_file_tools_candidate,
                 generation=generation,
@@ -175,6 +216,14 @@ class RuntimeReloader:
         )
         plugin_info, nonebot_plugin_specs = build_nonebot_plugin_candidate(
             plugin_info
+        )
+        intent_owners = build_intent_owner_index(
+            plugin_info,
+            picmenu_plugins=picmenu_projection.plugins,
+        )
+        directory_entry_count, directory_digest = discovery_directory_identity(
+            plugin_info,
+            intent_owners,
         )
         mcp_tools, mcp_mapping = await mcp_manager.discover_tools(
             commit=False,
@@ -349,6 +398,12 @@ class RuntimeReloader:
             generated_state_revision=generated_state.revision,
             generated_state_digest=generated_state.state_digest,
             generated_active=generated_state.active,
+            intent_owners=intent_owners,
+            directory_entry_count=directory_entry_count,
+            directory_digest=directory_digest,
+            picmenu_plugin_count=picmenu_projection.plugin_count,
+            picmenu_feature_count=picmenu_projection.feature_count,
+            picmenu_digest=picmenu_projection.digest,
         )
         temperaments, assignments = temperament_candidate
         snapshot = RuntimeSnapshot(
@@ -490,13 +545,18 @@ class RuntimeReloader:
                 generated_state = await asyncio.to_thread(
                     generated_tool_store.read_lifecycle_state
                 )
+                source_picmenu = await asyncio.to_thread(
+                    self._capture_picmenu_projection
+                )
                 source_fingerprint = await asyncio.to_thread(
                     self.fingerprint,
                     generated_state=generated_state,
+                    picmenu_projection=source_picmenu,
                 )
                 candidate = await self._build_candidate(
                     generation,
                     generated_state=generated_state,
+                    picmenu_projection=source_picmenu,
                 )
                 # Fingerprinting can read Generated Tool lifecycle files. Do it before
                 # publishing so a late filesystem error can never turn a successful
@@ -504,9 +564,13 @@ class RuntimeReloader:
                 observed_state = await asyncio.to_thread(
                     generated_tool_store.read_lifecycle_state
                 )
+                observed_picmenu = await asyncio.to_thread(
+                    self._capture_picmenu_projection
+                )
                 published_fingerprint = await asyncio.to_thread(
                     self.fingerprint,
                     generated_state=observed_state,
+                    picmenu_projection=observed_picmenu,
                 )
                 if (
                     not self._same_generated_state(
@@ -581,10 +645,20 @@ class RuntimeReloader:
             converged = self._same_generated_state(observed, committed)
             if converged:
                 try:
-                    self._fingerprint = await asyncio.to_thread(
-                        self.fingerprint,
-                        generated_state=observed,
+                    observed_picmenu = await asyncio.to_thread(
+                        self._capture_picmenu_projection
                     )
+                    expected_picmenu_digest = (
+                        candidate.snapshot.tool_snapshot.picmenu_digest
+                    )
+                    if observed_picmenu.digest != expected_picmenu_digest:
+                        self.request_filesystem_retry()
+                    else:
+                        self._fingerprint = await asyncio.to_thread(
+                            self.fingerprint,
+                            generated_state=observed,
+                            picmenu_projection=observed_picmenu,
+                        )
                 except Exception as error:
                     # Canonical and runtime are already committed.  A trailing
                     # filesystem scan cannot retroactively turn the operation
@@ -672,9 +746,13 @@ class RuntimeReloader:
                     raise RuntimeError(
                         "Generated Tool lifecycle plan 已过期，请重新执行管理指令"
                     )
+                source_picmenu = await asyncio.to_thread(
+                    self._capture_picmenu_projection
+                )
                 source_fingerprint = await asyncio.to_thread(
                     self.fingerprint,
                     generated_state=before,
+                    picmenu_projection=source_picmenu,
                 )
                 candidate = await self._build_candidate(
                     generation,
@@ -682,15 +760,20 @@ class RuntimeReloader:
                     generated_source_overrides=(
                         change.generated_source_overrides
                     ),
+                    picmenu_projection=source_picmenu,
                 )
                 observed_before = await asyncio.to_thread(
                     generated_tool_store.read_lifecycle_state
+                )
+                observed_picmenu = await asyncio.to_thread(
+                    self._capture_picmenu_projection
                 )
                 if (
                     not self._same_generated_state(before, observed_before)
                     or await asyncio.to_thread(
                         self.fingerprint,
                         generated_state=observed_before,
+                        picmenu_projection=observed_picmenu,
                     )
                     != source_fingerprint
                 ):
@@ -743,7 +826,12 @@ class RuntimeReloader:
         )
 
     async def watch(self) -> None:
-        fingerprint_initialized = False
+        # ``reload()`` publishes a fingerprint together with the initial runtime
+        # generation.  Preserve it when the watcher starts: PicMenu may finish
+        # loading between that publication and this coroutine's first turn.  If
+        # we replaced the published empty-catalog fingerprint with the now-full
+        # one, the directory change would be lost forever.
+        fingerprint_initialized = bool(self._fingerprint)
         consecutive_failures = 0
         retry_delay = 0.0
         while True:

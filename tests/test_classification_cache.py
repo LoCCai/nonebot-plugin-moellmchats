@@ -54,6 +54,7 @@ def _catalog(
     tools_enabled: bool = True,
     web_search_enabled: bool = False,
     blacklist_patterns: tuple[str, ...] = (),
+    directory_digest: str = "0" * 64,
     catalog: str = "- alpha: alpha tool",
 ) -> ToolCatalogRecord:
     context = ToolCatalogRenderContext.capture(
@@ -63,6 +64,7 @@ def _catalog(
         tools_enabled=tools_enabled,
         web_search_enabled=web_search_enabled,
         blacklist_patterns=blacklist_patterns,
+        directory_digest=directory_digest,
     )
     return ToolCatalogRecord(context.cache_key, catalog)
 
@@ -91,6 +93,7 @@ def _context(
     policy_version: str = "categorize-json-v1",
     additional_capabilities: tuple[str, ...] = (),
     ttl_seconds: float = 60.0,
+    scene: str = "unknown",
 ) -> ClassificationRenderContext:
     return ClassificationRenderContext.capture(
         prompt=prompt,
@@ -100,6 +103,7 @@ def _context(
         policy_version=policy_version,
         additional_capabilities=additional_capabilities,
         ttl_seconds=ttl_seconds,
+        scene=scene,
     )
 
 
@@ -294,6 +298,7 @@ def test_context_binds_catalog_model_capability_policy_and_short_ttl() -> None:
         "provider_cutover": True,
         "tools_enabled": True,
         "ttl_seconds": 45.0,
+        "scene": "unknown",
         "web_search_enabled": False,
         "capability_count": 2,
         "context_independent": True,
@@ -316,9 +321,11 @@ def test_context_key_separates_every_dynamic_classification_input() -> None:
         _context(policy_version="categorize-json-v2"),
         _context(additional_capabilities=("tenant:trusted-tools",)),
         _context(ttl_seconds=30),
+        _context(scene="group"),
+        _context(catalog_record=_catalog(directory_digest="f" * 64)),
     )
 
-    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 13
+    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 15
 
 
 def test_permission_is_always_part_of_capability_identity() -> None:
