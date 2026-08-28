@@ -6,15 +6,16 @@
 
 截至 2026-08-28：
 
-- 当前推荐进入隔离测试的 0.26.0 精确 Git 提交是 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`。
-- 该提交包含全量 OneBot/NapCat 协议工具、固定超管命令 `设置LLM冷却`（支持 `0`）以及工具生成模型 HTTP 400 最小参数兼容重试。
-- push run [`33155319608`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33155319608) 的 12 个 job 全部成功，且恰好一个 `release-gate` 成功。
-- PR #3 在该修复推送前已经合并并固定在旧 head `348293c…`；因此 `20cfe44…` 没有 PR run，不能称为“双门禁提交”。若上线规则强制要求 PR 门禁，应另开 PR 并等待其 CI，而不是复用 #3 的历史结果。
+- 当前推荐进入隔离测试的 0.26.1 精确 Git 提交是 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`。
+- 该提交包含全量 OneBot/NapCat 协议工具、工具生成模型 HTTP 400 最小参数兼容重试，以及优先级 0、全文锚定的固定超管命令 `/设置LLM冷却`（支持 `0`，不依赖标准命令前缀预处理）。
+- push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 的 12 个 job 全部成功，且恰好一个 `release-gate` 成功。
+- PR #3 早已合并并固定在旧 head `348293c…`；因此 `5d7f795…` 没有 PR run，不能称为“双门禁提交”。若上线规则强制要求 PR 门禁，应另开 PR 并等待其 CI，而不是复用 #3 的历史结果。
+- `20cfe44576a3f6f8dbf1bd5a330407a936fe481a` 是 0.26.0 历史安装点：它已经有冷却 Handler，但现场证明标准 `on_command` 没有接住 `/设置LLM冷却 0`，不应继续作为当前安装点。
 - `79d2268930251773cb4e91cdd9b13a9ec36a7d14` 是 0.25.0 回退基线，不包含 0.26.0 协议工具或上述后续修复；`bbc3963…` 是更早的历史实现点。
-- 开发工作树包内版本号是 `0.26.0`，但这不表示 PyPI 已发布该版本。`pip install nonebot-plugin-moellmchats` 得到什么必须以实际索引为准。
+- 开发工作树包内版本号是 `0.26.1`，但这不表示 PyPI 已发布该版本。`pip install nonebot-plugin-moellmchats` 得到什么必须以实际索引为准。
 - 这些证据说明“开发制品可以进入隔离测试”，不等于它已经在七七或其他生产 Bot 中部署验证。
 
-安装 0.26.0 时必须固定到完整的 `20cfe44…` SHA。只有明确回退到 0.25.0 时才使用 `79d2268…`。不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
+安装 0.26.1 时必须固定到完整的 `5d7f795…` SHA。只有明确回退到 0.25.0 时才使用 `79d2268…`。不要改用移动分支，也不要把本地脏工作树或未绑定提交的临时制品当作可恢复安装来源。
 
 ## 运行前提
 
@@ -36,7 +37,7 @@
 ### 项目使用 uv 时
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@5d7f7958e9535f97c7b977d5fbe0fb57d68352ba"
 ```
 
 然后确认锁文件中的 source 末尾确实是目标 SHA，而不是只有分支名：
@@ -54,7 +55,7 @@ grep -A3 'name = "nonebot-plugin-moellmchats"' uv.lock
 python3 -m venv .venv-test
 .venv-test/bin/python -m pip install --upgrade pip
 .venv-test/bin/python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@5d7f7958e9535f97c7b977d5fbe0fb57d68352ba"
 ```
 
 已有虚拟环境且依赖已经满足时，可以只替换插件本体。例如项目虚拟环境位于 `.venv`：
@@ -65,7 +66,7 @@ python3 -m venv .venv-test
   --force-reinstall \
   --no-deps \
   --no-cache-dir \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@5d7f7958e9535f97c7b977d5fbe0fb57d68352ba"
 ```
 
 `--no-deps` 不会检查或补装依赖，也不会更新项目的依赖声明或锁文件；只有确认当前环境已经满足[依赖清单](./dependencies.md)时才使用。安装完成后，在重启 Bot 前核对包版本和来源：
@@ -75,18 +76,26 @@ python3 -m venv .venv-test
 from importlib.metadata import distribution
 import json
 
-expected = "20cfe44576a3f6f8dbf1bd5a330407a936fe481a"
+expected = "5d7f7958e9535f97c7b977d5fbe0fb57d68352ba"
 dist = distribution("nonebot-plugin-moellmchats")
 source = json.loads(dist.read_text("direct_url.json") or "{}")
 actual = source.get("vcs_info", {}).get("commit_id")
 print("version:", dist.version)
 print("commit:", actual)
-assert dist.version == "0.26.0", dist.version
+assert dist.version == "0.26.1", dist.version
 assert actual == expected, actual
 PY
 ```
 
-预期输出中的版本是 `0.26.0`，提交是完整的 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`。如果仍显示 `0.25.0` 或 `79d2268…`，说明装的是回退基线，应停止重启并重新执行上面的精确安装命令。
+预期输出中的版本是 `0.26.1`，提交是完整的 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`。如果仍显示 `0.26.0` / `20cfe44…`，说明还是会漏接现场冷却指令的旧安装点；如果显示 `0.25.0` / `79d2268…`，则是回退基线。两种情况都应停止重启并重新执行上面的精确安装命令。
+
+安装只替换磁盘文件；运行中的 Python 进程不会自动重载入口模块。核对版本和 SHA 后，应按项目原有方式只重启该 Bot 进程，再由 `SUPERUSERS` 中的账号发送：
+
+```text
+/设置LLM冷却 0
+```
+
+正确行为是立即回复“已关闭 LLM 对话冷却”，且后台不应出现该消息的难度分类、模型选择或模型请求。如果命令无回复，依次核对运行进程是否在安装后启动、发送者是否属于 NoneBot `SUPERUSERS`，以及是否实际加载了另一份 site-packages；不要通过反复发送普通对话来猜测是否生效。
 
 ## 让 NoneBot 加载插件
 
@@ -157,7 +166,7 @@ PY
 
 | 阶段 | 要验证的内容 | 通过标准 |
 | --- | --- | --- |
-| 1. 锁定 | 依赖和 source SHA | 0.26.0 隔离测试必须解析到完整 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`；`79d2268…` 仅是 0.25.0 回退基线 |
+| 1. 锁定 | 依赖和 source SHA | 0.26.1 隔离测试必须解析到完整 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`；`20cfe44…` 是 0.26.0 历史点，`79d2268…` 仅是 0.25.0 回退基线 |
 | 2. 加载 | NoneBot 插件加载 | 无 import/config 权限错误，能生成独立配置目录 |
 | 3. 模型 | 测试服务商与模型 | `查看模型`、`查看配置` 正确；纯文本回复成功 |
 | 4. 调度 | 分类、视觉、MoE | 各角色使用预期模型；缺能力时明确拒绝或回退 |

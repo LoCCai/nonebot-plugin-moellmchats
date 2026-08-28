@@ -1,7 +1,7 @@
 ---
 title: 08-onebot-napcat-protocol-tools
 date: 2026-08-28T00:00:00+00:00
-lastmod: 2026-08-28T09:17:11+00:00
+lastmod: 2026-08-28T09:42:00+00:00
 ---
 
 # 全量 OneBot / NapCat 协议工具实施状态
@@ -82,7 +82,7 @@ NapCat OpenAPI SHA-256 为 `905ff1faa265cdfa6401a91e8ed832ab15c9e32a7683c42dc11b
 - pull_request run [`33148456661`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33148456661)：12/12 job 为 `completed/success`，唯一 `release-gate` job `98774850043` 成功；
 - PR [#3](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/3)：完成上述门禁核验时为 `OPEN`、非 Draft、head 为该实现 SHA 且 `mergeStateStatus=CLEAN`；随后已由本任务之外的操作合并。
 
-### 0.26.0 后续修复与当前安装点
+### 0.26.0 后续修复与历史安装点
 
 后续实现提交 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a` 在 0.26.0 上增加固定 `SUPERUSER` 冷却命令（允许 `0`～`86400`，`0` 关闭冷却），并为工具生成模型的非内容安全 HTTP 400 增加一次最小参数兼容重试和有界脱敏错误摘要。该提交没有改变 244 项协议清单或权限策略。
 
@@ -91,7 +91,22 @@ NapCat OpenAPI SHA-256 为 `905ff1faa265cdfa6401a91e8ed832ab15c9e32a7683c42dc11b
 - Python 3.10/3.12 × wheel/sdist 四组包外加载均成功，验证版本 0.26.0、冷却参数解析、v11/v12 消息门面、38 / 31 / 175 清单和 runtime generation 1；
 - push run [`33155319608`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33155319608) 为 12/12 `completed/success`，唯一 `release-gate` job `98796777215` 成功；本地 HEAD、`origin` 与 `ls-remote` 已核对为该 SHA。
 
-PR #3 在 `20cfe44…` 推送前已经合并并固定在旧 head `348293c…`，因此该后续提交没有 pull_request run；不得把 #3 的历史 PR run 误绑到它。当前 Git 隔离测试安装应固定 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`；`79d2268…` 只保留为 0.25.0 回退点。若发布规则要求新提交具备 PR 门禁，必须另开 PR 并等待新的 pull_request CI。
+PR #3 在 `20cfe44…` 推送前已经合并并固定在旧 head `348293c…`，因此该后续提交没有 pull_request run；不得把 #3 的历史 PR run 误绑到它。七七后来安装并重启了该提交，但现场 `/设置LLM冷却 0` 没有进入冷却 Handler，因此它已被 0.26.1 安装点取代。`79d2268…` 只保留为 0.25.0 回退点。
+
+### 0.26.1 冷却指令路由热修复与当前安装点
+
+现场日志证明安装和重启本身正常：磁盘包为 0.26.0 / `20cfe44…`，Bot 在安装后重新加载插件，发送者 `1143785758` 属于运行配置的 `SUPERUSERS`，`/` 也属于 `COMMAND_START`。但标准 `on_command` 没有接住消息，日志中只有同优先级业务插件的事件记录，没有冷却配置写入或确认回复。17:20 的模型选择来自另一条 @Bot 点赞请求，不能与 17:16 的冷却命令混为一条链路。
+
+实现提交 `5a85e70b6a61fdbb2b4728483ce0e81e332d8316` 将入口改为优先级 0、全文锚定的固定 Matcher，接受 `/`、`!`、`！` 或无前缀的三个固定别名；仍只允许 NoneBot `SUPERUSER`，普通群管理员无权修改。新增测试直接执行 NoneBot Matcher 的规则、权限、Handler、回复和 `block=True` 传播：超管写入一次 `cd_seconds=0` 并收到确认，普通用户不写入也不回复。包版本升为 0.26.1，244 项协议清单、权限策略、Broker 和默认开关均未改变。
+
+首个 push run [`33159974030`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33159974030) 因仓库检查仍把版本硬编码为 0.26.0 而失败，不作为放行证据。最小门禁修复提交 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba` 只同步该自检版本，成为当前安装点；其 push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 已完成：
+
+- 12/12 job 为 `completed/success`，唯一 `release-gate` job `98812485766` 成功；
+- Python 3.10～3.13 普通矩阵各为 `2958 passed, 13 skipped`，mandatory root sandbox 为 `41 passed, 0 skipped`；
+- Ruff、文档 11 JSON / 8 TOML / 8 Python 示例、117 个本地链接、12 个运行依赖、10 个开发依赖和 244 项协议资源检查通过；
+- Python 3.10/3.12 × wheel/sdist 四组包外加载均成功，runtime generation 为 1。
+
+PR #3 早已合并旧 head，0.26.1 没有 pull_request run；若发布规则要求双门禁，必须另开 PR，不能复用历史结果。当前安装命令必须固定完整 `5d7f795…`，但这只允许进入隔离测试；0.26.1 尚未在七七安装、重启或线上验证，本阶段也没有发布 PyPI。
 
 文档提交无法在自身内容中写入自己的 SHA 或由自身触发的 run ID，否则会形成无穷自引用；其身份应由 Git 历史、远端引用和对应 Actions 共同绑定。PR #3 已合并后产生的文档修订只会触发 push run，不得被描述成新的 PR 双门禁。每个被验收的 run 仍必须全部 job 成功，且恰好一个 `release-gate` 为 `completed/success`；不 promotion、不发布 PyPI。
 
@@ -100,6 +115,6 @@ PR #3 在 `20cfe44…` 推送前已经合并并固定在旧 head `348293c…`，
 1. `git status --short --branch`，确认仍在 `feat/generated-tool-bundles`；
 2. 保留未跟踪 `uv.lock`，不得提交、修改或删除；
 3. 核对本地 HEAD、`origin/feat/generated-tool-bundles` 和 `git ls-remote`；PR #3 已合并，不能再作为当前分支 head 依据；
-4. K-07 协议实现 SHA `cf69468…` 的历史远端双门禁已完成；当前 0.26.0 安装点为后续修复 `20cfe44…`；
-5. `20cfe44…` 的 push 门禁已完成，但没有 PR run；若发布规则要求双门禁，应另开 PR，不得复用 #3 的结果；
+4. K-07 协议实现 SHA `cf69468…` 的历史远端双门禁已完成；当前安装点为 0.26.1 `5d7f795…`，`20cfe44…` 只作现场问题历史证据；
+5. `5d7f795…` 的 push 门禁已完成，但没有 PR run；若发布规则要求双门禁，应另开 PR，不得复用 #3 的结果；
 6. 不检查或修改七七依赖/进程，除非用户另行明确授权新的部署阶段。

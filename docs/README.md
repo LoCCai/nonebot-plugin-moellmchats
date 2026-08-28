@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.0。隔离测试应固定到精确提交 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`，其 push run [`33155319608`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33155319608) 已 12/12 成功；PR #3 已在此前合并旧 head，因此该后续提交没有 PR run，不能写成“双门禁”。旧 `79d2268…` 只用于回退到 0.25.0。完整边界见[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，PyPI 与七七实际安装状态仍需分别核对。
+> 当前文档面向 0.26.1。隔离测试应固定到精确提交 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`，其 push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 已 12/12 成功；PR #3 已在此前合并旧 head，因此该补丁提交没有 PR run，不能写成“双门禁”。`20cfe44…` 是会漏接现场冷却指令的 0.26.0 历史点，`79d2268…` 只用于回退到 0.25.0。完整边界见[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
