@@ -17,6 +17,7 @@ from .private_files import (
 )
 
 config_path: Path = store.get_plugin_config_dir()
+MAX_CD_SECONDS = 86_400
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -180,6 +181,13 @@ class ConfigParser:
 
     @staticmethod
     def _validate(candidate: dict[str, Any]) -> None:
+        cooldown_seconds = candidate.get("cd_seconds")
+        if (
+            not isinstance(cooldown_seconds, int)
+            or isinstance(cooldown_seconds, bool)
+            or not 0 <= cooldown_seconds <= MAX_CD_SECONDS
+        ):
+            raise ValueError(f"config.json: cd_seconds 必须是 0 到 {MAX_CD_SECONDS} 的整数")
         for field in _POSITIVE_INTEGER_FIELDS:
             value = candidate.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:

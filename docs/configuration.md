@@ -137,7 +137,7 @@ LOCALSTORE_USE_CWD=true
 | `llm_max_active` | `4` | 全局同时执行的 LLM 任务数 | 按 API 配额和内存评估 |
 | `llm_max_pending` | `32` | 全局最多等待多少个任务 | 队列过长会消耗总预算，不宜盲目增加 |
 | `llm_max_per_user` | `2` | 单用户总槽位；默认表现为 1 个活动 + 1 个等待 | 防止单用户占满队列 |
-| `cd_seconds` | `120` | 用户成功占用对话后进入的冷却时间；排队前检查 | 测试实例可降低，生产按成本设置 |
+| `cd_seconds` | `120` | 用户成功占用对话后进入的冷却时间；排队前检查；允许 `0`～`86400`，`0` 表示关闭 | 可由超管执行 `设置LLM冷却 <秒数>` 热修改 |
 | `legacy_dispatch_max_pending` | `16` | 完整 NoneBot 事件总线兼容投递的等待上限 | 只有遗留插件确有需要时调整 |
 | `legacy_dispatch_timeout_seconds` | `20` | 兼容投递单次超时 | 遗留 Matcher 较慢时谨慎增加 |
 | `legacy_full_event_plugins` | `[]` | 必须走完整事件总线的插件包名数组；其他插件只定向执行 Matcher | 仅解决已确认的前处理器依赖 |

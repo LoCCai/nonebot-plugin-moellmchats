@@ -25,13 +25,7 @@ def test_config_storage_is_tightened_and_atomic_rewrites_stay_private(
     providers.write_text("[providers]\n", encoding="utf-8")
     providers.chmod(0o666)
 
-    immutable = (
-        config_dir
-        / "generated_tools"
-        / "versions"
-        / "bundle"
-        / ("a" * 64)
-    )
+    immutable = config_dir / "generated_tools" / "versions" / "bundle" / ("a" * 64)
     immutable.mkdir(parents=True)
     immutable_file = immutable / "tool.py"
     immutable_file.write_text("pass\n", encoding="utf-8")
@@ -49,6 +43,24 @@ def test_config_storage_is_tightened_and_atomic_rewrites_stay_private(
 
     parser._write(dict(parser.config))
     assert _mode(parser.filepath) == 0o600
+
+
+@pytest.mark.parametrize("value", [0, 1, config_module.MAX_CD_SECONDS])
+def test_config_accepts_bounded_nonnegative_cooldown(value: int) -> None:
+    candidate = dict(config_module.DEFAULT_CONFIG)
+    candidate["cd_seconds"] = value
+    config_module.ConfigParser._validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-1, config_module.MAX_CD_SECONDS + 1, True, 1.5, "0", None],
+)
+def test_config_rejects_invalid_cooldown(value: object) -> None:
+    candidate = dict(config_module.DEFAULT_CONFIG)
+    candidate["cd_seconds"] = value
+    with pytest.raises(ValueError, match="cd_seconds"):
+        config_module.ConfigParser._validate(candidate)
 
 
 def test_protected_tree_rejects_symlink_with_path_diagnostic(tmp_path: Path) -> None:

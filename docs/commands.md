@@ -51,6 +51,7 @@
 | `设置联网` / `切换联网` `<开关>`         | 私聊/群聊 | `0`/`1`/`开`/`关` | 是否启用网络搜索；还需开启工具调用且模型支持 Function Calling |
 | `设置工具调用` / `设置函数调用` `<开关>` | 私聊/群聊 | `0`/`1`/`开`/`关` | 是否启用函数调用（Function Calling） |
 | `设置私聊 <开关>`                        | 私聊/群聊 | `0`/`1`/`开`/`关` | 是否允许超级管理员私聊 Bot           |
+| `设置LLM冷却` / `设置LLMCD` / `设置对话冷却` `<秒数>` | 私聊/群聊 | `0`～`86400` | 直接调整每用户对话冷却；`0` 表示关闭冷却，不经过 LLM 或生成工具 |
 
 ---
 
@@ -132,6 +133,8 @@
 | `设置LLM功能权限 <工具包> <版本> <工具名> user\|superuser` | 工具包 ID + 当前版本哈希前缀 + 工具名 + 权限 | 对当前精确版本写入或撤销人工 user grant，并原子发布新 generation |
 | `停用LLM功能 <工具包>` | 工具包 ID | 发布不含该工具包的新 generation |
 | `回滚LLM功能 <工具包> <版本>` | 工具包 ID + 至少 8 位版本哈希前缀 | 仅切回唯一匹配、未 Archived 且 immutable tree 校验完整的版本；提交后由当前进程发布、其他进程由 watcher 收敛 |
+
+模型服务拒绝工具草稿请求时，只从结构化错误中回显经过截断和凭据、URL、本地路径脱敏的 `code/type/param/message`。HTTP 400 若不是内容安全拒绝、且首个请求包含模型可选参数，会自动移除可选参数并用 `model/messages/stream` 最小请求重试一次；副作用工具不会经过这条重试路径。Generated Tool 仍只能使用 nobody 沙箱和临时 workspace，不能借此修改 Bot 配置；`cd_seconds` 等宿主配置必须使用上面的固定管理员命令或受信源码入口。
 
 Generated manifest 中的 `permission` 是申请值；新批准版本的 effective permission 一律从 `superuser` 开始。只有 manifest 原本请求 `user`，且上述权限命令对当前 bundle digest 和工具名显式设置 `user`，才允许普通用户使用；设置 `superuser` 会撤销 grant，升级或回滚到其他 digest 不继承授权。
 

@@ -37,6 +37,131 @@ _REVIEW_SYSTEM = """你是独立代码复核员。审查给定 Python 工具包�
 只返回 JSON：{"approved":true或false,"summary":"简述","risks":["风险"]}。
 有隐藏行为、权限低报、明显注入或需求不匹配时必须 false。"""
 
+_MODEL_ERROR_BODY_LIMIT = 16_384
+_MODEL_ERROR_MESSAGE_LIMIT = 300
+_MODEL_ERROR_FIELD_LIMIT = 80
+_CONTENT_POLICY_MARKERS = (
+    "datainspectionfailed",
+    "content_filter",
+    "sensitive",
+    "safety",
+    "violation",
+    "audit",
+    "prohibited",
+)
+_BEARER_SECRET_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
+_NAMED_SECRET_RE = re.compile(
+    r"(?i)\b(authorization|api[_ -]?key|access[_ -]?token|token|cookie|"
+    r"secret|password|clientkey|rkey)(\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+_OPENAI_SECRET_RE = re.compile(r"(?i)\bsk-[a-z0-9_-]{8,}\b")
+_URL_RE = re.compile(r"(?i)\bhttps?://[^\s]+")
+_LOCAL_PATH_RE = re.compile(r"(?<![\w.])/(?:root|home|app|etc|var|tmp)(?:/[^\s,;:]+)+")
+_OPAQUE_SECRET_RE = re.compile(r"\b[a-zA-Z0-9_+/=-]{40,}\b")
+
+
+def _redact_model_error_field(value: object, *, limit: int) -> str:
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return ""
+    text = " ".join(str(value).split())
+    text = _URL_RE.sub("<url>", text)
+    text = _BEARER_SECRET_RE.sub("Bearer <redacted>", text)
+    text = _OPENAI_SECRET_RE.sub("<redacted>", text)
+    text = _NAMED_SECRET_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}<redacted>",
+        text,
+    )
+    text = _LOCAL_PATH_RE.sub("<path>", text)
+    text = _OPAQUE_SECRET_RE.sub("<redacted>", text)
+    return text[:limit]
+
+
+def _extract_model_error_info(body: str) -> dict[str, str]:
+    try:
+        payload = json.loads(body)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    candidates: list[dict[str, Any]] = []
+    nested = payload.get("error")
+    if isinstance(nested, dict):
+        candidates.append(nested)
+    candidates.append(payload)
+    values: dict[str, str] = {}
+    aliases = {
+        "code": ("code", "error_code"),
+        "type": ("type",),
+        "param": ("param",),
+        "message": ("message", "msg"),
+    }
+    for candidate in candidates:
+        for field, keys in aliases.items():
+            if values.get(field):
+                continue
+            raw = next(
+                (candidate.get(key) for key in keys if candidate.get(key) is not None),
+                None,
+            )
+            limit = _MODEL_ERROR_MESSAGE_LIMIT if field == "message" else _MODEL_ERROR_FIELD_LIMIT
+            if rendered := _redact_model_error_field(raw, limit=limit):
+                values[field] = rendered
+    return values
+
+
+def _is_content_policy_error(body: str) -> bool:
+    normalized = body.casefold()
+    return any(marker in normalized for marker in _CONTENT_POLICY_MARKERS)
+
+
+def _format_model_http_error(
+    status: int,
+    body: str,
+    *,
+    truncated: bool,
+    compatibility_retried: bool,
+) -> str:
+    parts = [f"模型请求失败 HTTP {status}"]
+    info = _extract_model_error_info(body)
+    if _is_content_policy_error(body):
+        parts.append("模型服务拒绝了请求内容或安全策略")
+    else:
+        labels = {
+            "code": "错误码",
+            "type": "类型",
+            "param": "参数",
+            "message": "原因",
+        }
+        parts.extend(f"{labels[field]}={info[field]}" for field in ("code", "type", "param", "message") if info.get(field))
+    if compatibility_retried:
+        parts.append("已使用最小兼容参数重试")
+    if truncated:
+        parts.append("错误响应已截断")
+    return "；".join(parts)
+
+
+async def _read_model_error_body(response: Any) -> tuple[str, bool, int]:
+    read_limit = _MODEL_ERROR_BODY_LIMIT + 1
+    try:
+        raw = await response.content.readexactly(read_limit)
+    except asyncio.IncompleteReadError as error:
+        raw = error.partial
+    truncated = len(raw) > _MODEL_ERROR_BODY_LIMIT
+    encoding = getattr(response, "charset", None) or "utf-8"
+    try:
+        body = raw[:_MODEL_ERROR_BODY_LIMIT].decode(
+            encoding,
+            errors="replace",
+        )
+    except LookupError:
+        body = raw[:_MODEL_ERROR_BODY_LIMIT].decode(
+            "utf-8",
+            errors="replace",
+        )
+    return body, truncated, len(raw)
+
 
 def _extract_json(text: str) -> dict[str, Any]:
     text = (text or "").strip()
@@ -66,8 +191,9 @@ class ToolAuthoringService:
         headers = {
             "Content-Type": "application/json",
             "Authorization": model.get("key", ""),
+            "Accept-Encoding": "identity",
         }
-        data: dict[str, Any] = {
+        minimal_data: dict[str, Any] = {
             "model": model["model"],
             "messages": [
                 {"role": "system", "content": system},
@@ -75,6 +201,7 @@ class ToolAuthoringService:
             ],
             "stream": False,
         }
+        data = dict(minimal_data)
         for key in ("max_tokens", "temperature", "top_p", "top_k"):
             if model.get(key) is not None:
                 data[key] = model[key]
@@ -86,21 +213,59 @@ class ToolAuthoringService:
                 config_parser.get_config("request_timeout_seconds", 180),
             )
         )
-        async with get_session().post(
-            model["url"],
-            headers=headers,
-            json=data,
-            proxy=model.get("proxy"),
-            timeout=timeout,
-        ) as response:
-            body = await response.text()
-            if response.status != 200:
-                raise RuntimeError(f"模型请求失败 HTTP {response.status}")
-        payload = json.loads(body)
+        attempt_data = data
+        compatibility_retried = False
+        while True:
+            async with get_session().post(
+                model["url"],
+                headers=headers,
+                json=attempt_data,
+                proxy=model.get("proxy"),
+                timeout=timeout,
+            ) as response:
+                if response.status == 200:
+                    body = await response.text()
+                    break
+                error_body, truncated, read_bytes = await _read_model_error_body(response)
+                logger.warning(
+                    "AI 工具草稿模型请求失败；"
+                    f"status={response.status} "
+                    f"read_bytes={read_bytes} "
+                    f"truncated={truncated}，响应正文已省略"
+                )
+                if (
+                    response.status == 400
+                    and not compatibility_retried
+                    and data != minimal_data
+                    and not _is_content_policy_error(error_body)
+                ):
+                    compatibility_retried = True
+                    attempt_data = minimal_data
+                    logger.warning("AI 工具草稿模型不接受可选参数，将使用 model/messages/stream 最小请求重试一次")
+                    continue
+                raise RuntimeError(
+                    _format_model_http_error(
+                        response.status,
+                        error_body,
+                        truncated=truncated,
+                        compatibility_retried=compatibility_retried,
+                    )
+                )
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            raise RuntimeError("模型响应不是合法 JSON") from None
+        if not isinstance(payload, dict):
+            raise RuntimeError("模型响应 JSON 顶层不是对象")
         choices = payload.get("choices") or []
-        if not choices:
+        if not isinstance(choices, list) or not choices:
             raise RuntimeError("模型未返回 choices")
-        message = choices[0].get("message") or {}
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise RuntimeError("模型返回的 choices 格式错误")
+        message = first_choice.get("message") or {}
+        if not isinstance(message, dict):
+            raise RuntimeError("模型返回的 message 格式错误")
         content = message.get("content") or ""
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("模型未返回可用内容")
@@ -115,30 +280,18 @@ class ToolAuthoringService:
             raise ValueError("生成结果缺少 manifest")
         if not isinstance(source, str) or not isinstance(tests_source, str):
             raise ValueError("生成结果缺少 tool_py 或 tests_py")
-        (path / "manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        (path / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         (path / "tool.py").write_text(source, encoding="utf-8")
         (path / "tests.py").write_text(tests_source, encoding="utf-8")
         harden_private_tree(path)
 
-    async def _create_admitted(
-        self, requirement: str
-    ) -> tuple[str, BundleValidation, dict[str, Any], str]:
+    async def _create_admitted(self, requirement: str) -> tuple[str, BundleValidation, dict[str, Any], str]:
         await asyncio.to_thread(generated_tool_store.ensure_initialized)
-        candidate = Path(
-            tempfile.mkdtemp(prefix=".candidate-", dir=generated_tool_store.root)
-        )
+        candidate = Path(tempfile.mkdtemp(prefix=".candidate-", dir=generated_tool_store.root))
         try:
-            generated = _extract_json(
-                await self._call_model(
-                    "selected_model", _AUTHOR_SYSTEM, requirement
-                )
-            )
+            generated = _extract_json(await self._call_model("selected_model", _AUTHOR_SYSTEM, requirement))
             await asyncio.to_thread(self._write_candidate, candidate, generated)
-            validation = await asyncio.to_thread(
-                generated_tool_store.validate_bundle, candidate
-            )
+            validation = await asyncio.to_thread(generated_tool_store.validate_bundle, candidate)
 
             def persist_initial_draft():
                 return generated_tool_store.create_draft(
@@ -153,9 +306,7 @@ class ToolAuthoringService:
                     },
                 )
 
-            draft_id, stored_validation = await asyncio.to_thread(
-                persist_initial_draft
-            )
+            draft_id, stored_validation = await asyncio.to_thread(persist_initial_draft)
             try:
                 await asyncio.to_thread(
                     generated_tool_store.mark_static_validated,
@@ -171,9 +322,7 @@ class ToolAuthoringService:
                         str(error)[:1000],
                     )
                 except Exception:
-                    logger.exception(
-                        f"草稿 {draft_id} 静态验证失败后无法记录 failure evidence"
-                    )
+                    logger.exception(f"草稿 {draft_id} 静态验证失败后无法记录 failure evidence")
                 raise
             draft_path = generated_tool_store.drafts_dir / draft_id
             try:
@@ -198,12 +347,8 @@ class ToolAuthoringService:
                     {
                         "requirement": requirement,
                         "manifest": stored_validation.manifest,
-                        "tool_py": (draft_path / "tool.py").read_text(
-                            encoding="utf-8"
-                        ),
-                        "tests_py": (draft_path / "tests.py").read_text(
-                            encoding="utf-8"
-                        ),
+                        "tool_py": (draft_path / "tool.py").read_text(encoding="utf-8"),
+                        "tests_py": (draft_path / "tests.py").read_text(encoding="utf-8"),
                         "static_risks": stored_validation.risks,
                         "test_summary": test_summary,
                     },
@@ -226,20 +371,13 @@ class ToolAuthoringService:
                     or review["summary"] != review["summary"].strip()
                     or len(review["summary"]) > 4000
                 ):
-                    raise ValueError(
-                        "复核模型 summary 必须为 1 到 4000 个字符"
-                    )
+                    raise ValueError("复核模型 summary 必须为 1 到 4000 个字符")
                 review_risks = review.get("risks", [])
                 if not isinstance(review_risks, list) or not all(
-                    isinstance(item, str)
-                    and bool(item.strip())
-                    and item == item.strip()
-                    and len(item) <= 500
+                    isinstance(item, str) and bool(item.strip()) and item == item.strip() and len(item) <= 500
                     for item in review_risks
                 ):
-                    raise ValueError(
-                        "复核模型 risks 必须是最多 500 字的非空字符串数组"
-                    )
+                    raise ValueError("复核模型 risks 必须是最多 500 字的非空字符串数组")
                 if len(review_risks) > 64:
                     raise ValueError("复核模型 risks 最多 64 项")
             except asyncio.CancelledError:
@@ -270,10 +408,7 @@ class ToolAuthoringService:
                     summary=review["summary"],
                     risks=tuple(review_risks),
                 )
-            logger.info(
-                f"AI 工具草稿已生成 draft={draft_id} approved={review['approved']} "
-                f"risks={len(stored_validation.risks)}"
-            )
+            logger.info(f"AI 工具草稿已生成 draft={draft_id} approved={review['approved']} risks={len(stored_validation.risks)}")
             return draft_id, stored_validation, review, test_summary
         finally:
             await asyncio.to_thread(shutil.rmtree, candidate, True)
@@ -294,9 +429,7 @@ class ToolAuthoringService:
         async with self._lock:
             runtime_metrics.generated_authoring_active = 1
             try:
-                async with timeout_scope(
-                    config_parser.get_config("request_timeout_seconds", 180)
-                ):
+                async with timeout_scope(config_parser.get_config("request_timeout_seconds", 180)):
                     async with get_llm_controller().slot(actor_key):
                         return await self._create_admitted(requirement)
             except TimeoutError:
