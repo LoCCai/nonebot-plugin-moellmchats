@@ -34,7 +34,7 @@ from .chat_runtime import (
     reset_all_runtime_state,
     reset_user_runtime_state,
 )
-from .config import config_parser
+from .config import MAX_CD_SECONDS, config_parser
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import generated_tool_store
 from .messages_handler import messages_dict
@@ -124,6 +124,7 @@ __plugin_meta__ = PluginMetadata(
 15.超级管理员限定：用"添加LLM功能"生成工具草稿，复核后用"批准LLM功能"热载入
 16.危险工具首次调用只生成确认码；原请求不会执行，用户必须另发"确认执行 <确认码>"，也可"取消执行 <确认码>"
 17.超级管理员限定：用"设置LLM功能权限 <包> <哈希> <工具> user|superuser"审批生成工具的普通用户权限
+18.超级管理员限定：用"设置LLM冷却 <秒数>"直接调整对话冷却；设为 0 可关闭冷却
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
@@ -756,6 +757,49 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         await set_private_chat_matcher.finish("已关闭超级管理员私聊对话模式")
     else:
         await set_private_chat_matcher.finish("参数错误，格式为：设置私聊 开、关、1、0")
+
+
+def _parse_llm_cooldown_seconds(raw: str) -> int:
+    value = raw.strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise ValueError(f"参数必须是 0 到 {MAX_CD_SECONDS} 的整数秒数")
+    normalized = value.lstrip("0") or "0"
+    if len(normalized) > len(str(MAX_CD_SECONDS)):
+        raise ValueError(f"参数必须是 0 到 {MAX_CD_SECONDS} 的整数秒数")
+    seconds = int(normalized)
+    if seconds > MAX_CD_SECONDS:
+        raise ValueError(f"参数必须是 0 到 {MAX_CD_SECONDS} 的整数秒数")
+    return seconds
+
+
+set_llm_cooldown_matcher = on_command(
+    "设置LLM冷却",
+    aliases={"设置LLMCD", "设置对话冷却"},
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
+)
+
+
+@set_llm_cooldown_matcher.handle()
+async def _(args: Message = CommandArg()):
+    try:
+        seconds = _parse_llm_cooldown_seconds(args.extract_plain_text())
+    except ValueError as error:
+        await set_llm_cooldown_matcher.finish(f"参数错误：{error}。格式：设置LLM冷却 <秒数>")
+
+    previous = config_parser.get_config("cd_seconds", 120)
+    try:
+        config_parser.set_config("cd_seconds", seconds)
+    except Exception:
+        logger.exception("超级管理员设置 LLM 冷却失败")
+        await set_llm_cooldown_matcher.finish("LLM 冷却设置失败，原配置继续使用，请查看后台日志。")
+
+    if seconds == 0:
+        result = "已关闭 LLM 对话冷却"
+    else:
+        result = f"已将 LLM 对话冷却设置为 {seconds} 秒"
+    await set_llm_cooldown_matcher.finish(f"{result}（原值：{previous} 秒）")
 
 
 # 重置个人对话（需要 @ 机器人触发）
