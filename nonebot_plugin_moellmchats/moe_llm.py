@@ -526,10 +526,18 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         self._llm_request_timeout(),
                     )
 
-                result_text = await self._call_model_with_trace(
-                    summary_operation,
-                    input_preview="tool summary retry",
-                )
+                try:
+                    result_text = await self._call_model_with_trace(
+                        summary_operation,
+                        input_preview="tool summary retry",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # 总结兜底请求失败不应炸掉整轮对话：工具可能已经执行、
+                    # 流式内容可能已经发出，这里降级为固定文案保证回复落库
+                    logger.exception("工具总结请求失败，使用兜底文案")
+                    result_text = ""
                 result_text = str(result_text or "")
                 if self.agent_runtime is not None:
                     await self.agent_runtime.flush_usage()
