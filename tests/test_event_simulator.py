@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+import uuid
 
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
@@ -75,6 +76,51 @@ async def test_capture_contexts_do_not_cross_talk(monkeypatch) -> None:
     )
     assert results == [("first", []), ("second", [])]
     assert simulator_module._captures == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api",
+    ["send_msg", "send_group_msg", "send_private_msg"],
+)
+async def test_capture_supports_every_onebot_message_send_action(api: str) -> None:
+    capture_id = uuid.uuid4().hex
+    simulator_module._captures[capture_id] = {
+        "messages": [],
+        "original_id": 10,
+        "fake_id": 20,
+    }
+    token = simulator_module._capture_key.set(capture_id)
+    data = {"message": Message("正文")}
+    try:
+        await simulator_module._capture_outgoing_api(object(), api, data)
+        assert simulator_module._captures[capture_id]["messages"] == [
+            {"text": "正文", "images": []}
+        ]
+    finally:
+        simulator_module._capture_key.reset(token)
+        simulator_module._captures.pop(capture_id, None)
+
+
+@pytest.mark.asyncio
+async def test_capture_does_not_consume_send_like_side_effect() -> None:
+    capture_id = uuid.uuid4().hex
+    simulator_module._captures[capture_id] = {
+        "messages": [],
+        "original_id": 10,
+        "fake_id": 20,
+    }
+    token = simulator_module._capture_key.set(capture_id)
+    try:
+        await simulator_module._capture_outgoing_api(
+            object(),
+            "send_like",
+            {"user_id": 123, "times": 1},
+        )
+        assert simulator_module._captures[capture_id]["messages"] == []
+    finally:
+        simulator_module._capture_key.reset(token)
+        simulator_module._captures.pop(capture_id, None)
 
 
 @pytest.mark.asyncio

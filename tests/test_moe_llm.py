@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from nonebot.adapters.onebot.v11.exception import ActionFailed
+from nonebot.adapters.onebot.v11.exception import (
+    ActionFailed,
+    ApiNotAvailable,
+    NetworkError,
+)
 import pytest
 
 from nonebot_plugin_moellmchats import moe_llm as module
@@ -15,6 +19,21 @@ def _action_failed() -> ActionFailed:
         message="Timeout",
         wording="",
     )
+
+
+def _network_error() -> NetworkError:
+    return NetworkError("WebSocket call api send_msg timeout")
+
+
+def _api_not_available() -> ApiNotAvailable:
+    return ApiNotAvailable()
+
+
+ADAPTER_FAILURE_FACTORIES = (
+    _action_failed,
+    _network_error,
+    _api_not_available,
+)
 
 
 class _ScriptedBot:
@@ -38,10 +57,12 @@ def _llm(bot: _ScriptedBot) -> MoeLlm:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_factory", ADAPTER_FAILURE_FACTORIES)
 async def test_emotion_failure_is_isolated_after_body_delivery(
     monkeypatch: pytest.MonkeyPatch,
+    failure_factory,
 ) -> None:
-    bot = _ScriptedBot([None, _action_failed(), None])
+    bot = _ScriptedBot([None, failure_factory(), None])
     llm = _llm(bot)
     monkeypatch.setattr(
         module,
@@ -57,10 +78,12 @@ async def test_emotion_failure_is_isolated_after_body_delivery(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_factory", ADAPTER_FAILURE_FACTORIES)
 async def test_body_delivery_failure_still_propagates(
     monkeypatch: pytest.MonkeyPatch,
+    failure_factory,
 ) -> None:
-    failure = _action_failed()
+    failure = failure_factory()
     bot = _ScriptedBot([failure])
     llm = _llm(bot)
     monkeypatch.setattr(
@@ -70,7 +93,7 @@ async def test_body_delivery_failure_still_propagates(
     )
     monkeypatch.setattr(module, "get_emotion", lambda _name: "图片")
 
-    with pytest.raises(ActionFailed) as captured:
+    with pytest.raises(type(failure)) as captured:
         await llm.send_emotion_message("正文[微笑]")
 
     assert captured.value is failure
@@ -78,10 +101,12 @@ async def test_body_delivery_failure_still_propagates(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_factory", ADAPTER_FAILURE_FACTORIES)
 async def test_emotion_only_failure_propagates_when_nothing_was_delivered(
     monkeypatch: pytest.MonkeyPatch,
+    failure_factory,
 ) -> None:
-    failure = _action_failed()
+    failure = failure_factory()
     bot = _ScriptedBot([failure])
     llm = _llm(bot)
     monkeypatch.setattr(
@@ -91,8 +116,23 @@ async def test_emotion_only_failure_propagates_when_nothing_was_delivered(
     )
     monkeypatch.setattr(module, "get_emotion", lambda _name: "图片")
 
-    with pytest.raises(ActionFailed) as captured:
+    with pytest.raises(type(failure)) as captured:
         await llm.send_emotion_message("[微笑]")
 
     assert captured.value is failure
     assert bot.sent == ["图片"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_factory", ADAPTER_FAILURE_FACTORIES)
+async def test_plain_body_failure_is_never_downgraded(failure_factory) -> None:
+    failure = failure_factory()
+    bot = _ScriptedBot([failure])
+    llm = _llm(bot)
+    llm.emotion_flag = False
+
+    with pytest.raises(type(failure)) as captured:
+        await llm.send_emotion_message("正文")
+
+    assert captured.value is failure
+    assert bot.sent == ["正文"]

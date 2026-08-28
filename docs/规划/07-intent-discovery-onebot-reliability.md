@@ -1,7 +1,7 @@
 ---
 title: 07-intent-discovery-onebot-reliability
 date: 2026-08-27T00:00:00+00:00
-lastmod: 2026-08-27T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 ---
 
 # 功能级意图发现与 OneBot 投递可靠性
@@ -31,7 +31,7 @@ lastmod: 2026-08-27T00:00:00+00:00
 | J-01 菜单规范化契约 | `7705cdd…` 基线 | 已完成（`bbc3963…`） | 清理 `<ft>`/控制字符，拒绝错误类型；功能、触发、字段和总字符有界；固化进 `ToolSnapshot` |
 | J-02 权威目录桥接 | J-01 | 已完成（`bbc3963…`） | 显式覆写 > PicMenu 内存目录 > Metadata menu > 普通 Metadata；未加载插件不能因菜单变成工具 |
 | J-03 两阶段展开 | J-02 | 已完成（`bbc3963…`） | 分类目录按功能展开且返回插件 ID；命中后兼容 Schema 包含精确消息入口；Provider/legacy parity 保持一致 |
-| J-04 OneBot 表情降级 | J-01 | 已完成（`bbc3963…`） | 正文失败传播；正文已成功后单个表情 `ActionFailed` 隔离且不重试正文；无成功投递时仍传播 |
+| J-04 OneBot 表情降级 | J-01 | `bbc3963…` 已完成；三类适配器失败本地补齐 | 正文失败传播；正文已成功后单个表情的 `ActionFailed`/`NetworkError`/`ApiNotAvailable` 隔离且不重试正文；无成功投递时仍传播 |
 | J-05 文档、依赖与本地矩阵 | J-01～J-04 | 已完成（`bbc3963…` 双门禁） | 用户文档、架构、依赖、定向/相关/普通全量、Ruff、mandatory root sandbox 与包制品均已核验 |
 | J-06 七七隔离升级与真实行为 | J-05 + 精确 SHA/制品 | 只读前置完成；升级/重载未执行 | 依赖固定到 `bbc3963…`，人工重载测试实例后验证分类、Matcher、OneBot |
 | J-07 发布/生产 | J-06 + 独立发布计划 | 锁定 | 合并、正式制品、发布观察与回退全部另行授权；本阶段不得推进 |
@@ -56,9 +56,24 @@ lastmod: 2026-08-27T00:00:00+00:00
 ### OneBot 不确定发送
 
 - 正文发送失败不吞异常，调用方可以正确标记失败。
-- 正文或前一个附件已成功后，附加表情的 `ActionFailed` 只跳过当前表情并记录无正文内容的 warning。
+- 正文或前一个附件已成功后，附加表情的 `ActionFailed`、`NetworkError` 或 `ApiNotAvailable` 只跳过当前表情并记录无正文内容的 warning。
 - 不自动重试 NapCat 超时，因为 `retcode=1200` 不能证明 QQ 端一定未投递，重试可能产生重复消息。
 - 返回并保存的是去掉表情标记后的正文；工具总结重试分支也使用该返回值。
+
+## 全部相关接口验收范围
+
+| 接口 | 本链路职责 | 验收边界 |
+| --- | --- | --- |
+| `Bot.send(event, message)` | MoEllmChats 投递正文和可选表情，由适配器按事件选择消息动作 | 正文是必需投递；可选表情只在已有成功投递后降级 |
+| `send_msg` | NoneBot OneBot V11 通用消息动作 | 兼容 Matcher 输出可被有界捕获 |
+| `send_group_msg` | 群消息动作 | 兼容 Matcher 输出可被有界捕获，reply ID 仍绑定原事件 |
+| `send_private_msg` | 私聊消息动作 | 兼容 Matcher 输出可被有界捕获 |
+| `send_like` | `qi_group_admin` 点赞副作用 | 不作为消息输出捕获，必须真实进入原 Matcher 的次数、黑名单和业务检查 |
+| `ActionFailed` | OneBot/NapCat 返回动作失败，例如 `retcode=1200` | 正文阶段原样传播；已有正文后仅降级可选表情 |
+| `NetworkError` | WebSocket/HTTP 超时、断连或异常响应 | 与动作失败使用相同的不重复正文规则 |
+| `ApiNotAvailable` | API 连接在两次发送之间失效 | 与动作失败使用相同的不重复正文规则 |
+
+不在本次范围内的踢人、禁言、撤回、群管理和其他 NapCat 扩展 API 不会因“全部相关接口”而开放给模型；新增副作用仍应使用明确的业务 Matcher 或 `ToolSpec`，禁止通用 `bot.call_api`。
 
 ## 当前证据与恢复点
 

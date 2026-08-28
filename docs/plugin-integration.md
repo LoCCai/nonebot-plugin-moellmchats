@@ -57,6 +57,8 @@ PicMenu 桥接是可选的 duck-typed 读取，不是 Python 包依赖，也不�
 
 因此“给我点个赞”应先召回 `qi_group_admin`，再生成插件本来支持的“点赞/赞我”消息，最终仍走该插件的 `bot.send_like` 与每日次数逻辑。不要注册一个允许模型任意填写 API 名和参数的 `bot.call_api` 工具，那会绕过业务层。
 
+兼容 Matcher 的消息输出钩子覆盖 OneBot V11 的 `send_msg`、`send_group_msg` 和 `send_private_msg` 三种发送动作，用于把目标插件的文本/图片结果收回工具 observation；`send_like` 不属于消息输出，不会被钩子吞掉或伪造成文本结果，仍由目标插件真实调用。这里的“覆盖全部接口”只指该链路实际使用的消息发送与点赞接口，不表示向模型开放踢人、禁言、删消息或任意 NapCat API。
+
 PicMenu/QWeb 在 MoEllmChats 初始 generation 之后才完成内存同步时，在隔离测试实例执行一次 `刷新工具` 即可发布新目录，无需把全部插件加入常驻，也无需重启 NoneBot。QWeb 后续目录 generation 变化同样需要触发一次工具重载，才能进入新的不可变 `RuntimeSnapshot`。
 
 ### 配置格式

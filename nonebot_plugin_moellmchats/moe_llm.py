@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 import aiohttp
-from nonebot.exception import ActionFailed
+from nonebot.exception import ActionFailed, ApiNotAvailable, NetworkError
 from nonebot.log import logger
 
 from .agent_context_runtime import (
@@ -167,9 +167,10 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                     try:
                         await self.bot.send(self.event, emotion)
                         delivered = True
-                    except ActionFailed as error:
+                    except (ActionFailed, NetworkError, ApiNotAvailable) as error:
                         # 正文或前一个表情已经成功时，不重发不确定结果，
-                        # 只隔离这个可选附件，避免 NapCat 超时拖垮整轮 Matcher。
+                        # 只隔离这个可选附件，避免 OneBot 动作失败、传输超时或
+                        # 连接刚失效拖垮整轮 Matcher。
                         if not delivered:
                             raise
                         info = getattr(error, "info", {})
@@ -180,7 +181,9 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         )
                         logger.warning(
                             "正文已发送，附加表情发送失败并已跳过："
-                            f"emotion={emotion_name[:80]!r}, retcode={retcode!r}"
+                            f"emotion={emotion_name[:80]!r}, "
+                            f"error_type={type(error).__name__!r}, "
+                            f"retcode={retcode!r}"
                         )
         else:  # 默认直接发送
             await self.bot.send(self.event, content)

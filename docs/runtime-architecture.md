@@ -166,7 +166,7 @@ Registered `ToolSpec`、Custom File 和 Generated Tool 中显式标为 `mutating
 
 兼容的 NoneBot Matcher 插件和当前 MCP 配置无法表达同等精细的逐工具确认契约。NoneBot 兼容适配器会保守记录为 `mutating`，但当前为保留既有命令行为使用有界兼容执行；MCP 工具也没有逐工具 effect/permission 配置。两者都只应开放已经审查、原本就允许对应用户直接调用的能力。可能产生副作用的新能力应改写为 `ToolSpec(effect=ToolEffect.MUTATING, ...)`，详见[插件集成](./plugin-integration.md)。
 
-最终回复和可选表情分开投递。正文发送失败会原样传播，因为不能假定用户收到回复；正文已经成功后，附加表情若被 OneBot/NapCat 以 `ActionFailed` 拒绝或超时，只记录 warning 并跳过该表情，不重发正文，也不重试结果不确定的 QQ 发送。没有任何正文或前序表情成功时，表情发送失败仍会传播。保存到上下文的是去掉表情标记后的正文。
+最终回复和可选表情分开投递。正文发送失败会原样传播，因为不能假定用户收到回复；正文已经成功后，附加表情若被 OneBot/NapCat 以 `ActionFailed`（动作失败）、`NetworkError`（HTTP/WebSocket 超时或传输失败）或 `ApiNotAvailable`（连接刚失效）拒绝，只记录不含正文的 warning 并跳过该表情，不重发正文，也不重试结果不确定的 QQ 发送。没有任何正文或前序表情成功时，同样三类表情发送失败仍会原样传播。保存到上下文的是去掉表情标记后的正文。
 
 ### 7. 只读并行为何默认关闭
 

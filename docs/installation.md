@@ -132,7 +132,7 @@ PY
 | 5. 发现目录 | PicMenu/QWeb、Metadata 菜单、覆写优先级 | `刷新工具` 后自然语言能召回菜单功能；未加载插件不进入工具目录 |
 | 6. 工具 | Custom File、ToolSpec、MCP、Matcher 兼容 | 只暴露预期工具；黑名单、权限、结果上限生效；不提供任意 `bot.call_api` |
 | 7. 确认 | `mutating` ToolSpec/文件工具 | 首次只给确认码；原用户在原会话另发确认后才执行 |
-| 8. OneBot 投递 | 正文与可选表情 | 正文失败可见；正文成功后单个表情 `ActionFailed` 不重发正文、不拖垮整轮 |
+| 8. OneBot 投递 | `send_msg`/`send_group_msg`/`send_private_msg`、正文与可选表情 | 三种消息动作均可捕获；正文失败可见；正文成功后单个表情的 `ActionFailed`/`NetworkError`/`ApiNotAvailable` 不重发正文、不拖垮整轮；`send_like` 仍实际进入业务 Matcher |
 | 9. 隔离 | 文件/生成工具 runner | `查看LLM状态` 显示 `isolation=ready`，隔离探针无跳过 |
 | 10. 运维 | 重载、取消、退回 | 坏配置保留旧 generation；请求可停止；回退路径已演练 |
 
