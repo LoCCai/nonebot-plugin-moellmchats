@@ -34,6 +34,7 @@ from nonebot_plugin_moellmchats.tool_contracts import (
     ToolPolicy,
     ToolSpec,
 )
+from nonebot_plugin_moellmchats.tool_discovery import with_menu_discovery
 from nonebot_plugin_moellmchats.tool_manager import (
     LlmToolExecutionRoute,
     PendingActionExecutionView,
@@ -518,7 +519,13 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
         provider_catalog=catalog,
     )
 
-    assert snapshot.provider_catalog.tools_for_provider("builtin") == (record,)
+    builtin_records = snapshot.provider_catalog.tools_for_provider("builtin")
+    assert len(builtin_records) == len(builtin_tool_specs())
+    assert record in builtin_records
+    assert all(
+        snapshot.provider_catalog.tools[spec.name].spec is spec
+        for spec in builtin_tool_specs()
+    )
     assert record.spec is builtin_spec
     assert builtin_spec.name not in snapshot.custom_tools
 
@@ -529,7 +536,7 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
     drifted_catalog = ProviderCatalogSnapshot(
         generation=14,
         registrations=catalog.registrations,
-        tools={builtin_spec.name: drifted},
+        tools={**catalog.tools, builtin_spec.name: drifted},
     )
     with pytest.raises(ValueError, match="ToolSpec"):
         ToolSnapshot(
@@ -1338,11 +1345,21 @@ def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
     )
     plugin_info, plugin_specs = build_nonebot_plugin_candidate(
         {
-            "catalog_plugin": {
-                "name": "Catalog Plugin",
-                "description": "plugin description",
-                "usage": "/catalog",
-            }
+            "catalog_plugin": with_menu_discovery(
+                {
+                    "name": "Catalog Plugin",
+                    "description": "plugin description",
+                    "usage": "/catalog",
+                },
+                [
+                    {
+                        "func": "目录动作",
+                        "brief_des": "feature description",
+                        "trigger_method": "命令触发",
+                        "trigger_condition": "/catalog",
+                    }
+                ],
+            )
         }
     )
     file_artifact = _file_artifact(file_spec, generation=generation)
@@ -1415,7 +1432,8 @@ def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
 
     expected = "\n".join(
         (
-            "- catalog_plugin | Catalog Plugin | plugin description",
+            "- catalog_plugin | Catalog Plugin > 目录动作 | "
+            "feature description | 命令: /catalog",
             "- catalog_registered | 自定义函数 | registered description",
             "- catalog_file | 自定义函数 | file description",
             "- catalog_generated | 自定义函数 | generated description",
@@ -1689,11 +1707,28 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
     )
     plugin_info, plugin_specs = build_nonebot_plugin_candidate(
         {
-            "payload_plugin": {
-                "name": "Payload Plugin",
-                "description": "plugin payload",
-                "usage": "/payload",
-            }
+            "payload_plugin": with_menu_discovery(
+                {
+                    "name": "Payload Plugin",
+                    "description": "plugin payload",
+                    "usage": "/payload",
+                },
+                [
+                    {
+                        "func": "公开动作",
+                        "brief_des": "public payload action",
+                        "trigger_method": "命令触发",
+                        "trigger_condition": "/payload",
+                    },
+                    {
+                        "func": "隐藏动作",
+                        "brief_des": "hidden payload action",
+                        "trigger_method": "命令触发",
+                        "trigger_condition": "/payload-admin",
+                        "pmn_hidden": True,
+                    },
+                ],
+            )
         }
     )
     file_artifact = _file_artifact(file_spec, generation=generation)
@@ -1788,17 +1823,39 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
         plugin_specs[0].name,
         "web_search",
     }
+    public_plugin_description = next(
+        item["function"]["description"]
+        for item in provider_schema
+        if item["function"]["name"] == plugin_specs[0].name
+    )
+    assert "公开动作" in public_plugin_description
+    assert "隐藏动作" not in public_plugin_description
 
-    _admin_names, admin_schema = snapshot.get_llm_payload_tools(
+    admin_legacy_names, admin_legacy_schema = snapshot.get_llm_payload_tools(
+        selected,
+        tools_enabled=True,
+        search_enabled=True,
+        is_superuser=True,
+        provider_cutover=False,
+    )
+    admin_provider_names, admin_schema = snapshot.get_llm_payload_tools(
         selected,
         tools_enabled=True,
         search_enabled=True,
         is_superuser=True,
         provider_cutover=True,
     )
+    assert admin_provider_names == admin_legacy_names
+    assert admin_schema == admin_legacy_schema
     assert generated_spec.name in {
         item["function"]["name"] for item in admin_schema
     }
+    admin_plugin_description = next(
+        item["function"]["description"]
+        for item in admin_schema
+        if item["function"]["name"] == plugin_specs[0].name
+    )
+    assert "隐藏动作" in admin_plugin_description
 
     blacklist.extend((file_spec.name, "web_search"))
     filtered_names, filtered_schema = snapshot.get_llm_payload_tools(

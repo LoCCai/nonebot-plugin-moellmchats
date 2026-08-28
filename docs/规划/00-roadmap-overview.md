@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-08-24T15:36:01+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -9,6 +9,12 @@ lastmod: 2026-08-24T15:36:01+00:00
 # MoEllmChats 0.25+ 后续推进总路线图
 
 > 完成度复核（2026-08-24）：Plan 1 / Milestone A～C 与后续安全、架构、数据库、缓存、并行、平台接线均已按依赖顺序完成；I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭。I-09 已完成隔离最终矩阵，且本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁也已关闭；Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成。本次远端证据回填提交定义为最终文档 HEAD，只有其自身精确双 `release-gate` 通过后才判定 I-09 与开发态总目标最终闭环，不再为记录该自指门禁另起文档提交。生产迁移、真实 PostgreSQL/Redis/模型、发布和部署均未观察；D-09 因缺少真实发布周期 parity 观察继续锁定。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+
+> 状态续记（2026-08-25）：上述最终判据已经满足。最终文档 HEAD `7705cdd46e8dffd29ee50440fcf8ede94e76dd7d` 的 push run `32746463522` 与 PR run `32746468781` 各 11/11 success、各唯一 `release-gate` 为 `completed/success`；本地、origin、`ls-remote` 与 PR #2 head 一致，PR 仍为 `OPEN / MERGEABLE / CLEAN`。Plan 1～3 的开发态依赖链已闭环；PR 合并、正式发布、目标 Bot 安装、真实后端/migration 和 D-09 发布周期观察仍未发生。
+
+> 状态续记（2026-08-27）：七七隔离加载反馈暴露插件级目录无法召回“给我点个赞”，以及正文成功后 NapCat 表情发送 `ActionFailed(retcode=1200)` 拖垮整轮的问题。新增 [功能级意图发现与 OneBot 投递可靠性](./07-intent-discovery-onebot-reliability.md) J-01～J-07 依赖链；J-01～J-05 已在精确实现提交 `bbc3963a361259f4d98c29003937afb1cbe976f9` 完成。实现 push `33066587717` / PR `33080256433` 与证据提交 `45f7a6e6d5d1017fd8f3d9dc4a65ed497a2862b9` 的 push `33081113984` / PR `33081119792` 均为 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支；PR #3 以该分支为 base 且为 `OPEN / CLEAN`。J-06 已完成只读依赖、拓扑、临时锁解析与禁网无 driver 加载前置；七七当前仍是同仓库 `8e7f054…`，尚未修改依赖、`.venv` 或重载进程。J-07 发布/生产继续锁定。
+
+> 状态续记（2026-08-28）：J 阶段在 `bbc3963…` 后继续修复可选表情边界，进入新阶段前的最终 0.25 基线为 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`；其 push/PR run `33134760223` / `33134761967` 是当前前置双门禁。新增 [全量 OneBot / NapCat 协议工具实施状态](./08-onebot-napcat-protocol-tools.md) K-01～K-08 依赖链：固定收录 v11 38、v12 31、NapCat 175 项，默认总开关关闭，完整收录与允许执行分离。K-01～K-07 已完成本地实现与 Python 3.12 普通全量/Ruff 首轮验证，四版本、制品、包外加载和远端双门禁仍待关闭；K-08 继续锁定，七七依赖/进程、真实 QQ、合并与发布均未操作。
 
 > I-01 本地门禁（2026-08-23）：规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增纯 stdlib、深度不可变且无 transport/credential 字段的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability`；能力、limits、精确 `NUMERIC(24,12)` Decimal 成本、availability 与 generation 均有界，identity/capability/full descriptor 三类 canonical SHA-256 分离。四版本定向各 `98 passed`、相关联合各 `492 passed`、普通全量及 Python 3.10 最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品/同哈希重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/descriptor/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 继续锁定；未读取现有模型配置或凭据，未改变 `ModelSelector`，未发模型请求，未迁移、未连接真实服务、未部署。
 
@@ -252,7 +258,7 @@ lastmod: 2026-08-24T15:36:01+00:00
 | ----| ---------------------------------------------------|
 |`0.25.0-rc1`|修 P0 安全问题、Generated Tool 默认禁网、二阶段确认|
 |`0.25.0-rc2`|Source Snapshot、Runner IPC、AST Policy、Sandbox CI 定义与本地实测|
-|`0.25.x stable`|生命周期、File Lock、分阶段 Reload/Rollback 与 Watcher 已实现；最新 OS 隔离增量的本地总门禁、首次远端聚合 `release-gate` green 和 required check 均完成后才达到发布门禁|
+|`0.25.x stable`|当前候选实现与本地/远端开发门禁已在 `bbc3963…` 闭环；仍需 PR #3 合并、正式制品发布和独立发布验收，不能把候选 SHA 或 CI green 称为 stable|
 |`0.26`|Provider discovery/source/trust 先 shadow 迁移，再版本化 Capabilities 与切换工具体系|
 |`0.27`|AgentRun / AgentStep / Tool Graph|
 |`0.28`|PostgreSQL + Redis 状态层|

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-28
+
+- 新增默认关闭的固定 OneBot v11/v12 与 NapCat 4.18.19 协议工具：包内离线清单完整收录 38/31/175 个动作，运行时只向模型暴露当前 Bot、权限与场景允许的严格动作 Schema，不提供任意 API 名入口。
+- 新增 v11/v12 中立事件门面、独立 3 秒上限的请求级能力探测与隔离缓存；只有精确识别为 `NapCat.Onebot` 的 v11 Bot 才能发现 NapCat 扩展，探测失败只关闭本次协议工具。
+- 新增协议执行 Broker、`bot_read` / `bot_send` / `bot_manage` 能力、二阶段确认、64 KiB 参数总量上限、限额、单次副作用、`result_unknown`、结果脱敏和包内低风险当前目标封装；凭证、原始发包、生命周期、任意文件接口及无可靠单目标上限的批量群管理永久拒绝。
+- 业务插件菜单触发词默认优先于协议动作；点赞、当前会话戳一戳和当前消息表情回应固定由事件注入目标，模型不能改为其他用户、群或消息。
+- 补充完整协议动作表、权限矩阵、配置、调度链路、模型和 ToolSpec/插件接入文档；固定来源、人工策略和 MIT 归属纳入 wheel/sdist，离线生成器纳入仓库与 sdist。
+
 - Milestone A 将 `mutating` 工具改为真正的二阶段确认：首次调用只保存有界参数并生成 6 位大写十六进制 nonce，用户需在原 Bot/会话另发 `确认执行 <确认码>`；新增 `取消执行`，确认码受用户、会话、generation、工具版本、TTL 与一次性消费约束。
 - 新增 deny-by-default `ToolCapability` / `ToolPolicy`，严格限定 `network`、`process`、`workspace`、`host_filesystem`、`secrets` 五个布尔字段并按申请与管理上限取交集；Generated Tool 的有效上限仅允许私有 workspace，`secrets` 目前不注入宿主密钥。
 - Custom File Tool 支持静态 `TOOLS_REGISTRY.capabilities`；省略时默认仅启用私有 workspace，任何放宽都必须使用显式布尔字面量，未知 capability 会拒绝整个候选 generation。

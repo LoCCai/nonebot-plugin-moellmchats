@@ -168,7 +168,7 @@ async def extract_webpage(
 
 ## runner 隔离边界与运行要求
 
-> 下列内容描述当前开发工作树的实现语义；最新 OS 隔离增量（UTS/socket/keyring/xattr）尚待完整门禁复跑，不能据此声称当前分支已经发布或生产验证。
+下列内容描述当前 0.25 候选实现的安全边界。对应隔离增量已经完成 Python 3.10～3.13、mandatory root sandbox 与包外制品门禁，但仍未在生产发布；门禁通过不能替代目标主机的 `isolation=ready` 预检和隔离测试。
 
 - 运行环境必须支持 Linux `setrlimit`、进程组和 UID/GID 切换；主进程通常需要以 root 启动，worker 随后降权到 nobody（65534）。不能安全降权时，文件/生成工具拒绝执行，聊天、MCP 和可信 `ToolSpec` 仍可使用。
 - worker 使用 `python -I`、`no_new_privs` 和环境变量白名单，不会注入生产密钥或 Bot/数据库对象；启动预检结果可在 `查看LLM状态` 的 `isolation` 字段查看。
@@ -202,7 +202,11 @@ Generated manifest 的 `permission` 同样只是 `requested_permission`。无论
 
 ## 显式 ToolSpec 接口（推荐）
 
-其他 Python 插件可调用 `register_tool(ToolSpec(...))` 注册结构化工具。`ToolSpec` 描述参数 JSON Schema、`read_only`/`mutating` 属性、`user`/`superuser` 权限、超时、结果上限和依赖；处理函数可接收 `_tool_context: ToolContext` 并返回 `ToolResult`。`ToolResult.images` 接受 list/tuple 并规范化为 tuple，`metadata` 接受任意 Mapping 但会复制为普通字典；两者仍须满足上面的严格元素与键类型约束。这类可信处理函数在 NoneBot 主进程执行，可以访问 Bot/Event。插件源码变化仍需重启 NoneBot；若插件在运行时动态注册或替换 `ToolSpec`，还需执行 `重载LLM` 才会发布新的工具快照。
+其他 Python 插件可调用 `register_tool(ToolSpec(...))` 注册结构化工具。`ToolSpec` 描述参数 JSON Schema、`read_only`/`mutating` 属性、`user`/`superuser` 权限、超时、结果上限和依赖；处理函数可接收 `_tool_context: ToolContext` 并返回 `ToolResult`。这类可信处理函数在 NoneBot 主进程执行，可以访问 Bot/Event，不经过本页 runner。
+
+`ToolResult` 完整包含 `text`、`images`、`metadata`、`files`、`structured`、`citations` 六个字段。集合和 JSON 会被脱离、递归校验并冻结；`files` 只允许安全 opaque locator，`citations` 只允许安全公网 HTTPS，不能借结果对象暴露主机路径或私网地址。完整构造签名、可复制插件、字段表和加载顺序见 [`ToolSpec` 接入文档](./plugin-integration.md#方式二注册强类型-toolspec推荐)。
+
+插件源码变化仍需重启 NoneBot；若插件在运行时动态注册或替换 `ToolSpec`，还需执行 `刷新工具` 或 `重载LLM` 才会发布新的工具快照。
 
 变更型工具统一进入上述一次性 PendingAction 流程；独立 `确认执行 <确认码>` 消息通过 TTL、用户/会话、generation、工具版本和固化参数校验后才运行。主进程中的同步 `mutating` handler 无法在 `asyncio` 超时后终止后台线程，因此会在启动前明确拒绝；应改为可取消的 `async` handler，或迁移到可杀死进程组的 Custom File。URL 参数仍统一拒绝私网、环回、保留地址和云元数据地址。
 
@@ -220,5 +224,5 @@ Generated manifest 的 `permission` 同样只是 `requested_permission`。无论
 
 ## 相关页面
 
-- [NoneBot 插件集成](./plugin-integration.md) — 让 LLM 调用现有 Bot 插件
+- [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md) — 兼容调用现有 Matcher，或注册可访问 Bot/Event 的强类型工具
 - [配置参考 → model_config.json](./configuration.md#model_configjson--智能调度配置) — `use_tools`、`tool_blacklist`、`resident_plugins` 配置项

@@ -13,7 +13,7 @@ def test_group_dynamic_context_is_character_bounded(monkeypatch) -> None:
         sender=SimpleNamespace(card="tester", nickname="tester"),
     )
     context_dict.clear()
-    context_dict[2].extend(["a" * 100, "b" * 100, "current"])
+    context_dict["2"].extend(["a" * 100, "b" * 100, "current"])
     chat = MoeLlm(
         SimpleNamespace(),
         event,

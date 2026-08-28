@@ -57,6 +57,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "provider_catalog_pending_actions_enabled": True,
     "provider_catalog_search_enabled": True,
     "provider_catalog_management_enabled": True,
+    "protocol_tools_enabled": False,
+    "protocol_tools_napcat_extensions_enabled": True,
+    "protocol_tools_low_risk_direct_enabled": True,
+    "protocol_tools_business_first": True,
     "user_history_expire_seconds": 600,
     "cd_seconds": 120,
     "search_api": "your api",
@@ -196,6 +200,10 @@ class ConfigParser:
             "provider_catalog_pending_actions_enabled",
             "provider_catalog_search_enabled",
             "provider_catalog_management_enabled",
+            "protocol_tools_enabled",
+            "protocol_tools_napcat_extensions_enabled",
+            "protocol_tools_low_risk_direct_enabled",
+            "protocol_tools_business_first",
         ):
             if type(candidate.get(field)) is not bool:
                 raise ValueError(f"config.json: {field} 必须是布尔值")

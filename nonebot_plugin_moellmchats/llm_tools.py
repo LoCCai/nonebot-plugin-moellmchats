@@ -19,6 +19,11 @@ from .parallel_execution import (
     ReadOnlyParallelToolExecutor,
 )
 from .pending_actions import PendingActionError, pending_action_store
+from .protocol_broker import (
+    ProtocolExecutionError,
+    ProtocolInvocation,
+    ProtocolInvocationStatus,
+)
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
     ToolEffect,
@@ -136,11 +141,7 @@ class LlmToolsMixin:
         if runtime is None:
             return
         function = call.get("function")
-        tool_name = (
-            function.get("name", "unknown_tool")
-            if isinstance(function, Mapping)
-            else "unknown_tool"
-        )
+        tool_name = function.get("name", "unknown_tool") if isinstance(function, Mapping) else "unknown_tool"
         source = getattr(tool_view, "source", None)
         await runtime.record_tool_outcome(
             tool_name=str(tool_name),
@@ -606,10 +607,7 @@ class LlmToolsMixin:
     ) -> list:
         """执行工具调用，并更新消息列表"""
         for call in tool_calls:
-            if (
-                not call.get("function", {}).get("arguments")
-                or not str(call["function"]["arguments"]).strip()
-            ):
+            if not call.get("function", {}).get("arguments") or not str(call["function"]["arguments"]).strip():
                 call["function"]["arguments"] = "{}"
 
         parallel_result = await self._try_execute_read_only_parallel_tools(
@@ -625,24 +623,18 @@ class LlmToolsMixin:
         executable_tool_calls = tool_calls[:max_tool_calls_per_round]
         skipped_tool_calls = tool_calls[max_tool_calls_per_round:]
         if skipped_tool_calls:
-            logger.warning(
-                f"本轮工具调用数量为 {len(tool_calls)}，超过上限 "
-                f"{max_tool_calls_per_round}，将跳过超出的调用"
-            )
+            logger.warning(f"本轮工具调用数量为 {len(tool_calls)}，超过上限 {max_tool_calls_per_round}，将跳过超出的调用")
 
         content_for_history = str(result_text) if result_text else ""
         if self.emotion_flag and content_for_history:
             content_for_history, _ = parse_emotion(content_for_history)
         # 提取本次调用的所有工具名称
-        called_func_names = [
-            call.get("function", {}).get("name", "未知插件") for call in executable_tool_calls
-        ]
+        called_func_names = [call.get("function", {}).get("name", "未知插件") for call in executable_tool_calls]
         func_names_str = ", ".join(called_func_names)
 
         assistant_msg = {
             "role": "assistant",
-            "content": content_for_history.strip()
-            or f"（正在调用工具: {func_names_str}）",
+            "content": content_for_history.strip() or f"（正在调用工具: {func_names_str}）",
             "tool_calls": tool_calls,
         }
         # 仅在有思维链且非空时附加
@@ -681,17 +673,11 @@ class LlmToolsMixin:
                     and tool_view.legacy_entry is not None
                 ):
                     parameters = tool_view.legacy_entry.get("parameters")
-                elif (
-                    tool_view is not None
-                    and tool_view.route
-                    is LlmToolExecutionRoute.NONEBOT_PLUGIN
-                ):
-                    parameters = (
-                        {
-                            "properties": {"command": {"type": "string"}},
-                            "required": ["command"],
-                        }
-                    )
+                elif tool_view is not None and tool_view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN:
+                    parameters = {
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    }
                 argument_error = self._validate_tool_arguments(args, parameters)
             if argument_error:
                 await self._record_agent_tool_outcome(
@@ -716,10 +702,7 @@ class LlmToolsMixin:
 
             repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
             if self._current_tool_usage[func_name] > repeated_limit:
-                tool_result = (
-                    f"工具 {func_name} 已达到单任务重复调用上限 {repeated_limit}，"
-                    "请基于已有结果完成回答。"
-                )
+                tool_result = f"工具 {func_name} 已达到单任务重复调用上限 {repeated_limit}，请基于已有结果完成回答。"
                 send_message_list.append(
                     {
                         "role": "tool",
@@ -746,10 +729,7 @@ class LlmToolsMixin:
                     {
                         "role": "tool",
                         "tool_call_id": call["id"],
-                        "content": (
-                            f"工具 {func_name} 不在当前 generation 的工具目录中，"
-                            "已拒绝执行。"
-                        ),
+                        "content": (f"工具 {func_name} 不在当前 generation 的工具目录中，已拒绝执行。"),
                     }
                 )
                 await self._record_agent_tool_outcome(
@@ -770,13 +750,14 @@ class LlmToolsMixin:
                 decision is not None
                 and not decision.allowed
                 and decision.confirmation_required
-                and tool_view.route is LlmToolExecutionRoute.CUSTOM_TOOL
+                and tool_view.route
+                in {
+                    LlmToolExecutionRoute.CUSTOM_TOOL,
+                    LlmToolExecutionRoute.BUILTIN_PROTOCOL,
+                }
                 and tool_view.spec is not None
                 and tool_view.spec.effect is ToolEffect.MUTATING
-                and (
-                    tool_view.spec.permission != "superuser"
-                    or is_superuser
-                )
+                and (tool_view.spec.permission != "superuser" or is_superuser)
             )
             if decision is not None and not decision.allowed and not pending_transition:
                 if text_to_send:
@@ -786,9 +767,7 @@ class LlmToolsMixin:
                     {
                         "role": "tool",
                         "tool_call_id": call["id"],
-                        "content": (
-                            f"工具 {func_name} 未执行：{decision.reason}。"
-                        ),
+                        "content": (f"工具 {func_name} 未执行：{decision.reason}。"),
                     }
                 )
                 await self._record_agent_tool_outcome(
@@ -844,6 +823,83 @@ class LlmToolsMixin:
                     trace_error_type = "ToolExecutionError"
                 tool_result = search_res if search_res else "未找到相关结果"
 
+            elif tool_view.route is LlmToolExecutionRoute.BUILTIN_PROTOCOL:
+                if text_to_send:
+                    await self.send_emotion_message(text_to_send)
+                    text_to_send = ""
+                try:
+                    protocol_spec = tool_view.spec
+                    assert protocol_spec is not None
+                    async with timeout_scope(self._tool_timeout_seconds()):
+                        invocation = await protocol_spec.handler(**args)
+                    if not isinstance(invocation, ProtocolInvocation):
+                        raise TypeError("协议 Builtin 必须返回 ProtocolInvocation")
+                    rendered = render_tool_result(
+                        invocation.result,
+                        max_chars=(protocol_spec.result_limit if protocol_spec.result_limit is not None else result_limit),
+                    )
+                    if invocation.status is ProtocolInvocationStatus.WAITING_CONFIRMATION:
+                        await self.bot.send(self.event, invocation.result.text)
+                        tool_result = f"{rendered}\n[系统提示]：确认指令已直接发送给用户；不得代替用户确认或声称动作已经完成。"
+                        send_message_list.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call["id"],
+                                "content": tool_result,
+                            }
+                        )
+                        runtime = getattr(self, "agent_runtime", None)
+                        if runtime is not None:
+                            await runtime.advance(AgentRunState.WAITING_CONFIRMATION)
+                        await self._record_agent_tool_outcome(
+                            call=call,
+                            tool_view=tool_view,
+                            arguments=args,
+                            status=ToolCallStatus.WAITING_CONFIRMATION,
+                            created_at=trace_created_at,
+                            started_monotonic=trace_started_monotonic,
+                            result_preview=tool_result,
+                            confirmation_id=invocation.confirmation_nonce,
+                        )
+                        if runtime is not None:
+                            await runtime.advance(AgentRunState.EXECUTING)
+                        continue
+                    tool_result = rendered or "协议动作执行成功。"
+                    if invocation.status is ProtocolInvocationStatus.RESULT_UNKNOWN:
+                        tool_result += "\n[系统提示]：结果不确定，绝对不要自动重试此副作用动作。"
+                        self._current_tool_usage[func_name] = (
+                            config_parser.get_config(
+                                "max_repeated_tool_calls",
+                                2,
+                            )
+                            + 1
+                        )
+                except asyncio.CancelledError:
+                    await self._record_agent_tool_outcome(
+                        call=call,
+                        tool_view=tool_view,
+                        arguments=args,
+                        status=ToolCallStatus.CANCELLED,
+                        created_at=trace_created_at,
+                        started_monotonic=trace_started_monotonic,
+                        error_type="CancelledError",
+                    )
+                    raise
+                except TimeoutError:
+                    runtime_metrics.tool_timeouts += 1
+                    trace_status = ToolCallStatus.TIMED_OUT
+                    trace_error_type = "TimeoutError"
+                    tool_result = "协议 Broker 超过外层时间预算；副作用结果可能不确定，不会自动重试。"
+                except ProtocolExecutionError as error:
+                    trace_status = ToolCallStatus.REJECTED
+                    trace_error_type = "ProtocolExecutionRejected"
+                    tool_result = f"协议工具未执行：{error}"
+                except Exception:
+                    logger.error("协议 Builtin 执行失败，异常详情已安全省略")
+                    trace_status = ToolCallStatus.FAILED
+                    trace_error_type = "ProtocolExecutionError"
+                    tool_result = "协议工具执行失败，异常详情已安全省略"
+
             elif tool_view.route is LlmToolExecutionRoute.CUSTOM_TOOL:
                 if text_to_send:
                     await self.send_emotion_message(text_to_send)
@@ -888,9 +944,7 @@ class LlmToolsMixin:
                         runtime = getattr(self, "agent_runtime", None)
                         action_store = pending_action_store
                         if runtime is not None:
-                            configured_store = (
-                                runtime.coordinator.resources.pending_action_store
-                            )
+                            configured_store = runtime.coordinator.resources.pending_action_store
                             if configured_store is not None:
                                 action_store = configured_store
                         try:
@@ -908,18 +962,14 @@ class LlmToolsMixin:
                             pending_error = "PendingActionError"
                             confirmation_id = None
                         else:
-                            remaining = action_store.remaining_ttl_seconds(
-                                action
-                            )
+                            remaining = action_store.remaining_ttl_seconds(action)
                             confirmation = (
                                 f"工具 {func_name} 会修改外部状态，尚未执行。\n"
                                 f"请在 {remaining} 秒内单独发送：确认执行 {action.nonce}"
                             )
                             await self.bot.send(self.event, confirmation)
                             tool_result = (
-                                f"{confirmation}\n"
-                                "[系统提示]：确认指令已直接发送给用户，"
-                                "不得代替用户确认或声称操作已经完成。"
+                                f"{confirmation}\n[系统提示]：确认指令已直接发送给用户，不得代替用户确认或声称操作已经完成。"
                             )
                             pending_status = ToolCallStatus.WAITING_CONFIRMATION
                             pending_error = None
@@ -931,14 +981,8 @@ class LlmToolsMixin:
                                 "content": tool_result,
                             }
                         )
-                        if (
-                            runtime is not None
-                            and pending_status
-                            is ToolCallStatus.WAITING_CONFIRMATION
-                        ):
-                            await runtime.advance(
-                                AgentRunState.WAITING_CONFIRMATION
-                            )
+                        if runtime is not None and pending_status is ToolCallStatus.WAITING_CONFIRMATION:
+                            await runtime.advance(AgentRunState.WAITING_CONFIRMATION)
                         await self._record_agent_tool_outcome(
                             call=call,
                             tool_view=tool_view,
@@ -950,11 +994,7 @@ class LlmToolsMixin:
                             confirmation_id=confirmation_id,
                             error_type=pending_error,
                         )
-                        if (
-                            runtime is not None
-                            and pending_status
-                            is ToolCallStatus.WAITING_CONFIRMATION
-                        ):
+                        if runtime is not None and pending_status is ToolCallStatus.WAITING_CONFIRMATION:
                             await runtime.advance(AgentRunState.EXECUTING)
                         continue
                     async with timeout_scope(self._tool_timeout_seconds()):
@@ -968,11 +1008,7 @@ class LlmToolsMixin:
                     # The shared executor has already applied the ToolSpec-specific
                     # text and image contract. Do not override it with the global
                     # fallback below.
-                    render_limit = (
-                        spec.result_limit
-                        if spec is not None and spec.result_limit is not None
-                        else result_limit
-                    )
+                    render_limit = spec.result_limit if spec is not None and spec.result_limit is not None else result_limit
                     result_limit = None
                     result_images = list(result.images)
                     if result_images:
@@ -1034,18 +1070,14 @@ class LlmToolsMixin:
                                 _format_message_dict=self.format_message_dict,
                             )
                             if not isinstance(plugin_result, ToolResult):
-                                raise TypeError(
-                                    "NoneBot Provider handler 必须返回 ToolResult"
-                                )
+                                raise TypeError("NoneBot Provider handler 必须返回 ToolResult")
                         else:
-                            plugin_text, plugin_images = (
-                                await event_simulator.dispatch_event(
-                                    self.bot,
-                                    self.event,
-                                    command,
-                                    self.format_message_dict,
-                                    plugin_name=func_name,
-                                )
+                            plugin_text, plugin_images = await event_simulator.dispatch_event(
+                                self.bot,
+                                self.event,
+                                command,
+                                self.format_message_dict,
+                                plugin_name=func_name,
                             )
                             plugin_result = ToolResult(
                                 text=plugin_text,
@@ -1085,10 +1117,7 @@ class LlmToolsMixin:
                         self._pending_vision_images.extend(plugin_images)
                     rendered_plugin_result = render_tool_result(plugin_result)
                     if rendered_plugin_result:
-                        tool_result = (
-                            f"插件执行返回结果：\n"
-                            f"{rendered_plugin_result}{_PLUGIN_SYSTEM_HINT}"
-                        )
+                        tool_result = f"插件执行返回结果：\n{rendered_plugin_result}{_PLUGIN_SYSTEM_HINT}"
                     else:
                         tool_result = "插件已执行，但未返回有效文本。[系统提示]：如果有后续操作，请继续调用下一个工具。"
 
@@ -1127,9 +1156,7 @@ class LlmToolsMixin:
             except Exception:
                 skipped_view = None
             try:
-                skipped_arguments = json.loads(
-                    call.get("function", {}).get("arguments") or "{}"
-                )
+                skipped_arguments = json.loads(call.get("function", {}).get("arguments") or "{}")
             except Exception:
                 skipped_arguments = {}
             if not isinstance(skipped_arguments, Mapping):
@@ -1171,11 +1198,7 @@ class LlmToolsMixin:
     def _build_empty_tool_summary_fallback(self) -> str:
         tool_messages = self.messages_handler.messages_entity.tool_messages
         last_tool_result = next(
-            (
-                message.get("content", "")
-                for message in reversed(tool_messages)
-                if message.get("role") == "tool"
-            ),
+            (message.get("content", "") for message in reversed(tool_messages) if message.get("role") == "tool"),
             "",
         )
         if last_tool_result:

@@ -19,7 +19,13 @@ from typing import (
 
 from .generated_tool_lifecycle import LifecycleState
 from .tool_artifacts import ToolArtifact
-from .tool_contracts import ToolEffect, ToolPolicy, ToolSpec
+from .tool_contracts import (
+    ToolConfirmationMode,
+    ToolEffect,
+    ToolPolicy,
+    ToolSpec,
+)
+from .tool_discovery import build_compatibility_description
 
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _BUNDLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -96,13 +102,10 @@ def _legacy_value_equal(left: object, right: object) -> bool:
     """Compare a legacy JSON value before or after runtime deep-freezing."""
 
     if isinstance(left, Mapping) and isinstance(right, Mapping):
-        return set(left) == set(right) and all(
-            _legacy_value_equal(left[key], right[key]) for key in left
-        )
+        return set(left) == set(right) and all(_legacy_value_equal(left[key], right[key]) for key in left)
     if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
         return len(left) == len(right) and all(
-            _legacy_value_equal(left_item, right_item)
-            for left_item, right_item in zip(left, right, strict=True)
+            _legacy_value_equal(left_item, right_item) for left_item, right_item in zip(left, right, strict=True)
         )
     return left == right
 
@@ -252,12 +255,9 @@ class GeneratedToolResources:
             if (
                 not isinstance(artifact.bundle_id, str)
                 or not isinstance(artifact.bundle_digest, str)
-                or self.lifecycle_state.active.get(artifact.bundle_id)
-                != artifact.bundle_digest
+                or self.lifecycle_state.active.get(artifact.bundle_id) != artifact.bundle_digest
             ):
-                raise ValueError(
-                    "Generated ToolArtifact 必须精确指向 after-state active 版本"
-                )
+                raise ValueError("Generated ToolArtifact 必须精确指向 after-state active 版本")
         object.__setattr__(self, "artifacts", artifacts)
 
     def __deepcopy__(self, _memo: dict[int, object]) -> GeneratedToolResources:
@@ -280,14 +280,8 @@ class GeneratedToolResources:
                 raise TypeError("Generated source overrides 必须是映射或 None")
             overrides: list[GeneratedSourceOverride] = []
             for key, directory in source_overrides.items():
-                if (
-                    not isinstance(key, tuple)
-                    or len(key) != 2
-                    or not all(isinstance(item, str) for item in key)
-                ):
-                    raise TypeError(
-                        "Generated source override key 必须是 (bundle_id, digest)"
-                    )
+                if not isinstance(key, tuple) or len(key) != 2 or not all(isinstance(item, str) for item in key):
+                    raise TypeError("Generated source override key 必须是 (bundle_id, digest)")
                 overrides.append(
                     GeneratedSourceOverride(
                         bundle_id=key[0],
@@ -310,35 +304,23 @@ class GeneratedToolResources:
         for name in sorted(legacy_tools):
             schema = legacy_tools[name]
             if not isinstance(schema, Mapping):
-                raise TypeError(
-                    f"GeneratedToolResources legacy 工具 {name} Schema 非法"
-                )
+                raise TypeError(f"GeneratedToolResources legacy 工具 {name} Schema 非法")
             if schema.get("source") != cls.source.value:
-                raise ValueError(
-                    f"GeneratedToolResources legacy 工具 {name} source 不一致"
-                )
+                raise ValueError(f"GeneratedToolResources legacy 工具 {name} source 不一致")
             artifact = schema.get("tool_artifact")
             if not isinstance(artifact, ToolArtifact):
-                raise ValueError(
-                    f"GeneratedToolResources legacy 工具 {name} 缺少 ToolArtifact"
-                )
+                raise ValueError(f"GeneratedToolResources legacy 工具 {name} 缺少 ToolArtifact")
             if artifact.tool_name != name:
-                raise ValueError(
-                    f"GeneratedToolResources legacy 工具 {name} artifact identity 不一致"
-                )
+                raise ValueError(f"GeneratedToolResources legacy 工具 {name} artifact identity 不一致")
             artifacts.append(artifact)
         resources = cls(
             lifecycle_state=lifecycle_state,
             source_overrides=typed_overrides,
             artifacts=tuple(artifacts),
         )
-        artifact_bundles = {
-            artifact.bundle_id for artifact in resources.artifacts
-        }
+        artifact_bundles = {artifact.bundle_id for artifact in resources.artifacts}
         if artifact_bundles != set(lifecycle_state.active):
-            raise ValueError(
-                "GeneratedToolResources artifact bundle 集合与 after-state active 不一致"
-            )
+            raise ValueError("GeneratedToolResources artifact bundle 集合与 after-state active 不一致")
         return resources
 
 
@@ -374,13 +356,9 @@ class MCPToolResources:
             if not isinstance(schema, Mapping):
                 raise TypeError("MCPToolResources legacy 工具结构非法")
             if schema.get("source") != cls.source.value:
-                raise ValueError(
-                    f"MCPToolResources legacy 工具 {name} source 不一致"
-                )
+                raise ValueError(f"MCPToolResources legacy 工具 {name} source 不一致")
             if schema.get("name") != name:
-                raise ValueError(
-                    f"MCPToolResources legacy 工具 {name} identity 不一致"
-                )
+                raise ValueError(f"MCPToolResources legacy 工具 {name} identity 不一致")
             specs.append(
                 ToolSpec(
                     name=name,
@@ -460,16 +438,9 @@ class ProviderDiscoveryContext(Generic[ProviderResourcesT]):
             if mismatched:
                 raise ValueError(f"File ToolArtifact generation 与 discovery context 不一致: {sorted(mismatched)}")
         if isinstance(self.resources, GeneratedToolResources):
-            mismatched = [
-                artifact.tool_name
-                for artifact in self.resources.artifacts
-                if artifact.generation != self.generation
-            ]
+            mismatched = [artifact.tool_name for artifact in self.resources.artifacts if artifact.generation != self.generation]
             if mismatched:
-                raise ValueError(
-                    "Generated ToolArtifact generation 与 discovery context 不一致: "
-                    f"{sorted(mismatched)}"
-                )
+                raise ValueError(f"Generated ToolArtifact generation 与 discovery context 不一致: {sorted(mismatched)}")
 
     def __deepcopy__(
         self,
@@ -543,9 +514,7 @@ def _expected_result_provenance(
     source: ToolSource,
     tool_name: str,
 ) -> ToolResultProvenance:
-    if source is ToolSource.MCP or (
-        source is ToolSource.BUILTIN and tool_name == "web_search"
-    ):
+    if source is ToolSource.MCP or (source is ToolSource.BUILTIN and tool_name == "web_search"):
         return ToolResultProvenance.EXTERNAL
     if source is ToolSource.GENERATED:
         return ToolResultProvenance.UNTRUSTED
@@ -573,9 +542,7 @@ class ToolTrustDecision:
     def __post_init__(self) -> None:
         if not isinstance(self.tool_name, str) or not self.tool_name:
             raise ToolTrustPolicyError("trust decision 工具名不能为空")
-        if not isinstance(self.provider_id, str) or not _PROVIDER_ID_RE.fullmatch(
-            self.provider_id
-        ):
+        if not isinstance(self.provider_id, str) or not _PROVIDER_ID_RE.fullmatch(self.provider_id):
             raise ToolTrustPolicyError("trust decision provider_id 非法")
         if not isinstance(self.source, ToolSource) or not isinstance(
             self.trust,
@@ -585,27 +552,21 @@ class ToolTrustDecision:
         if self.trust is not trust_for_source(self.source):
             raise ToolTrustPolicyError("trust decision trust 与 source 不一致")
         if self.provider_id != _PROVIDER_ID_BY_SOURCE[self.source]:
-            raise ToolTrustPolicyError(
-                "trust decision provider_id 与 source 不一致"
-            )
+            raise ToolTrustPolicyError("trust decision provider_id 与 source 不一致")
         _require_generation(self.generation)
         if not isinstance(self.operation, ToolTrustOperation):
             raise ToolTrustPolicyError("trust decision operation 非法")
         if not isinstance(self.boundary, ToolExecutionBoundary):
             raise ToolTrustPolicyError("trust decision execution boundary 非法")
         if self.boundary is not _TRUST_BOUNDARY_BY_SOURCE[self.source]:
-            raise ToolTrustPolicyError(
-                "trust decision execution boundary 不一致"
-            )
+            raise ToolTrustPolicyError("trust decision execution boundary 不一致")
         if not isinstance(self.result_provenance, ToolResultProvenance):
             raise ToolTrustPolicyError("trust decision result provenance 非法")
         if self.result_provenance is not _expected_result_provenance(
             self.source,
             self.tool_name,
         ):
-            raise ToolTrustPolicyError(
-                "trust decision result provenance 不一致"
-            )
+            raise ToolTrustPolicyError("trust decision result provenance 不一致")
         if self.permission not in {"user", "superuser"}:
             raise ToolTrustPolicyError("trust decision permission 非法")
         if not isinstance(self.effect, ToolEffect):
@@ -617,20 +578,14 @@ class ToolTrustDecision:
             "audit_required",
         ):
             if type(getattr(self, field_name)) is not bool:
-                raise ToolTrustPolicyError(
-                    f"trust decision {field_name} 必须是 bool"
-                )
+                raise ToolTrustPolicyError(f"trust decision {field_name} 必须是 bool")
         if not isinstance(self.reason, str) or not self.reason:
             raise ToolTrustPolicyError("trust decision reason 不能为空")
         expected_compatibility = self.source is ToolSource.NONEBOT_PLUGIN
         if self.legacy_bounded_compatibility is not expected_compatibility:
-            raise ToolTrustPolicyError(
-                "trust decision legacy compatibility 不一致"
-            )
+            raise ToolTrustPolicyError("trust decision legacy compatibility 不一致")
         if expected_compatibility and self.effect is not ToolEffect.MUTATING:
-            raise ToolTrustPolicyError(
-                "NoneBot compatibility decision 必须保守标记为 mutating"
-            )
+            raise ToolTrustPolicyError("NoneBot compatibility decision 必须保守标记为 mutating")
 
     def audit_metadata(self) -> dict[str, object]:
         """Return argument-free structured fields safe for an audit event."""
@@ -649,9 +604,7 @@ class ToolTrustDecision:
             "allowed": self.allowed,
             "reason": self.reason,
             "confirmation_required": self.confirmation_required,
-            "legacy_bounded_compatibility": (
-                self.legacy_bounded_compatibility
-            ),
+            "legacy_bounded_compatibility": (self.legacy_bounded_compatibility),
             "audit_required": self.audit_required,
         }
 
@@ -664,10 +617,7 @@ class ToolTrustDenied(PermissionError):
         if not isinstance(decision, ToolTrustDecision) or decision.allowed:
             raise TypeError("ToolTrustDenied 必须绑定被拒绝的 trust decision")
         self.decision = decision
-        super().__init__(
-            f"工具 {decision.tool_name} trust policy 拒绝"
-            f" {decision.operation.value}: {decision.reason}"
-        )
+        super().__init__(f"工具 {decision.tool_name} trust policy 拒绝 {decision.operation.value}: {decision.reason}")
 
 
 @dataclass(frozen=True)
@@ -712,20 +662,25 @@ class ToolTrustPolicy:
             "legacy_bounded_compatibility",
         ):
             if type(getattr(self, field_name)) is not bool:
-                raise ToolTrustPolicyError(
-                    f"trust policy {field_name} 必须是 bool"
-                )
+                raise ToolTrustPolicyError(f"trust policy {field_name} 必须是 bool")
         expected_compatibility = self.source is ToolSource.NONEBOT_PLUGIN
         if self.legacy_bounded_compatibility is not expected_compatibility:
             raise ToolTrustPolicyError("trust policy legacy compatibility 不一致")
         if expected_compatibility and self.spec.effect is not ToolEffect.MUTATING:
-            raise ToolTrustPolicyError(
-                "NoneBot compatibility tool 必须保守标记为 mutating"
-            )
-        expected_confirmation = (
-            self.spec.effect is ToolEffect.MUTATING
-            and not expected_compatibility
-        )
+            raise ToolTrustPolicyError("NoneBot compatibility tool 必须保守标记为 mutating")
+        direct = self.spec.confirmation_mode is ToolConfirmationMode.TRUSTED_LOW_RISK_DIRECT
+        capability = self.spec.policy.effective_v2 if self.spec.policy is not None else None
+        if capability is not None and (capability.bot_read or capability.bot_send or capability.bot_manage):
+            from .builtin_tools import is_trusted_protocol_tool_spec
+
+            if self.source is not ToolSource.BUILTIN or not is_trusted_protocol_tool_spec(self.spec):
+                raise ToolTrustPolicyError("只有包内可信协议 Builtin 可声明 Bot capability")
+        if direct:
+            from .builtin_tools import is_trusted_protocol_tool_spec
+
+            if self.source is not ToolSource.BUILTIN or not is_trusted_protocol_tool_spec(self.spec):
+                raise ToolTrustPolicyError("只有包内可信协议 Builtin 可声明低风险免确认")
+        expected_confirmation = self.spec.effect is ToolEffect.MUTATING and not expected_compatibility and not direct
         if self.confirmation_required is not expected_confirmation:
             raise ToolTrustPolicyError("trust policy confirmation policy 不一致")
 
@@ -734,6 +689,7 @@ class ToolTrustPolicy:
         if not isinstance(item, DiscoveredTool):
             raise TypeError("trust policy 只能从 DiscoveredTool 构建")
         compatibility = item.source is ToolSource.NONEBOT_PLUGIN
+        direct = item.spec.confirmation_mode is ToolConfirmationMode.TRUSTED_LOW_RISK_DIRECT
         return cls(
             tool_name=item.spec.name,
             provider_id=item.provider_id,
@@ -746,9 +702,7 @@ class ToolTrustPolicy:
                 item.source,
                 item.spec.name,
             ),
-            confirmation_required=(
-                item.spec.effect is ToolEffect.MUTATING and not compatibility
-            ),
+            confirmation_required=(item.spec.effect is ToolEffect.MUTATING and not compatibility and not direct),
             legacy_bounded_compatibility=compatibility,
         )
 
@@ -770,18 +724,13 @@ class ToolTrustPolicy:
             allowed = False
             reason = "工具管理只允许超级用户"
         elif (
-            operation
-            in {ToolTrustOperation.SELECTION, ToolTrustOperation.EXECUTION}
+            operation in {ToolTrustOperation.SELECTION, ToolTrustOperation.EXECUTION}
             and self.spec.permission == "superuser"
             and not is_superuser
         ):
             allowed = False
             reason = "工具契约只允许超级用户"
-        elif (
-            operation is ToolTrustOperation.EXECUTION
-            and self.confirmation_required
-            and not confirmed
-        ):
+        elif operation is ToolTrustOperation.EXECUTION and self.confirmation_required and not confirmed:
             allowed = False
             reason = "mutating 工具尚未完成二阶段确认"
 
@@ -805,9 +754,7 @@ class ToolTrustPolicy:
             allowed=allowed,
             reason=reason,
             confirmation_required=self.confirmation_required,
-            legacy_bounded_compatibility=(
-                self.legacy_bounded_compatibility
-            ),
+            legacy_bounded_compatibility=(self.legacy_bounded_compatibility),
             audit_required=audit_required,
         )
 
@@ -866,9 +813,7 @@ class ProviderRegistration:
     trust: ToolTrustLevel
 
     def __post_init__(self) -> None:
-        if not isinstance(self.provider_id, str) or not _PROVIDER_ID_RE.fullmatch(
-            self.provider_id
-        ):
+        if not isinstance(self.provider_id, str) or not _PROVIDER_ID_RE.fullmatch(self.provider_id):
             raise ValueError("provider registration id 非法")
         if not isinstance(self.source, ToolSource):
             raise TypeError("provider registration source 必须是 ToolSource")
@@ -901,9 +846,7 @@ class ProviderDiscoveryBatch:
         if not isinstance(self.registration, ProviderRegistration):
             raise TypeError("provider discovery batch 缺少 registration")
         _require_generation(self.generation)
-        if not isinstance(self.tools, tuple) or not all(
-            isinstance(item, DiscoveredTool) for item in self.tools
-        ):
+        if not isinstance(self.tools, tuple) or not all(isinstance(item, DiscoveredTool) for item in self.tools):
             raise TypeError("provider discovery batch tools 必须是不可变发现记录")
         names: set[str] = set()
         for item in self.tools:
@@ -996,9 +939,7 @@ class ProviderCatalogSnapshot:
         if not isinstance(self.tools, Mapping):
             raise TypeError("provider catalog tools 必须是映射")
         tools = dict(self.tools)
-        tools_by_provider: dict[str, list[str]] = {
-            provider_id: [] for provider_id in registrations
-        }
+        tools_by_provider: dict[str, list[str]] = {provider_id: [] for provider_id in registrations}
         trust_policies: dict[str, ToolTrustPolicy] = {}
         capability_policies: dict[str, ToolPolicy] = {}
         for name, item in tools.items():
@@ -1009,31 +950,22 @@ class ProviderCatalogSnapshot:
             registration = registrations.get(item.provider_id)
             if registration is None:
                 raise ValueError("provider catalog 包含未注册 provider")
-            if (
-                item.source is not registration.source
-                or item.trust is not registration.trust
-            ):
+            if item.source is not registration.source or item.trust is not registration.trust:
                 raise ValueError("provider catalog tool identity 不一致")
             if item.generation != self.generation:
                 raise ValueError("provider catalog generation 不一致")
             tools_by_provider[item.provider_id].append(name)
             policy = ToolTrustPolicy.from_discovered(item)
             if policy.spec is not item.spec:
-                raise ToolTrustPolicyError(
-                    "provider catalog trust policy ToolSpec identity 不一致"
-                )
+                raise ToolTrustPolicyError("provider catalog trust policy ToolSpec identity 不一致")
             trust_policies[name] = policy
             if item.spec.policy is not None:
                 capability_policies[name] = item.spec.policy
             if item.artifact is not None:
                 if item.spec.policy is None:
-                    raise ToolCapabilityPolicyError(
-                        "artifact provider 工具缺少 capability policy"
-                    )
+                    raise ToolCapabilityPolicyError("artifact provider 工具缺少 capability policy")
                 if item.artifact.contract.contract_version not in {1, 2}:
-                    raise ToolCapabilityPolicyError(
-                        "artifact provider 工具 contract version 非法"
-                    )
+                    raise ToolCapabilityPolicyError("artifact provider 工具 contract version 非法")
 
         ordered_registrations = dict(sorted(registrations.items()))
         ordered_tools = dict(sorted(tools.items()))
@@ -1056,12 +988,7 @@ class ProviderCatalogSnapshot:
         object.__setattr__(
             self,
             "_tools_by_provider",
-            MappingProxyType(
-                {
-                    provider_id: tuple(sorted(names))
-                    for provider_id, names in sorted(tools_by_provider.items())
-                }
-            ),
+            MappingProxyType({provider_id: tuple(sorted(names)) for provider_id, names in sorted(tools_by_provider.items())}),
         )
 
     @classmethod
@@ -1084,9 +1011,7 @@ class ProviderCatalogSnapshot:
             raise ToolTrustPolicyError("trust policy 工具名不能为空")
         policy = self._trust_policies.get(tool_name)
         if policy is None:
-            raise ToolTrustPolicyError(
-                f"provider catalog 缺少工具 trust policy: {tool_name}"
-            )
+            raise ToolTrustPolicyError(f"provider catalog 缺少工具 trust policy: {tool_name}")
         return policy
 
     @property
@@ -1095,14 +1020,10 @@ class ProviderCatalogSnapshot:
 
     def capability_policy_for(self, tool_name: str) -> ToolPolicy:
         if not isinstance(tool_name, str) or not tool_name:
-            raise ToolCapabilityPolicyError(
-                "capability policy 工具名不能为空"
-            )
+            raise ToolCapabilityPolicyError("capability policy 工具名不能为空")
         policy = self._capability_policies.get(tool_name)
         if policy is None:
-            raise ToolCapabilityPolicyError(
-                f"provider catalog 工具没有 capability policy: {tool_name}"
-            )
+            raise ToolCapabilityPolicyError(f"provider catalog 工具没有 capability policy: {tool_name}")
         return policy
 
     def decide_trust(
@@ -1167,9 +1088,7 @@ class ProviderRegistry:
         operations: tuple[ProviderDiscoveryOperation, ...],
     ) -> ProviderCatalogSnapshot:
         _require_generation(generation)
-        if not isinstance(operations, tuple) or not all(
-            isinstance(item, ProviderDiscoveryOperation) for item in operations
-        ):
+        if not isinstance(operations, tuple) or not all(isinstance(item, ProviderDiscoveryOperation) for item in operations):
             raise TypeError("provider registry operations 必须是 typed plan 元组")
         expected = {item.provider_id: item for item in self.registrations}
         actual: dict[str, ProviderDiscoveryOperation] = {}
@@ -1190,11 +1109,7 @@ class ProviderRegistry:
                 f"extra={sorted(set(actual) - set(expected))}"
             )
 
-        batches = tuple(
-            await asyncio.gather(
-                *(actual[provider_id].discover_batch() for provider_id in sorted(actual))
-            )
-        )
+        batches = tuple(await asyncio.gather(*(actual[provider_id].discover_batch() for provider_id in sorted(actual))))
         return self.build_snapshot(generation, batches)
 
     def build_snapshot(
@@ -1203,9 +1118,7 @@ class ProviderRegistry:
         batches: tuple[ProviderDiscoveryBatch, ...],
     ) -> ProviderCatalogSnapshot:
         _require_generation(generation)
-        if not isinstance(batches, tuple) or not all(
-            isinstance(item, ProviderDiscoveryBatch) for item in batches
-        ):
+        if not isinstance(batches, tuple) or not all(isinstance(item, ProviderDiscoveryBatch) for item in batches):
             raise TypeError("provider registry batches 必须是 typed batch 元组")
         expected = {item.provider_id: item for item in self.registrations}
         actual: dict[str, ProviderDiscoveryBatch] = {}
@@ -1224,10 +1137,7 @@ class ProviderRegistry:
             for item in batch.tools:
                 name = item.spec.name
                 if name in tools:
-                    raise ValueError(
-                        f"provider 工具名冲突: {name} "
-                        f"({owners[name]} vs {provider_id})"
-                    )
+                    raise ValueError(f"provider 工具名冲突: {name} ({owners[name]} vs {provider_id})")
                 tools[name] = item
                 owners[name] = provider_id
         if set(actual) != set(expected):
@@ -1349,9 +1259,7 @@ class RegisteredToolProvider:
                 raise ValueError(f"registered legacy 工具 {name} dependencies 非法")
             expected_dependencies = set(spec.dependencies)
             dependencies_match = (
-                expected_dependencies <= dependencies
-                if allow_additional_dependencies
-                else expected_dependencies == dependencies
+                expected_dependencies <= dependencies if allow_additional_dependencies else expected_dependencies == dependencies
             )
             if not dependencies_match:
                 raise ValueError(f"registered legacy 工具 {name} dependencies 不一致")
@@ -1369,10 +1277,7 @@ class FileToolProvider:
         self,
         context: ProviderDiscoveryContext[FileToolResources],
     ) -> tuple[DiscoveredTool, ...]:
-        if (
-            not isinstance(context, ProviderDiscoveryContext)
-            or type(context.resources) is not FileToolResources
-        ):
+        if not isinstance(context, ProviderDiscoveryContext) or type(context.resources) is not FileToolResources:
             raise TypeError("FileToolProvider 只接受 FileToolResources")
         discovered: list[DiscoveredTool] = []
         for artifact in sorted(
@@ -1410,9 +1315,7 @@ class FileToolProvider:
         _require_generation(generation)
         if type(allow_additional_dependencies) is not bool:
             raise TypeError("allow_additional_dependencies 必须是 bool")
-        if not isinstance(discovered, tuple) or not all(
-            isinstance(item, DiscoveredTool) for item in discovered
-        ):
+        if not isinstance(discovered, tuple) or not all(isinstance(item, DiscoveredTool) for item in discovered):
             raise TypeError("custom-file discovery 必须是 DiscoveredTool 元组")
         if not isinstance(legacy_tools, Mapping) or not isinstance(
             legacy_dependencies,
@@ -1440,9 +1343,7 @@ class FileToolProvider:
         actual_names = {
             name
             for name, schema in legacy_tools.items()
-            if isinstance(name, str)
-            and isinstance(schema, Mapping)
-            and schema.get("source") == self.source.value
+            if isinstance(name, str) and isinstance(schema, Mapping) and schema.get("source") == self.source.value
         }
         expected_names = set(expected)
         if actual_names != expected_names:
@@ -1469,27 +1370,13 @@ class FileToolProvider:
             if artifact.artifact_version == 2:
                 expected_schema.update(
                     {
-                        "tool_contract_version": (
-                            artifact.contract.contract_version
-                        ),
+                        "tool_contract_version": (artifact.contract.contract_version),
                         "artifact_digest_version": artifact.artifact_version,
-                        "requested_capabilities": (
-                            artifact.contract.requested_capabilities
-                        ),
-                        "detected_capabilities": (
-                            artifact.contract.detected_capabilities
-                        ),
-                        "admin_capabilities": (
-                            artifact.contract.admin_capabilities
-                        ),
-                        "effective_capabilities": (
-                            artifact.contract.effective_capabilities
-                        ),
-                        "capability_policy": (
-                            spec.policy.capability_contract()
-                            if spec.policy is not None
-                            else None
-                        ),
+                        "requested_capabilities": (artifact.contract.requested_capabilities),
+                        "detected_capabilities": (artifact.contract.detected_capabilities),
+                        "admin_capabilities": (artifact.contract.admin_capabilities),
+                        "effective_capabilities": (artifact.contract.effective_capabilities),
+                        "capability_policy": (spec.policy.capability_contract() if spec.policy is not None else None),
                     }
                 )
             if set(schema) != set(expected_schema):
@@ -1509,9 +1396,7 @@ class FileToolProvider:
                     schema.get(field_name),
                     expected_schema[field_name],
                 ):
-                    raise ValueError(
-                        f"custom-file legacy 工具 {name} {field_name} 不一致"
-                    )
+                    raise ValueError(f"custom-file legacy 工具 {name} {field_name} 不一致")
             artifact.verify(
                 expected_artifact_digest=artifact.artifact_digest,
                 expected_bundle_digest=None,
@@ -1519,15 +1404,11 @@ class FileToolProvider:
             )
 
             dependencies = legacy_dependencies.get(name, set())
-            if not isinstance(dependencies, AbstractSet) or not all(
-                isinstance(item, str) for item in dependencies
-            ):
+            if not isinstance(dependencies, AbstractSet) or not all(isinstance(item, str) for item in dependencies):
                 raise ValueError(f"custom-file legacy 工具 {name} dependencies 非法")
             expected_dependencies = set(spec.dependencies)
             dependencies_match = (
-                expected_dependencies <= dependencies
-                if allow_additional_dependencies
-                else expected_dependencies == dependencies
+                expected_dependencies <= dependencies if allow_additional_dependencies else expected_dependencies == dependencies
             )
             if not dependencies_match:
                 raise ValueError(f"custom-file legacy 工具 {name} dependencies 不一致")
@@ -1545,18 +1426,11 @@ class GeneratedToolProvider:
         self,
         context: ProviderDiscoveryContext[GeneratedToolResources],
     ) -> tuple[DiscoveredTool, ...]:
-        if (
-            not isinstance(context, ProviderDiscoveryContext)
-            or type(context.resources) is not GeneratedToolResources
-        ):
+        if not isinstance(context, ProviderDiscoveryContext) or type(context.resources) is not GeneratedToolResources:
             raise TypeError("GeneratedToolProvider 只接受 GeneratedToolResources")
-        artifact_bundles = {
-            artifact.bundle_id for artifact in context.resources.artifacts
-        }
+        artifact_bundles = {artifact.bundle_id for artifact in context.resources.artifacts}
         if artifact_bundles != set(context.resources.lifecycle_state.active):
-            raise ValueError(
-                "Generated discovery artifact bundle 集合与 after-state active 不一致"
-            )
+            raise ValueError("Generated discovery artifact bundle 集合与 after-state active 不一致")
         discovered: list[DiscoveredTool] = []
         for artifact in sorted(
             context.resources.artifacts,
@@ -1594,9 +1468,7 @@ class GeneratedToolProvider:
         _require_generation(generation)
         if type(allow_additional_dependencies) is not bool:
             raise TypeError("allow_additional_dependencies 必须是 bool")
-        if not isinstance(discovered, tuple) or not all(
-            isinstance(item, DiscoveredTool) for item in discovered
-        ):
+        if not isinstance(discovered, tuple) or not all(isinstance(item, DiscoveredTool) for item in discovered):
             raise TypeError("generated discovery 必须是 DiscoveredTool 元组")
         if not isinstance(legacy_tools, Mapping) or not isinstance(
             legacy_dependencies,
@@ -1624,9 +1496,7 @@ class GeneratedToolProvider:
         actual_names = {
             name
             for name, schema in legacy_tools.items()
-            if isinstance(name, str)
-            and isinstance(schema, Mapping)
-            and schema.get("source") == self.source.value
+            if isinstance(name, str) and isinstance(schema, Mapping) and schema.get("source") == self.source.value
         }
         expected_names = set(expected)
         if actual_names != expected_names:
@@ -1667,11 +1537,7 @@ class GeneratedToolProvider:
                         "artifact_digest_version": artifact.artifact_version,
                         "detected_capabilities": contract.detected_capabilities,
                         "admin_capabilities": contract.admin_capabilities,
-                        "capability_policy": (
-                            spec.policy.capability_contract()
-                            if spec.policy is not None
-                            else None
-                        ),
+                        "capability_policy": (spec.policy.capability_contract() if spec.policy is not None else None),
                     }
                 )
             if set(schema) != set(expected_schema):
@@ -1691,9 +1557,7 @@ class GeneratedToolProvider:
                     schema.get(field_name),
                     expected_schema[field_name],
                 ):
-                    raise ValueError(
-                        f"generated legacy 工具 {name} {field_name} 不一致"
-                    )
+                    raise ValueError(f"generated legacy 工具 {name} {field_name} 不一致")
             artifact.verify(
                 expected_artifact_digest=artifact.artifact_digest,
                 expected_bundle_digest=artifact.bundle_digest,
@@ -1701,15 +1565,11 @@ class GeneratedToolProvider:
             )
 
             dependencies = legacy_dependencies.get(name, set())
-            if not isinstance(dependencies, AbstractSet) or not all(
-                isinstance(item, str) for item in dependencies
-            ):
+            if not isinstance(dependencies, AbstractSet) or not all(isinstance(item, str) for item in dependencies):
                 raise ValueError(f"generated legacy 工具 {name} dependencies 非法")
             expected_dependencies = set(spec.dependencies)
             dependencies_match = (
-                expected_dependencies <= dependencies
-                if allow_additional_dependencies
-                else expected_dependencies == dependencies
+                expected_dependencies <= dependencies if allow_additional_dependencies else expected_dependencies == dependencies
             )
             if not dependencies_match:
                 raise ValueError(f"generated legacy 工具 {name} dependencies 不一致")
@@ -1727,10 +1587,7 @@ class MCPToolProvider:
         self,
         context: ProviderDiscoveryContext[MCPToolResources],
     ) -> tuple[DiscoveredTool, ...]:
-        if (
-            not isinstance(context, ProviderDiscoveryContext)
-            or type(context.resources) is not MCPToolResources
-        ):
+        if not isinstance(context, ProviderDiscoveryContext) or type(context.resources) is not MCPToolResources:
             raise TypeError("MCPToolProvider 只接受 MCPToolResources")
         return tuple(
             DiscoveredTool(
@@ -1761,18 +1618,14 @@ class MCPToolProvider:
         _require_generation(generation)
         if type(allow_additional_dependencies) is not bool:
             raise TypeError("allow_additional_dependencies 必须是 bool")
-        if not isinstance(discovered, tuple) or not all(
-            isinstance(item, DiscoveredTool) for item in discovered
-        ):
+        if not isinstance(discovered, tuple) or not all(isinstance(item, DiscoveredTool) for item in discovered):
             raise TypeError("mcp discovery 必须是 DiscoveredTool 元组")
         if not isinstance(legacy_tools, Mapping) or not isinstance(
             legacy_dependencies,
             Mapping,
         ):
             raise TypeError("mcp legacy parity 输入必须是映射")
-        if not isinstance(legacy_mcp_names, AbstractSet) or not all(
-            isinstance(name, str) for name in legacy_mcp_names
-        ):
+        if not isinstance(legacy_mcp_names, AbstractSet) or not all(isinstance(name, str) for name in legacy_mcp_names):
             raise TypeError("mcp legacy tool names 必须是字符串集合")
 
         expected: dict[str, ToolSpec] = {}
@@ -1793,9 +1646,7 @@ class MCPToolProvider:
         actual_names = {
             name
             for name, schema in legacy_tools.items()
-            if isinstance(name, str)
-            and isinstance(schema, Mapping)
-            and schema.get("source") == self.source.value
+            if isinstance(name, str) and isinstance(schema, Mapping) and schema.get("source") == self.source.value
         }
         expected_names = set(expected)
         if actual_names != expected_names:
@@ -1832,20 +1683,14 @@ class MCPToolProvider:
                     schema.get(field_name),
                     expected_schema[field_name],
                 ):
-                    raise ValueError(
-                        f"mcp legacy 工具 {name} {field_name} 不一致"
-                    )
+                    raise ValueError(f"mcp legacy 工具 {name} {field_name} 不一致")
 
             dependencies = legacy_dependencies.get(name, set())
-            if not isinstance(dependencies, AbstractSet) or not all(
-                isinstance(item, str) for item in dependencies
-            ):
+            if not isinstance(dependencies, AbstractSet) or not all(isinstance(item, str) for item in dependencies):
                 raise ValueError(f"mcp legacy 工具 {name} dependencies 非法")
             expected_dependencies = set(spec.dependencies)
             dependencies_match = (
-                expected_dependencies <= dependencies
-                if allow_additional_dependencies
-                else expected_dependencies == dependencies
+                expected_dependencies <= dependencies if allow_additional_dependencies else expected_dependencies == dependencies
             )
             if not dependencies_match:
                 raise ValueError(f"mcp legacy 工具 {name} dependencies 不一致")
@@ -1863,10 +1708,7 @@ class BuiltinToolProvider:
         self,
         context: ProviderDiscoveryContext[BuiltinToolResources],
     ) -> tuple[DiscoveredTool, ...]:
-        if (
-            not isinstance(context, ProviderDiscoveryContext)
-            or type(context.resources) is not BuiltinToolResources
-        ):
+        if not isinstance(context, ProviderDiscoveryContext) or type(context.resources) is not BuiltinToolResources:
             raise TypeError("BuiltinToolProvider 只接受 BuiltinToolResources")
         return tuple(
             DiscoveredTool(
@@ -1896,13 +1738,9 @@ class BuiltinToolProvider:
         _require_generation(generation)
         if type(allow_additional_dependencies) is not bool:
             raise TypeError("allow_additional_dependencies 必须是 bool")
-        if not isinstance(discovered, tuple) or not all(
-            isinstance(item, DiscoveredTool) for item in discovered
-        ):
+        if not isinstance(discovered, tuple) or not all(isinstance(item, DiscoveredTool) for item in discovered):
             raise TypeError("builtin discovery 必须是 DiscoveredTool 元组")
-        if not isinstance(legacy_specs, tuple) or not all(
-            isinstance(spec, ToolSpec) for spec in legacy_specs
-        ):
+        if not isinstance(legacy_specs, tuple) or not all(isinstance(spec, ToolSpec) for spec in legacy_specs):
             raise TypeError("builtin legacy specs 必须是 ToolSpec 元组")
         if not isinstance(legacy_dependencies, Mapping):
             raise TypeError("builtin legacy dependencies 必须是映射")
@@ -1940,20 +1778,14 @@ class BuiltinToolProvider:
             if actual[name] is not spec:
                 raise ValueError(f"builtin legacy 工具 {name} ToolSpec 不一致")
             dependencies = legacy_dependencies.get(name, set())
-            if not isinstance(dependencies, AbstractSet) or not all(
-                isinstance(item, str) for item in dependencies
-            ):
+            if not isinstance(dependencies, AbstractSet) or not all(isinstance(item, str) for item in dependencies):
                 raise ValueError(f"builtin legacy 工具 {name} dependencies 非法")
             expected_dependencies = set(spec.dependencies)
             dependencies_match = (
-                expected_dependencies <= dependencies
-                if allow_additional_dependencies
-                else expected_dependencies == dependencies
+                expected_dependencies <= dependencies if allow_additional_dependencies else expected_dependencies == dependencies
             )
             if not dependencies_match:
-                raise ValueError(
-                    f"builtin legacy 工具 {name} dependencies 不一致"
-                )
+                raise ValueError(f"builtin legacy 工具 {name} dependencies 不一致")
 
 
 @dataclass(frozen=True)
@@ -1968,13 +1800,8 @@ class NoneBotPluginProvider:
         self,
         context: ProviderDiscoveryContext[NoneBotPluginToolResources],
     ) -> tuple[DiscoveredTool, ...]:
-        if (
-            not isinstance(context, ProviderDiscoveryContext)
-            or type(context.resources) is not NoneBotPluginToolResources
-        ):
-            raise TypeError(
-                "NoneBotPluginProvider 只接受 NoneBotPluginToolResources"
-            )
+        if not isinstance(context, ProviderDiscoveryContext) or type(context.resources) is not NoneBotPluginToolResources:
+            raise TypeError("NoneBotPluginProvider 只接受 NoneBotPluginToolResources")
         return tuple(
             DiscoveredTool(
                 provider_id=self.provider_id,
@@ -2003,9 +1830,7 @@ class NoneBotPluginProvider:
         _require_generation(generation)
         if type(allow_additional_dependencies) is not bool:
             raise TypeError("allow_additional_dependencies 必须是 bool")
-        if not isinstance(discovered, tuple) or not all(
-            isinstance(item, DiscoveredTool) for item in discovered
-        ):
+        if not isinstance(discovered, tuple) or not all(isinstance(item, DiscoveredTool) for item in discovered):
             raise TypeError("nonebot-plugin discovery 必须是 DiscoveredTool 元组")
         if not isinstance(legacy_info, Mapping) or not isinstance(
             legacy_dependencies,
@@ -2045,40 +1870,20 @@ class NoneBotPluginProvider:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} source 不一致")
             if entry.get("tool_spec") is not spec:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} ToolSpec 不一致")
-            description = (
-                f"插件名称：{(entry.get('name') or name)!s}。"
-                f"功能描述：{(entry.get('description') or '无描述')!s}。"
-                f"原始用法说明：{(entry.get('usage') or '无用法说明')!s}"
-            )
+            description = build_compatibility_description(name, entry)
             if spec.description != description:
-                raise ValueError(
-                    f"nonebot-plugin legacy 工具 {name} description 不一致"
-                )
-            if (
-                spec.permission != "user"
-                or spec.effect is not ToolEffect.MUTATING
-                or not callable(spec.handler)
-            ):
-                raise ValueError(
-                    f"nonebot-plugin legacy 工具 {name} 兼容契约不一致"
-                )
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} description 不一致")
+            if spec.permission != "user" or spec.effect is not ToolEffect.MUTATING or not callable(spec.handler):
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} 兼容契约不一致")
             dependencies = legacy_dependencies.get(name, set())
-            if not isinstance(dependencies, AbstractSet) or not all(
-                isinstance(item, str) for item in dependencies
-            ):
-                raise ValueError(
-                    f"nonebot-plugin legacy 工具 {name} dependencies 非法"
-                )
+            if not isinstance(dependencies, AbstractSet) or not all(isinstance(item, str) for item in dependencies):
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} dependencies 非法")
             expected_dependencies = set(spec.dependencies)
             dependencies_match = (
-                expected_dependencies <= dependencies
-                if allow_additional_dependencies
-                else expected_dependencies == dependencies
+                expected_dependencies <= dependencies if allow_additional_dependencies else expected_dependencies == dependencies
             )
             if not dependencies_match:
-                raise ValueError(
-                    f"nonebot-plugin legacy 工具 {name} dependencies 不一致"
-                )
+                raise ValueError(f"nonebot-plugin legacy 工具 {name} dependencies 不一致")
 
 
 registered_tool_provider = RegisteredToolProvider()

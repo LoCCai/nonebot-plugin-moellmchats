@@ -8,11 +8,18 @@ from typing import Annotated, get_args, get_origin, get_type_hints
 
 import aiohttp
 import nonebot
-from nonebot.adapters.onebot.v11 import MessageSegment
 from nonebot.log import logger
 
 from .config import config_parser, config_path
 from .member_cache import member_name_cache
+from .onebot_facade import (
+    bot_self_id,
+    event_group_id,
+    event_message,
+    event_sender_name,
+    event_user_id,
+    message_segments,
+)
 
 try:
     import tomllib
@@ -130,9 +137,7 @@ def load_replies_candidate() -> dict[str, tuple[str, ...]]:
     result: dict[str, tuple[str, ...]] = {}
     for key in ("hello", "poke"):
         values = data.get(key)
-        if not isinstance(values, list) or not values or not all(
-            isinstance(value, str) and value for value in values
-        ):
+        if not isinstance(values, list) or not values or not all(isinstance(value, str) and value for value in values):
             raise ValueError(f"replies.toml: {key} 必须是非空字符串数组")
         result[key] = tuple(values)
     return result
@@ -193,7 +198,15 @@ def get_emotions_names() -> list:
 
 
 # 获取具体表情包
-def get_emotion(emoji_name: str) -> MessageSegment:
+def get_emotion(
+    emoji_name: str,
+    *,
+    protocol: str = "onebot_v11",
+):
+    if protocol == "onebot_v12":
+        # Optional local emotions are paths/bytes, not v12 implementation-owned
+        # file_id values.  Skip the attachment without failing the main reply.
+        return None
     path = Path(config_parser.get_config("emotions_dir")) / emoji_name
     emotion_image_list = list(path.glob("*"))
     if not emotion_image_list:
@@ -202,6 +215,8 @@ def get_emotion(emoji_name: str) -> MessageSegment:
     try:
         with open(image, "rb") as f:
             img = f.read()
+            from nonebot.adapters.onebot.v11 import MessageSegment
+
             return MessageSegment.image(img)
     except OSError:
         logger.warning(format_exc())
@@ -212,14 +227,20 @@ def get_emotion(emoji_name: str) -> MessageSegment:
 def format_context_message(event) -> dict:
     """Extract ordinary group context without OneBot API or reply lookups."""
     text_message = []
-    for segment in event.get_message():
+    nested_self = getattr(event, "self", None)
+    self_id = getattr(event, "self_id", None) or getattr(
+        nested_self,
+        "user_id",
+        None,
+    )
+    for segment in message_segments(event):
         if segment.type == "text":
             text_message.append(segment.data.get("text", ""))
         elif segment.type == "image":
             text_message.append("[图片]")
-        elif segment.type == "at":
-            qq = str(segment.data.get("qq", ""))
-            if qq and qq != str(event.self_id):
+        elif segment.type in {"at", "mention"}:
+            qq = str(segment.data.get("qq") if segment.type == "at" else segment.data.get("user_id", ""))
+            if qq and qq != str(self_id):
                 text_message.append(f"@{qq}")
     return {"text": text_message}
 
@@ -228,48 +249,68 @@ async def format_message(event, bot) -> dict:
     text_message = []
     reply_text = ""
     image_urls = []
+    image_file_ids = []
     mentions = []
     reply_user = None
-    sender = event.sender
+    current_user_id = event_user_id(event)
     current_user = {
-        "qq": str(getattr(sender, "user_id", getattr(event, "user_id", ""))),
-        "name": getattr(sender, "card", None)
-        or getattr(sender, "nickname", None)
-        or str(getattr(sender, "user_id", getattr(event, "user_id", ""))),
+        "qq": current_user_id,
+        "name": event_sender_name(event),
     }
 
     # 1. 处理回复消息
     if reply := getattr(event, "reply", None):
         reply_segments = []
-        for seg in event.reply.message:
-            if seg.type == "text":
-                reply_segments.append(seg.data.get("text", ""))
-            elif seg.type == "image":
-                reply_segments.append("[图片]")
-            elif seg.type == "at":
-                reply_segments.append("[提及]")
+        reply_message = getattr(reply, "message", None)
+        if reply_message is not None:
+            for seg in reply_message:
+                if seg.type == "text":
+                    reply_segments.append(seg.data.get("text", ""))
+                elif seg.type == "image":
+                    reply_segments.append("[图片]")
+                elif seg.type in {"at", "mention"}:
+                    reply_segments.append("[提及]")
+            for seg in reply_message:
+                if seg.type != "image":
+                    continue
+                if url := seg.data.get("url"):
+                    image_urls.append(url)
+                elif file_id := seg.data.get("file_id"):
+                    image_file_ids.append(str(file_id))
+        else:
+            reply_id = getattr(reply, "message_id", None)
+            if reply_id is not None:
+                reply_segments.append(f"[回复消息 {reply_id}]")
         reply_text = "".join(reply_segments).strip()
+        reply_sender = getattr(reply, "sender", None)
+        reply_user_id = str(getattr(reply_sender, "user_id", None) or getattr(reply, "user_id", ""))
+        reply_name = getattr(reply_sender, "card", None) or getattr(reply_sender, "nickname", None)
+        if not reply_name and reply_user_id and event_group_id(event) is not None:
+            reply_name = await get_member_name(
+                event_group_id(event),
+                reply_user_id,
+                bot,
+            )
         reply_user = {
-            "qq": str(getattr(reply.sender, "user_id", "")),
-            "name": reply.sender.card or reply.sender.nickname,
+            "qq": reply_user_id,
+            "name": reply_name or reply_user_id or "被引用者",
         }
 
-        for seg in reply.message:
-            if seg.type == "image" and (url := seg.data.get("url")):
-                image_urls.append(url)
-
     # 2. 处理当前消息
-    for msgseg in event.get_message():
-        if msgseg.type == "at":
-            qq = str(msgseg.data.get("qq"))
-            if qq != str(bot.self_id):
-                name = await get_member_name(event.group_id, qq, bot)
+    group_id = event_group_id(event)
+    for msgseg in event_message(event):
+        if msgseg.type in {"at", "mention"}:
+            qq = str(msgseg.data.get("qq") if msgseg.type == "at" else msgseg.data.get("user_id"))
+            if qq != bot_self_id(bot, event):
+                name = await get_member_name(group_id, qq, bot) if group_id is not None else qq
                 mentions.append({"qq": qq, "name": name})
                 text_message.append(name)
         elif msgseg.type == "image":
             text_message.append("[图片]")
             if url := msgseg.data.get("url"):
                 image_urls.append(url)
+            elif file_id := msgseg.data.get("file_id"):
+                image_file_ids.append(str(file_id))
         elif msgseg.type == "face":
             pass
         elif msgseg.type == "text":
@@ -283,13 +324,18 @@ async def format_message(event, bot) -> dict:
         "text": text_message,
         "reply": reply_text,
         "images": image_urls,
+        "image_file_ids": image_file_ids,
         "mentions": mentions,
         "reply_user": reply_user,
         "current_user": current_user,
     }
 
 
-async def get_member_name(group: int, sender_id: int, bot) -> str:  # 将QQ号转换成昵称
+async def get_member_name(
+    group: int | str,
+    sender_id: int | str,
+    bot,
+) -> str:  # 将QQ号转换成昵称
     return await member_name_cache.get(bot, group, sender_id)
 
 

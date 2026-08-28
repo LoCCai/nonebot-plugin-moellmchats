@@ -299,6 +299,10 @@ class AgentRequestIdentity:
         display_name = _display_name(getattr(sender, "card", None))
         if display_name is None:
             display_name = _display_name(getattr(sender, "nickname", None))
+        if display_name is None:
+            from .onebot_facade import event_sender_name
+
+            display_name = _display_name(event_sender_name(event))
         return cls(
             platform=platform,
             platform_user_id=platform_user_id,

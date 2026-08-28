@@ -11,7 +11,7 @@
 
 - [🚀 核心特性](#-核心特性)
 - [📦 安装](#-安装)
-- [⚙️ 配置](#️-配置)
+- [⚙️ 配置](#-配置)
 - [🎮 使用](#-使用)
 - [🔄 处理流程](#-处理流程)
 - [更新日志](#更新日志)
@@ -33,9 +33,11 @@
 
 - **多模态视觉支持**：支持识别用户发送/引用的图片，以及工具调用中插件返回的图片（需配置视觉模型如GPT-4o）；有图片时强制调用视觉模型，纯文本任务自动回到普通模型以节省成本；历史记录自动回退为纯文本，大幅节省Token
 
-- **极省Token的工具调用架构（Function Calling）**：预分类-后注入两阶段设计，仅在需要时将对应Tool Schema注入主模型；支持编写原生Python工具（`custom_tools/`）；支持覆写NoneBot插件描述（`custom_plugin_info.json`）
+- **完整紧凑目录 + 命中后展开（Function Calling）**：优先复用 PicMenu/QWeb 内存目录或 `PluginMetadata.extra.menu_data` 判断功能意图，只把命中插件的详细 Tool Schema 注入主模型；`resident_plugins` 仅作强制注入/诊断兜底，也支持原生 Python 工具与人工覆写
 
-- **分步 Agent 与二阶段确认**：每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；变更型工具首次调用只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消
+- **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
+
+- **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
 
 - **运行快照热重载**：配置、模型、人设、回复、工具描述、自定义工具、MCP 与表情索引支持 2 秒低频检测和 `重载LLM`；候选先完整校验，再原子发布到当前进程，坏文件会继续沿用上一代快照
 
@@ -49,15 +51,16 @@
 
 ## 📦 安装
 
-当前已接管的 0.25 维护线位于 GitHub
-`feat/generated-tool-bundles`。Milestone A、B 与 C-01～C-07 已在本地工作树实现；此前基线曾通过完整本地门禁，但最新 OS 隔离增量（UTS/socket/keyring/xattr）尚未完成全量复跑，因此当前仍是 **Unreleased、待复核** 的开发状态。增量尚未提交，也尚未取得首次远端聚合 `release-gate` green。远端 `master` 未包含本文描述的开发版。生产项目应提交锁文件，将 Git 依赖固定到经过验证的确定提交，不要把可移动的分支头或本地脏工作树当作发布版。
+截至 2026-08-28，进入 0.26.0 协议阶段前最后一个完成精确 push/PR 双门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，对应 run `33134760223` / `33134761967`；`bbc3963…` 只是更早的历史实现点。0.26.0 的精确源码提交和门禁状态以 [K 阶段实施状态](docs/规划/08-onebot-napcat-protocol-tools.md) 为准，不能把移动分支或本地脏工作树称为候选制品。不要把上游或默认 `master` 当成本轮集成 base；PyPI 是否已有 0.26.0 也必须独立核对。
+
+这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
 ### 使用 uv 安装（推荐）
 
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@feat/generated-tool-bundles"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
 ```
 
 ### 使用 pip 安装
@@ -65,7 +68,7 @@ uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugi
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-pip install "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@feat/generated-tool-bundles"
+pip install "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
 ```
 
 
@@ -101,7 +104,7 @@ COMMAND_START=["/",""]   # 可选
 | `config.json` | 手动 | 基础行为、队列、预算、热重载与兼容投递 | 自动或 `重载LLM` |
 | `model_config.json` | 指令/手动 | MoE调度、视觉/工具开关，支持指令实时切换 | 指令实时；手动自动重载 |
 | `temperaments.json` | 手动 | 性格预设的system prompt | 自动或 `重载LLM` |
-| `custom_plugin_info.json` | 手动 | 覆写NoneBot插件描述以提升LLM调用精准度 | 自动或 `重载LLM` |
+| `custom_plugin_info.json` | 手动 | 自动菜单不足时，完整覆写 NoneBot 插件发现说明与依赖 | 自动、`刷新工具` 或 `重载LLM` |
 | `custom_tools/` | 手动 | 原生Python函数，供LLM直接调用 | 自动、`刷新工具` 或 `重载LLM` |
 | `generated_tools/lifecycle_state.json` | 系统/超管指令 | schema v3 canonical 生命周期、digest-bound evidence、活动版本与精确版本授权；兼容读取 v2 | 生命周期推进及批准、拒绝、授权、停用、回滚时提交 |
 | `generated_tools/drafts/`、`versions/` | 系统/超管指令 | 草稿与按完整 SHA-256 保存的只读版本 | 由生命周期指令管理 |
@@ -109,9 +112,9 @@ COMMAND_START=["/",""]   # 可选
 
 启动和重载时会收紧 LocalStore 配置树权限：归属当前进程的配置目录为 `0700`，配置、凭据、草稿和权限策略文件为 `0600`；已批准的不可变版本目录/文件保持 `0500` / `0400`。这套保护依赖 POSIX 的 UID、mode bit 与安全 `chmod(..., follow_symlinks=False)` 语义；当前不支持 Windows，平台不能提供这些保证时会 fail closed。受保护配置路径发现符号链接、非当前用户所有或非普通文件/目录时也会拒绝加载或写入，不会通过强制 `chmod` 绕过。文件/生成工具的完整隔离路径还要求 Linux。
 
-**[→ 完整配置参考（含所有字段说明与示例）请见 docs 配置文档](docs/configuration.md)**
+**[→ 完整配置参考（含所有字段说明与示例）](docs/configuration.md)**
 
-其他文档页面：[自定义工具开发](docs/custom-tools.md) · [插件集成](docs/plugin-integration.md) · [性格系统](docs/personality.md)
+文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)
 
 ## 🎮 使用
 
@@ -196,27 +199,27 @@ schema v3 中的 `DraftEvidence` 是 canonical、绑定草稿 digest 并纳入 l
 
 ```mermaid
 flowchart TD
-    A[用户提问] --> B{冷却/队列检测}
-    B -->|通过| C{MoE / 工具 / 联网<br>任一开启?}
-
-    C -->|是| C_Cond[一次分类请求：<br>候选工具 + 视觉需求 + 难度级别]
-    C -->|否| D
-    C_Cond --> D
-
-    D[只组装所需工具信息<br>并选择视觉 / MoE / 当前聊天模型] --> E((大模型生成回复))
-
-    E --> F{是否触发工具调用?}
-
-    F -->|是| G{工具是否会变更外部状态?}
-    G -->|否| H[执行一个文件/生成/可信工具<br>NoneBot插件 / MCP / 联网搜索]
-    G -->|是| J[只生成一次性确认码，不执行]
-    J --> K{用户在原会话另发<br>确认执行 / 取消执行}
-    K -->|确认且绑定信息有效| N[单独执行并直接回传结果]
-    K -->|取消 / 过期 / 已重载| L[不执行]
-    H --> M[有界工具 observation 追加至对话]
-    M -->|携带执行结果闭环重试| E
-
-    F -->|否| I[发送最终响应文本]
+    A[用户提问] --> B[冷却与全局/用户有界准入]
+    B --> C[固定 RuntimeSnapshot、单一 Deadline<br>并创建 AgentRun]
+    C --> D{MoE / 工具 / 联网<br>任一开启?}
+    D -->|是| E[一次分类：难度、视觉、候选工具]
+    D -->|否| F
+    E --> F[按视觉 > MoE > selected 选模<br>物化最小 Tool Schema]
+    F --> G((调用聊天模型))
+    G --> H{返回 tool_calls?}
+    H -->|否| I[发送最终回复并记录 Usage/Audit]
+    H -->|是| J{整批满足显式受信<br>只读并行契约?}
+    J -->|是| K[同代 worker pool 并行执行]
+    J -->|否| L[标准路径只处理第一个工具]
+    L --> M{具备显式 mutating<br>确认契约?}
+    M -->|否| N[执行只读工具或有界兼容适配器]
+    M -->|是| O[只创建一次性 PendingAction，不执行]
+    O --> P{原用户在原会话<br>确认 / 取消}
+    P -->|确认且绑定有效| Q[单独执行并直接回传]
+    P -->|取消 / 过期 / 代际变化| R[不执行]
+    K --> S[规范化有界 ToolResult]
+    N --> S
+    S -->|作为 observation 继续闭环| G
 ```
 
 **核心机制说明**
@@ -230,6 +233,10 @@ flowchart TD
 4. **Token消耗降低**：动态Schema注入，日常聊天不携带工具说明，仅在触发特定任务时按需加载对应插件的Schema
 
 5. **安全权限合并**：Generated Tool 的五字段 capability 只是申请，实际权限取申请值和管理策略的交集；当前安全上限只开放私有 workspace，`network`、`process`、`host_filesystem`、`secrets` 不会因模型在 manifest 中声明 `true` 而被放开
+
+6. **默认串行、显式并行**：标准安装未配置 Trusted Runner Pool 和只读 Tool Graph，所以每轮只执行第一个工具；只有程序化集成明确提供同代 allowlist、依赖图和 worker pool，且整批都是通过权限/信任校验的强类型只读工具时才并行
+
+完整状态机、模型优先级、缓存、确认绑定和默认 Memory/可选后端边界见[调度链路与运行时架构](docs/runtime-architecture.md)。
 
 ## 更新日志
 

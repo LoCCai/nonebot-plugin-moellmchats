@@ -204,8 +204,11 @@ class ModelSelector:
 # api_key: API 密钥，自动补齐 Bearer。支持字符串或字符串列表随机轮询。
 # proxy: [可选] 该服务商的全局代理
 # models: [可选] 手动补充的模型列表。若API不支持 /models 自动获取，或获取不全时可在这里手动指定作为补充。
-# extra_payload: [可选] 字典格式。用于透传厂商特有参数（如 Gemini 的 thinking_config ）。
-#                该字典下的内容会直接合并到发送给 API 的请求根 JSON 中。
+# extra_payload: [可选] 字典格式。必须写在 global_default、default_config、
+#                config_groups 或 model_configs 的模型参数层中；写在 provider 根层不会生效。
+#                内容会浅合并到发送给 API 的请求根 JSON，请勿覆盖 model/messages/tools/stream。
+# 注意：下方 sk-xxxxxx 也是非空值；真实 Driver 启动时会尝试访问示例 Provider 的 /models。
+#       正式启动前请删除未使用的 Provider，并替换保留项的地址、密钥和模型列表。
 # 【全局默认配置】（所有供应商的所有模型均默认继承此设置，垫底优先级）
 [global_default]
 stream = true

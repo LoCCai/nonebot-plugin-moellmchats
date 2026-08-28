@@ -13,12 +13,8 @@ from urllib.parse import urlsplit
 
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _JSON_TYPES = {"array", "boolean", "integer", "null", "number", "object", "string"}
-_CAPABILITY_FIELDS = frozenset(
-    {"network", "process", "workspace", "host_filesystem", "secrets"}
-)
-_CAPABILITY_V2_FIELDS = frozenset(
-    {"network", "process", "filesystem", "database", "bot", "secrets"}
-)
+_CAPABILITY_FIELDS = frozenset({"network", "process", "workspace", "host_filesystem", "secrets"})
+_CAPABILITY_V2_FIELDS = frozenset({"network", "process", "filesystem", "database", "bot", "secrets"})
 _NETWORK_TARGET_RE = re.compile(
     r"^(?:\*|(?:\*\.)?(?=.{1,253}$)"
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
@@ -44,12 +40,8 @@ TOOL_RESULT_MAX_METADATA_BYTES = 16_384
 
 _POSTGRES_BIGINT_MAX = (1 << 63) - 1
 _TOOL_RESULT_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_TOOL_RESULT_OPAQUE_LOCATOR_RE = re.compile(
-    r"^[a-z][a-z0-9+.-]{1,31}:[A-Za-z0-9][A-Za-z0-9._~:+/=@%-]{0,479}$"
-)
-_TOOL_RESULT_FILE_SCHEMES = frozenset(
-    {"artifact", "attachment", "blob", "object", "result", "urn"}
-)
+_TOOL_RESULT_OPAQUE_LOCATOR_RE = re.compile(r"^[a-z][a-z0-9+.-]{1,31}:[A-Za-z0-9][A-Za-z0-9._~:+/=@%-]{0,479}$")
+_TOOL_RESULT_FILE_SCHEMES = frozenset({"artifact", "attachment", "blob", "object", "result", "urn"})
 _TOOL_RESULT_MEDIA_TYPE_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/"
     r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$"
@@ -80,6 +72,20 @@ ToolResultJsonValue: TypeAlias = (
 class ToolEffect(str, Enum):
     READ_ONLY = "read_only"
     MUTATING = "mutating"
+
+
+class ToolConfirmationMode(str, Enum):
+    """Confirmation contract declared by one immutable tool specification.
+
+    ``TRUSTED_LOW_RISK_DIRECT`` is intentionally not a general escape hatch.
+    Provider trust validation accepts it only for package-owned protocol
+    Builtins, and the protocol Broker still rechecks scope, capability, rate
+    limits, configuration and the current Bot/event identity before execution.
+    """
+
+    DEFAULT = "default"
+    REQUIRED = "required"
+    TRUSTED_LOW_RISK_DIRECT = "trusted_low_risk_direct"
 
 
 @dataclass(frozen=True)
@@ -113,9 +119,7 @@ class ToolCapability:
             raise ValueError("工具 capabilities 必须是映射")
         unknown = [key for key in value if key not in _CAPABILITY_FIELDS]
         if unknown:
-            raise ValueError(
-                f"工具 capabilities 包含未知字段: {sorted(map(str, unknown))}"
-            )
+            raise ValueError(f"工具 capabilities 包含未知字段: {sorted(map(str, unknown))}")
         return cls(**dict(value))
 
     def restrict(self, ceiling: ToolCapability) -> ToolCapability:
@@ -127,9 +131,7 @@ class ToolCapability:
             network=self.network and ceiling.network,
             process=self.process and ceiling.process,
             workspace=self.workspace and ceiling.workspace,
-            host_filesystem=(
-                self.host_filesystem and ceiling.host_filesystem
-            ),
+            host_filesystem=(self.host_filesystem and ceiling.host_filesystem),
             secrets=self.secrets and ceiling.secrets,
         )
 
@@ -152,30 +154,19 @@ class ToolCapability:
             network=self.network or other.network,
             process=self.process or other.process,
             workspace=self.workspace or other.workspace,
-            host_filesystem=(
-                self.host_filesystem or other.host_filesystem
-            ),
+            host_filesystem=(self.host_filesystem or other.host_filesystem),
             secrets=self.secrets or other.secrets,
         )
 
     def is_subset_of(self, ceiling: ToolCapability) -> bool:
         if not isinstance(ceiling, ToolCapability):
             raise ValueError("工具 capability ceiling 必须是 ToolCapability")
-        return all(
-            not getattr(self, name) or getattr(ceiling, name)
-            for name in _CAPABILITY_FIELDS
-        )
+        return all(not getattr(self, name) or getattr(ceiling, name) for name in _CAPABILITY_FIELDS)
 
     def missing_from(self, ceiling: ToolCapability) -> tuple[str, ...]:
         if not isinstance(ceiling, ToolCapability):
             raise ValueError("工具 capability ceiling 必须是 ToolCapability")
-        return tuple(
-            sorted(
-                name
-                for name in _CAPABILITY_FIELDS
-                if getattr(self, name) and not getattr(ceiling, name)
-            )
-        )
+        return tuple(sorted(name for name in _CAPABILITY_FIELDS if getattr(self, name) and not getattr(ceiling, name)))
 
     def as_dict(self) -> dict[str, bool]:
         return {
@@ -193,9 +184,7 @@ def _normalize_capability_names(
     label: str,
     pattern: re.Pattern[str],
 ) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)) or not all(
-        isinstance(item, str) and pattern.fullmatch(item) for item in value
-    ):
+    if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) and pattern.fullmatch(item) for item in value):
         raise ValueError(f"工具 {label} 必须是安全字符串数组")
     if len(set(value)) != len(value):
         raise ValueError(f"工具 {label} 不得包含重复项")
@@ -324,9 +313,7 @@ class ToolCapabilityV2:
             return cls.from_legacy(ToolCapability.from_mapping(value))
         unknown = set(value) - _CAPABILITY_V2_FIELDS
         if unknown:
-            raise ValueError(
-                f"工具 capabilities 包含未知字段: {sorted(map(str, unknown))}"
-            )
+            raise ValueError(f"工具 capabilities 包含未知字段: {sorted(map(str, unknown))}")
 
         network = value.get("network", False)
         if type(network) is bool:
@@ -425,12 +412,8 @@ class ToolCapabilityV2:
             process=self.process and ceiling.process,
             workspace_read=self.workspace_read and ceiling.workspace_read,
             workspace_write=self.workspace_write and ceiling.workspace_write,
-            host_filesystem_read=(
-                self.host_filesystem_read and ceiling.host_filesystem_read
-            ),
-            host_filesystem_write=(
-                self.host_filesystem_write and ceiling.host_filesystem_write
-            ),
+            host_filesystem_read=(self.host_filesystem_read and ceiling.host_filesystem_read),
+            host_filesystem_write=(self.host_filesystem_write and ceiling.host_filesystem_write),
             database_read=self.database_read and ceiling.database_read,
             database_write=self.database_write and ceiling.database_write,
             bot_read=self.bot_read and ceiling.bot_read,
@@ -473,9 +456,7 @@ class ToolCapabilityV2:
             network=bool(self.network_allow),
             process=self.process,
             workspace=self.workspace_write,
-            host_filesystem=(
-                self.host_filesystem_read or self.host_filesystem_write
-            ),
+            host_filesystem=(self.host_filesystem_read or self.host_filesystem_write),
             secrets=bool(self.secret_names),
         )
 
@@ -532,16 +513,8 @@ class ToolPolicy:
             raise ValueError("工具 admin capabilities 必须是 ToolCapability")
         if not isinstance(self.detected, ToolCapability):
             raise ValueError("工具 detected capabilities 必须是 ToolCapability")
-        requested_v2 = (
-            ToolCapabilityV2.from_legacy(self.requested)
-            if self.requested_v2 is None
-            else self.requested_v2
-        )
-        admin_v2 = (
-            ToolCapabilityV2.from_legacy(self.admin)
-            if self.admin_v2 is None
-            else self.admin_v2
-        )
+        requested_v2 = ToolCapabilityV2.from_legacy(self.requested) if self.requested_v2 is None else self.requested_v2
+        admin_v2 = ToolCapabilityV2.from_legacy(self.admin) if self.admin_v2 is None else self.admin_v2
         if not isinstance(requested_v2, ToolCapabilityV2):
             raise ValueError("工具 requested capability v2 必须是 ToolCapabilityV2")
         if not isinstance(admin_v2, ToolCapabilityV2):
@@ -554,10 +527,7 @@ class ToolPolicy:
         effective = effective_v2.to_legacy()
         missing = self.detected.missing_from(effective)
         if missing:
-            raise ValueError(
-                "工具 detected capabilities 未同时获得 requested/admin 授权: "
-                f"{list(missing)}"
-            )
+            raise ValueError(f"工具 detected capabilities 未同时获得 requested/admin 授权: {list(missing)}")
         object.__setattr__(self, "requested_v2", requested_v2)
         object.__setattr__(self, "admin_v2", admin_v2)
         object.__setattr__(self, "effective_v2", effective_v2)
@@ -566,13 +536,9 @@ class ToolPolicy:
     @classmethod
     def generated(
         cls,
-        requested: (
-            ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None
-        ) = None,
+        requested: (ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None) = None,
         *,
-        admin: (
-            ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None
-        ) = None,
+        admin: (ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None) = None,
     ) -> ToolPolicy:
         """Build a generated-tool policy with a conservative admin ceiling."""
 
@@ -588,9 +554,7 @@ class ToolPolicy:
     @classmethod
     def configured(
         cls,
-        requested: (
-            ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None
-        ) = None,
+        requested: (ToolCapability | ToolCapabilityV2 | Mapping[str, Any] | None) = None,
     ) -> ToolPolicy:
         """Use one administrator-maintained profile as request and ceiling."""
 
@@ -743,10 +707,7 @@ def mutable_tool_result_json(value: ToolResultJsonValue) -> Any:
     """Return a detached mutable JSON tree for transports and callers."""
 
     if isinstance(value, Mapping):
-        return {
-            key: mutable_tool_result_json(item)
-            for key, item in value.items()
-        }
+        return {key: mutable_tool_result_json(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [mutable_tool_result_json(item) for item in value]
     return value
@@ -815,8 +776,7 @@ class ToolResultFile:
         if "/" in name or "\\" in name or name in {".", ".."}:
             raise ValueError("ToolResultFile.name 不得是主机路径")
         if not isinstance(self.media_type, str) or (
-            self.media_type
-            and not _TOOL_RESULT_MEDIA_TYPE_RE.fullmatch(self.media_type)
+            self.media_type and not _TOOL_RESULT_MEDIA_TYPE_RE.fullmatch(self.media_type)
         ):
             raise ValueError("ToolResultFile.media_type 必须是有界 MIME type")
         if self.size_bytes is not None and (
@@ -825,10 +785,7 @@ class ToolResultFile:
             or not 0 <= self.size_bytes <= _POSTGRES_BIGINT_MAX
         ):
             raise ValueError("ToolResultFile.size_bytes 必须是非负有界整数")
-        if self.sha256 is not None and (
-            not isinstance(self.sha256, str)
-            or not _TOOL_RESULT_SHA256_RE.fullmatch(self.sha256)
-        ):
+        if self.sha256 is not None and (not isinstance(self.sha256, str) or not _TOOL_RESULT_SHA256_RE.fullmatch(self.sha256)):
             raise ValueError("ToolResultFile.sha256 必须是小写 SHA-256")
 
     @classmethod
@@ -938,9 +895,7 @@ class ToolResultCitation:
         if isinstance(value, cls):
             return value
         if not isinstance(value, Mapping):
-            raise ValueError(
-                "ToolResult.citations 只能包含 ToolResultCitation 或映射"
-            )
+            raise ValueError("ToolResult.citations 只能包含 ToolResultCitation 或映射")
         allowed = {"excerpt", "title", "url"}
         if set(value) - allowed or not {"title", "url"}.issubset(value):
             raise ValueError("ToolResult.citations 引用映射字段非法")
@@ -1018,9 +973,7 @@ class ToolResult:
         object.__setattr__(
             self,
             "citations",
-            tuple(
-                ToolResultCitation.from_value(item) for item in self.citations
-            ),
+            tuple(ToolResultCitation.from_value(item) for item in self.citations),
         )
 
         if not isinstance(self.metadata, Mapping):
@@ -1038,11 +991,7 @@ class ToolResult:
             self.structured,
             label="ToolResult.structured",
         )
-        if (
-            frozen_structured is not None
-            and _tool_result_json_size(frozen_structured)
-            > TOOL_RESULT_MAX_STRUCTURED_BYTES
-        ):
+        if frozen_structured is not None and _tool_result_json_size(frozen_structured) > TOOL_RESULT_MAX_STRUCTURED_BYTES:
             raise ValueError("ToolResult.structured 超过安全字节上限")
         object.__setattr__(self, "structured", frozen_structured)
 
@@ -1080,11 +1029,7 @@ def render_tool_result(
 
     if not isinstance(result, ToolResult):
         raise TypeError("render_tool_result 只接受 ToolResult")
-    if max_chars is not None and (
-        not isinstance(max_chars, int)
-        or isinstance(max_chars, bool)
-        or max_chars <= 0
-    ):
+    if max_chars is not None and (not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars <= 0):
         raise ValueError("render_tool_result.max_chars 必须是正整数或 None")
 
     supplemental: dict[str, Any] = {}
@@ -1093,13 +1038,9 @@ def render_tool_result(
     if result.files:
         supplemental["files"] = [item.as_dict() for item in result.files]
     if result.structured is not None:
-        supplemental["structured"] = mutable_tool_result_json(
-            result.structured
-        )
+        supplemental["structured"] = mutable_tool_result_json(result.structured)
     if result.citations:
-        supplemental["citations"] = [
-            item.as_dict() for item in result.citations
-        ]
+        supplemental["citations"] = [item.as_dict() for item in result.citations]
     if result.metadata:
         supplemental["metadata"] = mutable_tool_result_json(result.metadata)
 
@@ -1129,16 +1070,12 @@ def _freeze_schema_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise ValueError("工具 parameters 字段名必须是字符串")
-        return MappingProxyType(
-            {key: _freeze_schema_value(item) for key, item in value.items()}
-        )
+        return MappingProxyType({key: _freeze_schema_value(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_schema_value(item) for item in value)
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    raise ValueError(
-        f"工具 parameters 包含不可序列化类型: {type(value).__name__}"
-    )
+    raise ValueError(f"工具 parameters 包含不可序列化类型: {type(value).__name__}")
 
 
 def _mutable_schema_value(value: Any) -> Any:
@@ -1156,8 +1093,10 @@ def _schema_types(schema: Mapping[str, Any], path: str) -> tuple[str, ...]:
     if raw_type is None:
         return ()
     values = (raw_type,) if isinstance(raw_type, str) else raw_type
-    if not isinstance(values, (list, tuple)) or not values or not all(
-        isinstance(item, str) and item in _JSON_TYPES for item in values
+    if (
+        not isinstance(values, (list, tuple))
+        or not values
+        or not all(isinstance(item, str) and item in _JSON_TYPES for item in values)
     ):
         raise ValueError(f"{path}.type 不是受支持的 JSON Schema 类型")
     return tuple(values)
@@ -1177,8 +1116,7 @@ def _validate_schema_node(schema: Any, path: str) -> None:
             _validate_schema_node(child, f"{path}.properties.{name}")
     required = schema.get("required", [])
     if not isinstance(required, (list, tuple)) or not all(
-        isinstance(item, str) and properties is not None and item in properties
-        for item in required
+        isinstance(item, str) and properties is not None and item in properties for item in required
     ):
         raise ValueError(f"{path}.required 必须引用已声明的字段")
     if len(set(required)) != len(required):
@@ -1196,6 +1134,36 @@ def _validate_schema_node(schema: Any, path: str) -> None:
     enum = schema.get("enum")
     if enum is not None and (not isinstance(enum, (list, tuple)) or not enum):
         raise ValueError(f"{path}.enum 必须是非空数组")
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        branches = schema.get(keyword)
+        if branches is None:
+            continue
+        if not isinstance(branches, (list, tuple)) or not branches:
+            raise ValueError(f"{path}.{keyword} 必须是非空 Schema 数组")
+        for index, branch in enumerate(branches):
+            _validate_schema_node(branch, f"{path}.{keyword}[{index}]")
+    for keyword in (
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    ):
+        constraint = schema.get(keyword)
+        if constraint is not None and (not isinstance(constraint, (int, float)) or isinstance(constraint, bool)):
+            raise ValueError(f"{path}.{keyword} 必须是数字")
+    for keyword in ("minLength", "maxLength", "minItems", "maxItems"):
+        constraint = schema.get(keyword)
+        if constraint is not None and (not isinstance(constraint, int) or isinstance(constraint, bool) or constraint < 0):
+            raise ValueError(f"{path}.{keyword} 必须是非负整数")
+    pattern = schema.get("pattern")
+    if pattern is not None:
+        if not isinstance(pattern, str):
+            raise ValueError(f"{path}.pattern 必须是字符串")
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError(f"{path}.pattern 不是有效正则表达式") from error
 
 
 def validate_parameters_schema(parameters: Any) -> None:
@@ -1234,6 +1202,46 @@ def _validate_value(value: Any, schema: Mapping[str, Any], path: str) -> str | N
     enum = schema.get("enum")
     if enum is not None and value not in enum:
         return f"{path} 不在允许值范围内"
+    for keyword in ("anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, (list, tuple)):
+            matches = sum(_validate_value(value, branch, path) is None for branch in branches)
+            valid = matches >= 1 if keyword == "anyOf" else matches == 1
+            if not valid:
+                label = "任一" if keyword == "anyOf" else "恰好一个"
+                return f"{path or '参数'} 不匹配 {label}允许 Schema"
+    branches = schema.get("allOf")
+    if isinstance(branches, (list, tuple)):
+        for branch in branches:
+            error = _validate_value(value, branch, path)
+            if error:
+                return error
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        exclusive_minimum = schema.get("exclusiveMinimum")
+        exclusive_maximum = schema.get("exclusiveMaximum")
+        multiple_of = schema.get("multipleOf")
+        if minimum is not None and value < minimum:
+            return f"{path} 小于最小值 {minimum}"
+        if maximum is not None and value > maximum:
+            return f"{path} 大于最大值 {maximum}"
+        if exclusive_minimum is not None and value <= exclusive_minimum:
+            return f"{path} 必须大于 {exclusive_minimum}"
+        if exclusive_maximum is not None and value >= exclusive_maximum:
+            return f"{path} 必须小于 {exclusive_maximum}"
+        if multiple_of is not None and (multiple_of <= 0 or not math.isclose(value / multiple_of, round(value / multiple_of))):
+            return f"{path} 不是 {multiple_of} 的倍数"
+    if isinstance(value, str):
+        minimum = schema.get("minLength")
+        maximum = schema.get("maxLength")
+        pattern = schema.get("pattern")
+        if minimum is not None and len(value) < minimum:
+            return f"{path} 长度小于 {minimum}"
+        if maximum is not None and len(value) > maximum:
+            return f"{path} 长度大于 {maximum}"
+        if isinstance(pattern, str) and re.search(pattern, value) is None:
+            return f"{path} 不匹配允许格式"
     if isinstance(value, dict):
         properties = schema.get("properties") or {}
         for name in schema.get("required") or ():
@@ -1255,6 +1263,12 @@ def _validate_value(value: Any, schema: Mapping[str, Any], path: str) -> str | N
                 if error:
                     return error
     if isinstance(value, list) and isinstance(schema.get("items"), Mapping):
+        minimum = schema.get("minItems")
+        maximum = schema.get("maxItems")
+        if minimum is not None and len(value) < minimum:
+            return f"{path} 项目数小于 {minimum}"
+        if maximum is not None and len(value) > maximum:
+            return f"{path} 项目数大于 {maximum}"
         for index, item in enumerate(value):
             error = _validate_value(item, schema["items"], f"{path}[{index}]")
             if error:
@@ -1282,6 +1296,7 @@ class ToolSpec:
     result_limit: int | None = None
     dependencies: tuple[str, ...] = ()
     policy: ToolPolicy | None = None
+    confirmation_mode: ToolConfirmationMode = ToolConfirmationMode.DEFAULT
 
     def __post_init__(self) -> None:
         if not _TOOL_NAME_RE.fullmatch(self.name):
@@ -1304,20 +1319,21 @@ class ToolSpec:
         ):
             raise ValueError("工具 timeout_seconds 必须大于 0")
         if self.result_limit is not None and (
-            not isinstance(self.result_limit, int)
-            or isinstance(self.result_limit, bool)
-            or self.result_limit <= 0
+            not isinstance(self.result_limit, int) or isinstance(self.result_limit, bool) or self.result_limit <= 0
         ):
             raise ValueError("工具 result_limit 必须大于 0")
         if not isinstance(self.dependencies, tuple) or not all(
-            isinstance(item, str) and _TOOL_NAME_RE.fullmatch(item)
-            for item in self.dependencies
+            isinstance(item, str) and _TOOL_NAME_RE.fullmatch(item) for item in self.dependencies
         ):
             raise ValueError("工具 dependencies 必须是安全工具名元组")
         if len(set(self.dependencies)) != len(self.dependencies):
             raise ValueError("工具 dependencies 不得重复")
         if self.policy is not None and not isinstance(self.policy, ToolPolicy):
             raise ValueError("工具 policy 必须是 ToolPolicy")
+        if not isinstance(self.confirmation_mode, ToolConfirmationMode):
+            raise ValueError("工具 confirmation_mode 非法")
+        if self.confirmation_mode is ToolConfirmationMode.TRUSTED_LOW_RISK_DIRECT and self.effect is not ToolEffect.MUTATING:
+            raise ValueError("免确认模式只能用于 mutating 工具")
 
     def as_legacy_schema(self) -> dict[str, Any]:
         parameters = _mutable_schema_value(self.parameters)

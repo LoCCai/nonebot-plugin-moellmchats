@@ -9,7 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from nonebot_plugin_moellmchats.builtin_tools import WEB_SEARCH_TOOL_SPEC
+from nonebot_plugin_moellmchats.builtin_tools import (
+    WEB_SEARCH_TOOL_SPEC,
+    builtin_tool_specs,
+)
 from nonebot_plugin_moellmchats.generated_tool_lifecycle import LifecycleState
 from nonebot_plugin_moellmchats.generated_tool_runner import generated_tool_runner
 from nonebot_plugin_moellmchats.runtime_reload import (
@@ -374,7 +377,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         ToolExecutionBoundary.EXTERNAL_PROXY
     )
     assert provider_catalog.trust_summary() == {
-        "trusted": 2,
+        "trusted": len(builtin_tool_specs()) + 1,
         "reviewed": 1,
         "untrusted": 0,
         "external": 1,

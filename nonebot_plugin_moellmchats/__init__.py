@@ -3,14 +3,14 @@ import random
 import time
 
 from nonebot import get_driver
+from nonebot.adapters import Bot, Message
+from nonebot.adapters import Event as MessageEvent
 from nonebot.adapters.onebot.v11 import (
-    GROUP,
-    Bot,
     GroupMessageEvent,
-    Message,
-    MessageEvent,
-    MessageSegment,
     PokeNotifyEvent,
+)
+from nonebot.adapters.onebot.v11 import (
+    Message as V11Message,
 )
 from nonebot.adapters.onebot.v11.event import Sender
 from nonebot.log import logger
@@ -57,6 +57,7 @@ from .tool_authoring import tool_authoring_service
 from .tool_contracts import (
     ToolCapability,
     ToolCapabilityV2,
+    ToolConfirmationMode,
     ToolContext,
     ToolEffect,
     ToolPolicy,
@@ -88,6 +89,7 @@ __all__ = [
     "PendingActionStore",
     "ToolCapability",
     "ToolCapabilityV2",
+    "ToolConfirmationMode",
     "ToolContext",
     "ToolEffect",
     "ToolPolicy",
@@ -102,7 +104,7 @@ __all__ = [
 __plugin_meta__ = PluginMetadata(
     name="MoEllm聊天",
     description=(
-        "感谢llm，机器人变聪明了\n" "✨ 混合专家模型调度LLM插件 | 混合调度·联网搜索·上下文优化·个性定制·Token节约·更加拟人 ✨"
+        "感谢llm，机器人变聪明了\n✨ 混合专家模型调度LLM插件 | 混合调度·联网搜索·上下文优化·个性定制·Token节约·更加拟人 ✨"
     ),
     usage="""1.艾特或以bot的名字开头进行对话
 2.用"性格切换xx"来切换性格（每个性格设定绑定每个人账号，不共享）
@@ -125,11 +127,17 @@ __plugin_meta__ = PluginMetadata(
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
-    supported_adapters={"~onebot.v11"},
+    supported_adapters={"~onebot.v11", "~onebot.v12"},
 )
 
 
-message_matcher = on_message(permission=GROUP, priority=1, block=False)
+def _is_group_message(event: MessageEvent) -> bool:
+    from .onebot_facade import event_group_id
+
+    return event_group_id(event) is not None
+
+
+message_matcher = on_message(rule=_is_group_message, priority=1, block=False)
 
 
 @message_matcher.handle()
@@ -138,16 +146,24 @@ async def context_dict_func(bot: Bot, event: MessageEvent):
 
     if is_synthetic_event():
         return
-    if event.message.extract_plain_text().strip():  # 有文字才记录
+    from .onebot_facade import (
+        event_group_id,
+        event_plain_text,
+        event_sender_name,
+    )
+
+    if event_plain_text(event).strip():  # 有文字才记录
         if message_dict := format_context_message(event):
-            sender_name = event.sender.card or event.sender.nickname
+            sender_name = event_sender_name(event)
             message_text = "".join(message_dict["text"])
             reply_text = (message_dict.get("reply") or "").strip()
             reply_user = message_dict.get("reply_user") or {}
             if reply_text and reply_user:
                 reply_name = reply_user.get("name") or reply_user.get("qq") or "被引用者"
                 message_text = f"[引用消息: {reply_name}说「{reply_text}」] {message_text}"
-            llm.context_dict[event.group_id].append(f"[{sender_name}] {message_text}")
+            group_id = event_group_id(event)
+            if group_id is not None:
+                llm.context_dict[group_id].append(f"[{sender_name}] {message_text}")
         # 概率主动发
         # if random.randint(1, 100) == 1:
         #     llm = llm.MoeLlm(
@@ -160,7 +176,7 @@ temperament_switch_matcher = on_command("性格切换", aliases={"切换性格",
 
 
 @temperament_switch_matcher.handle()
-async def _(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
+async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if temp := args.extract_plain_text().strip():
         if temp in temperament_manager.get_temperaments_keys():
             # 写入文件
@@ -176,7 +192,7 @@ temperament_check_matcher = on_fullmatch(("查看性格", "查看人格"), prior
 
 
 @temperament_check_matcher.handle()
-async def _(event: GroupMessageEvent):
+async def _(event: MessageEvent):
     await temperament_check_matcher.finish(temperament_manager.get_all_temperaments())
 
 
@@ -296,10 +312,17 @@ llm_matcher = on_message(
 
 @llm_matcher.handle()
 async def _(bot: Bot, event: MessageEvent):
-    if event.message.extract_plain_text().strip():
+    from .onebot_facade import event_plain_text, make_text_message, onebot_protocol
+
+    if event_plain_text(event).strip():
         format_message_dict = await format_message(event, bot)
     else:
-        await llm_matcher.finish(Message(random.choice(get_reply_messages("hello"))))  # 没有就选一个卖萌回复
+        await llm_matcher.finish(
+            make_text_message(
+                onebot_protocol(bot, event) or "onebot_v11",
+                random.choice(get_reply_messages("hello")),
+            )
+        )
     await handle_llm(bot, event, llm_matcher, format_message_dict, is_ai=False)
 
 
@@ -319,7 +342,14 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         format_message_dict = await format_message(event, bot)
         await handle_llm(bot, event, ai_matcher, format_message_dict, is_ai=True)
     else:
-        await ai_matcher.finish(Message(random.choice(get_reply_messages("hello"))))  # 没有就选一个卖萌回复
+        from .onebot_facade import make_text_message, onebot_protocol
+
+        await ai_matcher.finish(
+            make_text_message(
+                onebot_protocol(bot, event) or "onebot_v11",
+                random.choice(get_reply_messages("hello")),
+            )
+        )
 
 
 confirm_action_matcher = on_command(
@@ -342,6 +372,35 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         snapshot = runtime_snapshots.current()
         if snapshot is None:
             raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
+        from .onebot_facade import event_user_id
+        from .protocol_broker import (
+            ProtocolExecutionError,
+            protocol_broker,
+            protocol_pending_actions,
+        )
+
+        if await protocol_pending_actions.contains(parts[0]):
+            try:
+                invocation = await protocol_broker.confirm(
+                    parts[0],
+                    bot=bot,
+                    event=event,
+                    generation=snapshot.generation,
+                    is_superuser=event_user_id(event)
+                    in {
+                        str(value)
+                        for value in getattr(
+                            getattr(bot, "config", None),
+                            "superusers",
+                            set(),
+                        )
+                    },
+                )
+            except ProtocolExecutionError as error:
+                await confirm_action_matcher.finish(f"确认失败：{error}")
+            result_text = render_tool_result(invocation.result) or "执行成功"
+            await confirm_action_matcher.send(f"已确认并执行协议工具 {invocation.tool_name}：\n{result_text}")
+            await confirm_action_matcher.finish()
         try:
             async with runtime_resource_host.lease(snapshot) as coordinator:
                 action, result = await execute_pending_action(
@@ -354,10 +413,7 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         except PendingActionError:
             raise
         except Exception as error:
-            raise PendingActionError(
-                "确认存储不可用，危险操作已拒绝 "
-                f"({type(error).__name__})"
-            ) from None
+            raise PendingActionError(f"确认存储不可用，危险操作已拒绝 ({type(error).__name__})") from None
     except PendingActionError as error:
         await confirm_action_matcher.finish(f"确认失败：{error}")
 
@@ -389,6 +445,21 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         snapshot = runtime_snapshots.current()
         if snapshot is None:
             raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
+        from .protocol_broker import (
+            ProtocolExecutionError,
+            protocol_pending_actions,
+        )
+
+        if await protocol_pending_actions.contains(parts[0]):
+            try:
+                await protocol_pending_actions.cancel(
+                    parts[0],
+                    bot=bot,
+                    event=event,
+                )
+            except ProtocolExecutionError as error:
+                await cancel_action_matcher.finish(f"取消失败：{error}")
+            await cancel_action_matcher.finish("已取消该待确认协议操作。")
         try:
             async with runtime_resource_host.lease(snapshot) as coordinator:
                 action_store = coordinator.resources.pending_action_store
@@ -398,10 +469,7 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         except PendingActionError:
             raise
         except Exception as error:
-            raise PendingActionError(
-                "确认存储不可用，危险操作已拒绝 "
-                f"({type(error).__name__})"
-            ) from None
+            raise PendingActionError(f"确认存储不可用，危险操作已拒绝 ({type(error).__name__})") from None
     except PendingActionError as error:
         await cancel_action_matcher.finish(f"取消失败：{error}")
     await cancel_action_matcher.finish("已取消该待确认操作。")
@@ -471,11 +539,7 @@ async def manage_tool_blacklist_command(
                 "详情请查看后台日志。"
             )
         runtime_snapshot = runtime_snapshots.current()
-        tool_snapshot = (
-            runtime_snapshot.tool_snapshot
-            if runtime_snapshot is not None
-            else None
-        )
+        tool_snapshot = runtime_snapshot.tool_snapshot if runtime_snapshot is not None else None
         if not isinstance(tool_snapshot, ToolSnapshot):
             await manage_blacklist_matcher.finish("当前工具管理器不支持工具存在性校验，请重启 Bot 或更新插件后重试。")
             return
@@ -502,27 +566,15 @@ async def manage_tool_blacklist_command(
             return
 
         if management_view is None:
-            await manage_blacklist_matcher.finish(
-                tool_manager.tool_identifier_not_found_message(plugin_name)
-            )
+            await manage_blacklist_matcher.finish(tool_manager.tool_identifier_not_found_message(plugin_name))
             return
         for decision in management_view.trust_decisions:
             if decision.audit_required:
-                logger.info(
-                    f"工具管理 trust decision: {decision.audit_metadata()}"
-                )
-        if (
-            management_view.provider_authoritative
-            and not management_view.trust_decisions
-        ):
-            logger.info(
-                "工具管理 selector decision: "
-                f"{management_view.selector_audit_metadata()}"
-            )
+                logger.info(f"工具管理 trust decision: {decision.audit_metadata()}")
+        if management_view.provider_authoritative and not management_view.trust_decisions:
+            logger.info(f"工具管理 selector decision: {management_view.selector_audit_metadata()}")
         if not management_view.allowed:
-            await manage_blacklist_matcher.finish(
-                management_view.denial_reason or "工具管理 trust policy 拒绝"
-            )
+            await manage_blacklist_matcher.finish(management_view.denial_reason or "工具管理 trust policy 拒绝")
 
     result = model_selector.manage_tool_blacklist(action, plugin_name)
 
@@ -854,7 +906,7 @@ async def _():
     except Exception as error:
         await reload_llm_matcher.finish(f"LLM 资源重载失败，旧配置仍在使用：{str(error)[:300]}")
     await reload_llm_matcher.finish(
-        f"LLM 资源重载完成：generation {result.generation}，" f"自定义工具 {result.custom_tools}，MCP 工具 {result.mcp_tools}。"
+        f"LLM 资源重载完成：generation {result.generation}，自定义工具 {result.custom_tools}，MCP 工具 {result.mcp_tools}。"
     )
 
 
@@ -912,7 +964,7 @@ view_tool_draft_matcher = on_command(
 def _parse_draft_review_args(raw: str) -> tuple[str, str, int]:
     parts = raw.split()
     if not 1 <= len(parts) <= 3:
-        raise ValueError("格式：查看LLM功能草稿 <草稿ID> " "[summary|manifest|source|tests|risks|capabilities|diff] [页码]")
+        raise ValueError("格式：查看LLM功能草稿 <草稿ID> [summary|manifest|source|tests|risks|capabilities|diff] [页码]")
     draft_id = parts[0]
     section = parts[1] if len(parts) >= 2 else "summary"
     allowed_sections = (
@@ -954,7 +1006,7 @@ async def _(args: Message = CommandArg()):
         )
     except Exception as error:
         await view_tool_draft_matcher.finish(f"读取草稿失败：{error}")
-    await view_tool_draft_matcher.finish(MessageSegment.text(page.text))
+    await view_tool_draft_matcher.finish(page.text)
 
 
 approve_tool_matcher = on_command(
@@ -970,8 +1022,7 @@ async def _(args: Message = CommandArg()):
     parts = args.extract_plain_text().split()
     if len(parts) != 3:
         await approve_tool_matcher.finish(
-            "格式：批准LLM功能 <草稿ID> <至少8位哈希> <review stamp>；"
-            "请从查看LLM功能草稿页头复制完整命令"
+            "格式：批准LLM功能 <草稿ID> <至少8位哈希> <review stamp>；请从查看LLM功能草稿页头复制完整命令"
         )
     try:
         change = await asyncio.to_thread(
@@ -985,10 +1036,7 @@ async def _(args: Message = CommandArg()):
             change,
         )
     except Exception as error:
-        await approve_tool_matcher.finish(
-            "批准失败："
-            f"{str(error)[:800]}。请用查看LLM状态核对 desired/applied 收敛。"
-        )
+        await approve_tool_matcher.finish(f"批准失败：{str(error)[:800]}。请用查看LLM状态核对 desired/applied 收敛。")
     await approve_tool_matcher.finish(
         f"已载入 {bundle_id}@{digest[:12]}，"
         f"lifecycle revision {result.generated_state_revision}，"
@@ -1008,9 +1056,7 @@ reject_tool_matcher = on_command(
 async def _(event: MessageEvent, args: Message = CommandArg()):
     parts = args.extract_plain_text().strip().split(maxsplit=1)
     if not parts:
-        await reject_tool_matcher.finish(
-            "格式：拒绝LLM功能 <草稿ID> [原因]"
-        )
+        await reject_tool_matcher.finish("格式：拒绝LLM功能 <草稿ID> [原因]")
     draft_id = parts[0]
     reason = parts[1] if len(parts) == 2 else "QQ 超级管理员拒绝"
     try:
@@ -1027,8 +1073,7 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
     except Exception as error:
         await reject_tool_matcher.finish(f"拒绝草稿失败：{error}")
     await reject_tool_matcher.finish(
-        f"已拒绝草稿 {draft_id}，源码保留用于审计；"
-        f"lifecycle revision {result.generated_state_revision}"
+        f"已拒绝草稿 {draft_id}，源码保留用于审计；lifecycle revision {result.generated_state_revision}"
     )
 
 
@@ -1046,8 +1091,7 @@ async def _():
     active_lines = []
     for bundle in status["active_tools"]:
         tools = ", ".join(
-            f"{item['name']}=" f"{item['requested_permission']}→{item['effective_permission']}"
-            for item in bundle.get("tools", [])
+            f"{item['name']}={item['requested_permission']}→{item['effective_permission']}" for item in bundle.get("tools", [])
         )
         suffix = f" [{tools}]" if tools else ""
         active_lines.append(f"{bundle['bundle_id']}@{bundle['digest'][:12]}{suffix}")
@@ -1076,18 +1120,10 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
     bundle_id, digest_prefix, tool_name, permission = parts
 
     try:
-        state = await asyncio.to_thread(
-            generated_tool_store.read_lifecycle_state
-        )
+        state = await asyncio.to_thread(generated_tool_store.read_lifecycle_state)
         digest = state.active.get(bundle_id)
-        if (
-            digest is None
-            or len(digest_prefix) < 8
-            or not digest.startswith(digest_prefix.lower())
-        ):
-            raise _GeneratedCommandInputError(
-                "工具包未激活，或当前版本哈希与给定前缀不匹配。"
-            )
+        if digest is None or len(digest_prefix) < 8 or not digest.startswith(digest_prefix.lower()):
+            raise _GeneratedCommandInputError("工具包未激活，或当前版本哈希与给定前缀不匹配。")
         change = await asyncio.to_thread(
             generated_tool_store.prepare_permission,
             bundle_id,
@@ -1104,10 +1140,7 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
     except _GeneratedCommandInputError as error:
         await generated_permission_matcher.finish(str(error))
     except Exception as error:
-        await generated_permission_matcher.finish(
-            "权限更新失败："
-            f"{str(error)[:800]}。请核对 desired/applied 收敛状态。"
-        )
+        await generated_permission_matcher.finish(f"权限更新失败：{str(error)[:800]}。请核对 desired/applied 收敛状态。")
     await generated_permission_matcher.finish(
         f"已设置 {tool_name} effective_permission="
         f"{changed['effective_permission']}，generation {result.generation}，"
@@ -1142,8 +1175,7 @@ async def _(args: Message = CommandArg()):
     except Exception as error:
         await deactivate_tool_matcher.finish(f"停用失败：{error}")
     await deactivate_tool_matcher.finish(
-        f"已停用 {bundle_id}，generation {result.generation}，"
-        f"lifecycle revision {result.generated_state_revision}"
+        f"已停用 {bundle_id}，generation {result.generation}，lifecycle revision {result.generated_state_revision}"
     )
 
 
@@ -1215,20 +1247,9 @@ async def _():
     current_snapshot = runtime_snapshots.current()
     desired_revision = generated_status["lifecycle_revision"]
     desired_digest = generated_status["lifecycle_state_digest"]
-    applied_revision = (
-        current_snapshot.generated_state_revision
-        if current_snapshot is not None
-        else None
-    )
-    applied_digest = (
-        current_snapshot.generated_state_digest
-        if current_snapshot is not None
-        else None
-    )
-    lifecycle_converged = (
-        applied_revision == desired_revision
-        and applied_digest == desired_digest
-    )
+    applied_revision = current_snapshot.generated_state_revision if current_snapshot is not None else None
+    applied_digest = current_snapshot.generated_state_digest if current_snapshot is not None else None
+    lifecycle_converged = applied_revision == desired_revision and applied_digest == desired_digest
     await llm_status_matcher.finish(
         "LLM 运行状态\n"
         f"generation: {metrics['reload_generation']}\n"
@@ -1302,8 +1323,8 @@ async def _poke_event(bot: Bot, event: PokeNotifyEvent):
             message_type="group",
             group_id=group_id,
             message_id=fake_id,
-            message=Message(),
-            original_message=Message(),
+            message=V11Message(),
+            original_message=V11Message(),
             raw_message="",
             font=0,
             sender=Sender(user_id=event.user_id, nickname=sender_name, card=sender_name),
@@ -1318,7 +1339,7 @@ async def _poke_event(bot: Bot, event: PokeNotifyEvent):
         }
         await handle_llm(bot, fake_event, poke_, format_message_dict, is_ai=False)
     else:
-        await poke_.send(Message(random.choice(get_reply_messages("poke"))))
+        await poke_.send(V11Message(random.choice(get_reply_messages("poke"))))
         # try:
         #     await poke_.send(Message(f"[CQ:group_poke,qq={event.user_id}]"))
         # except ActionFailed:

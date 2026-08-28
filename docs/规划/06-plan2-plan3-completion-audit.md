@@ -1,10 +1,12 @@
 ---
 title: 06-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
-lastmod: 2026-08-24T15:36:01+00:00
+lastmod: 2026-08-25T00:00:00+00:00
 ---
 
 # Plan 2 / Plan 3 完成度审计与最终集成顺序
+
+> 状态续记（2026-08-25）：I-09 最终文档 HEAD `7705cdd46e8dffd29ee50440fcf8ede94e76dd7d` 的 push run `32746463522` 与 PR run `32746468781` 各 11/11 success、`non_success=[]`，各唯一 `release-gate` 为 `completed/success`；本地、origin、`ls-remote` 与 PR #2 head 一致，PR 为 `OPEN / MERGEABLE / CLEAN`。因此下文记录的“最终文档 HEAD 自身双门禁”条件已经满足，Plan 2 / Plan 3 的 Primitive 与 Runtime integration 开发态总目标已闭环。PR 合并、PyPI 发布、目标 Bot 安装、真实 PostgreSQL/Redis/模型、在线 migration、生产部署和 D-09 发布周期观察均未发生。
 
 ## 1. 审计结论
 
@@ -236,3 +238,22 @@ Milestone I 只允许修改和验证开发仓库。禁止：
 - 删除 D-09 legacy sidecar。
 
 当前精确恢复点：规划审计基线与 I-01～I-08 最终闭环所需双 `release-gate` 均已关闭；I-09 隔离本地最终矩阵及本地证据 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的 push `32745646558` / PR `32745651110` 双门禁也已完成，Plan 2 / Plan 3 开发态验收已收齐。本次回填五份规划文档的提交即最终文档 HEAD，以其自身精确 push/PR 双 `release-gate` 为最后判据；不再为记录该自指门禁另起提交。继续不运行在线 migration、不连接真实服务、不合并、不发布、不部署、不操作生产；D-09 保持锁定。
+
+## 9. 2026-08-25 用户文档闭环
+
+本轮只在开发仓库补齐用户说明，不改变 runtime 契约，不进入生产路径：
+
+- 新增安装与验收、依赖与运行前提、调度链路与运行时架构三页；重写模型、MCP、NoneBot 兼容接入与 `ToolSpec` 开发说明。
+- `config.json` 的全部 `DEFAULT_CONFIG` 字段已逐项解释；`providers.toml` 明确连接字段、四级浅继承和 `extra_payload` 的正确层级；`model_config.json` 明确固定角色、完整能力路由契约和 fail-closed 条件。
+- 依赖审计将源码顶层 import、`pyproject.toml`、fresh wheel/sdist metadata 分层核对；未发现运行时漏声明包。PostgreSQL、Redis、MCP SDK 安装依赖与默认实际连接行为已明确区分。
+- 七七侧只读核对显示其依赖声明仍引用可移动分支，现有 `uv.lock` 固定的是旧提交 `8e7f0547e72bb67bbdfbda937c7873b235e971e7`，不是最终候选 `7705cdd…`。锁内现有包版本满足最终约束，但这不能证明最终 SHA 已安装或加载。
+- 本轮未修改七七依赖、锁文件、配置、数据、容器或进程；未读取生产密钥，未连接真实 PostgreSQL/Redis/模型，未运行 migration，未合并、发布、部署或重启。
+
+本轮离线验证结果（2026-08-25）：
+
+- 58 个 `DEFAULT_CONFIG` 字段全部在配置表中逐项覆盖；文档中的 4 个严格 JSON、8 个 TOML、8 个 Python 示例均可解析或编译，能力路由示例通过真实 runtime 构造与选模，最小 `ToolSpec` 插件在临时 LocalStore 中实际注册成功。
+- 仓库 20 个 Markdown 文件中的 95 个本地链接/锚点有效；定向选模、能力路由、Registered Tool 与结构化结果契约共 `107 passed`。
+- fresh wheel/sdist 构建及 Twine 检查通过；两种制品的 `Requires-Python` 和 12 条 `Requires-Dist` 一致并与 `pyproject.toml` 对齐，且都在 checkout 外完成无 driver、零真实后端加载。
+- `git diff --check`、源码依赖 import 对照和修改文件 whitespace 检查通过；用户原有未跟踪 `uv.lock` 未修改。
+
+状态：**用户文档与开发仓库离线门禁完成，可进入七七隔离安装测试；D-09、PR 合并、正式发布、真实后端和生产发布门禁仍未解除。**

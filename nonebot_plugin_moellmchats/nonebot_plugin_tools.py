@@ -6,6 +6,7 @@ from typing import Any
 
 from .event_simulator import event_simulator
 from .tool_contracts import ToolEffect, ToolResult, ToolSpec
+from .tool_discovery import build_compatibility_description
 
 _COMMAND_PARAMETERS = {
     "type": "object",
@@ -13,7 +14,7 @@ _COMMAND_PARAMETERS = {
         "command": {
             "type": "string",
             "description": (
-                "严格根据该插件的'原始用法说明'，"
+                "严格根据该插件的原始用法说明和菜单功能提示，"
                 "生成可以直接触发该插件的机器人指令字符串。"
             ),
         }
@@ -113,16 +114,9 @@ def build_nonebot_plugin_candidate(
             raise ValueError(
                 f"NoneBot 插件 {plugin_name} 不得伪造保留 Provider 字段"
             )
-        display_name = str(info.get("name") or plugin_name)
-        description = str(info.get("description") or "无描述")
-        usage = str(info.get("usage") or "无用法说明")
         spec = ToolSpec(
             name=plugin_name,
-            description=(
-                f"插件名称：{display_name}。"
-                f"功能描述：{description}。"
-                f"原始用法说明：{usage}"
-            ),
+            description=build_compatibility_description(plugin_name, info),
             parameters=_COMMAND_PARAMETERS,
             handler=_build_handler(plugin_name),
             # A legacy command can reach arbitrary plugin behavior.  Keep the

@@ -6,16 +6,39 @@ from contextvars import ContextVar
 import re
 import time
 import traceback
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 import uuid
 
 from nonebot.adapters.onebot.v11 import (
-    Bot,
+    Bot as V11Bot,
+)
+from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
-    Message,
-    MessageSegment,
     PrivateMessageEvent,
 )
+from nonebot.adapters.onebot.v11 import (
+    Message as V11Message,
+)
+from nonebot.adapters.onebot.v11 import (
+    MessageSegment as V11MessageSegment,
+)
+from nonebot.adapters.onebot.v12 import (
+    Bot as V12Bot,
+)
+from nonebot.adapters.onebot.v12 import (
+    GroupMessageEvent as V12GroupMessageEvent,
+)
+from nonebot.adapters.onebot.v12 import (
+    Message as V12Message,
+)
+from nonebot.adapters.onebot.v12 import (
+    MessageSegment as V12MessageSegment,
+)
+from nonebot.adapters.onebot.v12 import (
+    PrivateMessageEvent as V12PrivateMessageEvent,
+)
+from nonebot.compat import model_dump
 from nonebot.exception import StopPropagation
 from nonebot.internal.matcher import matchers
 from nonebot.log import logger
@@ -30,14 +53,21 @@ from nonebot.rule import TrieRule
 from .admission import AdmissionRejected, get_dispatch_controller
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .onebot_facade import onebot_protocol
 from .runtime_metrics import runtime_metrics
 
+if TYPE_CHECKING:
+    from nonebot.adapters import Bot
+
 _capture_key: ContextVar[str | None] = ContextVar("moellm_capture_key", default=None)
-_synthetic_plugin: ContextVar[str | None] = ContextVar(
-    "moellm_synthetic_plugin", default=None
-)
+_synthetic_plugin: ContextVar[str | None] = ContextVar("moellm_synthetic_plugin", default=None)
 _captures: dict[str, dict] = {}
-_SEND_ACTIONS = {"send_msg", "send_group_msg", "send_private_msg"}
+_SEND_ACTIONS = {
+    "send_msg",
+    "send_group_msg",
+    "send_private_msg",
+    "send_message",
+}
 _AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all)\]")
 
 
@@ -50,21 +80,34 @@ def get_synthetic_target() -> str | None:
     return _synthetic_plugin.get()
 
 
-def _rewrite_reply_id(message, original_id: int | str, fake_id: int | str) -> Message:
-    result = Message(message)
+def _message_class(protocol: str) -> type[Any]:
+    return V12Message if protocol == "onebot_v12" else V11Message
+
+
+def _rewrite_reply_id(
+    message,
+    original_id: int | str,
+    fake_id: int | str,
+    *,
+    protocol: str,
+):
+    result = _message_class(protocol)(message)
     for segment in result:
-        if segment.type == "reply" and str(segment.data.get("id")) == str(fake_id):
-            segment.data["id"] = str(original_id)
+        if segment.type != "reply":
+            continue
+        field = "message_id" if protocol == "onebot_v12" else "id"
+        if str(segment.data.get(field)) == str(fake_id):
+            segment.data[field] = str(original_id)
     return result
 
 
-def _extract_send_data(message) -> dict:
-    normalized = Message(message)
+def _extract_send_data(message, *, protocol: str) -> dict:
+    normalized = _message_class(protocol)(message)
     text: list[str] = []
     images: list[str] = []
     for segment in normalized:
         if segment.type == "image":
-            raw = segment.data.get("url") or segment.data.get("file") or ""
+            raw = segment.data.get("url") or segment.data.get("file_id") or segment.data.get("file") or ""
             if raw.startswith("base64://"):
                 images.append("data:image/jpeg;base64," + raw[9:])
             elif raw.startswith("file://"):
@@ -82,6 +125,8 @@ def _extract_send_data(message) -> dict:
             text.append(segment.data.get("text", ""))
         elif segment.type == "at":
             text.append(f"[提及:{segment.data.get('qq')}]")
+        elif segment.type == "mention":
+            text.append(f"[提及:{segment.data.get('user_id')}]")
         elif segment.type != "reply":
             text.append(str(segment))
     full_text = "".join(text).strip()
@@ -92,7 +137,6 @@ def _extract_send_data(message) -> dict:
     return {"text": full_text, "images": images[:image_limit]}
 
 
-@Bot.on_calling_api
 async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
     """Capture target-plugin output through NoneBot's supported API hook."""
     key = _capture_key.get()
@@ -102,58 +146,103 @@ async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
     message = data.get("message")
     if context is None or message is None:
         return
-    fixed = _rewrite_reply_id(message, context["original_id"], context["fake_id"])
+    protocol = onebot_protocol(bot) or context.get(
+        "protocol",
+        "onebot_v11",
+    )
+    fixed = _rewrite_reply_id(
+        message,
+        context["original_id"],
+        context["fake_id"],
+        protocol=protocol,
+    )
     data["message"] = fixed
-    context["messages"].append(_extract_send_data(fixed))
+    context["messages"].append(_extract_send_data(fixed, protocol=protocol))
 
 
-def _build_fake_message(command: str, source: dict | None = None) -> Message:
+V11Bot.on_calling_api(_capture_outgoing_api)
+V12Bot.on_calling_api(_capture_outgoing_api)
+
+
+def _build_fake_message(
+    command: str,
+    source: dict | None = None,
+    *,
+    protocol: str = "onebot_v11",
+) -> Any:
     source = source or {}
     mentions = source.get("mentions") or []
     reply_user = source.get("reply_user") or {}
-    result = Message()
+    message_class = _message_class(protocol)
+    segment_class: Any = V12MessageSegment if protocol == "onebot_v12" else V11MessageSegment
+    result: Any = message_class()
     last = 0
     for match in _AT_PATTERN.finditer(command):
         if match.start() > last:
-            result.append(MessageSegment.text(command[last : match.start()]))
+            result.append(segment_class.text(command[last : match.start()]))
         token = match.group(1)
         if token.startswith("at:"):
             index = int(match.group(2))
-            target = reply_user if index == 0 else (
-                mentions[index - 1] if 0 < index <= len(mentions) else {}
-            )
+            target = reply_user if index == 0 else (mentions[index - 1] if 0 < index <= len(mentions) else {})
             if qq := target.get("qq"):
-                result.append(MessageSegment.at(int(qq)))
+                result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
         elif token == "at_all":
             for target in mentions:
                 if qq := target.get("qq"):
-                    result.append(MessageSegment.at(int(qq)))
+                    result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
         last = match.end()
     if last < len(command):
-        result.append(MessageSegment.text(command[last:]))
+        result.append(segment_class.text(command[last:]))
     return result
 
 
-def _build_event(original, command: str, source: dict | None):
-    message = _build_fake_message(command, source)
+def _build_event(original: Any, command: str, source: dict | None) -> tuple[Any, int | str]:
+    protocol = (
+        "onebot_v12"
+        if isinstance(
+            original,
+            (V12GroupMessageEvent, V12PrivateMessageEvent),
+        )
+        else "onebot_v11"
+    )
+    message = _build_fake_message(command, source, protocol=protocol)
     for segment in getattr(original, "message", []):
         if segment.type == "image":
             message.append(segment)
-    fake_id = int(time.time_ns() % 10**15)
-    if fake_id == int(original.message_id):
-        fake_id += 1
+    if protocol == "onebot_v12":
+        fake_id: int | str = uuid.uuid4().hex
+    else:
+        fake_id = int(time.time_ns() % 10**15)
+        if fake_id == int(original.message_id):
+            fake_id += 1
+    if protocol == "onebot_v12":
+        kwargs = model_dump(original)
+        kwargs.update(
+            {
+                "id": uuid.uuid4().hex,
+                "message_id": str(fake_id),
+                "message": message,
+                "original_message": message,
+                "alt_message": command,
+            }
+        )
+        if isinstance(original, V12GroupMessageEvent):
+            return V12GroupMessageEvent(**kwargs), fake_id
+        if isinstance(original, V12PrivateMessageEvent):
+            return V12PrivateMessageEvent(**kwargs), fake_id
+        raise TypeError(f"不支持的 v12 事件类型: {type(original).__name__}")
     kwargs = {
         "time": original.time,
-        "self_id": original.self_id,
-        "post_type": original.post_type,
+        "self_id": getattr(original, "self_id"),
+        "post_type": getattr(original, "post_type"),
         "sub_type": original.sub_type,
         "user_id": original.user_id,
-        "message_type": original.message_type,
+        "message_type": getattr(original, "message_type"),
         "message_id": fake_id,
         "message": message,
         "raw_message": str(message),
         "font": getattr(original, "font", 0),
-        "sender": original.sender,
+        "sender": getattr(original, "sender"),
     }
     if (reply := getattr(original, "reply", None)) is not None:
         kwargs["reply"] = reply
@@ -193,9 +282,7 @@ async def _dispatch_full_bus(bot: Bot, event) -> None:
     state: dict = {}
     dependency_cache: dict = {}
     async with AsyncExitStack() as stack:
-        if not await _apply_event_preprocessors(
-            bot, event, state, stack, dependency_cache, show_log=False
-        ):
+        if not await _apply_event_preprocessors(bot, event, state, stack, dependency_cache, show_log=False):
             return
         try:
             TrieRule.get_value(bot, event, state)
@@ -218,9 +305,7 @@ async def _dispatch_full_bus(bot: Bot, event) -> None:
                     break
             if stopped:
                 break
-        await _apply_event_postprocessors(
-            bot, event, state, stack, dependency_cache, show_log=False
-        )
+        await _apply_event_postprocessors(bot, event, state, stack, dependency_cache, show_log=False)
 
 
 class EventSimulator:
@@ -236,26 +321,21 @@ class EventSimulator:
             return "执行失败：缺少目标插件或指令参数", []
         try:
             async with get_dispatch_controller().slot():
-                fake_event, fake_id = _build_event(
-                    original_event, command_str, format_message_dict
-                )
+                fake_event, fake_id = _build_event(original_event, command_str, format_message_dict)
                 capture_id = uuid.uuid4().hex
                 _captures[capture_id] = {
                     "messages": [],
                     "original_id": original_event.message_id,
                     "fake_id": fake_id,
+                    "protocol": onebot_protocol(bot, original_event) or "onebot_v11",
                 }
                 capture_token = _capture_key.set(capture_id)
                 event_token = _synthetic_plugin.set(plugin_name)
-                full_plugins = set(
-                    config_parser.get_config("legacy_full_event_plugins", [])
-                )
+                full_plugins = set(config_parser.get_config("legacy_full_event_plugins", []))
                 mode = "full" if plugin_name in full_plugins else "targeted"
                 runtime_metrics.dispatch_modes[mode] += 1
                 try:
-                    timeout = config_parser.get_config(
-                        "legacy_dispatch_timeout_seconds", 20
-                    )
+                    timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 20)
                     async with timeout_scope(timeout):
                         if mode == "full":
                             await _dispatch_full_bus(bot, fake_event)
@@ -267,9 +347,7 @@ class EventSimulator:
                 finally:
                     _synthetic_plugin.reset(event_token)
                     _capture_key.reset(capture_token)
-                    captured = _captures.pop(capture_id, {"messages": []})[
-                        "messages"
-                    ]
+                    captured = _captures.pop(capture_id, {"messages": []})["messages"]
                 texts = [item["text"] for item in captured if item["text"]]
                 images = [url for item in captured for url in item["images"]]
                 return "\n".join(texts), images

@@ -3,7 +3,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import time
 
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
+from nonebot.adapters import Bot
+from nonebot.adapters import Event as MessageEvent
 
 from . import full_metrics as _full_metrics
 from . import moe_llm as llm
@@ -19,6 +20,14 @@ from .agent_runtime import AgentRunState, DeadlineContext
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
+from .onebot_facade import (
+    event_scene,
+    event_sender_name,
+    event_time_seconds,
+    event_user_id,
+    onebot_protocol,
+)
+from .protocol_context import protocol_request_scope
 from .request_manager import register_request, unregister_request
 from .runtime_snapshot import runtime_snapshots
 from .state_store import BoundedValueStore
@@ -34,14 +43,20 @@ async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
 
     if is_synthetic_event():
         return False
-    if isinstance(event, GroupMessageEvent):
+    scene = event_scene(event)
+    if scene in {"group", "channel"}:
         return True
-    if isinstance(event, PrivateMessageEvent):
-        return bool(config_parser.get_config("private_chat_enabled") and str(event.user_id) in bot.config.superusers)
+    if scene == "private":
+        bot_config = getattr(bot, "config", None)
+        return bool(
+            config_parser.get_config("private_chat_enabled")
+            and event_user_id(event)
+            in {str(value) for value in getattr(bot_config, "superusers", set())}
+        )
     return False
 
 
-def reset_user_runtime_state(user_id: int) -> None:
+def reset_user_runtime_state(user_id: int | str) -> None:
     default_cooldown_store.reset_user(user_id)
     is_repeat_ask_dict[user_id] = False
 
@@ -55,7 +70,7 @@ async def _release_cooldown(
     store: CooldownStoreProtocol,
     lease: CooldownLease | None,
     *,
-    user_id: int,
+    user_id: int | str,
 ) -> None:
     if lease is not None:
         await store.release(lease)
@@ -91,9 +106,18 @@ async def handle_llm(
     admission_controller: AdmissionGateProtocol | None = None,
     resource_host: RuntimeResourceHost | None = None,
 ):
-    user_id = event.sender.user_id
-    if user_id is None:
+    normalized_user_id = event_user_id(event)
+    if not normalized_user_id:
         raise CooldownError("LLM cooldown 无法确认当前 user_id")
+    sender = getattr(event, "sender", None)
+    raw_user_id = getattr(
+        event,
+        "user_id",
+        getattr(sender, "user_id", normalized_user_id),
+    )
+    user_id: int | str = (
+        raw_user_id if isinstance(raw_user_id, (int, str)) else normalized_user_id
+    )
     cooldown_seconds = int(config_parser.get_config("cd_seconds", 120) or 0)
     deadline = DeadlineContext.from_timeout(config_parser.get_config("request_timeout_seconds", 180))
     selected_host = runtime_resource_host if resource_host is None else resource_host
@@ -106,7 +130,9 @@ async def handle_llm(
     is_finished: str | bool = False
     agent_request: AgentRequestRuntime | None = None
 
-    async def execute_agent(coordinator: AgentGenerationCoordinator) -> None:
+    async def execute_bound_agent(
+        coordinator: AgentGenerationCoordinator,
+    ) -> None:
         nonlocal agent_request, is_finished
         temp = "ai助手" if is_ai else temperament_manager.get_temperament(user_id)
         if not temp:
@@ -123,7 +149,10 @@ async def handle_llm(
                 pass
             agent_request = await AgentRequestRuntime.begin(
                 coordinator,
-                AgentRequestIdentity.from_event(event),
+                AgentRequestIdentity.from_event(
+                    event,
+                    platform=(onebot_protocol(bot, event) or "onebot"),
+                ),
                 request_id=request_id,
                 deadline=deadline,
             )
@@ -155,6 +184,19 @@ async def handle_llm(
         finally:
             unregister_request(request_id)
 
+    async def execute_agent(coordinator: AgentGenerationCoordinator) -> None:
+        bot_config = getattr(bot, "config", None)
+        is_superuser = normalized_user_id in {
+            str(value) for value in getattr(bot_config, "superusers", set())
+        }
+        async with protocol_request_scope(
+            bot,
+            event,
+            generation=coordinator.generation,
+            is_superuser=is_superuser,
+        ):
+            await execute_bound_agent(coordinator)
+
     async with _generation_redis_lease(
         selected_host,
         enabled=use_generation_cooldown or use_generation_admission,
@@ -169,11 +211,11 @@ async def handle_llm(
             action_store = default_cooldown_store if cooldown_store is None else cooldown_store
         cooldown_claim = await action_store.claim(
             user_id=user_id,
-            event_time=event.time,
+            event_time=event_time_seconds(event),
             cooldown_seconds=cooldown_seconds,
         )
         if cooldown_claim.retry_after_seconds:
-            sender_name = getattr(event.sender, "card", None) or event.sender.nickname
+            sender_name = event_sender_name(event)
             await matcher.finish(f"{sender_name}的 LLM 对话冷却中，请在 {cooldown_claim.retry_after_seconds} 秒后重试。")
 
         admission_started_at = time.monotonic()

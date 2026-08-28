@@ -8,6 +8,52 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: Repository quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: >-
+          python -m pip install .
+          ruff==0.16.2
+          pyright==1.1.411
+      - run: ruff check nonebot_plugin_moellmchats tests scripts
+      - name: Check formatting of the protocol gate
+        run: >-
+          ruff format --check
+          nonebot_plugin_moellmchats/builtin_tools.py
+          nonebot_plugin_moellmchats/event_simulator.py
+          nonebot_plugin_moellmchats/onebot_facade.py
+          nonebot_plugin_moellmchats/protocol_broker.py
+          nonebot_plugin_moellmchats/protocol_context.py
+          nonebot_plugin_moellmchats/protocol_registry.py
+          nonebot_plugin_moellmchats/tool_contracts.py
+          scripts
+          tests/test_onebot_facade.py
+          tests/test_protocol_broker.py
+          tests/test_protocol_context.py
+          tests/test_protocol_registry.py
+      - name: Check protocol type boundaries
+        run: >-
+          pyright
+          --pythonpath "$(command -v python)"
+          nonebot_plugin_moellmchats/builtin_tools.py
+          nonebot_plugin_moellmchats/event_simulator.py
+          nonebot_plugin_moellmchats/onebot_facade.py
+          nonebot_plugin_moellmchats/protocol_broker.py
+          nonebot_plugin_moellmchats/protocol_context.py
+          nonebot_plugin_moellmchats/protocol_registry.py
+          nonebot_plugin_moellmchats/tool_contracts.py
+          scripts/generate_protocol_manifests.py
+          scripts/check_repository.py
+          scripts/check_distribution.py
+      - run: python scripts/check_repository.py
+      - run: python -m pip check
+
   test:
     name: Python ${{ matrix.python-version }} tests
     runs-on: ubuntu-latest
@@ -25,7 +71,7 @@ jobs:
       - if: matrix.python-version == '3.12'
         run: python -m pip install nonebot2==2.4.4 nonebot-adapter-onebot==2.4.6
       - run: ruff check nonebot_plugin_moellmchats tests
-      - run: pytest -q --ignore=tests/test_sandbox_integration.py
+      - run: python -m pytest -q --ignore=tests/test_sandbox_integration.py
 
   sandbox:
     name: Mandatory root sandbox
@@ -83,6 +129,7 @@ jobs:
           set -euo pipefail
           python -m build --sdist --wheel --outdir dist/ .
           python -m twine check dist/*.whl dist/*.tar.gz
+          python scripts/check_distribution.py dist/*.whl dist/*.tar.gz
           mapfile -t WHEELS < <(find dist -maxdepth 1 -type f -name '*.whl' -print | sort)
           mapfile -t SDISTS < <(find dist -maxdepth 1 -type f -name '*.tar.gz' -print | sort)
           test "${#WHEELS[@]}" -eq 1
@@ -203,6 +250,8 @@ jobs:
           import nonebot_plugin_moellmchats as package
           from nonebot_plugin_moellmchats.runtime_reload import runtime_reloader
           from nonebot_plugin_moellmchats.runtime_snapshot import runtime_snapshots
+          from nonebot_plugin_moellmchats.onebot_facade import make_text_message
+          from nonebot_plugin_moellmchats.protocol_registry import protocol_registry
 
           source_root = Path(os.environ["SOURCE_ROOT"]).resolve()
           module_path = Path(package.__file__).resolve()
@@ -211,6 +260,11 @@ jobs:
           assert package_metadata["Name"] == expected["distribution"]
           assert package_metadata["Version"] == expected["version"]
           assert package_metadata["Requires-Python"] == expected["requires_python"]
+          assert str(make_text_message("onebot_v11", "v11 package smoke")) == "v11 package smoke"
+          assert str(make_text_message("onebot_v12", "v12 package smoke")) == "v12 package smoke"
+          assert len(protocol_registry.standard_v11_actions) == 38
+          assert len(protocol_registry.v12_actions) == 31
+          assert len(protocol_registry.napcat_actions) == 175
 
           result = asyncio.run(runtime_reloader.reload("package-smoke"))
           snapshot = runtime_snapshots.current()
@@ -222,7 +276,7 @@ jobs:
   release-gate:
     name: release-gate
     if: ${{ always() }}
-    needs: [test, sandbox, build, package]
+    needs: [quality, test, sandbox, build, package]
     runs-on: ubuntu-latest
     steps:
       - name: Require every release check
@@ -230,6 +284,7 @@ jobs:
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
           SANDBOX_RESULT: ${{ needs.sandbox.result }}
           TEST_RESULT: ${{ needs.test.result }}
         run: |
@@ -238,4 +293,5 @@ jobs:
           test "$SANDBOX_RESULT" = success
           test "$BUILD_RESULT" = success
           test "$PACKAGE_RESULT" = success
+          test "$QUALITY_RESULT" = success
           echo "RELEASE_GATE_OK"
