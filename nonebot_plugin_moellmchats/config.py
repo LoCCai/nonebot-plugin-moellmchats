@@ -8,6 +8,7 @@ from typing import Any
 
 import nonebot_plugin_localstore as store
 import ujson as json
+from nonebot.log import logger
 
 from .private_files import (
     atomic_write_private_text,
@@ -174,6 +175,15 @@ class ConfigParser:
         if not isinstance(loaded, dict):
             raise ValueError("config.json 顶层必须是对象")
 
+        unknown_keys = sorted(set(loaded) - set(DEFAULT_CONFIG))
+        if unknown_keys:
+            # 拼错的键此前会被静默忽略，用户以为生效实际从未生效。
+            # 仍保留在配置映射中，避免回写时删掉用户文件里的额外键。
+            logger.warning(
+                "config.json 包含未知配置项（不会生效，请检查拼写）: {}",
+                ", ".join(unknown_keys),
+            )
+
         candidate = deepcopy(DEFAULT_CONFIG)
         candidate.update(loaded)
         self._validate(candidate)
@@ -212,6 +222,12 @@ class ConfigParser:
             "protocol_tools_napcat_extensions_enabled",
             "protocol_tools_low_risk_direct_enabled",
             "protocol_tools_business_first",
+            "runtime_watch_enabled",
+            "generated_tools_enabled",
+            "fastai_enabled",
+            "emotions_enabled",
+            "private_chat_enabled",
+            "show_datetime",
         ):
             if type(candidate.get(field)) is not bool:
                 raise ValueError(f"config.json: {field} 必须是布尔值")
