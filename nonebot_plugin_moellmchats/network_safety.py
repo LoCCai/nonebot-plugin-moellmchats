@@ -50,7 +50,7 @@ async def validate_public_url(url: str, *, dns_timeout: float = 2.0) -> None:
             ),
             timeout=dns_timeout,
         )
-    except TimeoutError as error:
+    except asyncio.TimeoutError as error:
         raise ValueError("网络工具 URL DNS 解析超时") from error
     except OSError as error:
         raise ValueError("网络工具 URL 无法解析") from error

@@ -5,6 +5,7 @@ import time
 
 from nonebot.adapters import Bot
 from nonebot.adapters import Event as MessageEvent
+from nonebot.log import logger
 
 from . import full_metrics as _full_metrics
 from . import moe_llm as llm
@@ -17,6 +18,7 @@ from .agent_context_runtime import (
     runtime_resource_host,
 )
 from .agent_runtime import AgentRunState, DeadlineContext
+from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
@@ -36,6 +38,7 @@ from .temperament_manager import temperament_manager
 cd = BoundedValueStore(lambda: 0)
 default_cooldown_store = MemoryCooldownStore(cd)
 is_repeat_ask_dict = BoundedValueStore(lambda: False)
+_CANCEL_NOTICE_TIMEOUT_SECONDS = 1.0
 
 
 async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
@@ -75,6 +78,19 @@ async def _release_cooldown(
     if lease is not None:
         await store.release(lease)
     is_repeat_ask_dict[user_id] = False
+
+
+async def _send_cancel_notice(matcher) -> None:
+    try:
+        async with timeout_scope(_CANCEL_NOTICE_TIMEOUT_SECONDS):
+            await matcher.send("当前 LLM 请求已被超级管理员终止。")
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        logger.debug(
+            "取消通知发送失败，保持取消传播: error_type={}",
+            type(error).__name__,
+        )
 
 
 @asynccontextmanager
@@ -259,7 +275,8 @@ async def handle_llm(
                 cooldown_claim.lease,
                 user_id=user_id,
             )
-            await matcher.finish("当前 LLM 请求已被超级管理员终止。")
+            await _send_cancel_notice(matcher)
+            raise
         except Exception:
             await _release_cooldown(
                 action_store,

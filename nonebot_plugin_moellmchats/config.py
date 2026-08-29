@@ -6,6 +6,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from nonebot.log import logger
 import nonebot_plugin_localstore as store
 import ujson as json
 
@@ -175,6 +176,13 @@ class ConfigParser:
         if not isinstance(loaded, dict):
             raise ValueError("config.json 顶层必须是对象")
 
+        unknown_keys = sorted(set(loaded) - set(DEFAULT_CONFIG))
+        if unknown_keys:
+            logger.warning(
+                "config.json 包含未知配置项（不会生效，请检查拼写）: {}",
+                ", ".join(unknown_keys),
+            )
+
         candidate = deepcopy(DEFAULT_CONFIG)
         candidate.update(loaded)
         self._validate(candidate)
@@ -214,6 +222,12 @@ class ConfigParser:
             "protocol_tools_low_risk_direct_enabled",
             "protocol_tools_business_first",
             "tool_progress_messages_enabled",
+            "runtime_watch_enabled",
+            "generated_tools_enabled",
+            "fastai_enabled",
+            "emotions_enabled",
+            "private_chat_enabled",
+            "show_datetime",
         ):
             if type(candidate.get(field)) is not bool:
                 raise ValueError(f"config.json: {field} 必须是布尔值")

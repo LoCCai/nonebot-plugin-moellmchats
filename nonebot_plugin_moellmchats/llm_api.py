@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Mapping
 import datetime
+import hashlib
 import re
 
 from nonebot.log import logger
@@ -137,6 +138,46 @@ class LlmApiMixin:
             return any(self._payload_contains_image(item) for item in value)
         return False
 
+    @staticmethod
+    def _is_sse_done(line: bytes) -> bool:
+        payload = line.strip()
+        if payload.startswith(b"data:"):
+            payload = payload[5:].strip()
+        return payload == b"[DONE]"
+
+    @staticmethod
+    def _decode_sse_payload(line: bytes) -> dict | None:
+        """Return one JSON object without exposing malformed provider data."""
+
+        payload = line.strip()
+        if payload.startswith(b"data:"):
+            payload = payload[5:].strip()
+        if not payload or payload.startswith(b":"):
+            return None
+        # SSE control fields and JSON arrays/scalars are not chat chunks.  In
+        # particular, rejecting arrays before ``.get`` prevents a malformed
+        # provider response from escaping into the retry path.
+        if not payload.startswith(b"{"):
+            return None
+        try:
+            decoded = payload.decode("utf-8")
+            value = json.loads(decoded)
+        except (UnicodeError, ValueError):
+            logger.debug(
+                "忽略无法解析的 SSE 数据行: payload_bytes={} payload_sha256={}",
+                len(payload),
+                hashlib.sha256(payload).hexdigest()[:16],
+            )
+            return None
+        if not isinstance(value, dict):
+            logger.debug(
+                "忽略非对象 SSE 数据行: payload_bytes={} payload_sha256={}",
+                len(payload),
+                hashlib.sha256(payload).hexdigest()[:16],
+            )
+            return None
+        return value
+
     async def _check_400_error(self, response, request_data=None) -> str | None:
         """检查是否为400错误及敏感内容拦截，返回错误提示或None"""
         if response.status == 400:
@@ -215,22 +256,12 @@ class LlmApiMixin:
                 current_segment = 0
                 jump_out = False  # 判断是否跳出循环
                 async for line in resp.content:
-                    if (
-                        not line
-                        or line.startswith(b"data: [DONE]")
-                        or line.startswith(b"[DONE]")
-                        or jump_out
-                    ):
+                    if not line or jump_out or self._is_sse_done(line):
                         break  # 结束标记，退出循环
 
-                    if line.startswith(b"data:"):
-                        decoded = line[5:].decode("utf-8")
-                    elif line.startswith(b""):
-                        decoded = line.decode("utf-8")
-                    if not decoded.strip() or decoded.startswith(":"):
+                    json_data = self._decode_sse_payload(line)
+                    if json_data is None:
                         continue
-
-                    json_data = json.loads(decoded)
                     if usage := json_data.get("usage"):
                         self._record_token_usage(usage)
                     content = ""

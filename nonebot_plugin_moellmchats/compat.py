@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+
+# ``timeout`` below consistently raises the built-in exception.  On Python
+# 3.10 ``asyncio.TimeoutError`` is still a distinct class, so chat callers must
+# import this alias instead of guessing which timeout primitive raised.
+TimeoutError = builtins.TimeoutError
 
 if hasattr(asyncio, "timeout"):
     timeout = asyncio.timeout

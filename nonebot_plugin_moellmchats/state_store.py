@@ -30,6 +30,10 @@ class BoundedDequeStore(MutableMapping[Any, deque]):
         self._evict()
         return value
 
+    def __contains__(self, key: object) -> bool:
+        self._prune(time.monotonic())
+        return key in self._values
+
     def __setitem__(self, key: Any, value: deque) -> None:
         self._values[key] = (time.monotonic(), value)
         self._values.move_to_end(key)
@@ -81,6 +85,10 @@ class BoundedValueStore(MutableMapping[Any, Any]):
         self._values[key] = (time.monotonic(), value)
         self._values.move_to_end(key)
         return value
+
+    def __contains__(self, key: object) -> bool:
+        self._prune()
+        return key in self._values
 
     def __setitem__(self, key: Any, value: Any) -> None:
         self._values[key] = (time.monotonic(), value)

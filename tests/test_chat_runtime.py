@@ -52,6 +52,32 @@ class FakeMatcher:
         self.messages.append(str(message))
         raise MatcherFinished
 
+    async def send(self, message: str) -> None:
+        self.messages.append(str(message))
+
+
+@pytest.mark.asyncio
+async def test_cancel_notice_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SlowMatcher:
+        async def send(self, _message: str) -> None:
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(chat_runtime, "_CANCEL_NOTICE_TIMEOUT_SECONDS", 0.01)
+    await asyncio.wait_for(
+        chat_runtime._send_cancel_notice(SlowMatcher()),
+        timeout=0.2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_notice_preserves_repeated_cancellation() -> None:
+    class CancelMatcher:
+        async def send(self, _message: str) -> None:
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await chat_runtime._send_cancel_notice(CancelMatcher())
+
 
 def _event(*, user_id: int = 42, timestamp: int = 1_000):
     return SimpleNamespace(
@@ -483,7 +509,7 @@ async def test_chat_cancellation_records_cancelled_terminal_before_finish(
     task.cancel()
 
     try:
-        with pytest.raises(MatcherFinished):
+        with pytest.raises(asyncio.CancelledError):
             await task
     finally:
         await host.close()

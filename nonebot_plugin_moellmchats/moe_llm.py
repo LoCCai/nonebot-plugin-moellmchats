@@ -1,6 +1,6 @@
 import asyncio
-from asyncio import TimeoutError
 from collections import Counter
+from collections.abc import Awaitable, Callable
 import datetime
 import random
 import time
@@ -15,6 +15,7 @@ from .agent_context_runtime import (
     AgentRequestRuntime,
 )
 from .agent_runtime import AgentRunState, AgentStepStatus, AgentStepType
+from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .llm_api import LlmApiMixin
@@ -36,6 +37,8 @@ from .tool_manager import tool_manager
 from .utils import get_emotion, get_emotions_names, get_session, parse_emotion
 
 __all__ = ["MoeLlm", "context_dict", "token_usage_history"]
+
+_PROGRESS_NOTICE_TIMEOUT_SECONDS = 1.0
 
 
 class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
@@ -196,6 +199,40 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
 
     def _llm_request_timeout(self) -> aiohttp.ClientTimeout:
         return aiohttp.ClientTimeout(total=self._remaining_request_seconds())
+
+    async def _send_retry_notice(self, retry_times: int) -> None:
+        try:
+            async with timeout_scope(_PROGRESS_NOTICE_TIMEOUT_SECONDS):
+                await self.bot.send(
+                    self.event,
+                    f"api又卡了呐！第 {retry_times + 1} 次尝试，请勿多次发送~",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "重试通知发送失败，继续当前请求: error_type={}",
+                type(error).__name__,
+            )
+
+    async def _call_tool_summary_safely(
+        self,
+        operation: Callable[[], Awaitable[Any]],
+    ) -> str:
+        try:
+            result = await self._call_model_with_trace(
+                operation,
+                input_preview="tool summary retry",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning(
+                "工具总结请求失败，使用固定兜底: error_type={}",
+                type(error).__name__,
+            )
+            return ""
+        return str(result or "")
 
     async def _call_model_with_trace(
         self,
@@ -394,10 +431,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             for retry_times in range(max_retry_times):
                 self._last_api_error_non_retryable = False
                 if retry_times > 0:
-                    await self.bot.send(
-                        self.event,
-                        f"api又卡了呐！第 {retry_times + 1} 次尝试，请勿多次发送~",
-                    )
+                    await self._send_retry_notice(retry_times)
                     await asyncio.sleep(2 ** (retry_times + 1))
                 try:
                     if current_stream_flag:
@@ -530,11 +564,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         self._llm_request_timeout(),
                     )
 
-                result_text = await self._call_model_with_trace(
-                    summary_operation,
-                    input_preview="tool summary retry",
-                )
-                result_text = str(result_text or "")
+                result_text = await self._call_tool_summary_safely(summary_operation)
                 if self.agent_runtime is not None:
                     await self.agent_runtime.flush_usage()
                 if result_text:

@@ -54,7 +54,10 @@ class MemberNameCache:
         except asyncio.CancelledError:
             raise
         except Exception:
-            name = user_id_text
+            # A transient adapter failure is not a valid cache result.  Return
+            # the stable fallback for this caller, but let the next request
+            # retry immediately instead of pinning the QQ id for the full TTL.
+            return user_id_text
         finally:
             if task.done():
                 async with self._lock:
@@ -91,18 +94,16 @@ class MemberNameCache:
                 if protocol == "onebot_v11":
                     parameters["no_cache"] = False
                 member = await bot.get_group_member_info(**parameters)
-            return str(
-                member.get("card")
-                or member.get("nickname")
-                or member.get("user_displayname")
-                or member.get("user_name")
-                or user_id
-            )
         except TimeoutError:
             runtime_metrics.member_lookup_timeouts += 1
-            return str(user_id)
-        except Exception:
-            return str(user_id)
+            raise
+        return str(
+            member.get("card")
+            or member.get("nickname")
+            or member.get("user_displayname")
+            or member.get("user_name")
+            or user_id
+        )
 
     def clear(self) -> None:
         self._cache.clear()
