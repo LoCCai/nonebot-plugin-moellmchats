@@ -47,7 +47,7 @@
 
 - **0.25 工具包热插拔**：超级管理员可让聊天模型生成工具草稿，由总结模型复核并分页核对 manifest、源码、测试、风险、capability、diff 与 SHA-256；批准时必须同时提交草稿 ID、至少 8 位内容哈希前缀和页面给出的完整 64 位 review stamp。`lifecycle_state.json` schema v3 以 revision/state digest CAS 管理唯一活动版本，并兼容读取 schema v2；版本按完整哈希只读保存，可无重启停用或回滚。生成工具即使声明 `permission=user`，也会默认以 `superuser` 生效，只有超管对精确包哈希和工具做人工授权后才可向普通用户开放
 
-- **Capability 受控的隔离 runner**：文件和生成工具不在 NoneBot 主进程执行，使用 nobody、环境变量白名单、资源上限、独立进程组和全局单并发。Capability 严格限定为五个布尔字段：`network`、`process`、`workspace`、`host_filesystem`、`secrets`；effective 值取申请与管理上限的交集。Generated Tool 的管理上限只开放私有 workspace；Custom File 只有静态字面量声明才能放宽能力。`secrets` 仍是预留字段，即使为 true 也不会注入宿主密钥。完整路径要求 Linux，隔离前提不足时 fail closed，详见[自定义工具文档](docs/custom-tools.md#runner-隔离边界与运行要求)
+- **Capability 受控的隔离 runner**：文件和生成工具不在 NoneBot 主进程执行，使用 nobody、环境变量白名单、资源上限、独立进程组和全局单并发。Capability v2 可表达 network 主机 allowlist、workspace/host 读写及预留的 database/bot/secrets 权限；旧五布尔格式仍兼容，effective 始终取申请与管理上限的交集。Generated Tool 的管理上限只开放私有 workspace；Custom File 只有静态字面量声明才能放宽能力，联网仍只能经 `safe_request`。`secrets` 即使获准也不会注入宿主密钥。完整路径要求 Linux，隔离前提不足时 fail closed，详见[自定义工具文档](docs/custom-tools.md#runner-隔离边界与运行要求)
 
 - **结构化预检与固定制品**：Custom File / Generated 候选 generation 会先经过输出 `ALLOW` / `DENY` / `CAPABILITY_REQUIRED` / `RISK` 的 AST Policy，再把源码、Schema 和安全契约固化为不可变 `ToolArtifact`；执行前复核 artifact digest，Generated Tool 还会复核 bundle digest，活动请求不会回读后来被修改的源文件
 
@@ -55,7 +55,7 @@
 
 ## 📦 安装
 
-截至 2026-08-29，当前已有完整远程证据、可进入隔离测试的仍是 0.26.2 精确 Git 提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`。push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success，且各只有一个成功的 `release-gate`。0.26.3 的 K-09 修复正在当前分支完成本地与远程门禁，取得精确实现 SHA 的 push/PR 双绿灯前不得按移动分支安装。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 本任务不会合并；详细进度见 [K-09 实施状态](docs/规划/10-code-review-fixes-20260829.md)。PyPI 和七七实际安装状态必须分别核对。
+截至 2026-08-29，当前推荐进入隔离测试的 0.26.3 精确 Git 提交是 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。它在 0.26.2 基础上增加连续取消清理、分类 single-flight、Custom File 安全 HTTP、walrus AST 加固和结构化 400 判定；push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 success，且各恰好一个成功的 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，本任务不会合并。`e340fb7…` 是 0.26.2 历史安装点；详细边界见 [K-09 实施状态](docs/规划/10-code-review-fixes-20260829.md)。PyPI 和七七实际安装状态必须分别核对。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
@@ -64,7 +64,7 @@
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e340fb77d9c215316c9d4afd69799aedbfcf34fc"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@86ee2a6a35d57e0f8e6f14bae2e3af39b8899241"
 ```
 
 ### 项目使用 pip/venv 时
@@ -73,7 +73,7 @@ uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugi
 
 ```bash
 python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e340fb77d9c215316c9d4afd69799aedbfcf34fc"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@86ee2a6a35d57e0f8e6f14bae2e3af39b8899241"
 ```
 
 

@@ -6,7 +6,7 @@ lastmod: 2026-08-29T00:00:00+00:00
 
 # K-09 当前基线审查修复（0.26.3）
 
-> 当前状态：核心语义重放已通过第一道远程双门禁；高风险并发与网络安全批次已经完成 0.26.3 本地全门禁，尚待提交并取得精确实现 SHA 的 push/PR 双绿灯。本阶段不合并 PR、不发布 PyPI、不修改或重启七七，也不发送真实 QQ 动作。
+> 当前状态：K-09 的核心语义重放与高风险并发/网络安全批次均已通过各自精确 SHA 的 push/PR 双门禁。0.26.3 可以进入隔离测试，但本阶段不合并 PR、不发布 PyPI、不修改或重启七七，也不发送真实 QQ 动作。
 
 ## 基线与旧分支事实更正
 
@@ -24,14 +24,16 @@ K-09 只以 `feat/generated-tool-bundles` 的精确基线 `74f3c638adf47dc8ca556
 | 节点 | 依赖 | 状态 | 交付语义 |
 | --- | --- | --- | --- |
 | K-09A 核心 11 项语义重放 | K-08 | 已实现并通过双门禁 | 个人上下文键、有界 Store 成员检查、SSE、总结兜底、取消、重试通知、超时、成员缓存、`ai` 边界、Tavily TLS/占位密钥、布尔配置与未知键 |
-| K-09B PostgreSQL 取消 cleanup | K-09A | 已实现，本地定向通过 | transaction factory 与 spool writer 均使用 shield/settle；连续取消不能跳过 rollback/close，cleanup 异常只作类型化附加证据 |
-| K-09C 分类 single-flight | K-09B | 已实现，本地定向通过 | 完整 key 同键只构建一次，异键并发；等待者取消不取消共享任务；失败可重试，发布冲突回读精确胜出记录 |
-| K-09D 安全 HTTP 门面 | K-09C | 已实现，本地定向通过 | Custom File 仅能使用注入的 `safe_request`；每跳 DNS/公网/allowlist 重验、IP 固定连接、手动重定向、TLS 降级和跨域敏感头防护，共享总时间与大小预算 |
-| K-09E AST 与 400 判定 | K-09D | 已实现，本地定向通过 | `NamedExpr`/walrus 不再绕过 process/network/mutating 证据；`safe_request` 的非 GET/HEAD 或动态 method 保守提升为 mutating；400 只匹配结构化 `code/type` 精确值 |
-| K-09F 版本、文档和制品 | K-09E | 已实现，本地制品通过 | 版本 0.26.3；Custom File 迁移、架构、排错、依赖、安装、CHANGELOG 与规划状态同步；不增加 migration 或配置项 |
-| K-09G 完整本地与远程门禁 | K-09F | 本地已通过，远程待关闭 | Python 3.10～3.13、静态、仓库/文档/依赖、sandbox、制品、包外 v11/v12 加载均通过；实现 SHA 的 push/PR 双 Actions 尚待取得 |
+| K-09B PostgreSQL 取消 cleanup | K-09A | 已实现并通过双门禁 | transaction factory 与 spool writer 均使用 shield/settle；连续取消不能跳过 rollback/close，cleanup 异常只作类型化附加证据 |
+| K-09C 分类 single-flight | K-09B | 已实现并通过双门禁 | 完整 key 同键只构建一次，异键并发；等待者取消不取消共享任务；失败可重试，发布冲突回读精确胜出记录 |
+| K-09D 安全 HTTP 门面 | K-09C | 已实现并通过双门禁 | Custom File 仅能使用注入的 `safe_request`；每跳 DNS/公网/allowlist 重验、IP 固定连接、手动重定向、TLS 降级和跨域敏感头防护，共享总时间与大小预算 |
+| K-09E AST 与 400 判定 | K-09D | 已实现并通过双门禁 | `NamedExpr`/walrus 不再绕过 process/network/mutating 证据；`safe_request` 的非 GET/HEAD 或动态 method 保守提升为 mutating；400 只匹配结构化 `code/type` 精确值 |
+| K-09F 版本、文档和制品 | K-09E | 已实现并通过双门禁 | 版本 0.26.3；Custom File 迁移、架构、排错、依赖、安装、CHANGELOG 与规划状态同步；不增加 migration 或配置项 |
+| K-09G 完整本地与远程门禁 | K-09F | 已关闭 | Python 3.10～3.13、静态、仓库/文档/依赖、sandbox、制品、包外 v11/v12 加载，以及实现 SHA 的 push/PR 双 Actions 均通过 |
 
-K-09A 实现提交为 `0a9b7c4cf7858926ef0801369d91641cffaadc1c`，只推送到本仓库 `origin/feat/generated-tool-bundles`。它的 push run [`33240925332`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33240925332) 与 PR run [`33240926968`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33240926968) 均全部成功且各有唯一成功 `release-gate`。这两个 run 只放行 K-09A，不得冒充尚未推送的 K-09B～K-09G。
+K-09A 实现提交为 `0a9b7c4cf7858926ef0801369d91641cffaadc1c`，只推送到本仓库 `origin/feat/generated-tool-bundles`。它的 push run [`33240925332`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33240925332) 与 PR run [`33240926968`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33240926968) 均全部成功且各有唯一成功 `release-gate`。这两个 run 只放行 K-09A。
+
+K-09B～K-09G 的 0.26.3 实现提交为 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。它的 push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 `completed/success`，且各恰好一个 `release-gate` 成功；在实现提交门禁核验时，本地 HEAD、remote-tracking、`ls-remote` 和 PR head 均精确命中该 SHA。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，没有合并。
 
 ## 安全 HTTP 契约
 
@@ -54,10 +56,10 @@ K-09A 实现提交为 `0a9b7c4cf7858926ef0801369d91641cffaadc1c`，只推送到�
 - Python 3.10/3.12 × wheel/sdist 四组 checkout 外加载均验证 v11/v12 消息门面、38/31/175 协议清单和 generation 1 reload；
 - 内置 `_example.py` 从源码 AST 提取后无控制字符或语法 warning，假 `safe_request` 验证 script/style 内容不会泄漏到提取结果。
 
-这些制品只存在于独立临时目录，没有提交本地 `dist/`。最终远程证据只能在 K-09G 的精确实现 SHA 推送后补录。
+这些制品只存在于独立临时目录，没有提交本地 `dist/`。远程 Actions 对同一实现 SHA 重新构建并完成了上述双门禁；本地临时制品不冒充 GitHub artifact。
 
 任何本地 Fake Bot、隔离 worker 或 CI 结果都不证明七七已安装、重载或完成真实 QQ/模型/PostgreSQL/Redis 验收。
 
 ## 恢复点
 
-继续时先核对当前工作树、`uv.lock` 仍未跟踪且未改动，再提交 K-09B～K-09G 的实现与候选文档，推送本仓库分支并核对精确 SHA 的 push/pull_request 双门禁。双绿灯前，0.26.3 不得写成可安装候选。剩余设计问题见[11-pending-issues-backlog](./11-pending-issues-backlog.md)。
+0.26.3 的实现恢复点是 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`；安装与回退必须使用完整 SHA，不能跟随移动分支。继续维护时先核对 `uv.lock` 仍未跟踪且未被本阶段提交，再从[11-pending-issues-backlog](./11-pending-issues-backlog.md)按依赖另开设计批次。

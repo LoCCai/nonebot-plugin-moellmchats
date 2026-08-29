@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档正在收口 0.26.3 K-09。已有完整远程证据、可进入隔离测试的仍是 0.26.2 精确提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`；0.26.3 在取得精确实现 SHA 的 push/PR 双绿灯前不得按移动分支安装。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 本任务不合并。当前边界见[K-09 实施状态](./规划/10-code-review-fixes-20260829.md)，PyPI 与七七实际安装状态仍需分别核对。
+> 当前文档面向 0.26.3 隔离候选 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 success，且各恰好一个成功 `release-gate`；PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。完整边界见[K-09 实施状态](./规划/10-code-review-fixes-20260829.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
