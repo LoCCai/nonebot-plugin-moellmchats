@@ -8,6 +8,7 @@ from nonebot.log import logger
 import ujson as json
 
 from .llm_state import token_usage_history
+from .model_error_policy import is_content_policy_error_info
 from .request_manager import get_current_request_elapsed
 
 
@@ -188,17 +189,10 @@ class LlmApiMixin:
             # 1. 尝试解析 API 返回的具体报错信息
             error_info = self._extract_api_error_info(error_content)
             detail_msg = error_info.get("message", "")
-            # 2. 敏感词拦截逻辑保持不变
-            sensitive_keywords = [
-                "DataInspectionFailed",  # 阿里
-                "content_filter",  # OpenAI/Azure
-                "sensitive",
-                "safety",
-                "violation",
-                "audit",
-                "prohibited",
-            ]
-            if any(k.lower() in error_content.lower() for k in sensitive_keywords):
+            # Only exact normalized structured code/type values prove a
+            # content-policy rejection.  Free-form messages mentioning words
+            # such as "audit" or "safety" are ordinary provider errors.
+            if is_content_policy_error_info(error_info):
                 return "图片或内容可能包含敏感信息"
             if request_data is not None:
                 logger.warning(

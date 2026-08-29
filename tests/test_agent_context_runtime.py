@@ -189,6 +189,27 @@ class _RecordingSession(AsyncSession):
         self.events.append("close")
 
 
+class _BlockingCleanupSession(_RecordingSession):
+    def __init__(self, events: list[str]) -> None:
+        super().__init__(events)
+        self.rollback_started = asyncio.Event()
+        self.rollback_release = asyncio.Event()
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
+
+    async def rollback(self) -> None:
+        self.events.append("rollback.start")
+        self.rollback_started.set()
+        await self.rollback_release.wait()
+        self.events.append("rollback.done")
+
+    async def close(self) -> None:
+        self.events.append("close.start")
+        self.close_started.set()
+        await self.close_release.wait()
+        self.events.append("close.done")
+
+
 class _RecordingSpoolWriter:
     def __init__(self) -> None:
         self.usage: list[tuple[ModelUsageRecord, ...]] = []
@@ -735,6 +756,42 @@ async def test_transaction_cancellation_rolls_back_closes_and_propagates() -> No
         await factory.execute(operation)
 
     assert events == ["begin", "operation", "rollback", "close"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_transaction_repeated_cancellation_cannot_skip_rollback_or_close() -> None:
+    resources, engine = _database_resources()
+    events: list[str] = []
+    session = _BlockingCleanupSession(events)
+    factory = PostgresTransactionFactory(
+        resources,
+        sessionmaker_factory=lambda *_args, **_kwargs: lambda: session,
+    )
+
+    async def operation(_repositories) -> None:
+        events.append("operation")
+        raise asyncio.CancelledError
+
+    task = asyncio.create_task(factory.execute(operation))
+    await asyncio.wait_for(session.rollback_started.wait(), timeout=1)
+    task.cancel()
+    session.rollback_release.set()
+    await asyncio.wait_for(session.close_started.wait(), timeout=1)
+    task.cancel()
+    session.close_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert events == [
+        "begin",
+        "operation",
+        "rollback.start",
+        "rollback.done",
+        "close.start",
+        "close.done",
+    ]
     await engine.dispose()
 
 

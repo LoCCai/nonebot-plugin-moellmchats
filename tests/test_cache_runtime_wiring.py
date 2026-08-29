@@ -10,7 +10,6 @@ import nonebot_plugin_moellmchats.categorize as categorize_module
 from nonebot_plugin_moellmchats.categorize import Categorize
 from nonebot_plugin_moellmchats.classification_cache import (
     ClassificationCacheRecord,
-    ClassificationCacheUnavailableError,
     MemoryClassificationCache,
 )
 from nonebot_plugin_moellmchats.llm_payload import LlmPayloadMixin
@@ -328,12 +327,11 @@ async def test_catalog_consumer_rejects_generation_and_backend_timeout(
             runtime_generation=snapshot.generation + 1,
         )
 
-    with pytest.raises(ToolCatalogCacheUnavailableError, match="lookup"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=_TimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=_TimeoutCache(),
+    ).get_category() == ("1", False, [])
 
 
 @pytest.mark.asyncio
@@ -692,7 +690,7 @@ async def test_timeout_fallback_classification_is_never_published(
 
 
 @pytest.mark.asyncio
-async def test_classification_cache_timeout_does_not_become_model_fallback(
+async def test_classification_cache_timeout_degrades_without_model_bypass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_runtime(monkeypatch)
@@ -700,13 +698,12 @@ async def test_classification_cache_timeout_does_not_become_model_fallback(
     session = _FakeSession([])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
 
-    with pytest.raises(ClassificationCacheUnavailableError, match="lookup"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=MemoryToolCatalogCache(),
-            classification_cache=_TimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+        classification_cache=_TimeoutCache(),
+    ).get_category() == ("1", False, [])
 
     assert session.call_count == 0
 
@@ -718,12 +715,11 @@ async def test_cache_publish_timeouts_are_normalized_without_bypass(
     _configure_runtime(monkeypatch)
     snapshot = _CountingSnapshot(_snapshot())
 
-    with pytest.raises(ToolCatalogCacheUnavailableError, match="publish"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=_PublishTimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=_PublishTimeoutCache(),
+    ).get_category() == ("1", False, [])
 
     schema = _PayloadHarness(snapshot, _PublishTimeoutCache())
     with pytest.raises(ToolSchemaCacheUnavailableError, match="publish"):
@@ -731,13 +727,12 @@ async def test_cache_publish_timeouts_are_normalized_without_bypass(
 
     session = _FakeSession([_model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
-    with pytest.raises(ClassificationCacheUnavailableError, match="publish"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=MemoryToolCatalogCache(),
-            classification_cache=_PublishTimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+        classification_cache=_PublishTimeoutCache(),
+    ).get_category() == ("1", False, [])
     assert session.call_count == 1
 
 

@@ -447,7 +447,7 @@ async def test_artifact_entry_rejects_unpinned_digest_before_dispatch(
 
 
 @pytest.mark.asyncio
-async def test_runner_rejects_scoped_v2_capability_before_dispatch(
+async def test_runner_passes_scoped_v2_allowlist_to_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy = ToolPolicy.configured(
@@ -460,25 +460,25 @@ async def test_runner_rejects_scoped_v2_capability_before_dispatch(
         b"async def snapshot_echo():\n    return 'ok'\n",
         policy=policy,
     )
-    invoked = False
+    invoked_network_allow: tuple[str, ...] | None = None
 
     async def invoke_snapshot(*_args, **_kwargs):
-        nonlocal invoked
-        invoked = True
-        return {"ok": True, "text": "unexpected", "images": []}
+        nonlocal invoked_network_allow
+        invoked_network_allow = _kwargs.get("network_allow")
+        return {"ok": True, "text": "ok", "images": []}
 
     runner = GeneratedToolRunner()
     monkeypatch.setattr(runner, "_invoke_snapshot", invoke_snapshot)
-    with pytest.raises(ValueError, match="尚未迁移"):
-        await runner.execute_artifact(
-            artifact,
-            {},
-            {},
-            expected_artifact_digest=artifact.artifact_digest,
-            expected_bundle_digest=None,
-            generation=artifact.generation,
-        )
-    assert invoked is False
+    result = await runner.execute_artifact(
+        artifact,
+        {},
+        {},
+        expected_artifact_digest=artifact.artifact_digest,
+        expected_bundle_digest=None,
+        generation=artifact.generation,
+    )
+    assert result.text == "ok"
+    assert invoked_network_allow == ("api.example",)
 
 
 @pytest.mark.asyncio

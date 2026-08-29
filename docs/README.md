@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.2。隔离测试应固定到精确提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`；push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success，且各只有一个成功 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。`5d7f795…` 是 0.26.1 历史点，`79d2268…` 只用于回退到 0.25.0。完整边界见[K-08 实施状态](./规划/09-business-routing-execution-truth.md)，PyPI 与七七实际安装状态仍需分别核对。
+> 当前文档正在收口 0.26.3 K-09。已有完整远程证据、可进入隔离测试的仍是 0.26.2 精确提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`；0.26.3 在取得精确实现 SHA 的 push/PR 双绿灯前不得按移动分支安装。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 本任务不合并。当前边界见[K-09 实施状态](./规划/10-code-review-fixes-20260829.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
@@ -26,6 +26,8 @@
 | [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
 | [全量 OneBot / NapCat 协议工具实施状态](./规划/08-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
 | [业务路由与执行状态真实性](./规划/09-business-routing-execution-truth.md) | 0.26.2 K-08 的目录竞态、唯一所有者、命令、真实状态、重试和门禁 |
+| [当前基线审查修复](./规划/10-code-review-fixes-20260829.md) | 0.26.3 K-09 的语义重放、取消清理、single-flight、安全 HTTP、AST/400 判定与门禁 |
+| [K-09 后续设计清单](./规划/11-pending-issues-backlog.md) | 未在 0.26.3 简化处理的 spool、usage、热缓存、排空、Redis、MCP 与结构问题 |
 
 ---
 

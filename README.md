@@ -37,6 +37,8 @@
 
 - **0.26.2 业务所有者与真实执行状态**：功能可声明有界 `llm_intents` 精确别名，唯一可用所有者纠正分类模型，重复/隐藏/黑名单/未加载均 fail closed；NoneBot 兼容调用只有在 Adapter 成功回调后才确认输出或副作用，并区分未命中、空命中、部分成功与结果不确定，避免“模型说做了”被误当成真实成功
 
+- **0.26.3 取消、并发与安全联网加固**：统一 Python 3.10～3.13 超时/取消语义，确保 PostgreSQL rollback/close 和 spool 清理在连续取消下仍能 settle；分类缓存按 generation 和完整 key 做 single-flight；Custom File 联网只能经 IP 固定、逐跳重验的 `safe_request`，并阻断直接网络客户端与 walrus 别名绕过
+
 - **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
 
 - **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
@@ -53,7 +55,7 @@
 
 ## 📦 安装
 
-截至 2026-08-28，当前推荐进入隔离测试的 0.26.2 精确 Git 提交是 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`。它在 0.26.1 基础上增加 PicMenu 快照身份、唯一业务意图所有者、真实命令前缀、九种 Matcher/API 执行状态、失败重放拦截和进度消息开关；push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success，且各只有一个成功的 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 在核验时为 `OPEN / MERGEABLE / CLEAN`，本任务不会合并。`5d7f795…` 是 0.26.1 历史安装点，`20cfe44…` 是会漏接现场冷却指令的 0.26.0 历史点，`79d2268…` 是 0.25.0 回退基线。详细状态见 [K-08 实施状态](docs/规划/09-business-routing-execution-truth.md)；PyPI 和七七实际安装状态必须分别核对。
+截至 2026-08-29，当前已有完整远程证据、可进入隔离测试的仍是 0.26.2 精确 Git 提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc`。push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success，且各只有一个成功的 `release-gate`。0.26.3 的 K-09 修复正在当前分支完成本地与远程门禁，取得精确实现 SHA 的 push/PR 双绿灯前不得按移动分支安装。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 本任务不会合并；详细进度见 [K-09 实施状态](docs/规划/10-code-review-fixes-20260829.md)。PyPI 和七七实际安装状态必须分别核对。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 

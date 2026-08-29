@@ -50,6 +50,7 @@ flowchart TD
 - 默认全局最多 4 个活动请求、32 个等待请求；每用户最多 2 个槽位，实际形成 1 个活动 + 1 个等待。
 - `request_timeout_seconds` 在冷却/准入前建立，覆盖排队、分类、模型、工具和最终收尾，而不是每一步各拿一份新预算。
 - 超时、管理员停止或异常会走 AgentRun 终态，并清理对应请求登记；不会因重试而获得新的总预算。
+- 管理员停止会先释放该用户的冷却，再用最多 1 秒尝试发送取消通知，随后继续传播 `CancelledError`。通知失败或再次超时只记安全异常类型，不能把取消伪装成普通失败，也不能拖住请求清理。
 
 ### 2. 固定一代运行快照
 
@@ -103,6 +104,8 @@ created → admitted → classifying → planning → executing
 
 工具候选还有一个先于分类结果的确定性所有者检查。功能目录可为一个功能声明最多 16 个 `llm_intents`；用户原话经过 NFKC、casefold、去空白和标点后做精确别名匹配。唯一、可见、未拉黑且已加载的所有者会纠正分类模型返回的插件；别名重复、所有者不可见、被拉黑或未加载时 fail closed，不会猜测另一个“意思相近”的插件。分类缓存策略为 v3，并绑定目录摘要、runtime generation、群/私聊场景和超级用户身份。
 
+同一 generation 内，完整分类 key 相同的并发 miss 通过 `resolve_exact` 合并为一次共享构建；不同 key 仍可并行。单个等待者取消不会取消共享构建，构建失败会清理 flight 供后续重试，发布冲突会回读并验证精确胜出记录。缓存本身不可用时，系统保守降级为“中等难度、无分类工具”，但前面的唯一业务意图所有者仍可按确定性目录生效。
+
 默认是固定模型模式。只有显式、完整配置 `capability_routing` 后，模型选择才会按 text/vision/tools/json_schema/reasoning/streaming 能力、上下文、输出、质量、延迟和成本约束重新路由。配置方法见[能力路由](./configuration.md#可选能力路由-capability_routing)。
 
 ### 5. 工具目录与最小 Schema
@@ -113,7 +116,7 @@ created → admitted → classifying → planning → executing
 | --- | --- | --- |
 | Builtin | 主进程；结果可能来自外网或当前 Bot | `web_search`、固定 OneBot/NapCat 协议工具 |
 | Registered `ToolSpec` | 可信主进程 | 访问 Bot/Event 或应用服务的强类型工具 |
-| Custom File | nobody 隔离 artifact | 管理员手写、无需 Bot 对象的 Python 工具 |
+| Custom File | nobody 隔离 artifact；联网只能经 `safe_request` | 管理员手写、无需 Bot 对象的 Python 工具 |
 | Generated Tool | 最严格的生成代码 sandbox | AI 生成、人工复核批准的工具包 |
 | MCP | 外部进程或远端服务 | 标准 MCP server 提供的工具 |
 | NoneBot plugin compatibility | 有界事件模拟 | 调用已有 Matcher/命令型插件 |
@@ -153,6 +156,8 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 ### 6. 工具执行、确认和闭环
 
 默认路径每轮最多真正执行一个工具。若模型一次返回多个调用，超出的调用会记录为跳过；模型拿到本轮 observation 后可在下一轮继续调用。总轮次取 `max_tool_rounds` 与 `max_agent_steps` 的较小值，同一工具还受 `max_repeated_tool_calls` 限制。
+
+Custom File 若声明有界 network allowlist，只能调用 worker 注入的 `safe_request`；直接使用 `aiohttp`、`httpx`、`requests`、`urllib` 或 `socket` 会在 AST 预检中拒绝。该门面每一跳都重新校验 allowlist 与全部 DNS 地址，只连接已经验证的公网 IP，关闭自动重定向并拒绝 URL 凭据、HTTPS 降级和跨域敏感头继承；最多 5 次重定向，所有跳共享固定时间与请求/响应大小预算。它是管理员工具的受控网络门面，不是对任意 Python 源码绝对安全的证明。
 
 工具结果统一转换为 `ToolResult`：
 
@@ -205,6 +210,8 @@ NoneBot 兼容适配器不会再用“有 metadata”推断成功。规则检查
 - Classification Cache：只缓存成功、可解析的分类结果。
 
 generation、权限、模型 identity、策略或 key 漂移都会导致 miss/拒绝；timeout、解析回退和内容拦截不会被缓存。默认实现是进程内 Memory，不需要 Redis。
+
+Classification Cache 的 single-flight 由 generation-local 缓存实例拥有，因此只合并同代、完整 key 相同的构建，不会跨 Bot、目录摘要、场景、权限或重载代际复用结果。
 
 每轮模型和工具步骤会产生低基数 metrics、payload-free structured log、Usage 和 Audit 记录。工具安全日志只保存 request/tool-call 摘要、generation、目录摘要、选择来源、插件、意图摘要、脱敏 command 形状及摘要、Matcher/API 计数、最终状态、耗时和重试决策；不记录完整工具/API 参数、Token、Cookie、URL 查询或本地路径。标准安装没有 PostgreSQL/local spool/platform API，因此这些高级持久化和管理挂载不会自动启用；现有内存 token 使用查询仍保持兼容。
 

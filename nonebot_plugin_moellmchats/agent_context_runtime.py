@@ -38,6 +38,7 @@ from .chat_history import (
     MessageRecord,
     UserRecord,
 )
+from .compat import settle_awaitable
 from .compat import timeout as timeout_scope
 from .database_schema import (
     DISPLAY_NAME_MAX_CHARS,
@@ -112,6 +113,13 @@ class AgentContextCommitCancellationUnknownError(
 
 class AgentContextCleanupError(AgentContextPersistenceError):
     """A transaction committed but its session could not be closed cleanly."""
+
+
+class AgentContextCancellationCleanupError(
+    AgentContextPersistenceError,
+    asyncio.CancelledError,
+):
+    """Cancellation remains primary, but pre-commit cleanup was not confirmed."""
 
 
 def _safe_error_type(error: BaseException) -> str:
@@ -478,18 +486,31 @@ class PostgresTransactionFactory:
         duration = max(0.0, finished_at - started_at)
         self._metric(lambda: self._metrics.observe_duration(metric, duration))
 
-    async def _close(self, session: AsyncSession) -> BaseException | None:
-        try:
-            await session.close()
-        except Exception as error:
-            return error
-        return None
+    async def _cleanup_session(
+        self,
+        session: AsyncSession,
+        *,
+        rollback: bool,
+    ) -> tuple[tuple[BaseException, ...], bool]:
+        errors: list[BaseException] = []
+        interrupted = False
+        if rollback:
+            rollback_outcome = await settle_awaitable(session.rollback())
+            interrupted = rollback_outcome.interrupted
+            if rollback_outcome.error is not None:
+                errors.append(rollback_outcome.error)
+        close_outcome = await settle_awaitable(session.close())
+        interrupted = interrupted or close_outcome.interrupted
+        if close_outcome.error is not None:
+            errors.append(close_outcome.error)
+        return tuple(errors), interrupted
 
-    async def _rollback(self, session: AsyncSession) -> None:
-        try:
-            await session.rollback()
-        except Exception:
-            return
+    @staticmethod
+    def _cleanup_suffix(errors: tuple[BaseException, ...]) -> str:
+        if not errors:
+            return ""
+        kinds = ",".join(_safe_error_type(error) for error in errors)
+        return f"；cleanup 未确认 ({kinds})"
 
     async def _execute_unobserved(
         self,
@@ -516,31 +537,59 @@ class PostgresTransactionFactory:
             repositories = self._repositories.for_session(session)
             result = await operation(repositories)
         except asyncio.CancelledError:
-            await self._rollback(session)
-            await self._close(session)
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=True,
+            )
+            if cleanup_errors:
+                raise AgentContextCancellationCleanupError(
+                    "PostgreSQL transaction 被取消且 cleanup 未确认"
+                    + self._cleanup_suffix(cleanup_errors)
+                ) from None
             raise
         except Exception as error:
-            await self._rollback(session)
-            await self._close(session)
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=True,
+            )
             if isinstance(error, AgentContextRuntimeError):
                 raise
-            raise AgentContextPersistenceError(f"PostgreSQL transaction 执行失败 ({_safe_error_type(error)})") from None
+            raise AgentContextPersistenceError(
+                f"PostgreSQL transaction 执行失败 ({_safe_error_type(error)})"
+                + self._cleanup_suffix(cleanup_errors)
+            ) from None
 
         try:
             await session.commit()
         except asyncio.CancelledError as error:
-            await self._close(session)
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=False,
+            )
             raise AgentContextCommitCancellationUnknownError(
                 f"PostgreSQL commit 被取消且结果不可确认 ({_safe_error_type(error)})"
+                + self._cleanup_suffix(cleanup_errors)
             ) from None
         except Exception as error:
-            await self._close(session)
-            raise AgentContextCommitUnknownError(f"PostgreSQL commit 结果不可确认 ({_safe_error_type(error)})") from None
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=False,
+            )
+            raise AgentContextCommitUnknownError(
+                f"PostgreSQL commit 结果不可确认 ({_safe_error_type(error)})"
+                + self._cleanup_suffix(cleanup_errors)
+            ) from None
 
-        close_error = await self._close(session)
-        if close_error is not None:
+        cleanup_errors, interrupted = await self._cleanup_session(
+            session,
+            rollback=False,
+        )
+        if interrupted:
+            raise asyncio.CancelledError
+        if cleanup_errors:
             raise AgentContextCleanupError(
-                f"PostgreSQL commit 已确认但 session 关闭失败 ({_safe_error_type(close_error)})"
+                "PostgreSQL commit 已确认但 session 关闭失败"
+                + self._cleanup_suffix(cleanup_errors)
             ) from None
         return result
 
@@ -1823,6 +1872,7 @@ runtime_resource_host = RuntimeResourceHost()
 
 
 __all__ = [
+    "AgentContextCancellationCleanupError",
     "AgentContextCleanupError",
     "AgentContextCommitCancellationUnknownError",
     "AgentContextCommitUnknownError",

@@ -10,6 +10,7 @@ from nonebot_plugin_moellmchats.tool_authoring import (
     _MODEL_ERROR_BODY_LIMIT,
     ToolAuthoringService,
     _format_model_http_error,
+    _is_content_policy_error,
     _read_model_error_body,
 )
 
@@ -340,3 +341,36 @@ async def test_call_model_hides_unstructured_error_body(monkeypatch) -> None:
 
     assert str(captured.value) == "模型请求失败 HTTP 502"
     assert "secret-token" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        json.dumps({"error": {"code": "Content-Filter"}}),
+        json.dumps({"error": {"type": "DATA_INSPECTION_FAILED"}}),
+    ],
+)
+def test_content_policy_detection_uses_exact_structured_identifiers(
+    body: str,
+) -> None:
+    assert _is_content_policy_error(body) is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        json.dumps(
+            {
+                "error": {
+                    "code": "invalid_parameter",
+                    "type": "invalid_request_error",
+                    "message": "audit and safety options are unsupported",
+                }
+            }
+        ),
+        json.dumps({"message": "content_filter appears only in prose"}),
+        "not-json safety audit content_filter",
+    ],
+)
+def test_content_policy_detection_ignores_free_form_keywords(body: str) -> None:
+    assert _is_content_policy_error(body) is False

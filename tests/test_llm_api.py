@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from nonebot_plugin_moellmchats import llm_api as module
 from nonebot_plugin_moellmchats.llm_api import LlmApiMixin
 
 
 class _Api(LlmApiMixin):
     pass
+
+
+class _ErrorResponse:
+    status = 400
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+    async def text(self) -> str:
+        return self.body
 
 
 def test_sse_done_marker_variants() -> None:
@@ -60,3 +74,43 @@ def test_bad_sse_line_log_never_contains_payload(
     assert records
     assert all("SECRET_PAYLOAD" not in record for record in records)
     assert any("payload_sha256" in record for record in records)
+
+
+@pytest.mark.asyncio
+async def test_http_400_policy_detection_uses_only_structured_code_or_type() -> None:
+    api = _Api()
+    ordinary = await api._check_400_error(
+        _ErrorResponse(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "invalid_parameter",
+                        "type": "invalid_request_error",
+                        "message": "audit and safety options are unsupported",
+                    }
+                }
+            )
+        )
+    )
+    blocked = await api._check_400_error(
+        _ErrorResponse(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "Content-Filter",
+                        "message": "rejected",
+                    }
+                }
+            )
+        )
+    )
+    invalid = await api._check_400_error(
+        _ErrorResponse("not-json audit safety content_filter")
+    )
+
+    assert ordinary is not None
+    assert "API请求被拒绝" in ordinary
+    assert ordinary != "图片或内容可能包含敏感信息"
+    assert blocked == "图片或内容可能包含敏感信息"
+    assert invalid is not None
+    assert "API请求被拒绝" in invalid

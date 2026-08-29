@@ -19,6 +19,7 @@ def _valid_request(**updates) -> dict:
         "arguments": {},
         "context": {},
         "workspace_enabled": False,
+        "network_allow": [],
         "generated_runtime_guard": False,
         "execution": {"mode": "compatibility"},
     }
@@ -145,6 +146,14 @@ def test_worker_request_rejects_missing_or_non_boolean_runtime_guard(
         generated_tool_worker._validate_request(request)
 
 
+@pytest.mark.parametrize("invalid", [None, True, "*", [1], {}])
+def test_worker_request_rejects_invalid_network_allowlist(invalid: object) -> None:
+    request = _valid_request(network_allow=invalid)
+
+    with pytest.raises(ValueError, match="network_allow"):
+        generated_tool_worker._validate_request(request)
+
+
 def test_worker_routes_runtime_guard_only_by_explicit_protocol_field(
     monkeypatch,
 ) -> None:
@@ -188,3 +197,21 @@ def test_custom_worker_module_keeps_regular_builtins() -> None:
     )
 
     assert asyncio.run(module.probe()) == 42
+
+
+def test_custom_worker_injects_bound_safe_request_facade() -> None:
+    calls: list[str] = []
+
+    async def safe_request(url: str):
+        calls.append(url)
+        return "ok"
+
+    module = generated_tool_worker._load_module(
+        Path("custom.py"),
+        "custom_safe_request",
+        "async def probe():\n    return await safe_request('https://api.example')\n",
+        safe_request_func=safe_request,
+    )
+
+    assert asyncio.run(module.probe()) == "ok"
+    assert calls == ["https://api.example"]

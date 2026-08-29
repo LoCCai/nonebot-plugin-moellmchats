@@ -238,6 +238,7 @@ _NETWORK_MODULES = {
     "urllib",
     "websockets",
 }
+_SAFE_HTTP_CALLS = {"safe_request"}
 _GENERATED_DENIED_MODULES = {"builtins", "ctypes", "pickle", "posix"}
 _GENERATED_DENIED_BUILTINS = {
     "__import__",
@@ -487,6 +488,8 @@ def _syntactic_name(node: ast.AST) -> str:
     if isinstance(node, ast.Attribute):
         parent = _syntactic_name(node.value)
         return f"{parent}.{node.attr}" if parent else node.attr
+    if isinstance(node, ast.NamedExpr):
+        return _syntactic_name(node.value)
     return ""
 
 
@@ -589,6 +592,10 @@ class _ScopeVisitor(ast.NodeVisitor):
     def generated(self) -> bool:
         return self.source_type == "generated"
 
+    @property
+    def custom_file(self) -> bool:
+        return self.source_type == "custom_file"
+
     def result(self) -> _ScopeAnalysis:
         return _ScopeAnalysis(
             findings=self.findings,
@@ -651,6 +658,8 @@ class _ScopeVisitor(ast.NodeVisitor):
     def _call_name(self, node: ast.AST) -> str:
         if isinstance(node, ast.Name):
             return self.aliases.get(node.id, node.id)
+        if isinstance(node, ast.NamedExpr):
+            return self._call_name(node.value)
         if isinstance(node, ast.Attribute):
             raw = _syntactic_name(node)
             if raw in self.aliases:
@@ -823,12 +832,21 @@ class _ScopeVisitor(ast.NodeVisitor):
                 node,
             )
         elif root in _NETWORK_MODULES:
-            self._capability(
-                "network",
-                "capability.network",
-                f"导入 {root} 需要 network capability",
-                node,
-            )
+            if self.custom_file:
+                self._add(
+                    PolicyDecision.DENY,
+                    "network.raw_client",
+                    f"Custom File 禁止直接导入网络客户端 {root}；请使用 safe_request",
+                    node,
+                    capability="network",
+                )
+            else:
+                self._capability(
+                    "network",
+                    "capability.network",
+                    f"导入 {root} 需要 network capability",
+                    node,
+                )
         elif self.generated and root in _GENERATED_DENIED_MODULES:
             self._add(
                 PolicyDecision.DENY,
@@ -917,6 +935,14 @@ class _ScopeVisitor(ast.NodeVisitor):
         if node.value is not None:
             self.visit(node.value)
             self._inspect_assignment_target(node.target, node.value)
+        self.visit(node.target)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        # Walrus bindings are real aliases at the surrounding scope.  Bind
+        # them before subsequent expressions so ``(f := os.system)(...)`` and
+        # the equivalent network/mutating forms cannot evade policy evidence.
+        self.visit(node.value)
+        self._inspect_assignment_target(node.target, node.value)
         self.visit(node.target)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
@@ -1145,6 +1171,26 @@ class _ScopeVisitor(ast.NodeVisitor):
             return False
         return True
 
+    def _safe_http_is_mutating(
+        self,
+        node: ast.Call,
+        name: str,
+    ) -> bool | None:
+        if name not in _SAFE_HTTP_CALLS:
+            return None
+        method_node: ast.AST | None = None
+        for keyword in node.keywords:
+            if keyword.arg == "method":
+                method_node = keyword.value
+        if method_node is None:
+            return False
+        literal, method = _literal(method_node)
+        if literal and isinstance(method, str):
+            return method.strip().upper() not in _HTTP_READ_ONLY_METHODS
+        if self._call_name(method_node) in _HTTP_READ_ONLY_CONSTANTS:
+            return False
+        return True
+
     def _inspect_named_call(self, node: ast.Call, name: str) -> None:
         normalized = name.removeprefix("builtins.")
         root = _root_module(name)
@@ -1200,13 +1246,49 @@ class _ScopeVisitor(ast.NodeVisitor):
                 f"动态调用可暴露进程执行原语的模块命名空间 {name}",
                 node,
             )
-        if root in _NETWORK_MODULES:
+        if name in _SAFE_HTTP_CALLS:
             self._capability(
                 "network",
                 "capability.network",
-                f"调用 {name} 需要 network capability",
+                "调用 safe_request 需要 network capability",
                 node,
             )
+        elif root in _NETWORK_MODULES:
+            if self.custom_file:
+                self._add(
+                    PolicyDecision.DENY,
+                    "network.raw_client",
+                    f"Custom File 禁止直接调用网络客户端 {name}；请使用 safe_request",
+                    node,
+                    capability="network",
+                )
+            else:
+                self._capability(
+                    "network",
+                    "capability.network",
+                    f"调用 {name} 需要 network capability",
+                    node,
+                )
+
+        if self.custom_file and normalized in {
+            "__import__",
+            "importlib.__import__",
+            "importlib.import_module",
+        }:
+            module_node = node.args[0] if node.args else None
+            literal, module_name = _literal(module_node)
+            if (
+                not literal
+                or not isinstance(module_name, str)
+                or _root_module(module_name) in _NETWORK_MODULES
+            ):
+                self._add(
+                    PolicyDecision.DENY,
+                    "network.raw_client",
+                    "Custom File 禁止动态加载网络客户端；请使用 safe_request",
+                    node,
+                    capability="network",
+                )
 
         if (isinstance(node.func, ast.Name) and normalized == "open") or name in {"builtins.open", "io.open"}:
             if self._open_is_mutating(node, 1):
@@ -1227,6 +1309,8 @@ class _ScopeVisitor(ast.NodeVisitor):
             self._mark_mutating("检测到可能写入远端状态的 HTTP request", node)
         if self._http_url_open_is_mutating(node, name):
             self._mark_mutating("检测到可能写入远端状态的 HTTP 调用", node)
+        if self._safe_http_is_mutating(node, name):
+            self._mark_mutating("检测到可能写入远端状态的 safe_request", node)
 
         if normalized == "print" and any(keyword.arg == "file" for keyword in node.keywords):
             self._mark_mutating("检测到 print(file=...) 文件输出", node)

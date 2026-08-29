@@ -8,6 +8,7 @@ import builtins
 import ctypes
 import errno
 import importlib
+import importlib.util
 import inspect
 import json
 import os
@@ -17,7 +18,7 @@ import sys
 import time
 import traceback
 import types
-from typing import Any
+from typing import Any, Protocol, cast
 
 _PROTOCOL_VERSION = 1
 _MAX_SOURCE_BYTES = 65_536
@@ -68,14 +69,43 @@ class _FrozenBuiltins(dict[str, Any]):
     def _deny_mutation(*_args: Any, **_kwargs: Any) -> None:
         raise TypeError("generated builtins are read-only")
 
-    __delitem__ = _deny_mutation
-    __ior__ = _deny_mutation
-    __setitem__ = _deny_mutation
-    clear = _deny_mutation
-    pop = _deny_mutation
-    popitem = _deny_mutation
-    setdefault = _deny_mutation
-    update = _deny_mutation
+    def __delitem__(self, _key: str) -> None:
+        self._deny_mutation()
+
+    def __ior__(self, _value: Any) -> Any:
+        self._deny_mutation()
+        return self
+
+    def __setitem__(self, _key: str, _value: Any) -> None:
+        self._deny_mutation()
+
+    def clear(self) -> None:
+        self._deny_mutation()
+
+    def pop(self, *_args: Any, **_kwargs: Any) -> Any:
+        self._deny_mutation()
+
+    def popitem(self) -> tuple[str, Any]:
+        self._deny_mutation()
+        raise AssertionError("unreachable")
+
+    def setdefault(self, *_args: Any, **_kwargs: Any) -> Any:
+        self._deny_mutation()
+
+    def update(self, *_args: Any, **_kwargs: Any) -> None:
+        self._deny_mutation()
+
+
+class _SafeRequestCallable(Protocol):
+    async def __call__(
+        self,
+        url: str,
+        *,
+        method: str,
+        headers: dict[str, str] | None,
+        body: bytes | str | None,
+        _network_allow: tuple[str, ...],
+    ) -> Any: ...
 
 
 def _mapping_proxy_supports_frame_import() -> bool:
@@ -401,6 +431,13 @@ def _validate_request(request: dict[str, Any]) -> None:
         raise ValueError("workspace_enabled must be boolean")
     if type(request.get("generated_runtime_guard")) is not bool:
         raise ValueError("generated_runtime_guard must be boolean")
+    network_allow = request.get("network_allow")
+    if (
+        not isinstance(network_allow, list)
+        or not all(isinstance(item, str) for item in network_allow)
+        or len(network_allow) > 128
+    ):
+        raise ValueError("network_allow must be a bounded string array")
     execution = request.get("execution")
     if not isinstance(execution, dict) or execution.get("mode") not in {
         "artifact",
@@ -415,15 +452,52 @@ def _load_module(
     source: str,
     *,
     generated_guard: _GeneratedRuntimeGuard | None = None,
+    safe_request_func: Any = None,
 ):
     module = types.ModuleType(name)
     module.__file__ = str(path)
     module.__package__ = ""
     if generated_guard is not None:
         module.__dict__["__builtins__"] = generated_guard.builtins
+    if safe_request_func is not None:
+        module.__dict__["safe_request"] = safe_request_func
     sys.modules[name] = module
     exec(compile(source, str(path), "exec"), module.__dict__)
     return module
+
+
+def _bound_safe_request(network_allow: tuple[str, ...]):
+    path = Path(__file__).with_name("network_safety.py")
+    spec = importlib.util.spec_from_file_location(
+        "_moellm_safe_http",
+        path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("safe HTTP facade is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    request = getattr(module, "safe_request", None)
+    if not callable(request):
+        raise RuntimeError("safe HTTP facade is invalid")
+    safe_request = cast("_SafeRequestCallable", request)
+
+    async def bound(
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        body: bytes | str | None = None,
+    ):
+        return await safe_request(
+            url,
+            method=method,
+            headers=headers,
+            body=body,
+            _network_allow=network_allow,
+        )
+
+    return bound
 
 
 async def _run_handler(module: Any, request: dict[str, Any]) -> Any:
@@ -565,6 +639,17 @@ def main() -> int:
         if isinstance(request.get("execution"), dict):
             execution = dict(request["execution"])
         _validate_request(request)
+        # Load the trusted stdlib-only facade while the original interpreter
+        # identity can still traverse its stdlib path (for example a Python
+        # installed below /root).  No untrusted snapshot is compiled or run
+        # until after limits, UID drop and seccomp are active.
+        safe_request_func = None
+        if request["network_allow"]:
+            if request["generated_runtime_guard"]:
+                raise RuntimeError("generated tools cannot receive safe_request")
+            safe_request_func = _bound_safe_request(
+                tuple(request["network_allow"])
+            )
         # Limits, UID drop and seccomp are active before snapshot compilation.
         _apply_limits()
         generated_guard = _runtime_guard_for_request(request)
@@ -573,6 +658,7 @@ def main() -> int:
             "moellm_generated_tool",
             request["source"],
             generated_guard=generated_guard,
+            safe_request_func=safe_request_func,
         )
         if request["handler"] == "__tests__":
             result = asyncio.run(

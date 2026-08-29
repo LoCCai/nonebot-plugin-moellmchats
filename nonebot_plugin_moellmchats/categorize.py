@@ -7,6 +7,7 @@ from nonebot.log import logger
 import ujson as json
 
 from .classification_cache import (
+    ClassificationCacheError,
     ClassificationCacheKey,
     ClassificationCacheProtocol,
     ClassificationCacheRecord,
@@ -66,7 +67,14 @@ class Categorize:
             classification_cache,
             ClassificationCacheProtocol,
         ):
-            raise TypeError("classification_cache 必须实现 ClassificationCacheProtocol")
+            legacy_methods = (
+                getattr(classification_cache, "lookup", None),
+                getattr(classification_cache, "publish", None),
+            )
+            if not all(callable(method) for method in legacy_methods):
+                raise TypeError(
+                    "classification_cache 必须实现 ClassificationCacheProtocol"
+                )
         if classification_cache is not None and tool_catalog_cache is None:
             raise ValueError("classification cache 必须依赖同代 tool catalog cache")
         if tool_catalog_cache is not None:
@@ -95,6 +103,12 @@ class Categorize:
                 return await self._get_category()
         except TimeoutError:
             logger.warning("分类模型超过时间预算，降级为无工具中等难度")
+            return "1", "[图片]" in self.plain, []
+        except (ClassificationCacheError, ToolCatalogCacheUnavailableError) as error:
+            logger.warning(
+                "分类缓存不可用，降级为无工具中等难度: error_type={}",
+                type(error).__name__,
+            )
             return "1", "[图片]" in self.plain, []
         finally:
             runtime_metrics.classification_seconds += time.monotonic() - started

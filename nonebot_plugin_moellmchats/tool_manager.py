@@ -1686,9 +1686,8 @@ class ToolManager:
 编写或修改完后，在群聊中发送管理员指令：`/刷新工具` 或 `/重载工具` 即可即时生效！
 """
 
-import re
 import datetime
-import aiohttp
+import re
 from typing import Annotated
 
 # ==========================================
@@ -1728,20 +1727,24 @@ async def extract_webpage(
     if not url.startswith(("http://", "https://")):
         return "提取失败：请提供有效的URL（以http://或https://开头）"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; MoEllmChats custom tool example)"
-    }
-    timeout = aiohttp.ClientTimeout(total=30)
-
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    return f"提取失败：网页返回状态码 {response.status}"
-                html = await response.text()
+        # safe_request 由隔离 runner 注入，不要导入 aiohttp/httpx/requests/socket。
+        # 下方 TOOLS_REGISTRY 的 network.allow 会限制真正可连接的主机。
+        response = await safe_request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; "
+                    "MoEllmChats custom tool example)"
+                )
+            },
+        )
+        if response.status != 200:
+            return f"提取失败：网页返回状态码 {response.status}"
+        html = response.text
 
         # 使用正则移除 script 和 style 标签及其内容
-        text = re.sub(r'<(script|style).*?>.*?</\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r'<(script|style).*?>.*?</\\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
         # 移除所有剩余的 HTML 标签
         text = re.sub(r'<[^>]+>', ' ', text)
 
@@ -1756,6 +1759,60 @@ async def extract_webpage(
         return f"网页提取成功，以下是内容摘要：\\n{text}"
     except Exception as e:
         return f"提取网页失败，发生错误：{str(e)}"
+
+# 一旦声明 TOOLS_REGISTRY，只有列出的函数会成为工具。
+# 联网工具必须使用结构化 network.allow，这里只是示例域名；
+# 复制后请同时替换 Schema 约束、函数用途和 allowlist。
+TOOLS_REGISTRY = [
+    {
+        "name": "get_current_datetime",
+        "description": "获取当前系统日期、时间和星期。",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "func": get_current_datetime,
+        "permission": "user",
+        "effect": "read_only",
+        "capabilities": {
+            "network": False,
+            "process": False,
+            "filesystem": {"workspace": False, "host": False},
+            "database": False,
+            "bot": False,
+            "secrets": False,
+        },
+    },
+    {
+        "name": "extract_webpage",
+        "description": "读取 example.com 示例页面并提取文本。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "example.com 下的完整 HTTPS URL",
+                    "pattern": r"^https://example\\.com(?:/.*)?$",
+                    "maxLength": 2048,
+                }
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        "func": extract_webpage,
+        "permission": "user",
+        "effect": "read_only",
+        "capabilities": {
+            "network": {"allow": ["example.com"]},
+            "process": False,
+            "filesystem": {"workspace": False, "host": False},
+            "database": False,
+            "bot": False,
+            "secrets": False,
+        },
+    },
+]
 '''
             with open(template_file, "w", encoding="utf-8") as f:
                 f.write(template_content)

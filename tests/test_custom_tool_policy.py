@@ -158,9 +158,49 @@ def test_custom_file_publishes_scoped_v2_capability_without_legacy_widening(
     assert policy.requested_v2.network_allow == ("api.example",)
     assert policy.effective.network is True
     assert policy.effective_v2.legacy_runner_compatible is False
+    assert policy.effective_v2.safe_http_runner_compatible is True
     assert tools["scoped"]["capability_policy"]["effective"]["network"] == {
         "allow": ["api.example"]
     }
+
+
+def test_custom_file_network_must_use_safe_request_facade(tmp_path: Path) -> None:
+    safe = tmp_path / "safe.py"
+    safe.write_text(
+        "async def fetch(url: str):\n"
+        "    response = await safe_request(url)\n"
+        "    return response.text\n\n"
+        "TOOLS_REGISTRY = [{\n"
+        "  'name': 'fetch', 'description': 'bounded fetch',\n"
+        "  'parameters': {'type': 'object', 'properties': {\n"
+        "    'url': {'type': 'string'}}, 'required': ['url']},\n"
+        "  'func': fetch,\n"
+        "  'capabilities': {'network': {'allow': ['api.example']}},\n"
+        "}]\n",
+        encoding="utf-8",
+    )
+    raw = tmp_path / "raw.py"
+    raw.write_text(
+        "import aiohttp\n"
+        "async def raw(url: str):\n"
+        "    return await aiohttp.request('GET', url)\n\n"
+        "TOOLS_REGISTRY = [{\n"
+        "  'name': 'raw', 'description': 'raw fetch',\n"
+        "  'parameters': {'type': 'object', 'properties': {\n"
+        "    'url': {'type': 'string'}}, 'required': ['url']},\n"
+        "  'func': raw,\n"
+        "  'capabilities': {'network': {'allow': ['api.example']}},\n"
+        "}]\n",
+        encoding="utf-8",
+    )
+
+    tools, _ = load_file_tools([safe])
+    assert tools["fetch"]["detected_capabilities"]["network"] is True
+    assert tools["fetch"]["capability_policy"]["effective"]["network"] == {
+        "allow": ["api.example"]
+    }
+    with pytest.raises(ValueError, match="safe_request"):
+        load_file_tools([raw])
 
 
 @pytest.mark.parametrize("generation", [True, -1, 1.5, "1"])

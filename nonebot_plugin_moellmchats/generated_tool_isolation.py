@@ -374,6 +374,7 @@ def _runtime_files(worker_path: Path) -> tuple[tuple[Path, int, bool], ...]:
     read_write = _LANDLOCK_ACCESS_FS_READ_FILE | _LANDLOCK_ACCESS_FS_WRITE_FILE
     return (
         (worker_path, read_only, True),
+        (worker_path.with_name("network_safety.py"), read_only, True),
         (Path(sys.executable), executable, True),
         (Path("/etc/ld.so.cache"), read_only, False),
         (Path("/etc/localtime"), read_only, False),

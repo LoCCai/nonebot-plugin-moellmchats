@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.26.3] - 2026-08-29
+
+- 统一 Python 3.10～3.13 的聊天超时异常；SSE 只接受 JSON object，摘要失败、重试通知和管理员取消通知均使用固定安全兜底，`CancelledError` 不再被通知异常替换。
+- PostgreSQL transaction factory 与 local spool writer 使用 shield/settle 清理，连续取消也必须等待 rollback/close 完成或返回类型化清理错误；原业务异常或取消保持主结果。
+- 分类缓存增加 generation-local `resolve_exact` single-flight：完整 key 相同只构建一次，异键仍并行，等待者取消不取消共享构建，失败可重试，发布冲突回读精确胜出记录。
+- Custom File 联网改为 worker 注入的 `safe_request`：逐跳重验公网 DNS 与 allowlist、固定验证 IP、手动有界重定向、拒绝 URL 凭据/HTTPS 降级/跨域敏感头，并统一总时间与请求/响应大小预算。
+- AST Policy 拒绝 Custom File 直接使用 `aiohttp`、`httpx`、`requests`、`urllib` 或 `socket`，跟踪 walrus/`NamedExpr` 别名；`safe_request` 的非 GET/HEAD 或动态 method 保守判定为变更型。
+- 工具生成的 HTTP 400 内容安全判断只匹配结构化 `code`/`type` 精确值；普通消息中的 `audit`、`safety` 等单词不再误触发内容安全拦截。
+- 修复个人上下文字符串键、有界 Store 只读成员检查、成员名失败缓存、`ai` 唤醒边界、Tavily TLS/占位密钥，以及布尔配置与未知键兼容告警。
+
 ## [0.26.2] - 2026-08-28
 
 - PicMenu 内存目录增加确定性计数和 SHA-256 身份，并纳入 runtime watcher；即使首次 generation 先看到空目录，完整目录稍后安装也会在一个监控周期内自动发布新 generation，读取异常继续保留上一有效快照。

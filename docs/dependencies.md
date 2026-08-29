@@ -67,6 +67,12 @@ MoEllmChats 可以读取“已经加载的 PicMenu Next 当前内存目录”，
 
 0.26.2 的目录摘要、NFKC 意图规范化、参数摘要和状态对象只使用 Python 标准库 `hashlib`、`json`、`unicodedata`、`dataclasses` 与现有 NoneBot Adapter 钩子，没有增加运行依赖、数据库表或 migration。七七侧的 QWeb/PicMenu 字段桥接属于宿主源码契约，不会打进本插件 wheel，也不是本插件的 pip 依赖。
 
+### 0.26.3 安全 HTTP 与并发修复没有新增依赖
+
+`safe_request` 使用 Python 标准库的 `asyncio`、`socket`、`ssl`、`ipaddress` 和 `urllib.parse` 实现有界 HTTP/1.1 门面，不要求安装 `httpx`、`requests` 或额外 DNS 包。Custom File 仍不能直接导入网络客户端；工具只接收 worker 注入的门面，network allowlist 来自已审核的静态 Capability，不能由模型参数扩大。
+
+分类 single-flight、连续取消 cleanup、SSE 解析和 400 结构化判断也只复用标准库及已有 SQLAlchemy/asyncpg 接口。0.26.3 没有新增配置项、数据库 migration、Redis key 或后台服务；安装依赖集合保持不变。
+
 ### 协议清单不是新运行依赖
 
 OneBot v11 的 38 项、OneBot v12 的 31 项和 NapCat 4.18.19 的 175 项动作以规范化 JSON 随 wheel/sdist 安装。运行时和普通构建不访问协议文档站，也不需要安装 NapCatDocs、Git 或 OpenAPI 解析器。
@@ -149,5 +155,6 @@ MCP 不经过文件/生成工具的 nobody sandbox：
 3. 保留 `mcp[cli]` 的现有兼容声明；MCP server 可执行文件仍需独立管理，不能把 SDK extra 当成 server 清单。
 4. 新增的 PicMenu/QWeb 菜单发现只消费已加载模块的内存投影，不新增 Python、系统或服务依赖。
 5. 协议清单生成器、文档/依赖检查和制品检查只使用 Python 标准库；`build`、`pyright`、`ruff`、`twine` 只属于开发门禁，不会进入普通安装依赖或在运行时联网。
+6. 0.26.3 的安全 HTTP、single-flight 和取消清理复用标准库及已有依赖；没有把 `httpx`、`requests`、额外 DNS 客户端或新后端加入安装集合。
 
 依赖约束本身只说明 resolver 允许的范围。最终可安装性还要由 fresh wheel/sdist 构建和包外安装 smoke 验证，见[安装验收](./installation.md#隔离功能验收清单)。

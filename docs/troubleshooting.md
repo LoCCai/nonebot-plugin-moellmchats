@@ -75,6 +75,34 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 
 这是为了避免点赞、发消息、群管理等副作用因模型循环而重复发生。需要在修复后重新验收时，应开启一个新任务，并先只读核对外部状态。
 
+## SSE 没有输出或看到坏行日志
+
+0.26.3 的流式解析只接受两种载荷：`data:` 后的 JSON object，或整行就是 JSON object 的 NDJSON。`event:`、`retry:`、注释、空行、数组、字符串/数字标量和无效 JSON 都会跳过，不再触发整轮重试。`data:[DONE]` 和带空格的 `data: [DONE]` 都是正常结束。
+
+坏行日志只包含原因、字节长度和 SHA-256 摘要，不会记录原始 payload。如果供应商发的是数组或自定义控制包，应在 provider 转换层把内容归一为 OpenAI 兼容的 JSON object，不要放宽主链路去解释任意类型。
+
+## 停止请求、连续取消与数据库清理
+
+`停止请求` 先释放对话冷却，再用最多 1 秒尝试发送终止通知，最后仍以 `CancelledError` 结束原任务。通知发送失败或超时不表示取消失败，也不应把取消改记为普通成功。
+
+PostgreSQL transaction 与 spool writer 会让同一个 rollback/close 子任务在连续取消下 settle 完成，然后再传播原取消或业务异常。如果 cleanup 本身失败，日志/类型化错误只记安全异常类型，不记连接字符串。commit 已发出后断连仍是 unknown result，不能自动重试；应根据审计/业务幂等键只读核对。
+
+## 分类缓存不可用或同一请求重复分类
+
+当前 generation 的内存分类缓存会按完整 key 做 single-flight：同键并发只有一个 builder，等待者取消不会取消共享分类，构建失败后会清理 flight 以便新请求重试。不同 key 不互相串行。
+
+目录或分类缓存 lookup/publish/resolve 不可用时，本请求降级为“中等难度、无工具”，而不是绕过缓存直接再调一次分类模型。K-08 的唯一业务意图所有者在此前已经解析，所以精确别名仍可保持业务优先；所有者不可用时仍 fail closed，不改猜其他插件。
+
+## Custom File 报 `safe_request` 或 network allowlist 错误
+
+先确认工具源码没有导入 `aiohttp/httpx/requests/urllib/socket`，并且 `TOOLS_REGISTRY.capabilities.network` 使用了明确主机列表，例如 `{"allow": ["api.example"]}`。`safe_request` 由 worker 注入，源码不要从插件包导入它，也不能把 `_network_allow`、resolver 或 connector 当作模型参数。
+
+常见拒绝原因包括：URL 主机不在 allowlist，DNS 同时返回公网和私网地址，重定向超出 allowlist，HTTPS 降级，URL 携带凭据，响应压缩/超过 1 MiB，请求体超过 256 KiB，或所有重定向合计超过 15 秒。不要把 allowlist 改成 `*` 来“修好”配置；应确认真实 API 主机和必需重定向域名后逐个声明。
+
+## HTTP 400 明明是参数错误，却显示内容安全拦截
+
+0.26.3 只在结构化错误对象的 `code` 或 `type` 精确归一为已知内容策略标识时，才显示敏感内容提示。普通 `message` 中出现 `audit`、`safety` 或 `content_filter` 字样不会触发；非 JSON 正文也不会用子串猜测。日志和用户错误仍不包含原响应正文、请求参数或凭据。
+
 ## 相关页面
 
 - [调度链路与运行时架构](./runtime-architecture.md)
@@ -82,3 +110,5 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 - [配置参考](./configuration.md)
 - [安装与隔离验收](./installation.md)
 - [OneBot / NapCat 协议工具](./protocol-tools.md)
+- [Custom File 与安全 HTTP](./custom-tools.md#安全联网只使用-safe_request)
+- [K-09 实施状态](./规划/10-code-review-fixes-20260829.md)

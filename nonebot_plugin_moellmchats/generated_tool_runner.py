@@ -315,6 +315,7 @@ class GeneratedToolRunner:
         context: dict[str, Any],
         *,
         allow_workspace: bool,
+        network_allow: tuple[str, ...],
         generated_runtime_guard: bool,
         execution: Mapping[str, Any],
     ) -> bytes:
@@ -331,6 +332,7 @@ class GeneratedToolRunner:
                     "arguments": arguments,
                     "context": context,
                     "workspace_enabled": allow_workspace,
+                    "network_allow": list(network_allow),
                     "generated_runtime_guard": generated_runtime_guard,
                     "execution": dict(execution),
                 },
@@ -419,6 +421,7 @@ class GeneratedToolRunner:
         allow_workspace: bool,
         allow_host_filesystem: bool = False,
         allow_secrets: bool = False,
+        network_allow: tuple[str, ...] | None = None,
         generated_runtime_guard: bool,
         execution: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -431,12 +434,24 @@ class GeneratedToolRunner:
         }
         if not all(type(value) is bool for value in capabilities.values()):
             raise TypeError("工具 runner capability 必须是显式布尔值")
+        effective_network_allow = (
+            (("*",) if not disable_network else ())
+            if network_allow is None
+            else network_allow
+        )
+        if (
+            not isinstance(effective_network_allow, tuple)
+            or not all(isinstance(item, str) for item in effective_network_allow)
+            or bool(effective_network_allow) is disable_network
+        ):
+            raise ValueError("工具 runner network allowlist 与 capability 不一致")
         request = self._request_bytes(
             snapshot,
             handler,
             arguments,
             context,
             allow_workspace=allow_workspace,
+            network_allow=effective_network_allow,
             generated_runtime_guard=generated_runtime_guard,
             execution=execution,
         )
@@ -702,7 +717,7 @@ class GeneratedToolRunner:
     @staticmethod
     def _artifact_capabilities(
         artifact: ToolArtifact,
-    ) -> tuple[bool, bool, bool, bool, bool]:
+    ) -> tuple[bool, bool, bool, bool, bool, tuple[str, ...]]:
         capabilities = artifact.contract.effective_capabilities
         if not isinstance(capabilities, Mapping):
             raise ValueError("ToolArtifact 缺少固化 effective capabilities")
@@ -722,6 +737,7 @@ class GeneratedToolRunner:
             )
         ):
             raise ValueError("ToolArtifact effective capabilities 非法")
+        network_allow = ("*",) if allow_network else ()
         if artifact.contract.contract_version == 2:
             structured = artifact.contract.effective_capabilities_v2
             if not isinstance(structured, Mapping):
@@ -729,10 +745,11 @@ class GeneratedToolRunner:
             effective_v2 = ToolCapabilityV2.from_mapping(structured)
             if effective_v2.to_legacy().as_dict() != dict(capabilities):
                 raise ValueError("ToolArtifact capability v1/v2 投影不一致")
-            if not effective_v2.legacy_runner_compatible:
+            if not effective_v2.safe_http_runner_compatible:
                 raise ValueError(
                     "ToolArtifact capability v2 尚未迁移到当前 runner consumer"
                 )
+            network_allow = effective_v2.network_allow
         if artifact.source_type == "generated" and (
             allow_network
             or allow_process
@@ -749,6 +766,7 @@ class GeneratedToolRunner:
             cast("bool", allow_workspace),
             cast("bool", allow_host_filesystem),
             cast("bool", allow_secrets),
+            network_allow,
         )
 
     async def execute_artifact(
@@ -775,6 +793,7 @@ class GeneratedToolRunner:
             allow_workspace,
             allow_host_filesystem,
             allow_secrets,
+            network_allow,
         ) = self._artifact_capabilities(artifact)
         execution = {
             "mode": "artifact",
@@ -793,6 +812,7 @@ class GeneratedToolRunner:
                 allow_workspace=allow_workspace,
                 allow_host_filesystem=allow_host_filesystem,
                 allow_secrets=allow_secrets,
+                network_allow=network_allow,
                 generated_runtime_guard=artifact.source_type == "generated",
                 execution=execution,
             )
@@ -813,7 +833,7 @@ class GeneratedToolRunner:
             expected_bundle_digest=expected_bundle_digest,
             generation=generation,
         )
-        _, _, allow_workspace, _, _ = self._artifact_capabilities(artifact)
+        _, _, allow_workspace, _, _, _ = self._artifact_capabilities(artifact)
         execution = {
             "mode": "artifact",
             "artifact_digest": expected_artifact_digest,
