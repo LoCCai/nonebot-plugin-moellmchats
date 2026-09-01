@@ -59,7 +59,7 @@
 
 ## 📦 安装
 
-0.26.5 源码正在按 [K-11 工具进度与恢复状态真实性](docs/规划/13-tool-progress-execution-truth-20260901.md) 完成实现与双 Actions 门禁。在它取得精确实现 SHA 的 push/pull_request 双绿前，最后一个已验证的隔离恢复点仍是 0.26.4 提交 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`（push [`33485504350`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485504350)、PR [`33485508930`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485508930)，均 12/12 success 且各唯一 `release-gate` 成功）。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 不会在本任务中合并；PyPI 和七七实际安装状态必须分别核对。K-11 远程门禁关闭后，本段会在独立证据提交中替换为 0.26.5 的完整实现 SHA 和 run。
+0.26.5 已按 [K-11 工具进度与恢复状态真实性](docs/规划/13-tool-progress-execution-truth-20260901.md) 完成实现与精确双 Actions 门禁。当前隔离测试恢复点是完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，不会在本任务中合并；PyPI 和七七实际安装状态必须分别核对。本证据提交还必须通过自身双 Actions，最终结果直接交付，不再创建第三个自指提交。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
@@ -68,7 +68,7 @@
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
 ### 项目使用 pip/venv 时
@@ -77,7 +77,7 @@ uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugi
 
 ```bash
 python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
 

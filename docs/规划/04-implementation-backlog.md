@@ -1740,4 +1740,4 @@ Admin API
 4. 0.26.5 配置、命令、架构、排错、安装、依赖和规划同步；
 5. 串行四版本、sandbox、制品、包外加载和实现/证据双 Actions。
 
-当前基线固定为 `7693b4de1c9240dccde8773557623056a51fa3b4`。开发工作树已通过定向 `148 passed`、Python 3.10～3.13 串行普通全量各 `3129 passed, 1 skipped`、mandatory root sandbox `41 passed, 0 skipped`、静态/仓库检查、fresh wheel/sdist、Twine 和四组包外加载；这些不是远程或生产证据，精确实现提交及其双 Actions 尚待关闭。K-11 不新增运行依赖、数据库 migration、Redis key 或后台任务，也不操作七七、真实模型或 QQ。
+当前基线固定为 `7693b4de1c9240dccde8773557623056a51fa3b4`。实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已通过定向 `148 passed`、Python 3.10～3.13 串行普通全量各 `3129 passed, 1 skipped`、mandatory root sandbox `41 passed, 0 skipped`、静态/仓库检查、fresh wheel/sdist、Twine、四组包外加载及精确 push/pull_request 双 Actions；纯证据提交自身双 Actions 尚待关闭。这些不是生产证据。K-11 不新增运行依赖、数据库 migration、Redis key 或后台任务，也不操作七七、真实模型或 QQ。

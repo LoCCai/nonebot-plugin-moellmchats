@@ -6,20 +6,21 @@
 
 截至 2026-09-01：
 
-- 0.26.5 已进入 K-11 本地实现阶段，新增逐调用固定进度、可选自然话术和只读失败恢复真实性；在精确实现提交的 push/pull_request 双 Actions 全绿前，不把脏工作树、移动分支或临时制品写成安装点。
-- 当前最后一个已验证、可恢复的隔离候选仍是 0.26.4 精确 Git 提交 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`。下方命令暂时继续指向它；K-11 远程门禁关闭后会在独立证据提交中一次性替换为 0.26.5 的完整实现 SHA。
+- 0.26.5 已完成 K-11 实现，新增逐调用固定进度、可选自然话术和只读失败恢复真实性；精确实现提交的 push/pull_request 双 Actions 已全绿。
+- 当前已验证、可恢复的隔离候选是 0.26.5 精确 Git 提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`，下方命令全部固定到该 SHA，不使用移动分支。
 - 0.26.5 保留此前全量 OneBot/NapCat 协议工具、固定冷却管理入口、业务路由、连续取消/single-flight/安全 HTTP、分类超时、400 正文边界和参数级重复限次。
-- push run [`33485504350`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485504350) 与 PR run [`33485508930`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485508930) 的 12 个 job 均全部成功，且各恰好一个 `release-gate` 成功。
+- push run [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR run [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 的 12 个 job 均全部成功，且各恰好一个 `release-gate` 成功。
 - PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`；本任务没有合并它。
 - `20cfe44576a3f6f8dbf1bd5a330407a936fe481a` 是 0.26.0 历史安装点：它已经有冷却 Handler，但现场证明标准 `on_command` 没有接住 `/设置LLM冷却 0`，不应继续作为当前安装点。
 - `79d2268930251773cb4e91cdd9b13a9ec36a7d14` 是 0.25.0 回退基线，不包含 0.26.0 协议工具或上述后续修复；`bbc3963…` 是更早的历史实现点。
 - `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba` 是 0.26.1 历史安装点，不含本轮业务路由和执行状态修复。
 - `e340fb77d9c215316c9d4afd69799aedbfcf34fc` 是 0.26.2 历史安装点，不含 K-09 并发、取消和网络安全修复。
 - `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241` 是 0.26.3 历史安装点，不含 K-10 分类、重复限次和固定进度指令修复。
-- 当前源码包内版本号是 `0.26.5`，但这不表示 PyPI 已发布该版本，也不表示它已经通过远程门禁或安装到七七。`pip install nonebot-plugin-moellmchats` 得到什么仍必须以实际索引为准。
+- `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8` 是 0.26.4 历史安装点，不含 K-11 逐调用提示和只读恢复修复。
+- 当前源码包内版本号是 `0.26.5`，但这不表示 PyPI 已发布该版本，也不表示它已经安装到七七。`pip install nonebot-plugin-moellmchats` 得到什么仍必须以实际索引为准。
 - 这些证据说明“开发制品可以进入隔离测试”，不等于它已经在七七或其他生产 Bot 中部署验证。
 
-在 0.26.5 精确恢复点回填前，下方 0.26.4 命令只用于最后已验证候选。只有明确回退到 0.26.3 时才使用 `86ee2a6…`，回退到 0.26.2 时才使用 `e340fb7…`，回退到 0.26.1 时才使用 `5d7f795…`，回退到 0.25.0 时才使用 `79d2268…`。不要自行把命令改成移动分支或当前未验证 HEAD。
+下方 0.26.5 命令用于当前已验证候选。只有明确回退到 0.26.4 时才使用 `2b87cdf…`，回退到 0.26.3 时才使用 `86ee2a6…`，回退到 0.26.2 时才使用 `e340fb7…`，回退到 0.26.1 时才使用 `5d7f795…`，回退到 0.25.0 时才使用 `79d2268…`。不要自行把命令改成移动分支或未验证 HEAD。
 
 ## 运行前提
 
@@ -41,7 +42,7 @@
 ### 项目使用 uv 时
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
 然后确认锁文件中的 source 末尾确实是目标 SHA，而不是只有分支名：
@@ -59,7 +60,7 @@ grep -A3 'name = "nonebot-plugin-moellmchats"' uv.lock
 python3 -m venv .venv-test
 .venv-test/bin/python -m pip install --upgrade pip
 .venv-test/bin/python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
 已有虚拟环境且依赖已经满足时，可以只替换插件本体。例如项目虚拟环境位于 `.venv`：
@@ -70,7 +71,7 @@ python3 -m venv .venv-test
   --force-reinstall \
   --no-deps \
   --no-cache-dir \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
 `--no-deps` 不会检查或补装依赖，也不会更新项目的依赖声明或锁文件；只有确认当前环境已经满足[依赖清单](./dependencies.md)时才使用。安装完成后，在重启 Bot 前核对包版本和来源：
@@ -82,18 +83,18 @@ python3 -m venv .venv-test
 from importlib.metadata import distribution
 import json
 
-expected = "2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
+expected = "e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 dist = distribution("nonebot-plugin-moellmchats")
 source = json.loads(dist.read_text("direct_url.json") or "{}")
 actual = source.get("vcs_info", {}).get("commit_id")
 print("version:", dist.version)
 print("commit:", actual)
-assert dist.version == "0.26.4", dist.version
+assert dist.version == "0.26.5", dist.version
 assert actual == expected, actual
 PY
 ```
 
-预期输出中的版本是 `0.26.4`，提交是完整的 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`。如果仍显示 `0.26.3` / `86ee2a6…`，说明尚未包含 K-10 修复；如果显示 `0.26.2` / `e340fb7…`、`0.26.1` / `5d7f795…`、`0.26.0` / `20cfe44…` 或 `0.25.0` / `79d2268…`，则是更旧安装点。应停止重启并重新执行上面的精确安装命令。
+预期输出中的版本是 `0.26.5`，提交是完整的 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`。如果仍显示 `0.26.4` / `2b87cdf…`，说明尚未包含 K-11 修复；如果显示 `0.26.3` / `86ee2a6…`、`0.26.2` / `e340fb7…`、`0.26.1` / `5d7f795…`、`0.26.0` / `20cfe44…` 或 `0.25.0` / `79d2268…`，则是更旧安装点。应停止重启并重新执行上面的精确安装命令。
 
 安装只替换磁盘文件；运行中的 Python 进程不会自动重载入口模块。核对版本和 SHA 后，应按项目原有方式只重启该 Bot 进程，再由 `SUPERUSERS` 中的账号发送：
 
@@ -172,7 +173,7 @@ PY
 
 | 阶段 | 要验证的内容 | 通过标准 |
 | --- | --- | --- |
-| 1. 锁定 | 依赖和 source SHA | 0.26.4 隔离测试必须解析到完整 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`；`86ee2a6…` 是 0.26.3 历史点，`79d2268…` 仅是 0.25.0 回退基线 |
+| 1. 锁定 | 依赖和 source SHA | 0.26.5 隔离测试必须解析到完整 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；`2b87cdf…` 是 0.26.4 历史点，`79d2268…` 仅是 0.25.0 回退基线 |
 | 2. 加载 | NoneBot 插件加载 | 无 import/config 权限错误，能生成独立配置目录 |
 | 3. 模型 | 测试服务商与模型 | `查看模型`、`查看配置` 正确；纯文本回复成功 |
 | 4. 调度 | 分类、视觉、MoE | 各角色使用预期模型；缺能力时明确拒绝或回退 |

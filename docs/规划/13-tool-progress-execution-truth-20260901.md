@@ -6,7 +6,7 @@ lastmod: 2026-09-01T00:00:00+00:00
 
 # K-11 工具进度与恢复状态真实性（0.26.5）
 
-> 当前状态：以 `feat/generated-tool-bundles` 精确基线 `7693b4de1c9240dccde8773557623056a51fa3b4` 实施。源码、定向回归、Python 3.10～3.13 普通全量、mandatory root sandbox、静态/仓库检查、fresh 制品和四组包外加载均已完成本地门禁；实现提交和精确双 Actions 仍按依赖顺序待关闭。当前工作树不是安装恢复点。
+> 当前状态：以 `feat/generated-tool-bundles` 精确基线 `7693b4de1c9240dccde8773557623056a51fa3b4` 实施。0.26.5 实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已通过完整本地门禁和精确 push/pull_request 双 Actions，可作为隔离测试安装恢复点。本文件所在证据提交仍须通过自身双 Actions 才最终闭环。
 
 ## 问题与边界
 
@@ -22,7 +22,7 @@ K-11 同时修复显示层和执行真实性，但不放宽副作用重试：真
 | K-11B 可选自然话术与固定命令 | K-11A | 已实现并通过首轮定向验证 | `tool_progress_model_preface_enabled=false`；复用同一次工具决策响应、脱敏后合并，不增加请求；固定 SUPERUSER 命令原子写入并热更新 |
 | K-11C 只读恢复与部分成功反馈 | K-11B | 已实现并通过首轮定向验证 | 已知只读失败可被随后已确认输出/副作用恢复；未知/变更失败和不确定副作用继续 fail closed；真正部分成功明确保留已可见结果 |
 | K-11D 版本、配置、文档与规划 | K-11C | 本地已完成 | 版本 0.26.5；同步配置、命令、架构、排错、安装、依赖、README、CHANGELOG 和 K-11；无新依赖或 migration |
-| K-11E 本地与远程门禁 | K-11D | 本地已完成，远程待关闭 | 串行四版本、静态、仓库/文档/资源、sandbox、fresh 制品、Twine、四组包外加载已通过；下一步推实现和证据提交并分别核验双 Actions |
+| K-11E 本地与远程门禁 | K-11D | 实现已通过，证据提交待门禁 | 串行四版本、静态、仓库/文档/资源、sandbox、fresh 制品、Twine、四组包外加载及实现提交双 Actions 已通过；证据提交自身双 Actions 待关闭 |
 
 ## 进度消息契约
 
@@ -54,4 +54,6 @@ Python 3.13 首轮整套运行曾有两个未改动的 runtime watcher / spool w
 
 fresh wheel/sdist 的 SHA-256 分别为 `c2a6f576c81c89ef49ffb29084da02652f516a5294354c6da47df36d1bdd4580` / `e2be72eec03453ca533d648d817ad0dc89905c466ab7305a04ef323f1da07b5f`；Twine 与包内容检查通过。Python 3.10/3.12 × wheel/sdist 四组均从 checkout 外的独立 `site-packages` 加载，验证 v11/v12 消息门面、v11 38 / v12 31 / NapCat 175 项清单与 generation 1 发布。
 
-只有实现提交的 push 和 pull_request Actions 都全部成功、各恰好一个成功 `release-gate`，才会把其完整 SHA 写入安装页；随后纯证据提交也必须通过自身双 Actions。最终交付只报告实现 SHA、证据 SHA、CI run、PR 状态和用户自行执行的精确 `.venv` 安装命令，不以 CI 冒充七七线上验收。
+实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已只推送到本仓库 `origin/feat/generated-tool-bundles`。push run [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 pull_request run [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均精确命中该 SHA、12/12 jobs 成功、`non_success=[]`，且各恰好一个成功 `release-gate`。本地 HEAD、remote-tracking、`git ls-remote` 与 PR #5 head 核验时一致，PR 为 `OPEN / MERGEABLE / CLEAN`；未合并、未发布、未部署。
+
+本文件所在纯证据提交也必须通过自身 push/pull_request 双 Actions。为避免无限自指，不再创建第三个提交记录证据提交自身 run；最终交付直接报告其核验结果、实现 SHA、证据 SHA、CI run、PR 状态和用户自行执行的精确 `.venv` 安装命令，不以 CI 冒充七七线上验收。
