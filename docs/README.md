@@ -2,9 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.3 隔离候选 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 success，且各恰好一个成功 `release-gate`；PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。完整边界见[K-09 实施状态](./规划/10-code-review-fixes-20260829.md)，PyPI 与七七实际安装状态仍需分别核对。
-
-> 0.26.4 的分类超时、工具重复限次和固定进度指令正在 [K-10](./规划/12-llm-runtime-incident-20260901.md) 关闭门禁；精确实现 SHA 和安装恢复点尚未形成，因此当前安装页仍固定 0.26.3，不使用移动分支代替。
+> 当前文档面向 0.26.4 隔离候选 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`。push run [`33485504350`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485504350) 与 PR run [`33485508930`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485508930) 均为 12/12 success，且各恰好一个成功 `release-gate`；PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。完整边界见[K-10 实施状态](./规划/12-llm-runtime-incident-20260901.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 

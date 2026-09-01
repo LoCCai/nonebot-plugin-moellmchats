@@ -57,9 +57,7 @@
 
 ## 📦 安装
 
-截至 2026-08-29，当前推荐进入隔离测试的 0.26.3 精确 Git 提交是 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。它在 0.26.2 基础上增加连续取消清理、分类 single-flight、Custom File 安全 HTTP、walrus AST 加固和结构化 400 判定；push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 success，且各恰好一个成功的 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，本任务不会合并。`e340fb7…` 是 0.26.2 历史安装点；详细边界见 [K-09 实施状态](docs/规划/10-code-review-fixes-20260829.md)。PyPI 和七七实际安装状态必须分别核对。
-
-0.26.4 正在 `feat/generated-tool-bundles` / PR #5 按 [K-10](docs/规划/12-llm-runtime-incident-20260901.md) 验证。在实现提交及 push/pull_request 双门禁完成前，上述 0.26.3 SHA 仍是文档中的最后已验证候选；不要从脏工作树或移动分支安装 0.26.4。
+截至 2026-09-01，当前推荐进入隔离测试的 0.26.4 精确 Git 提交是 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`。它包含此前的协议工具、业务路由、连续取消、安全 HTTP 和 single-flight，并修复分类传输超时、400 正文边界、参数级工具重复限次，新增固定 `设置工具进度` 超管指令；push run [`33485504350`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485504350) 与 PR run [`33485508930`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485508930) 均为 12/12 success，且各恰好一个成功的 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，本任务不会合并。`86ee2a6…` 是 0.26.3 历史安装点；详细边界见 [K-10 实施状态](docs/规划/12-llm-runtime-incident-20260901.md)。PyPI 和七七实际安装状态必须分别核对。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
@@ -68,7 +66,7 @@
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@86ee2a6a35d57e0f8e6f14bae2e3af39b8899241"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
 ```
 
 ### 项目使用 pip/venv 时
@@ -77,7 +75,7 @@ uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugi
 
 ```bash
 python -m pip install \
-  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@86ee2a6a35d57e0f8e6f14bae2e3af39b8899241"
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@2b87cdf410b3c77792b5d8c9d37ab11b379d72c8"
 ```
 
 
