@@ -101,6 +101,7 @@ class LlmToolsMixin:
         emotion_flag: bool
         is_superuser: bool
         _current_tool_usage: Counter[str]
+        _current_tool_fingerprint_usage: Counter[tuple[int, str, str]]
         _pending_vision_images: list[str]
         _tool_call_fingerprints: dict[tuple[int, str, str], str]
         _tool_retry_blocked_tools: set[str]
@@ -178,6 +179,15 @@ class LlmToolsMixin:
             blocked_tools = set()
             self._tool_retry_blocked_tools = blocked_tools
         return attempts, blocked_tools
+
+    def _tool_fingerprint_usage(
+        self,
+    ) -> Counter[tuple[int, str, str]]:
+        usage = getattr(self, "_current_tool_fingerprint_usage", None)
+        if not isinstance(usage, Counter):
+            usage = Counter()
+            self._current_tool_fingerprint_usage = usage
+        return usage
 
     def _remember_tool_attempt(
         self,
@@ -460,7 +470,7 @@ class LlmToolsMixin:
             )
             if self._retry_rejection(fingerprint) is not None:
                 return None
-            if self._current_tool_usage[tool_name] + 1 > repeated_limit:
+            if self._tool_fingerprint_usage()[fingerprint] + 1 > repeated_limit:
                 return None
             prepared.append(
                 _PreparedParallelToolCall(
@@ -581,6 +591,12 @@ class LlmToolsMixin:
             if decision is not None and decision.audit_required:
                 logger.info(f"工具 trust decision: {decision.audit_metadata()}")
             self._current_tool_usage[prepared.tool_name] += 1
+            fingerprint = (
+                int(getattr(self.tool_snapshot, "generation", 0)),
+                prepared.tool_name,
+                self._canonical_arguments_digest(prepared.arguments),
+            )
+            self._tool_fingerprint_usage()[fingerprint] += 1
             runtime_metrics.tool_steps += 1
             self.messages_handler.messages_entity.add_used_plugins({prepared.tool_name})
 
@@ -1027,11 +1043,16 @@ class LlmToolsMixin:
                 continue
 
             self._current_tool_usage[func_name] += 1
+            fingerprint_usage = self._tool_fingerprint_usage()
+            fingerprint_usage[fingerprint] += 1
             runtime_metrics.tool_steps += 1
             self.messages_handler.messages_entity.add_used_plugins({func_name})
             repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
-            if self._current_tool_usage[func_name] > repeated_limit:
-                tool_result = f"工具 {func_name} 已达到单任务重复调用上限 {repeated_limit}，请基于已有结果完成回答。"
+            if fingerprint_usage[fingerprint] > repeated_limit:
+                tool_result = (
+                    f"工具 {func_name} 使用相同参数已达到单任务重复调用上限 "
+                    f"{repeated_limit}，请基于已有结果完成回答。"
+                )
                 send_message_list.append(
                     {
                         "role": "tool",

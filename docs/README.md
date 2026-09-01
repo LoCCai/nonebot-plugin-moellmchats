@@ -4,6 +4,8 @@
 
 > 当前文档面向 0.26.3 隔离候选 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 success，且各恰好一个成功 `release-gate`；PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。完整边界见[K-09 实施状态](./规划/10-code-review-fixes-20260829.md)，PyPI 与七七实际安装状态仍需分别核对。
 
+> 0.26.4 的分类超时、工具重复限次和固定进度指令正在 [K-10](./规划/12-llm-runtime-incident-20260901.md) 关闭门禁；精确实现 SHA 和安装恢复点尚未形成，因此当前安装页仍固定 0.26.3，不使用移动分支代替。
+
 ---
 
 ## 目录
@@ -28,6 +30,7 @@
 | [业务路由与执行状态真实性](./规划/09-business-routing-execution-truth.md) | 0.26.2 K-08 的目录竞态、唯一所有者、命令、真实状态、重试和门禁 |
 | [当前基线审查修复](./规划/10-code-review-fixes-20260829.md) | 0.26.3 K-09 的语义重放、取消清理、single-flight、安全 HTTP、AST/400 判定与门禁 |
 | [K-09 后续设计清单](./规划/11-pending-issues-backlog.md) | 未在 0.26.3 简化处理的 spool、usage、热缓存、排空、Redis、MCP 与结构问题 |
+| [LLM 运行事故修复](./规划/12-llm-runtime-incident-20260901.md) | 0.26.4 K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
 
 ---
 

@@ -379,6 +379,72 @@ async def test_explicit_trusted_read_only_graph_uses_real_parallel_path() -> Non
 
 
 @pytest.mark.asyncio
+async def test_parallel_preflight_uses_full_tool_fingerprint_limit() -> None:
+    async def first(value: int) -> str:
+        return str(value)
+
+    async def second() -> str:
+        return "second"
+
+    specs = (
+        ToolSpec(
+            name="first",
+            description="first",
+            parameters={
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+            handler=first,
+        ),
+        ToolSpec(
+            name="second",
+            description="second",
+            parameters={"type": "object", "properties": {}},
+            handler=second,
+        ),
+    )
+    tool_snapshot = _registered_tool_snapshot(20, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        tool_snapshot,
+        _parallel_graph("first", "second"),
+        runner_tools=("first", "second"),
+    )
+    harness = Harness({}, snapshot=tool_snapshot)
+    harness.agent_runtime = runtime
+    blocked_arguments = {"value": 1}
+    blocked_fingerprint = (
+        tool_snapshot.generation,
+        "first",
+        harness._canonical_arguments_digest(blocked_arguments),
+    )
+    harness._current_tool_fingerprint_usage = Counter({blocked_fingerprint: 2})
+
+    try:
+        assert (
+            harness._prepare_read_only_parallel_batch(
+                [
+                    _call(1, "first", '{"value": 1}'),
+                    _call(2, "second"),
+                ]
+            )
+            is None
+        )
+        assert (
+            harness._prepare_read_only_parallel_batch(
+                [
+                    _call(3, "first", '{"value": 2}'),
+                    _call(4, "second"),
+                ]
+            )
+            is not None
+        )
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
 async def test_parallel_trace_persistence_is_serialized_with_unique_step_indexes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1269,6 +1335,54 @@ async def test_repeated_tool_limit_prevents_third_execution() -> None:
         messages = await harness._execute_tools([_call(index, "tool")], "", [], "")
     assert executions == 2
     assert "重复调用上限" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_tool_limit_allows_distinct_arguments() -> None:
+    executions: list[int] = []
+
+    async def tool(value: int):
+        executions.append(value)
+        return str(value)
+
+    harness = Harness({"tool": {"func": tool}})
+    for index in range(4):
+        messages = await harness._execute_tools(
+            [_call(index, "tool", f'{{"value": {index}}}')],
+            "",
+            [],
+            "",
+        )
+        assert "重复调用上限" not in messages[-1]["content"]
+
+    assert executions == [0, 1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_repeated_tool_limit_normalizes_json_object_key_order() -> None:
+    executions: list[tuple[int, int]] = []
+
+    async def tool(left: int, right: int):
+        executions.append((left, right))
+        return "ok"
+
+    harness = Harness({"tool": {"func": tool}})
+    for index, arguments in enumerate(
+        (
+            '{"left": 1, "right": 2}',
+            '{"right": 2, "left": 1}',
+            '{"left": 1, "right": 2}',
+        )
+    ):
+        messages = await harness._execute_tools(
+            [_call(index, "tool", arguments)],
+            "",
+            [],
+            "",
+        )
+
+    assert executions == [(1, 2), (1, 2)]
+    assert "使用相同参数已达到" in messages[-1]["content"]
 
 
 @pytest.mark.asyncio

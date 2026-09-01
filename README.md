@@ -39,6 +39,8 @@
 
 - **0.26.3 取消、并发与安全联网加固**：统一 Python 3.10～3.13 超时/取消语义，确保 PostgreSQL rollback/close 和 spool 清理在连续取消下仍能 settle；分类缓存按 generation 和完整 key 做 single-flight；Custom File 联网只能经 IP 固定、逐跳重验的 `safe_request`，并阻断直接网络客户端与 walrus 别名绕过
 
+- **0.26.4 分类超时与工具循环修复**：分类传输超时立即降级，不再占用 JSON 解析重试；服务商 400/异常正文不进入日志；工具重复上限按 generation、工具名和规范化参数摘要计算；超级管理员可用固定指令 `设置工具进度 开/关` 即时切换前置提示
+
 - **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
 
 - **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
@@ -56,6 +58,8 @@
 ## 📦 安装
 
 截至 2026-08-29，当前推荐进入隔离测试的 0.26.3 精确 Git 提交是 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`。它在 0.26.2 基础上增加连续取消清理、分类 single-flight、Custom File 安全 HTTP、walrus AST 加固和结构化 400 判定；push run [`33244154109`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244154109) 与 PR run [`33244155607`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33244155607) 均为 12/12 success，且各恰好一个成功的 `release-gate`。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，本任务不会合并。`e340fb7…` 是 0.26.2 历史安装点；详细边界见 [K-09 实施状态](docs/规划/10-code-review-fixes-20260829.md)。PyPI 和七七实际安装状态必须分别核对。
+
+0.26.4 正在 `feat/generated-tool-bundles` / PR #5 按 [K-10](docs/规划/12-llm-runtime-incident-20260901.md) 验证。在实现提交及 push/pull_request 双门禁完成前，上述 0.26.3 SHA 仍是文档中的最后已验证候选；不要从脏工作树或移动分支安装 0.26.4。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
@@ -142,6 +146,7 @@ COMMAND_START=["/",""]   # 可选
 |        设置分类模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                    设置分类模型，如：`设置分类模型 1`                     |
 |        设置总结模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                设置工具包复核等总结任务使用的模型                         |
 |      设置工具/函数调用      | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    |              控制是否开启函数调用机制，如：`设置工具调用 开`              |
+|          设置工具进度       | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    | 控制是否发送调用前过渡话术及“正在搜索/调用/执行”提示，如：`/设置工具进度 关` |
 |          刷新工具           | 超级管理员 | 私聊 / 群聊 |         无         | 原子热重载工具；成功显示新 generation 与分类计数，失败保留旧 generation |
 |          重载LLM            | 超级管理员 | 私聊 / 群聊 |         无         | 原子重载全部运行资源；失败时保留上一代快照 |
 |        查看LLM状态          | 超级管理员 | 私聊 / 群聊 |         无         | 查看队列、拒绝、缓存、工具、投递与最近重载状态 |

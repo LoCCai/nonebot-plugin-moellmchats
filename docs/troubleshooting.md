@@ -63,7 +63,7 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 - 最终失败反馈；
 - 后台安全审计和 Agent/ToolCall 状态。
 
-如果希望恢复原来的可见过渡提示，把该项设回 `true` 并发布新 generation。不要把进度提示当作 API 成功证据。
+超级管理员可直接发送 `/设置工具进度 关` 或 `/设置工具进度 开`；别名为 `设置调用进度`、`设置工具提示`，前缀可省略。该固定指令不经过 LLM、分类或工具链，写入后立即更新当前运行快照。普通群管理员没有权限。不要把进度提示当作 API 成功证据。
 
 ## 为什么系统拒绝重复调用
 
@@ -71,7 +71,8 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 
 - 未命中、空命中、失败或超时：相同工具和相同参数禁止原样重复；
 - 结果不确定或部分成功：本任务内整个同名工具禁止再次调用；
-- 不同工具或实质不同参数仍可继续，但仍受总步骤和同工具次数上限约束。
+- `max_repeated_tool_calls` 也使用同一组 `(generation, 工具名, 规范化参数摘要)` 计数；相同参数达到上限才拒绝，不同实质参数仍可继续；
+- 所有调用仍受 `max_tool_rounds` 与 `max_agent_steps` 的总上限约束。
 
 这是为了避免点赞、发消息、群管理等副作用因模型循环而重复发生。需要在修复后重新验收时，应开启一个新任务，并先只读核对外部状态。
 
@@ -93,6 +94,12 @@ PostgreSQL transaction 与 spool writer 会让同一个 rollback/close 子任务
 
 目录或分类缓存 lookup/publish/resolve 不可用时，本请求降级为“中等难度、无工具”，而不是绕过缓存直接再调一次分类模型。K-08 的唯一业务意图所有者在此前已经解析，所以精确别名仍可保持业务优先；所有者不可用时仍 fail closed，不改猜其他插件。
 
+## 分类超时后为什么没有第二次请求
+
+0.26.4 把“传输超时”和“响应 JSON 无法解析”分开处理：连接、读取或总请求超时会立即结束本次分类，并降级为“中等难度、无工具”；它不会消耗解析重试，也不会再等待一次完整的 `classification_timeout_seconds`。这能避免一次分类占用接近两倍超时预算。
+
+只有两类可恢复的响应问题会进行最多一次有限重试：首次 HTTP 400 会移除 `json_object` 模式后再试一次；非超时的 JSON/结构解析错误会再试一次。400 响应正文不会读取，其他异常日志只记录尝试次数和安全异常类型，不记录服务商正文、请求参数或凭据。若要定位供应商兼容性，应结合状态码、异常类型和服务商侧 request ID 排查，不要临时把原始响应正文写入群聊或普通日志。
+
 ## Custom File 报 `safe_request` 或 network allowlist 错误
 
 先确认工具源码没有导入 `aiohttp/httpx/requests/urllib/socket`，并且 `TOOLS_REGISTRY.capabilities.network` 使用了明确主机列表，例如 `{"allow": ["api.example"]}`。`safe_request` 由 worker 注入，源码不要从插件包导入它，也不能把 `_network_allow`、resolver 或 connector 当作模型参数。
@@ -112,3 +119,4 @@ PostgreSQL transaction 与 spool writer 会让同一个 rollback/close 子任务
 - [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [Custom File 与安全 HTTP](./custom-tools.md#安全联网只使用-safe_request)
 - [K-09 实施状态](./规划/10-code-review-fixes-20260829.md)
+- [K-10 实施状态](./规划/12-llm-runtime-incident-20260901.md)

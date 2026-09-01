@@ -155,7 +155,7 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 
 ### 6. 工具执行、确认和闭环
 
-默认路径每轮最多真正执行一个工具。若模型一次返回多个调用，超出的调用会记录为跳过；模型拿到本轮 observation 后可在下一轮继续调用。总轮次取 `max_tool_rounds` 与 `max_agent_steps` 的较小值，同一工具还受 `max_repeated_tool_calls` 限制。
+默认路径每轮最多真正执行一个工具。若模型一次返回多个调用，超出的调用会记录为跳过；模型拿到本轮 observation 后可在下一轮继续调用。总轮次取 `max_tool_rounds` 与 `max_agent_steps` 的较小值；同一工具使用同一组规范化参数还受 `max_repeated_tool_calls` 限制，不同参数不会被误判成原样循环。
 
 Custom File 若声明有界 network allowlist，只能调用 worker 注入的 `safe_request`；直接使用 `aiohttp`、`httpx`、`requests`、`urllib` 或 `socket` 会在 AST 预检中拒绝。该门面每一跳都重新校验 allowlist 与全部 DNS 地址，只连接已经验证的公网 IP，关闭自动重定向并拒绝 URL 凭据、HTTPS 降级和跨域敏感头继承；最多 5 次重定向，所有跳共享固定时间与请求/响应大小预算。它是管理员工具的受控网络门面，不是对任意 Python 源码绝对安全的证明。
 

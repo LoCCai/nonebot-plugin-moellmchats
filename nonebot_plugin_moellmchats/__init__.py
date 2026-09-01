@@ -126,6 +126,7 @@ __plugin_meta__ = PluginMetadata(
 16.危险工具首次调用只生成确认码；原请求不会执行，用户必须另发"确认执行 <确认码>"，也可"取消执行 <确认码>"
 17.超级管理员限定：用"设置LLM功能权限 <包> <哈希> <工具> user|superuser"审批生成工具的普通用户权限
 18.超级管理员限定：用"设置LLM冷却 <秒数>"直接调整对话冷却；设为 0 可关闭冷却
+19.超级管理员限定：用"设置工具进度 开/关"控制是否向当前会话发送工具调用前的进度提示
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
@@ -758,6 +759,63 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         await set_private_chat_matcher.finish("已关闭超级管理员私聊对话模式")
     else:
         await set_private_chat_matcher.finish("参数错误，格式为：设置私聊 开、关、1、0")
+
+
+_TOOL_PROGRESS_COMMAND_PATTERN = re.compile(
+    r"^\s*(?:[/!！])?(?:设置工具进度|设置调用进度|设置工具提示)(?:\s+(?P<state>.*?))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_tool_progress_command(raw: str) -> bool | None:
+    match = _TOOL_PROGRESS_COMMAND_PATTERN.fullmatch(raw)
+    if match is None:
+        return None
+    state = (match.group("state") or "").strip()
+    if state in {"开", "1"}:
+        return True
+    if state in {"关", "0"}:
+        return False
+    raise ValueError("参数必须是 开、关、1 或 0")
+
+
+set_tool_progress_matcher = on_regex(
+    _TOOL_PROGRESS_COMMAND_PATTERN.pattern,
+    flags=re.IGNORECASE,
+    permission=SUPERUSER,
+    priority=0,
+    block=True,
+)
+
+
+@set_tool_progress_matcher.handle()
+async def _(event: MessageEvent):
+    try:
+        enabled = _parse_tool_progress_command(event.get_plaintext())
+    except ValueError as error:
+        await set_tool_progress_matcher.finish(
+            f"参数错误：{error}。格式：/设置工具进度 开、关、1、0"
+        )
+    if enabled is None:  # pragma: no cover - on_regex guarantees this invariant
+        return
+
+    previous = bool(
+        config_parser.get_config("tool_progress_messages_enabled", True)
+    )
+    try:
+        config_parser.set_config("tool_progress_messages_enabled", enabled)
+    except Exception:
+        logger.exception("超级管理员设置工具进度消息失败")
+        await set_tool_progress_matcher.finish(
+            "工具进度消息设置失败，原配置继续使用，请查看后台日志。"
+        )
+
+    state = "开启" if enabled else "关闭"
+    previous_state = "开启" if previous else "关闭"
+    await set_tool_progress_matcher.finish(
+        f"已{state}工具调用进度提示（原状态：{previous_state}）。"
+        "确认消息、工具结果、最终回复和后台日志不受影响。"
+    )
 
 
 def _parse_llm_cooldown_seconds(raw: str) -> int:

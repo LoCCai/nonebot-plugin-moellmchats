@@ -114,6 +114,19 @@ class _FakeResponse:
         return "test response"
 
 
+class _TimeoutResponse(_FakeResponse):
+    async def __aenter__(self):
+        raise asyncio.TimeoutError
+
+
+class _UnreadableBodyResponse(_FakeResponse):
+    async def json(self) -> dict[str, Any]:
+        raise AssertionError("classification error response body must not be read")
+
+    async def text(self) -> str:
+        raise AssertionError("classification error response body must not be read")
+
+
 class _FakeSession:
     def __init__(self, responses: list[_FakeResponse | dict[str, Any]]) -> None:
         self.responses = list(responses)
@@ -687,6 +700,117 @@ async def test_timeout_fallback_classification_is_never_published(
     assert results == [("1", False, []), ("1", False, [])]
     assert cache.publish_count == 0
     assert session.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_transport_timeout_does_not_consume_parse_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    cache = _RecordingClassificationCache()
+    session = _FakeSession(
+        [
+            _TimeoutResponse(_model_response()),
+            _FakeResponse(_model_response()),
+        ]
+    )
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+
+    result = await _categorizer(
+        "transport timeout",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+        classification_cache=cache,
+    ).get_category()
+
+    assert result == ("1", False, [])
+    assert cache.publish_count == 0
+    assert session.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_http_400_retry_does_not_read_or_log_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    session = _FakeSession(
+        [
+            _UnreadableBodyResponse(
+                {"private": "provider-response-must-not-appear"},
+                status=400,
+            ),
+            _FakeResponse(_model_response()),
+        ]
+    )
+    log_messages: list[str] = []
+
+    class _RecordingLogger:
+        @staticmethod
+        def _record(message: object, *args: object) -> None:
+            rendered = str(message)
+            if args:
+                rendered = rendered.format(*args)
+            log_messages.append(rendered)
+
+        debug = _record
+        info = _record
+        warning = _record
+
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    monkeypatch.setattr(categorize_module, "logger", _RecordingLogger())
+
+    result = await _categorizer(
+        "400 retry",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+    ).get_category()
+
+    assert result == ("1", False, ["alpha"])
+    assert session.call_count == 2
+    assert all("provider-response-must-not-appear" not in message for message in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_repeated_http_400_never_reads_or_logs_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    private_marker = "second-provider-response-must-not-appear"
+    session = _FakeSession(
+        [
+            _UnreadableBodyResponse({"private": private_marker}, status=400),
+            _UnreadableBodyResponse({"private": private_marker}, status=400),
+        ]
+    )
+    log_messages: list[str] = []
+
+    class _RecordingLogger:
+        @staticmethod
+        def _record(message: object, *args: object) -> None:
+            rendered = str(message)
+            if args:
+                rendered = rendered.format(*args)
+            log_messages.append(rendered)
+
+        debug = _record
+        info = _record
+        warning = _record
+
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    monkeypatch.setattr(categorize_module, "logger", _RecordingLogger())
+
+    result = await _categorizer(
+        "repeated 400",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+    ).get_category()
+
+    assert result is False
+    assert session.call_count == 2
+    assert all(private_marker not in message for message in log_messages)
 
 
 @pytest.mark.asyncio

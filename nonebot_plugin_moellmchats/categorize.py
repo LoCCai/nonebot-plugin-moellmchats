@@ -1,6 +1,6 @@
+import asyncio
 import re
 import time
-import traceback
 
 import aiohttp
 from nonebot.log import logger
@@ -17,6 +17,7 @@ from .classification_cache import (
     ClassificationResultSource,
     resolve_classification,
 )
+from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .model_capabilities import ModelCapability
@@ -211,10 +212,19 @@ class Categorize:
                     timeout=aiohttp.ClientTimeout(total=config_parser.get_config("classification_timeout_seconds", 20)),
                     proxy=category_model_config.get("proxy"),
                 ) as resp:
-                    if resp.status == 400 and try_times == 0:
-                        err_text = await resp.text()
-                        logger.info(f"模型不支持结构化输出或参数异常，将降级重试。详情: {err_text}")
-                        raise ValueError("Model does not support json_object format")
+                    if resp.status == 400:
+                        # Never decode or log a provider's 400 payload.  Leaving
+                        # the context releases the response without loading an
+                        # unknown-sized error body into application memory.
+                        if try_times == 0:
+                            logger.info(
+                                "分类模型返回 HTTP 400，将移除 json_object 后有限重试"
+                            )
+                        else:
+                            logger.warning(
+                                "分类模型兼容重试仍返回 HTTP 400，已省略响应正文"
+                            )
+                        continue
 
                     response = await resp.json()
 
@@ -262,9 +272,18 @@ class Categorize:
 
             except _UncacheableClassificationResult:
                 raise
-            except Exception:
-                logger.warning(traceback.format_exc())
-                logger.warning(f"分类结果解析异常，当前尝试次数 {try_times + 1}，返回正文已省略。")
+            except (TimeoutError, asyncio.TimeoutError) as error:
+                # A transport timeout is not a parse failure.  Propagate one
+                # normalized exception so the outer classification deadline
+                # degrades immediately instead of spending another full
+                # per-attempt timeout and defeating the request budget.
+                raise TimeoutError from error
+            except Exception as error:
+                logger.warning(
+                    "分类模型响应不可用，准备有限重试: attempt={} error_type={}",
+                    try_times + 1,
+                    type(error).__name__,
+                )
                 continue
 
         if cache_key is not None:
