@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.4 隔离候选 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`。push run [`33485504350`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485504350) 与 PR run [`33485508930`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33485508930) 均为 12/12 success，且各恰好一个成功 `release-gate`；PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，未合并。完整边界见[K-10 实施状态](./规划/12-llm-runtime-incident-20260901.md)，PyPI 与七七实际安装状态仍需分别核对。
+> 当前文档已同步 0.26.5 K-11 源码契约；精确实现 SHA 与双 Actions 尚待本阶段远程门禁后回填。在此之前，最后已验证的隔离恢复点仍是 0.26.4 提交 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8`。完整边界见[K-11 实施状态](./规划/13-tool-progress-execution-truth-20260901.md)，PR #5 不在本任务合并，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
@@ -29,6 +29,7 @@
 | [当前基线审查修复](./规划/10-code-review-fixes-20260829.md) | 0.26.3 K-09 的语义重放、取消清理、single-flight、安全 HTTP、AST/400 判定与门禁 |
 | [K-09 后续设计清单](./规划/11-pending-issues-backlog.md) | 未在 0.26.3 简化处理的 spool、usage、热缓存、排空、Redis、MCP 与结构问题 |
 | [LLM 运行事故修复](./规划/12-llm-runtime-incident-20260901.md) | 0.26.4 K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
+| [工具进度与恢复状态真实性](./规划/13-tool-progress-execution-truth-20260901.md) | 0.26.5 K-11 的逐调用固定提示、可选自然话术、只读失败恢复、部分成功总结和交付边界 |
 
 ---
 

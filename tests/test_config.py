@@ -25,6 +25,7 @@ _BOOLEAN_FIELDS = (
     "protocol_tools_low_risk_direct_enabled",
     "protocol_tools_business_first",
     "tool_progress_messages_enabled",
+    "tool_progress_model_preface_enabled",
 )
 
 

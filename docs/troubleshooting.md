@@ -11,7 +11,8 @@
 - `command_preview`、`arguments_digest`：只显示脱敏命令形状和摘要，不会显示完整参数；
 - `matcher_checked`、`matcher_matched`、`matcher_failed`、`matcher_blocked`：确认规则是否检查、命中或异常；
 - `capture_success`、`api_success`、`api_failed`、`api_unknown`：确认 Adapter 是否真正回调成功；
-- `status`、`retry_decision`、`duration_ms`：以这里判断最后结果和是否允许再次尝试。
+- `api_read_failed`、`api_read_recovered`、`api_unresolved_failed`、`api_unresolved_unknown`：区分已恢复的只读查询降级和仍未解决的失败；
+- `progress_status`、`status`、`retry_decision`、`duration_ms`：进度是否送达与执行是否成功是两件事，最终结果以后四项为准。
 
 日志不会记录完整工具参数、原始 API 参数、Token、Cookie、Authorization、URL 查询或本地路径。如果排查必须看到业务参数，应在目标业务插件内增加经过审查的字段级日志，不要临时打开无差别 payload 日志。
 
@@ -38,9 +39,11 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 | `timed_out` | 兼容执行超过预算并已取消 | 查慢规则、外部 I/O 和 `legacy_dispatch_timeout_seconds`；不要先放大超时 |
 | `admission_rejected` | 兼容队列没有接纳 | 查活动/等待数和持续时间，等待压力恢复后再发新任务 |
 | `result_unknown` | API 可能已经到达外部系统，但响应不确定 | 绝对不要重试同一工具；先从外部状态只读核对 |
-| `partial_success` | 已有文本、图片或副作用成功，随后又失败 | 保留已成功部分，不要重放该工具；只用不同工具完成剩余步骤 |
+| `partial_success` | 已有文本、图片或副作用成功，随后仍有未解决的变更/未知 API、Matcher 异常或不确定副作用 | 保留 observation 中明确列出的已成功部分，不要重放该工具；只用不同工具完成剩余步骤 |
 
 只有 `matched_with_output` 和 `matched_side_effect` 是兼容插件成功。任意非空 metadata、模型说“已执行”或 `on_calling_api` 看到发送参数，都不能把失败改成成功。
+
+一个常见的正常降级是：`get_group_member_info` 失败，插件改用 `get_stranger_info`，随后正文发送成功。此时日志会同时出现 `api_read_failed=1`、`api_read_recovered=1` 和 `status=matched_with_output`，不应再把整步称为失败，也不会封锁同一个业务插件的下一条实质不同命令。如果只读查询失败后没有正文、图片或已确认副作用，则仍是 `failed`，不能用“查询 API 本来只是辅助”伪装成功。
 
 ## 命令前缀不对
 
@@ -55,7 +58,7 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 
 ## 关闭进度消息后是不是没有执行
 
-不是。`tool_progress_messages_enabled=false` 只隐藏模型前置话术和“正在搜索/调用/执行”消息。以下内容不受影响：
+不是。`tool_progress_messages_enabled=false` 只隐藏固定进度与可选自然话术。以下内容不受影响：
 
 - 二阶段确认消息；
 - 目标插件已确认的结果；
@@ -63,7 +66,17 @@ PicMenu 在 MoEllmChats 初始 generation 后才装入完整目录不再要求�
 - 最终失败反馈；
 - 后台安全审计和 Agent/ToolCall 状态。
 
-超级管理员可直接发送 `/设置工具进度 关` 或 `/设置工具进度 开`；别名为 `设置调用进度`、`设置工具提示`，前缀可省略。该固定指令不经过 LLM、分类或工具链，写入后立即更新当前运行快照。普通群管理员没有权限。不要把进度提示当作 API 成功证据。
+超级管理员可直接发送 `/设置工具进度 关` 或 `/设置工具进度 开`；别名为 `设置调用进度`、`设置工具提示`，前缀可省略。开启时，每个真正获准的调用会单独显示一条固定提示，例如：
+
+```text
+正在投递插件：bread_shop｜功能：抢面包
+正在调用搜索工具：web_search
+正在调用协议接口：napcat_v11__send_like｜功能：发送点赞
+```
+
+如果总开关已经开启但群里仍没有提示，先在同请求日志找 `LLM 工具进度审计`：`status=sent` 表示 Adapter 已确认发送；`timed_out` 或 `failed` 只表示进度发送失败，工具仍会继续；没有该日志通常表示调用在 Schema、权限、信任、重复或策略检查阶段已被拒绝。不要根据模型自己的“我来看看”判断固定提示是否工作。
+
+自然话术默认关闭。超级管理员可发送 `/设置工具自然话术 开`，别名 `设置工具话术`、`设置调用话术`；它只把同一次工具决策中的一句脱敏话术合到固定提示下面，不增加模型请求。总开关关闭时，自然话术开关不会单独发消息。两个固定指令都不经过 LLM、分类或工具链，写入后立即更新当前运行快照；普通群管理员没有权限。不要把任何进度提示当作 API 成功证据。
 
 ## 为什么系统拒绝重复调用
 

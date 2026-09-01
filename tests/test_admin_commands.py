@@ -11,8 +11,10 @@ from nonebot_plugin_moellmchats import (
     _parse_llm_cooldown_command,
     _parse_llm_cooldown_seconds,
     _parse_tool_progress_command,
+    _parse_tool_progress_model_preface_command,
     set_llm_cooldown_matcher,
     set_tool_progress_matcher,
+    set_tool_progress_model_preface_matcher,
 )
 from nonebot_plugin_moellmchats.config import MAX_CD_SECONDS
 
@@ -86,6 +88,38 @@ def test_parse_tool_progress_command(raw: str, expected: bool | None) -> None:
 def test_parse_tool_progress_command_rejects_invalid_input(raw: str) -> None:
     with pytest.raises(ValueError, match="开、关、1 或 0"):
         _parse_tool_progress_command(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("/设置工具自然话术 开", True),
+        ("!设置工具话术 1", True),
+        ("！设置调用话术 关", False),
+        ("设置工具自然话术 0", False),
+        ("请设置工具自然话术 关", None),
+    ],
+)
+def test_parse_tool_progress_model_preface_command(
+    raw: str,
+    expected: bool | None,
+) -> None:
+    assert _parse_tool_progress_model_preface_command(raw) is expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "设置工具自然话术",
+        "设置工具自然话术 打开",
+        "设置工具自然话术 0 1",
+    ],
+)
+def test_parse_tool_progress_model_preface_command_rejects_invalid_input(
+    raw: str,
+) -> None:
+    with pytest.raises(ValueError, match="开、关、1 或 0"):
+        _parse_tool_progress_model_preface_command(raw)
 
 
 def _group_event(*, user_id: int, text: str) -> GroupMessageEvent:
@@ -231,6 +265,66 @@ async def test_fixed_tool_progress_matcher_rejects_non_superuser(monkeypatch) ->
         set_tool_progress_matcher,
         bot,
         _group_event(user_id=2, text="/设置工具进度 关"),
+        {},
+    )
+
+    assert mutations == []
+    assert bot.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fixed_tool_progress_model_preface_matcher_updates_config_without_llm(
+    monkeypatch,
+) -> None:
+    values = {"tool_progress_model_preface_enabled": False}
+    mutations: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.config_parser.get_config",
+        lambda key, default=None: values.get(key, default),
+    )
+
+    def set_config(key: str, value: bool) -> None:
+        mutations.append((key, value))
+        values[key] = value
+
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.config_parser.set_config",
+        set_config,
+    )
+    bot = _RecordingBot()
+
+    with pytest.raises(StopPropagation):
+        await check_and_run_matcher(
+            set_tool_progress_model_preface_matcher,
+            bot,
+            _group_event(user_id=1, text="/设置工具自然话术 开"),
+            {},
+        )
+
+    assert mutations == [("tool_progress_model_preface_enabled", True)]
+    assert len(bot.calls) == 1
+    assert bot.calls[0][0] == "send_msg"
+    message = str(bot.calls[0][1]["message"])
+    assert "已开启工具调用自然话术" in message
+    assert "不会增加模型请求" in message
+
+
+@pytest.mark.asyncio
+async def test_fixed_tool_progress_model_preface_matcher_rejects_non_superuser(
+    monkeypatch,
+) -> None:
+    mutations: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.config_parser.set_config",
+        lambda key, value: mutations.append((key, value)),
+    )
+    bot = _RecordingBot()
+
+    await check_and_run_matcher(
+        set_tool_progress_model_preface_matcher,
+        bot,
+        _group_event(user_id=2, text="/设置工具自然话术 开"),
         {},
     )
 

@@ -533,9 +533,121 @@ async def test_called_api_failure_never_commits_staged_output() -> None:
         assert context["messages"] == []
         assert context["api_failed"] == 1
         assert context["api_unknown"] == 0
+        assert context["api_read_failed"] == 0
+        assert context["api_unresolved_failed"] == 1
     finally:
         simulator_module._capture_key.reset(token)
         simulator_module._captures.pop(capture_id, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("protocol", "read_api", "send_api", "message", "exception"),
+    [
+        (
+            "onebot_v11",
+            "get_group_member_info",
+            "send_group_msg",
+            Message("抢面包成功"),
+            ActionFailed("OneBot V11", "not in group"),
+        ),
+        (
+            "onebot_v12",
+            "get_user_info",
+            "send_message",
+            V12Message("v12 fallback success"),
+            NetworkError("OneBot V12", "read disconnected"),
+        ),
+    ],
+)
+async def test_recovered_read_failure_with_verified_output_is_success(
+    protocol: str,
+    read_api: str,
+    send_api: str,
+    message,
+    exception: Exception,
+) -> None:
+    capture_id = uuid.uuid4().hex
+    context = simulator_module._empty_dispatch_context()
+    context.update(
+        {
+            "original_id": "10" if protocol == "onebot_v12" else 10,
+            "fake_id": "20" if protocol == "onebot_v12" else 20,
+            "protocol": protocol,
+            "matcher_matched": 1,
+        }
+    )
+    simulator_module._captures[capture_id] = context
+    token = simulator_module._capture_key.set(capture_id)
+    failed_read: dict = {}
+    successful_fallback: dict = {}
+    sent = {"message": message}
+    try:
+        await simulator_module._capture_outgoing_api(
+            object(), read_api, failed_read
+        )
+        await simulator_module._confirm_outgoing_api(
+            object(), exception, read_api, failed_read, None
+        )
+        fallback_api = (
+            "get_stranger_info"
+            if protocol == "onebot_v11"
+            else "get_self_info"
+        )
+        await simulator_module._capture_outgoing_api(
+            object(), fallback_api, successful_fallback
+        )
+        await simulator_module._confirm_outgoing_api(
+            object(),
+            None,
+            fallback_api,
+            successful_fallback,
+            {"nickname": "fallback"},
+        )
+        await simulator_module._capture_outgoing_api(
+            object(), send_api, sent
+        )
+        await simulator_module._confirm_outgoing_api(
+            object(), None, send_api, sent, {"message_id": "sent"}
+        )
+        result = simulator_module._dispatch_result(
+            context,
+            started_monotonic=0,
+        )
+    finally:
+        simulator_module._capture_key.reset(token)
+        simulator_module._captures.pop(capture_id, None)
+
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    assert result.api_failed == 1
+    assert result.api_read_failed == 1
+    assert result.api_read_recovered == 1
+    assert result.api_unresolved_failed == 0
+    assert result.api_unresolved_unknown == 0
+    assert result.api_succeeded == 2
+    assert result.successful_captures == 1
+
+
+def test_read_failure_without_verified_result_is_failed() -> None:
+    context = simulator_module._empty_dispatch_context()
+    context.update(
+        {
+            "matcher_matched": 1,
+            "api_failed": 1,
+            "api_unknown": 1,
+            "api_read_failed": 1,
+        }
+    )
+
+    result = simulator_module._dispatch_result(
+        context,
+        started_monotonic=0,
+    )
+
+    assert result.status is simulator_module.PluginDispatchStatus.FAILED
+    assert result.api_read_recovered == 0
+    assert result.api_unresolved_failed == 0
+    assert result.api_unresolved_unknown == 0
 
 
 def test_dispatch_result_distinguishes_all_execution_truth_states() -> None:

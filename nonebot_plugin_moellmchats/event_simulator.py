@@ -107,6 +107,10 @@ class PluginDispatchResult:
     api_succeeded: int = 0
     api_failed: int = 0
     api_unknown: int = 0
+    api_read_failed: int = 0
+    api_read_recovered: int = 0
+    api_unresolved_failed: int = 0
+    api_unresolved_unknown: int = 0
     mutating_api_succeeded: int = 0
     duration_ms: int = 0
 
@@ -124,6 +128,10 @@ class PluginDispatchResult:
             "api_succeeded",
             "api_failed",
             "api_unknown",
+            "api_read_failed",
+            "api_read_recovered",
+            "api_unresolved_failed",
+            "api_unresolved_unknown",
             "mutating_api_succeeded",
             "duration_ms",
         ):
@@ -274,8 +282,18 @@ async def _confirm_outgoing_api(
         staged = {"api": api, "effect": None, "output": None}
     if exception is not None:
         context["api_failed"] += 1
-        if _unknown_api_result(exception):
+        unknown_result = _unknown_api_result(exception)
+        if unknown_result:
             context["api_unknown"] += 1
+        if staged.get("effect") == "read_only":
+            context["api_read_failed"] += 1
+        else:
+            # Mutating and unclassified APIs stay fail closed.  Only a known
+            # read-only lookup may be treated as recovered by later verified
+            # output from the same completed Matcher.
+            context["api_unresolved_failed"] += 1
+            if unknown_result:
+                context["api_unresolved_unknown"] += 1
         return
     context["api_succeeded"] += 1
     if staged.get("effect") == "mutating":
@@ -504,13 +522,36 @@ def _dispatch_result(
 ) -> PluginDispatchResult:
     pending = context.get("pending_api", {})
     if pending:
-        context["api_unknown"] += len(pending)
-        context["api_failed"] += len(pending)
+        for staged in pending.values():
+            context["api_unknown"] += 1
+            context["api_failed"] += 1
+            if staged.get("effect") == "read_only":
+                context["api_read_failed"] += 1
+            else:
+                context["api_unresolved_failed"] += 1
+                context["api_unresolved_unknown"] += 1
         pending.clear()
     captured = context.get("messages", [])
     texts = [item["text"] for item in captured if item.get("text")]
     images = [url for item in captured for url in item.get("images", [])]
     has_verified_effect = bool(captured or context.get("mutating_api_succeeded", 0))
+    read_recovered = int(context.get("api_read_failed", 0)) if has_verified_effect else 0
+    inferred_unresolved_unknown = max(
+        0,
+        int(context.get("api_unknown", 0)) - int(context.get("api_read_failed", 0)),
+    )
+    unresolved_unknown = max(
+        int(context.get("api_unresolved_unknown", 0)),
+        inferred_unresolved_unknown,
+    )
+    unresolved_failed = max(
+        int(context.get("api_unresolved_failed", 0)),
+        max(
+            0,
+            int(context.get("api_failed", 0)) - int(context.get("api_read_failed", 0)),
+        ),
+        unresolved_unknown,
+    )
     if forced_status is not None:
         status = forced_status
         if (
@@ -523,19 +564,21 @@ def _dispatch_result(
             and has_verified_effect
         ):
             status = PluginDispatchStatus.PARTIAL_SUCCESS
-        elif context.get("api_unknown", 0) and forced_status in {
+        elif unresolved_unknown and forced_status in {
             PluginDispatchStatus.FAILED,
             PluginDispatchStatus.TIMED_OUT,
         }:
             status = PluginDispatchStatus.RESULT_UNKNOWN
-    elif context.get("api_unknown", 0):
+    elif unresolved_unknown:
         status = PluginDispatchStatus.PARTIAL_SUCCESS if has_verified_effect else PluginDispatchStatus.RESULT_UNKNOWN
-    elif context.get("matcher_failed", 0) or context.get("api_failed", 0):
+    elif context.get("matcher_failed", 0) or unresolved_failed:
         status = PluginDispatchStatus.PARTIAL_SUCCESS if has_verified_effect else PluginDispatchStatus.FAILED
     elif captured:
         status = PluginDispatchStatus.MATCHED_WITH_OUTPUT
     elif context.get("mutating_api_succeeded", 0):
         status = PluginDispatchStatus.MATCHED_SIDE_EFFECT
+    elif context.get("api_read_failed", 0):
+        status = PluginDispatchStatus.FAILED
     elif context.get("matcher_matched", 0):
         status = PluginDispatchStatus.MATCHED_EMPTY
     else:
@@ -553,6 +596,10 @@ def _dispatch_result(
         api_succeeded=int(context.get("api_succeeded", 0)),
         api_failed=int(context.get("api_failed", 0)),
         api_unknown=int(context.get("api_unknown", 0)),
+        api_read_failed=int(context.get("api_read_failed", 0)),
+        api_read_recovered=read_recovered,
+        api_unresolved_failed=unresolved_failed,
+        api_unresolved_unknown=unresolved_unknown,
         mutating_api_succeeded=int(context.get("mutating_api_succeeded", 0)),
         duration_ms=max(0, int((time.monotonic() - started_monotonic) * 1000)),
     )
@@ -569,6 +616,10 @@ def _empty_dispatch_context() -> dict[str, Any]:
         "api_succeeded": 0,
         "api_failed": 0,
         "api_unknown": 0,
+        "api_read_failed": 0,
+        "api_read_recovered": 0,
+        "api_unresolved_failed": 0,
+        "api_unresolved_unknown": 0,
         "mutating_api_succeeded": 0,
     }
 
@@ -649,6 +700,9 @@ class EventSimulator:
                     f"capture_success={result.successful_captures} "
                     f"api_success={result.api_succeeded} "
                     f"api_failed={result.api_failed} "
+                    f"api_read_failed={result.api_read_failed} "
+                    f"api_read_recovered={result.api_read_recovered} "
+                    f"api_unresolved_failed={result.api_unresolved_failed} "
                     f"duration_ms={result.duration_ms}"
                 )
                 return result

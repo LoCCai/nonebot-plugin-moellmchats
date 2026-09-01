@@ -270,15 +270,24 @@ class LlmPayloadMixin:
 
             mention_hint = self._build_tool_mention_hint()
 
-            if config_parser.get_config("tool_progress_messages_enabled", True):
+            progress_enabled = config_parser.get_config(
+                "tool_progress_messages_enabled",
+                True,
+            )
+            model_preface_enabled = config_parser.get_config(
+                "tool_progress_model_preface_enabled",
+                False,
+            )
+            if progress_enabled and model_preface_enabled:
                 progress_rule = (
-                    "1. 同步执行：如果你需要调用工具，必须在本次回复的文本(content)中用简短的一句话"
-                    "说明你要做什么，并在同一次回复中立刻发起工具调用(tool_calls)。"
+                    "1. 调用工具时，可以在本次回复的文本(content)中用简短的一句话说明你要做什么，"
+                    "并在同一次回复中立刻发起 tool_calls；运行时会把这句话附在可信的固定进度提示后，"
+                    "不得提前声称成功。"
                 )
             else:
                 progress_rule = (
                     "1. 调用工具时不要输出执行前话术，直接在同一次回复中发起 tool_calls；"
-                    "工具结果和最终总结仍须正常输出。"
+                    "固定进度提示由运行时按配置发送，工具结果和最终总结仍须正常输出。"
                 )
             send_message_list[0]["content"] += (
                 "。特别注意："

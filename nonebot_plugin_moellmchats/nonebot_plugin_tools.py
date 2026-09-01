@@ -71,7 +71,22 @@ class PluginDispatchError(RuntimeError):
         if not isinstance(result, PluginDispatchResult) or result.succeeded:
             raise TypeError("PluginDispatchError 只接受非成功调度结果")
         self.result = result
-        super().__init__(_DISPATCH_FEEDBACK[result.status])
+        feedback = _DISPATCH_FEEDBACK[result.status]
+        if result.status is PluginDispatchStatus.PARTIAL_SUCCESS and (
+            result.text.strip() or result.images
+        ):
+            confirmed: list[str] = []
+            if result.text.strip():
+                confirmed.append(result.text.strip()[:2_000])
+            if result.images:
+                confirmed.append(f"已确认发送图片 {len(result.images)} 张")
+            feedback = (
+                "插件已经确认产生并向用户显示以下结果；这部分执行成功，"
+                "不得描述为失败：\n"
+                + "\n".join(confirmed)
+                + "\n其后仍有未完成或不确定步骤；不要再次调用同一工具。"
+            )
+        super().__init__(feedback)
 
 
 def configured_command_prefixes() -> tuple[str, ...]:
@@ -163,6 +178,10 @@ def _dispatch_metadata(result: PluginDispatchResult) -> dict[str, int | str]:
         "api_succeeded": result.api_succeeded,
         "api_failed": result.api_failed,
         "api_unknown": result.api_unknown,
+        "api_read_failed": result.api_read_failed,
+        "api_read_recovered": result.api_read_recovered,
+        "api_unresolved_failed": result.api_unresolved_failed,
+        "api_unresolved_unknown": result.api_unresolved_unknown,
         "mutating_api_succeeded": result.mutating_api_succeeded,
         "duration_ms": result.duration_ms,
     }

@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime
+import json
 from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11 import Message
@@ -63,11 +64,16 @@ from nonebot_plugin_moellmchats.tool_graph import (
     ToolGraphEdge,
     ToolGraphRelation,
 )
-from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
+from nonebot_plugin_moellmchats.tool_manager import (
+    LlmToolExecutionRoute,
+    LlmToolExecutionView,
+    ToolSnapshot,
+)
 from nonebot_plugin_moellmchats.tool_providers import (
     DiscoveredTool,
     ProviderCatalogSnapshot,
     ProviderRegistration,
+    ToolSource,
     builtin_tool_provider,
     file_tool_provider,
     generated_tool_provider,
@@ -357,6 +363,10 @@ async def test_explicit_trusted_read_only_graph_uses_real_parallel_path() -> Non
 
         assert max_active == 2
         assert entered == {"first", "second"}
+        assert harness.bot.sent == [
+            "正在调用注册工具：second",
+            "正在调用注册工具：first",
+        ]
         assert [message["tool_call_id"] for message in messages[1:]] == [
             "1",
             "2",
@@ -1335,6 +1345,7 @@ async def test_repeated_tool_limit_prevents_third_execution() -> None:
         messages = await harness._execute_tools([_call(index, "tool")], "", [], "")
     assert executions == 2
     assert "重复调用上限" in messages[-1]["content"]
+    assert len(harness.bot.sent) == 2
 
 
 @pytest.mark.asyncio
@@ -1638,6 +1649,7 @@ async def test_non_object_tool_arguments_become_tool_error() -> None:
         [_call(1, "web_search", "[]")], "", [], ""
     )
     assert "必须是 JSON 对象" in messages[-1]["content"]
+    assert harness.bot.sent == []
 
 
 @pytest.mark.asyncio
@@ -1647,6 +1659,7 @@ async def test_missing_required_argument_becomes_tool_error() -> None:
         [_call(1, "web_search", "{}")], "", [], ""
     )
     assert "缺少必填参数" in messages[-1]["content"]
+    assert harness.bot.sent == []
 
 
 @pytest.mark.asyncio
@@ -1681,7 +1694,7 @@ async def test_web_search_legacy_branch_uses_canonical_builtin_handler(
     )
 
     assert calls == [("latest", harness.tool_snapshot, True)]
-    assert harness.bot.sent == ["正在搜索: latest..."]
+    assert harness.bot.sent == ["正在调用搜索工具：web_search"]
     assert "external observation" in messages[-1]["content"]
 
 
@@ -1739,7 +1752,75 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
             "plugin_demo",
         )
     ]
+    assert harness.bot.sent == [
+        "正在投递插件：plugin_demo｜功能：demo"
+    ]
     assert "visible output" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_bread_style_steps_continue_after_recovered_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {
+            "bread_shop": {
+                "description": "bread shop",
+                "usage": "/吃面包\n/买面包\n/抢面包\n/赌面包",
+            }
+        }
+    )
+    commands: list[str] = []
+
+    async def dispatch(_bot, _event, command, _source, *, plugin_name):
+        assert plugin_name == "bread_shop"
+        commands.append(command)
+        recovered = command == "/抢面包"
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text={
+                "/吃面包": "吃面包成功",
+                "/买面包": "买面包成功",
+                "/抢面包": "抢到了东山啊的面包 8 个",
+                "/赌面包": "赌面包完成",
+            }[command],
+            matcher_checked=1,
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=2 if recovered else 1,
+            api_failed=1 if recovered else 0,
+            api_unknown=1 if recovered else 0,
+            api_read_failed=1 if recovered else 0,
+            api_read_recovered=1 if recovered else 0,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    tool_contexts: list[str] = []
+    for index, command in enumerate(
+        ("/吃面包", "/买面包", "/抢面包", "/赌面包"),
+        start=1,
+    ):
+        messages = await harness._execute_tools(
+            [
+                _call(
+                    index,
+                    "bread_shop",
+                    json.dumps({"command": command}, ensure_ascii=False),
+                )
+            ],
+            "",
+            [],
+            "",
+        )
+        tool_contexts.append(messages[-1]["content"])
+
+    assert commands == ["/吃面包", "/买面包", "/抢面包", "/赌面包"]
+    assert "抢到了东山啊的面包 8 个" in tool_contexts[2]
+    assert "失败" not in tool_contexts[2]
+    assert "赌面包完成" in tool_contexts[3]
 
 
 @pytest.mark.asyncio
@@ -1821,6 +1902,9 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
                 1 if status is PluginDispatchStatus.PARTIAL_SUCCESS else 0
             ),
             text=("已发送部分内容" if status is PluginDispatchStatus.PARTIAL_SUCCESS else ""),
+            images=("private-image-reference",)
+            if status is PluginDispatchStatus.PARTIAL_SUCCESS
+            else (),
         )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
@@ -1841,14 +1925,20 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
     assert calls == 1
     assert (
         "结果不确定" in first[-1]["content"]
-        or "部分可验证结果" in first[-1]["content"]
+        or "这部分执行成功" in first[-1]["content"]
     )
+    if status is PluginDispatchStatus.PARTIAL_SUCCESS:
+        assert "已发送部分内容" in first[-1]["content"]
+        assert "已确认发送图片 1 张" in first[-1]["content"]
+        assert "private-image-reference" not in first[-1]["content"]
     assert "禁止再次调用" in second[-1]["content"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_preface_enabled", [False, True])
 async def test_progress_switch_hides_only_pre_execution_messages(
     monkeypatch: pytest.MonkeyPatch,
+    model_preface_enabled: bool,
 ) -> None:
     calls = 0
 
@@ -1870,6 +1960,8 @@ async def test_progress_switch_hides_only_pre_execution_messages(
         lambda key, default=None: (
             False
             if key == "tool_progress_messages_enabled"
+            else model_preface_enabled
+            if key == "tool_progress_model_preface_enabled"
             else original_get_config(key, default)
         ),
     )
@@ -1885,6 +1977,283 @@ async def test_progress_switch_hides_only_pre_execution_messages(
     assert harness.sent == []
     assert harness.bot.sent == []
     assert "最终工具结果" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_progress_message_combines_optional_model_preface_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query() -> ToolResult:
+        return ToolResult(text="最终工具结果")
+
+    spec = ToolSpec(
+        name="query_once",
+        description="query",
+        parameters={"type": "object", "properties": {}},
+        handler=query,
+    )
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            True
+            if key
+            in {
+                "tool_progress_messages_enabled",
+                "tool_progress_model_preface_enabled",
+            }
+            else original_get_config(key, default)
+        ),
+    )
+    harness = Harness({"query_once": spec.as_legacy_schema()})
+
+    await harness._execute_tools(
+        [_call(1, "query_once")],
+        "  我来查询一下\n不会提前下结论  ",
+        [],
+        "",
+    )
+
+    assert harness.bot.sent == [
+        "正在调用工具：query_once\n说明：我来查询一下 不会提前下结论"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_whitespace_model_preface_never_suppresses_fixed_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def query() -> str:
+        return "ok"
+
+    spec = ToolSpec(
+        name="query_once",
+        description="query",
+        parameters={"type": "object", "properties": {}},
+        handler=query,
+    )
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            True
+            if key
+            in {
+                "tool_progress_messages_enabled",
+                "tool_progress_model_preface_enabled",
+            }
+            else original_get_config(key, default)
+        ),
+    )
+    harness = Harness({"query_once": spec.as_legacy_schema()})
+
+    await harness._execute_tools(
+        [_call(1, "query_once")],
+        " \n\t ",
+        [],
+        "",
+    )
+
+    assert harness.bot.sent == ["正在调用工具：query_once"]
+
+
+def _source_progress_view(source: ToolSource) -> LlmToolExecutionView:
+    spec = ToolSpec(
+        name=f"{source.value}_demo",
+        description="demo",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: None,
+    )
+    return LlmToolExecutionView(
+        tool_name=spec.name,
+        generation=1,
+        route=LlmToolExecutionRoute.CUSTOM_TOOL,
+        source=source,
+        spec=spec,
+        legacy_entry={"tool_spec": spec},
+        provider_authoritative=False,
+        bundle_id="bundle" if source is ToolSource.GENERATED else None,
+        bundle_digest=("0" * 64 if source is ToolSource.GENERATED else None),
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (ToolSource.REGISTERED, "正在调用注册工具：registered_demo"),
+        (ToolSource.CUSTOM_FILE, "正在调用自定义文件工具：custom_file_demo"),
+        (ToolSource.GENERATED, "正在调用生成工具：generated_demo"),
+        (ToolSource.MCP, "正在调用MCP 工具：mcp_demo"),
+    ],
+)
+def test_progress_message_uses_trusted_source_label(
+    source: ToolSource,
+    expected: str,
+) -> None:
+    assert (
+        LlmToolsMixin._build_tool_progress_message(
+            _source_progress_view(source),
+            {},
+            confirmation_required=False,
+            model_preface="",
+        )
+        == expected
+    )
+
+
+def test_protocol_progress_uses_trusted_action_summary() -> None:
+    view = LlmToolExecutionView(
+        tool_name="napcat_v11__send_like",
+        generation=1,
+        route=LlmToolExecutionRoute.BUILTIN_PROTOCOL,
+        source=ToolSource.BUILTIN,
+        spec=None,
+        legacy_entry=None,
+        provider_authoritative=False,
+    )
+
+    assert LlmToolsMixin._build_tool_progress_message(
+        view,
+        {},
+        confirmation_required=False,
+        model_preface="",
+    ) == (
+        "正在调用协议接口：napcat_v11__send_like｜功能：发送点赞"
+    )
+    assert LlmToolsMixin._build_tool_progress_message(
+        view,
+        {},
+        confirmation_required=True,
+        model_preface="",
+    ) == "正在准备工具确认：napcat_v11__send_like"
+
+
+def test_progress_model_preface_redacts_sensitive_values() -> None:
+    raw = (
+        "给 1143785758 点赞，读取 https://example.invalid/a?token=secret "
+        "和 /root/private/config.json，Authorization=Bearer-secret，"
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0123456789+/="
+    )
+
+    rendered = LlmToolsMixin._safe_progress_preface(raw)
+
+    assert "1143785758" not in rendered
+    assert "example.invalid" not in rendered
+    assert "/root/private" not in rendered
+    assert "Bearer-secret" not in rendered
+    assert "QUJDREVGR0" not in rendered
+    assert "<id>" in rendered
+    assert "<已省略链接>" in rendered
+    assert "<已省略路径>" in rendered
+    assert "<已省略 Base64>" in rendered
+
+
+@pytest.mark.asyncio
+async def test_progress_send_failure_does_not_block_tool_execution() -> None:
+    calls = 0
+
+    async def query() -> str:
+        nonlocal calls
+        calls += 1
+        return "ok"
+
+    async def fail_send(_event, _message) -> None:
+        raise RuntimeError("private transport detail")
+
+    spec = ToolSpec(
+        name="query_once",
+        description="query",
+        parameters={"type": "object", "properties": {}},
+        handler=query,
+    )
+    harness = Harness({"query_once": spec.as_legacy_schema()})
+    harness.bot.send = fail_send
+
+    messages = await harness._execute_tools(
+        [_call(1, "query_once")],
+        "",
+        [],
+        "",
+    )
+
+    assert calls == 1
+    assert "ok" in messages[-1]["content"]
+    assert harness._tool_progress_status(_call(1, "query_once")) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_progress_send_timeout_does_not_block_tool_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    calls = 0
+
+    async def query() -> str:
+        nonlocal calls
+        calls += 1
+        return "ok"
+
+    async def blocked_send(_event, _message) -> None:
+        await asyncio.Event().wait()
+
+    spec = ToolSpec(
+        name="query_once",
+        description="query",
+        parameters={"type": "object", "properties": {}},
+        handler=query,
+    )
+    harness = Harness({"query_once": spec.as_legacy_schema()})
+    harness.bot.send = blocked_send
+    monkeypatch.setattr(module, "_PROGRESS_SEND_TIMEOUT_SECONDS", 0.01)
+
+    messages = await asyncio.wait_for(
+        harness._execute_tools(
+            [_call(1, "query_once")],
+            "",
+            [],
+            "",
+        ),
+        timeout=1,
+    )
+
+    assert calls == 1
+    assert "ok" in messages[-1]["content"]
+    assert harness._tool_progress_status(_call(1, "query_once")) == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_progress_cancellation_propagates_before_tool_execution() -> None:
+    calls = 0
+
+    async def query() -> str:
+        nonlocal calls
+        calls += 1
+        return "ok"
+
+    async def cancel_send(_event, _message) -> None:
+        raise asyncio.CancelledError
+
+    spec = ToolSpec(
+        name="query_once",
+        description="query",
+        parameters={"type": "object", "properties": {}},
+        handler=query,
+    )
+    harness = Harness({"query_once": spec.as_legacy_schema()})
+    harness.bot.send = cancel_send
+
+    with pytest.raises(asyncio.CancelledError):
+        await harness._execute_tools(
+            [_call(1, "query_once")],
+            "",
+            [],
+            "",
+        )
+
+    assert calls == 0
 
 
 def test_command_audit_preview_never_exposes_arguments_or_locations() -> None:
@@ -1926,7 +2295,8 @@ async def test_hallucinated_superuser_tool_is_rejected_without_breaking_reply() 
     )
     assert executions == 0
     assert "仅允许超级用户" in messages[-1]["content"]
-    assert harness.sent == ["normal answer"]
+    assert harness.sent == []
+    assert harness.bot.sent == []
 
 
 @pytest.mark.asyncio
@@ -2048,7 +2418,8 @@ async def test_llm_tools_rejects_unknown_name_before_legacy_dispatch(
 
     assert "不在当前 generation" in messages[-1]["content"]
     assert "已拒绝执行" in messages[-1]["content"]
-    assert harness.sent == ["normal answer"]
+    assert harness.sent == []
+    assert harness.bot.sent == []
 
 
 @pytest.mark.asyncio
@@ -2091,7 +2462,8 @@ async def test_provider_catalog_execution_enforces_trust_permission() -> None:
 
     assert executions == 0
     assert "工具契约只允许超级用户" in messages[-1]["content"]
-    assert harness.sent == ["normal answer"]
+    assert harness.sent == []
+    assert harness.bot.sent == []
 
 
 @pytest.mark.asyncio

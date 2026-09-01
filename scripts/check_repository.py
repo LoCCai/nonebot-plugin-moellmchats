@@ -188,8 +188,8 @@ def _check_dependencies() -> tuple[int, int]:
         for item in includes
     ):
         raise RepositoryCheckError("wheel/sdist protocol resource include is missing")
-    if poetry.get("version") != "0.26.4":
-        raise RepositoryCheckError("package version is not 0.26.4")
+    if poetry.get("version") != "0.26.5":
+        raise RepositoryCheckError("package version is not 0.26.5")
     return len(expected_runtime), len(expected_development)
 
 

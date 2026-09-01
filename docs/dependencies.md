@@ -77,6 +77,12 @@ MoEllmChats 可以读取“已经加载的 PicMenu Next 当前内存目录”，
 
 分类超时分流复用标准库 `asyncio` 和现有 `aiohttp`；工具参数摘要复用标准库 `hashlib/json` 与已有内存计数器；`设置工具进度` 复用 NoneBot Matcher 和现有 `ConfigParser.set_config()`。0.26.4 没有新增 Python/系统依赖、数据库表、migration、Redis key、后台任务或配置字段，只为 0.26.2 已存在的 `tool_progress_messages_enabled` 增加固定超级管理员入口。
 
+### 0.26.5 工具进度与恢复状态修复没有新增依赖
+
+确定性进度标题、敏感文本折叠和参数摘要继续只使用标准库 `re`、`unicodedata`、`hashlib` 与现有 NoneBot Bot/Event 接口；1 秒预算复用包内 Python 3.10～3.13 兼容 timeout。自然话术来自同一次工具决策响应，不会增加模型调用。只读恢复与未解决失败计数只扩展进程内 `PluginDispatchResult` 和既有审计 metadata。
+
+因此 0.26.5 的运行依赖和 0.26.4 完全相同，没有新增数据库表、migration、Redis key、后台任务或外部服务。唯一新增配置字段是布尔值 `tool_progress_model_preface_enabled=false`，由已有 LocalStore 配置文件、`ConfigParser.set_config()` 和 runtime watcher 管理。
+
 ### 协议清单不是新运行依赖
 
 OneBot v11 的 38 项、OneBot v12 的 31 项和 NapCat 4.18.19 的 175 项动作以规范化 JSON 随 wheel/sdist 安装。运行时和普通构建不访问协议文档站，也不需要安装 NapCatDocs、Git 或 OpenAPI 解析器。
@@ -161,5 +167,6 @@ MCP 不经过文件/生成工具的 nobody sandbox：
 5. 协议清单生成器、文档/依赖检查和制品检查只使用 Python 标准库；`build`、`pyright`、`ruff`、`twine` 只属于开发门禁，不会进入普通安装依赖或在运行时联网。
 6. 0.26.3 的安全 HTTP、single-flight 和取消清理复用标准库及已有依赖；没有把 `httpx`、`requests`、额外 DNS 客户端或新后端加入安装集合。
 7. 0.26.4 只修正分类超时、日志脱敏和内存工具计数，并为既有布尔配置增加 Matcher；依赖集合与 0.26.3 相同，不新增 migration。
+8. 0.26.5 只扩展进程内进度显示、调度状态计数和一个布尔配置；不新增 Python/系统依赖、migration、Redis key 或后台任务。
 
 依赖约束本身只说明 resolver 允许的范围。最终可安装性还要由 fresh wheel/sdist 构建和包外安装 smoke 验证，见[安装验收](./installation.md#隔离功能验收清单)。

@@ -182,9 +182,13 @@ Registered `ToolSpec`、Custom File 和 Generated Tool 中显式标为 `mutating
 
 NoneBot 兼容适配器不会再用“有 metadata”推断成功。规则检查和 Matcher 运行由兼容 NoneBot 2.4.4～2.5.x 的观察包装器记录；发送内容只在 Adapter 的成功回调后提交。最终状态是 `matched_with_output`、`matched_side_effect`、`partial_success`、`matched_empty`、`not_matched`、`failed`、`timed_out`、`admission_rejected` 或 `result_unknown`。只有前两种进入成功 `ToolResult`；超时映射为 `TIMED_OUT`、准入拒绝映射为 `REJECTED`，其余非成功/不确定状态映射为 `FAILED` 并把具体原因交回模型。
 
+API 计数进一步区分已知只读失败、已恢复只读失败、未解决失败和未解决不确定结果。`get_group_member_info` 等已知只读查询失败后，只要 Matcher 正常完成并随后产生 Adapter 已确认的文本、图片或副作用，就视为业务降级已经恢复，最终仍是 `matched_with_output` 或 `matched_side_effect`。只读失败但没有任何可验证结果仍是 `failed`；未知 API、变更 API 失败、Matcher 异常和不确定副作用继续 fail closed。真正的 `partial_success` observation 会携带有界的已确认文本与图片数量，并明确这些内容已经对用户可见，模型只能把剩余步骤描述为失败或不确定，不能把整个动作总结成失败。
+
 每次工具尝试绑定 `(generation, tool_name, canonical_arguments_digest)`。`not_matched`、`matched_empty`、`failed`、`timed_out` 的相同指纹在本任务内禁止原样重放，但仍允许不同工具或实质不同参数；`partial_success` 和 `result_unknown` 会封锁本任务内的整个同名工具。外部副作用不因超时、断连或响应不确定而自动重试。
 
-`tool_progress_messages_enabled` 只控制模型前置话术和“正在执行”类用户可见提示。默认 `true` 保持原表现；设为 `false` 后内部分类、调用、确认、结果、最终总结和日志不变。进度消息不是执行证据，真实状态只以上述类型化结果和 Adapter 成功回调为准。
+进度提示位于执行准入之后、真正调用之前。运行时先完成 Schema、当前 generation、权限、信任、二阶段策略和重复检查；只有获准调用才按来源生成固定标题。串行路径每轮当前最多一项，显式受信只读并行批次则逐项各发送一条。二阶段动作写“正在准备工具确认”，不会声称已经执行。未知、越权、参数错误、策略拒绝或重复受限调用没有“正在执行”提示。
+
+`tool_progress_messages_enabled` 是进度总开关，默认 `true`。关闭后内部分类、调用、确认、结果、最终总结和日志不变。`tool_progress_model_preface_enabled` 默认 `false`；开启时只复用当前工具决策响应中的一句自然话术，脱敏并合入固定标题，不产生第二次模型请求，并行批次只附在第一项。进度发送共享 1 秒有界预算，失败或超时不阻断工具；调用方取消仍传播。执行审计只记录 `progress_status`、只读失败/恢复和未解决计数，不记录原始话术、完整参数或 API 参数。进度消息不是执行证据，真实状态只以上述类型化结果和 Adapter 成功回调为准。
 
 最终回复和可选表情分开投递。正文发送失败会原样传播，因为不能假定用户收到回复；正文已经成功后，附加表情若被 OneBot/NapCat 以 `ActionFailed`（动作失败）、`NetworkError`（HTTP/WebSocket 超时或传输失败）或 `ApiNotAvailable`（连接刚失效）拒绝，只记录不含正文的 warning 并跳过该表情，不重发正文，也不重试结果不确定的 QQ 发送。没有任何正文或前序表情成功时，同样三类表情发送失败仍会原样传播。保存到上下文的是去掉表情标记后的正文。
 

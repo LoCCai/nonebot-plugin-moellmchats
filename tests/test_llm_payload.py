@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from nonebot_plugin_moellmchats.config import config_parser
 from nonebot_plugin_moellmchats.llm_payload import LlmPayloadMixin
 from nonebot_plugin_moellmchats.model_selector import model_selector
 
@@ -72,7 +73,29 @@ def test_payload_delegates_tool_view_to_generation_snapshot(monkeypatch) -> None
     assert data["tools"] == schema
     assert data["stream"] is False
     assert stream is False
-    assert "同步执行" in messages[0]["content"]
+    assert "固定进度提示由运行时按配置发送" in messages[0]["content"]
+
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            True
+            if key
+            in {
+                "tool_progress_messages_enabled",
+                "tool_progress_model_preface_enabled",
+            }
+            else original_get_config(key, default)
+        ),
+    )
+    natural_messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "hello"},
+    ]
+    harness._build_payload(natural_messages)
+    assert "附在可信的固定进度提示后" in natural_messages[0]["content"]
+    assert "不得提前声称成功" in natural_messages[0]["content"]
 
 
 def test_payload_passes_disabled_model_boundary_without_search_read(
