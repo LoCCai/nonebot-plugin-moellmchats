@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260903T175545750Z-36036-5c4559a376f8",
+  "runId": "20260903T175545750Z-36036-5c4559a376f8",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline_partial: baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "c4b41ee5277f39df0ecc7a2b105fe6b0010cb33e",
+  "diffHash": "38b2b9492f214c9deddc0980b4d8adf1cbd796d0aedd1812c4172a43ee76a6e3",
+  "rulesVersion": "unavailable",
+  "sessionHash": "db509d23b3b7410ef456f50d6cf2174992d28a676ea67e867e499e5cee65a3a7",
+  "reportRef": ".mimosa/reports/task-review-sess_8a6c9e95-4217-4cc2-80f6-a2e2b2844c01-20260903T175545750Z-36036-5c4559a376f8.json",
+  "events": [],
+  "observedFindingIds": [
+    "mimosa-16d7e487bac2cf86668359e6",
+    "mimosa-987b15c64a2f261ade35f561",
+    "mimosa-e4029d5248459389615250b2",
+    "mimosa-ac1527aafcc336b6c451ce17"
+  ],
+  "verifiedFiles": [
+    {
+      "file": "nonebot_plugin_moellmchats/__init__.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "nonebot_plugin_moellmchats/llm_tools.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "tests/test_generated_bundle_review.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "nonebot_plugin_moellmchats/chat_runtime.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "nonebot_plugin_moellmchats/event_simulator.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "nonebot_plugin_moellmchats/network_safety.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-09-03T17:55:46.073Z"
+}

@@ -1,0 +1,292 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20260903T175545750Z-36036-5c4559a376f8",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "baseline",
+      "target": ".",
+      "reason": "baseline_partial: baseline capture had enumeration or snapshot errors"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": false,
+      "captured_files": 215,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 1,
+      "compensated_target_count": 6
+    },
+    "change_tracking": {
+      "touched_observed": 3,
+      "touched_retained": 3,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 6,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 6,
+      "selected_files": 6,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 6,
+      "scanned_files": 6,
+      "skipped_files": 0,
+      "failed_files": 0,
+      "project_checks_required": 0,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "baseline_partial": 1,
+      "project_check_failed": 1
+    },
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline_partial: baseline capture had enumeration or snapshot errors",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-09-03T17:55:45.750Z",
+  "session_id": "sess_8a6c9e95-4217-4cc2-80f6-a2e2b2844c01",
+  "target": ".",
+  "revision": "c4b41ee5277f39df0ecc7a2b105fe6b0010cb33e",
+  "rules_version": "unavailable",
+  "diff_hash": "38b2b9492f214c9deddc0980b4d8adf1cbd796d0aedd1812c4172a43ee76a6e3",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 6,
+    "changed_files": [
+      {
+        "file": "nonebot_plugin_moellmchats/__init__.py",
+        "ranges": [
+          {
+            "start": 753,
+            "end": 756
+          },
+          {
+            "start": 814,
+            "end": 817
+          },
+          {
+            "start": 857,
+            "end": 860
+          },
+          {
+            "start": 934,
+            "end": 937
+          }
+        ],
+        "before_hash": "b965a5b7ce6b7994d3bc194414f633a9368cd4b60c43abb81863fb0d88def720",
+        "after_hash": "d29a3a3179a65194e009cddbe03bf1dd63cc60166df62d3f41c2f814917e93d6"
+      },
+      {
+        "file": "nonebot_plugin_moellmchats/chat_runtime.py",
+        "ranges": [
+          {
+            "start": 22,
+            "end": 22
+          },
+          {
+            "start": 191,
+            "end": 200
+          },
+          {
+            "start": 282,
+            "end": 289
+          },
+          {
+            "start": 291,
+            "end": 301
+          }
+        ],
+        "before_hash": "bb0a61e0e6fd422c5c88d92840e76df36be24e8f531b9d15b6c7646004950f4a",
+        "after_hash": "c13894afa503d313566e72989307e461124d6576c36099cf60cc49854d0d6103"
+      },
+      {
+        "file": "nonebot_plugin_moellmchats/event_simulator.py",
+        "ranges": [
+          {
+            "start": 261,
+            "end": 263
+          },
+          {
+            "start": 293,
+            "end": 297
+          },
+          {
+            "start": 309,
+            "end": 313
+          },
+          {
+            "start": 551,
+            "end": 556
+          },
+          {
+            "start": 639,
+            "end": 639
+          },
+          {
+            "start": 684,
+            "end": 689
+          }
+        ],
+        "before_hash": "69dc47221ccf71aa8203d14ceac4fd8f0f44f323117590d6127e9be11e8de842",
+        "after_hash": "4bfbda5ea3fb4fd8ab5c2327fb86a9c469927c90e198e2adc640dbc4cd0a3bb7"
+      },
+      {
+        "file": "nonebot_plugin_moellmchats/llm_tools.py",
+        "ranges": [
+          {
+            "start": 225,
+            "end": 226
+          },
+          {
+            "start": 343,
+            "end": 355
+          },
+          {
+            "start": 365,
+            "end": 365
+          },
+          {
+            "start": 371,
+            "end": 371
+          },
+          {
+            "start": 1495,
+            "end": 1502
+          },
+          {
+            "start": 1535,
+            "end": 1542
+          },
+          {
+            "start": 1545,
+            "end": 1545
+          },
+          {
+            "start": 1596,
+            "end": 1598
+          },
+          {
+            "start": 1760,
+            "end": 1760
+          },
+          {
+            "start": 1767,
+            "end": 1767
+          },
+          {
+            "start": 1824,
+            "end": 1831
+          }
+        ],
+        "before_hash": "f4901409f6d59b3eb7e2286892542290d2af1e5386d336d9ebdfc108d480895c",
+        "after_hash": "0aa7275b3a1fac487e1884d66d1d81db1e8d782065d0e4de0e3883a7381b83f3"
+      },
+      {
+        "file": "nonebot_plugin_moellmchats/network_safety.py",
+        "ranges": [
+          {
+            "start": 215,
+            "end": 215
+          },
+          {
+            "start": 452,
+            "end": 457
+          }
+        ],
+        "before_hash": "21aa17acf76274ca6db6729247c2a75ab44d8ccbb269c403adc032a993e17648",
+        "after_hash": "63a57dcab3fce2a650075860a8f7a2976a1e59c04c9215f60ca7ba9a0aba52f7"
+      },
+      {
+        "file": "tests/test_generated_bundle_review.py",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 253
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "551e0a22c1c8f1c872f0304ba0389a14cfd4a0c5a9fe5c52955a6fa30e6cfb9b"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-09-03T17:55:44.585Z",
+    "completed_at": "2026-09-03T17:55:45.750Z",
+    "duration_ms": 1165,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 1165,
+    "peakMemoryBytes": 143630336,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 6,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_8a6c9e95-4217-4cc2-80f6-a2e2b2844c01-20260903T175545750Z-36036-5c4559a376f8.json",
+    "latest_report": ".mimosa/reports/task-review-sess_8a6c9e95-4217-4cc2-80f6-a2e2b2844c01.json",
+    "history_summary": ".mimosa/history/run-20260903T175545750Z-36036-5c4559a376f8.json"
+  }
+}
