@@ -750,6 +750,10 @@ set_private_chat_matcher = on_command("设置私聊", permission=SUPERUSER, prio
 
 @set_private_chat_matcher.handle()
 async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    from .event_simulator import is_synthetic_event
+
+    if is_synthetic_event():
+        return
     arg = args.extract_plain_text().strip()
     if arg in ["开", "1"]:
         config_parser.set_config("private_chat_enabled", True)
@@ -807,6 +811,10 @@ set_tool_progress_matcher = on_regex(
 
 @set_tool_progress_matcher.handle()
 async def _(event: MessageEvent):
+    from .event_simulator import is_synthetic_event
+
+    if is_synthetic_event():
+        return
     try:
         enabled = _parse_tool_progress_command(event.get_plaintext())
     except ValueError as error:
@@ -846,6 +854,10 @@ set_tool_progress_model_preface_matcher = on_regex(
 
 @set_tool_progress_model_preface_matcher.handle()
 async def _(event: MessageEvent):
+    from .event_simulator import is_synthetic_event
+
+    if is_synthetic_event():
+        return
     try:
         enabled = _parse_tool_progress_model_preface_command(
             event.get_plaintext()
@@ -919,6 +931,10 @@ set_llm_cooldown_matcher = on_regex(
 
 @set_llm_cooldown_matcher.handle()
 async def _(event: MessageEvent):
+    from .event_simulator import is_synthetic_event
+
+    if is_synthetic_event():
+        return
     try:
         seconds = _parse_llm_cooldown_command(event.get_plaintext())
     except ValueError as error:

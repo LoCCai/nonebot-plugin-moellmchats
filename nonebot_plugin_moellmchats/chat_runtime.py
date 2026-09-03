@@ -19,7 +19,7 @@ from .agent_context_runtime import (
 )
 from .agent_runtime import AgentRunState, DeadlineContext
 from .compat import TimeoutError
-from .compat import timeout as timeout_scope
+from .compat import settle_awaitable, timeout as timeout_scope
 from .config import config_parser
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
 from .onebot_facade import (
@@ -188,7 +188,16 @@ async def handle_llm(
             except asyncio.CancelledError as error:
                 if not agent_request.run.is_terminal:
                     state = AgentRunState.TIMED_OUT if deadline.remaining() <= 0 else AgentRunState.CANCELLED
-                    await agent_request.finish_exception(state, error)
+                    # settle 抵御二次取消：清理未完成前不放弃收尾，避免 run 悬在非终态
+                    settled = await settle_awaitable(
+                        agent_request.finish_exception(state, error)
+                    )
+                    if settled.error is not None:
+                        logger.warning(
+                            "取消路径收尾 agent run 失败: state={} error_type={}",
+                            state.value,
+                            type(settled.error).__name__,
+                        )
                 raise
             except Exception as error:
                 if not agent_request.run.is_terminal:
@@ -270,12 +279,26 @@ async def handle_llm(
             )
             await matcher.finish("本次 LLM 任务已超过总时间预算，已安全终止。")
         except asyncio.CancelledError:
-            await _release_cooldown(
-                action_store,
-                cooldown_claim.lease,
-                user_id=user_id,
+            # settle 抵御二次取消：管理员终止与超时/级联取消叠加时，
+            # 冷却租约仍要释放完毕（否则用户被卡在冷却里直到 TTL 兜底）
+            settled_release = await settle_awaitable(
+                _release_cooldown(
+                    action_store,
+                    cooldown_claim.lease,
+                    user_id=user_id,
+                )
             )
-            await _send_cancel_notice(matcher)
+            if settled_release.error is not None:
+                logger.warning(
+                    "取消路径释放冷却失败（等待 TTL 兜底）: error_type={}",
+                    type(settled_release.error).__name__,
+                )
+            settled_notice = await settle_awaitable(_send_cancel_notice(matcher))
+            if settled_notice.error is not None:
+                logger.debug(
+                    "取消通知发送异常: error_type={}",
+                    type(settled_notice.error).__name__,
+                )
             raise
         except Exception:
             await _release_cooldown(

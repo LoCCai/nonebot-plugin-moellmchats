@@ -1,0 +1,253 @@
+"""fix/generated-bundles-review 判例回归测试。
+
+每项对应 2026-09 审查中通过复现或代码核实确认的问题：
+1. 进度话术脱敏正则在空格处截断，泄露 Bearer 凭证体
+2. 进度状态键在 tool_call 缺 id 时互相覆盖
+3. api_read_recovered 把全部只读失败按任意已验证效果洗白
+4. 安全 HTTP chunk size 接受非规范十六进制形式
+5. 取消清理未 settle，二次取消泄漏冷却租约
+6. 改写配置的超管命令 handler 必须带合成事件守卫
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import uuid
+
+import pytest
+from nonebot.adapters.onebot.v11.exception import ActionFailed
+
+import nonebot_plugin_moellmchats.chat_runtime as chat_runtime
+import nonebot_plugin_moellmchats.event_simulator as simulator_module
+from nonebot_plugin_moellmchats.agent_context_runtime import RuntimeResourceHost
+from nonebot_plugin_moellmchats.agent_runtime import AgentRunState
+from nonebot_plugin_moellmchats.cooldowns import CooldownClaim, CooldownLease
+from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
+from nonebot_plugin_moellmchats.network_safety import SafeHttpError, _read_chunked_body
+
+from test_chat_runtime import (
+    FakeMatcher,
+    _config,
+    _publish_snapshot,
+    _runtime_event,
+)
+
+
+# ---------- 1. 脱敏正则 ----------
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Authorization=Bearer secret123",
+        "Authorization: Bearer abc987xyz",
+        "token=Bearer sk-live-9f3k2",
+    ],
+)
+def test_progress_preface_redacts_bearer_credentials(raw: str) -> None:
+    sanitized = LlmToolsMixin._safe_progress_preface(raw)
+    assert "secret123" not in sanitized
+    assert "abc987xyz" not in sanitized
+    assert "sk-live-9f3k2" not in sanitized
+    assert "<redacted>" in sanitized
+
+
+def test_progress_preface_keeps_plain_text_usable() -> None:
+    sanitized = LlmToolsMixin._safe_progress_preface("正在搜索今天的天气并汇总")
+    assert sanitized == "正在搜索今天的天气并汇总"
+
+
+# ---------- 2. 进度状态键 ----------
+
+def test_tool_progress_status_keys_distinct_without_call_id() -> None:
+    holder = object().__new__(LlmToolsMixin)
+    first = {"function": {"name": "web_search"}, "arguments": "{}"}
+    second = {"function": {"name": "web_search"}, "arguments": "{}"}
+    assert not (first.get("id") or second.get("id"))
+
+    holder._set_tool_progress_status(first, "sent")
+    holder._set_tool_progress_status(second, "timed_out")
+
+    assert holder._tool_progress_status(first) == "sent"
+    assert holder._tool_progress_status(second) == "timed_out"
+
+
+def test_tool_progress_status_key_uses_id_when_present() -> None:
+    holder = object().__new__(LlmToolsMixin)
+    call = {"id": "call_1", "function": {"name": "web_search"}}
+    holder._set_tool_progress_status(call, "failed")
+    assert holder._tool_progress_status(call) == "failed"
+    assert LlmToolsMixin._tool_progress_status_key(call) == "call_1"
+
+
+# ---------- 3. api_read_recovered 派生 ----------
+
+def test_read_failures_are_not_recovered_by_unrelated_verified_effect() -> None:
+    # 变更型 API 成功 + 只读查询失败且从未重试成功：
+    # 修复前会被全额记为 api_read_recovered
+    context = simulator_module._empty_dispatch_context()
+    context.update(
+        {
+            "matcher_matched": 1,
+            "api_failed": 1,
+            "api_read_failed": 1,
+            "mutating_api_succeeded": 1,
+        }
+    )
+    result = simulator_module._dispatch_result(context, started_monotonic=0)
+    assert result.api_read_recovered == 0
+    assert result.api_read_failed == 1
+
+
+@pytest.mark.asyncio
+async def test_read_failure_recovered_only_by_later_read_success() -> None:
+    capture_id = uuid.uuid4().hex
+    context = simulator_module._empty_dispatch_context()
+    context.update({"original_id": 10, "fake_id": 20})
+    simulator_module._captures[capture_id] = context
+    token = simulator_module._capture_key.set(capture_id)
+    failed_read: dict = {}
+    fallback_read: dict = {}
+    try:
+        await simulator_module._capture_outgoing_api(
+            object(), "get_group_member_info", failed_read
+        )
+        await simulator_module._confirm_outgoing_api(
+            object(), ActionFailed("OneBot V11", "failed"),
+            "get_group_member_info", failed_read, None,
+        )
+        await simulator_module._capture_outgoing_api(
+            object(), "get_stranger_info", fallback_read
+        )
+        await simulator_module._confirm_outgoing_api(
+            object(), None, "get_stranger_info", fallback_read,
+            {"nickname": "fallback"},
+        )
+        result = simulator_module._dispatch_result(context, started_monotonic=0)
+    finally:
+        simulator_module._capture_key.reset(token)
+        simulator_module._captures.pop(capture_id, None)
+
+    assert result.api_read_failed == 1
+    assert result.api_read_recovered == 1
+
+
+# ---------- 4. chunk size 严格解析 ----------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", [b"+5", b" 5", b"1_0", b""])
+async def test_chunk_size_rejects_non_canonical_hex(prefix: bytes) -> None:
+    reader = asyncio.StreamReader()
+    reader.feed_data(prefix + b"\r\n")
+    reader.feed_eof()
+    deadline = asyncio.get_running_loop().time() + 1
+    with pytest.raises(SafeHttpError, match="chunk size"):
+        await _read_chunked_body(reader, deadline=deadline)
+
+
+@pytest.mark.asyncio
+async def test_chunk_size_accepts_canonical_hex() -> None:
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"4\r\nWiki\r\n0\r\n\r\n")
+    reader.feed_eof()
+    deadline = asyncio.get_running_loop().time() + 1
+    body = await _read_chunked_body(reader, deadline=deadline)
+    assert body == b"Wiki"
+
+
+# ---------- 5. 二次取消仍释放冷却 ----------
+
+
+class SlowReleaseCooldownStore:
+    def __init__(self, events: list[tuple[str, bool]]) -> None:
+        self.events = events
+        self.release_started = asyncio.Event()
+        self.lease = CooldownLease(user_id=42, token="b" * 32, claimed_at=1_000.0)
+
+    async def claim(self, *, user_id, event_time, cooldown_seconds):
+        del user_id, event_time, cooldown_seconds
+        self.events.append(("claim", True))
+        return CooldownClaim(lease=self.lease, retry_after_seconds=0)
+
+    async def release(self, lease):
+        assert lease is self.lease
+        self.events.append(("release.begin", True))
+        self.release_started.set()
+        await asyncio.sleep(0.05)
+        self.events.append(("release.done", True))
+        return True
+
+
+@pytest.mark.asyncio
+async def test_double_cancellation_still_releases_cooldown_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chat_runtime.reset_all_runtime_state()
+    _config(monkeypatch, cooldown=120, timeout=30)
+    _publish_snapshot()
+    host = RuntimeResourceHost()
+    entered = asyncio.Event()
+    captured = []
+    events: list[tuple[str, bool]] = []
+
+    class Chat:
+        def __init__(self, _bot, _event, _message, *, temperament, agent_runtime):
+            del temperament
+            captured.append(agent_runtime)
+
+        async def get_llm_chat(self) -> bool:
+            runtime = captured[-1]
+            await runtime.advance(AgentRunState.PLANNING, model="model")
+            await runtime.advance(AgentRunState.EXECUTING)
+            entered.set()
+            await asyncio.Event().wait()
+            return True
+
+    monkeypatch.setattr(chat_runtime.llm, "MoeLlm", Chat)
+    monkeypatch.setattr(
+        chat_runtime.temperament_manager,
+        "get_temperament",
+        lambda _user_id: "测试性格",
+    )
+    store = SlowReleaseCooldownStore(events)
+    matcher = FakeMatcher()
+    task = asyncio.create_task(
+        chat_runtime.handle_llm(
+            object(),
+            _runtime_event(),
+            matcher,
+            {"text": ["hello"]},
+            cooldown_store=store,
+            resource_host=host,
+        )
+    )
+    await entered.wait()
+    task.cancel()  # 管理员终止
+    await store.release_started.wait()
+    task.cancel()  # 释放进行中的叠加取消（超时/级联）
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        await host.close()
+
+    # 修复前：二次取消中断 release，租约泄漏直到 TTL 兜底
+    assert ("release.done", True) in events
+    assert chat_runtime.cd[42] == 0
+
+
+# ---------- 6. 合成事件守卫存在性（静态核对） ----------
+
+def test_superuser_config_handlers_reject_synthetic_events() -> None:
+    import nonebot_plugin_moellmchats as plugin_root
+
+    source = inspect.getsource(plugin_root)
+    for command in (
+        "@set_tool_progress_matcher.handle()",
+        "@set_tool_progress_model_preface_matcher.handle()",
+        "@set_private_chat_matcher.handle()",
+        "@set_llm_cooldown_matcher.handle()",
+    ):
+        start = source.index(command)
+        block = source[start : start + 400]
+        assert "is_synthetic_event" in block, f"{command} 缺少合成事件守卫"

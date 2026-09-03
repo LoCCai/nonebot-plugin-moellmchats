@@ -258,6 +258,9 @@ async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
         "api": api,
         "effect": _api_effect(protocol, api),
         "output": output,
+        # 钉住 data 引用：staged 项存活期间 id(data) 不会被复用，
+        # 防止与后续调用的参数字典地址冲导致误配对
+        "data_ref": data,
     }
 
 
@@ -287,6 +290,11 @@ async def _confirm_outgoing_api(
             context["api_unknown"] += 1
         if staged.get("effect") == "read_only":
             context["api_read_failed"] += 1
+            # 只读失败进入待恢复队列：仅当同一 Matcher 内后续有成功的
+            # 只读调用时才计为已恢复（见成功分支）
+            context["api_read_pending_recovery"] = (
+                context.get("api_read_pending_recovery", 0) + 1
+            )
         else:
             # Mutating and unclassified APIs stay fail closed.  Only a known
             # read-only lookup may be treated as recovered by later verified
@@ -298,6 +306,11 @@ async def _confirm_outgoing_api(
     context["api_succeeded"] += 1
     if staged.get("effect") == "mutating":
         context["mutating_api_succeeded"] += 1
+    elif staged.get("effect") == "read_only":
+        pending_recovery = context.get("api_read_pending_recovery", 0)
+        if pending_recovery:
+            context["api_read_pending_recovery"] = pending_recovery - 1
+            context["api_read_recovered"] = context.get("api_read_recovered", 0) + 1
     output = staged.get("output")
     if isinstance(output, dict):
         context["messages"].append(output)
@@ -535,7 +548,12 @@ def _dispatch_result(
     texts = [item["text"] for item in captured if item.get("text")]
     images = [url for item in captured for url in item.get("images", [])]
     has_verified_effect = bool(captured or context.get("mutating_api_succeeded", 0))
-    read_recovered = int(context.get("api_read_failed", 0)) if has_verified_effect else 0
+    # 已恢复的只读失败只认钩子里记录的真实"失败→后续只读成功"配对；
+    # 不能因存在任意已验证效果就把全部只读失败洗白为已恢复
+    read_recovered = min(
+        int(context.get("api_read_recovered", 0)),
+        int(context.get("api_read_failed", 0)),
+    )
     inferred_unresolved_unknown = max(
         0,
         int(context.get("api_unknown", 0)) - int(context.get("api_read_failed", 0)),
@@ -618,6 +636,7 @@ def _empty_dispatch_context() -> dict[str, Any]:
         "api_unknown": 0,
         "api_read_failed": 0,
         "api_read_recovered": 0,
+        "api_read_pending_recovery": 0,
         "api_unresolved_failed": 0,
         "api_unresolved_unknown": 0,
         "mutating_api_succeeded": 0,
@@ -660,11 +679,14 @@ class EventSimulator:
                 _captures[capture_id] = context
                 capture_token = _capture_key.set(capture_id)
                 event_token = _synthetic_plugin.set(plugin_name)
-                full_plugins = set(config_parser.get_config("legacy_full_event_plugins", []))
-                mode = "full" if plugin_name in full_plugins else "targeted"
-                runtime_metrics.dispatch_modes[mode] += 1
                 forced_status = None
                 try:
+                    # 配置读取/指标写入必须落在 try 内：若在此抛异常，
+                    # 下方 finally 仍会清理 _captures 与两个 contextvar，
+                    # 否则进程级残留脏上下文且后续 send 持续误入死 context
+                    full_plugins = set(config_parser.get_config("legacy_full_event_plugins", []))
+                    mode = "full" if plugin_name in full_plugins else "targeted"
+                    runtime_metrics.dispatch_modes[mode] += 1
                     timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 20)
                     async with timeout_scope(timeout):
                         if mode == "full":

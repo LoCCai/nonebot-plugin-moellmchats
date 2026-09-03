@@ -222,7 +222,8 @@ class LlmToolsMixin:
             compact,
         )
         compact = re.sub(
-            r"(?i)\b(token|cookie|authorization|secret|password|clientkey|rkey|csrf)\b\s*[:=]?\s*[^\s,;。；，]*",
+            r"(?i)\b(token|cookie|authorization|secret|password|clientkey|rkey|csrf)\b"
+            r"\s*[:=]?\s*(?:(?:bearer|basic)\s+)?[^\s,;。；，]*",
             r"\1=<redacted>",
             compact,
         )
@@ -339,6 +340,19 @@ class LlmToolsMixin:
             return f"{heading}\n说明：{model_preface}"
         return heading
 
+    @staticmethod
+    def _tool_progress_status_key(call: Mapping[str, Any]) -> str:
+        call_id = call.get("id")
+        if isinstance(call_id, str) and call_id:
+            return call_id
+        # 部分兼容网关不返回 tool_call id；用函数名 + 对象标识避免
+        # 多个无 id 调用共用 "" 键互相覆盖（call 对象在请求内保持存活）
+        function = call.get("function")
+        name = ""
+        if isinstance(function, Mapping):
+            name = str(function.get("name") or "")
+        return f"__unnamed::{name}::{id(call)}"
+
     def _set_tool_progress_status(
         self,
         call: Mapping[str, Any],
@@ -348,13 +362,13 @@ class LlmToolsMixin:
         if not isinstance(statuses, dict):
             statuses = {}
             self._tool_progress_statuses = statuses
-        statuses[str(call.get("id") or "")] = status
+        statuses[self._tool_progress_status_key(call)] = status
 
     def _tool_progress_status(self, call: Mapping[str, Any]) -> str:
         statuses = getattr(self, "_tool_progress_statuses", None)
         if not isinstance(statuses, dict):
             return "not_sent"
-        return statuses.get(str(call.get("id") or ""), "not_sent")
+        return statuses.get(self._tool_progress_status_key(call), "not_sent")
 
     def _audit_tool_progress(
         self,
@@ -1477,14 +1491,15 @@ class LlmToolsMixin:
             dispatch_result: PluginDispatchResult | None = None
             if tool_view.route is LlmToolExecutionRoute.BUILTIN_SEARCH:
                 query = args.get("query", "")
-                await self._send_tool_progress(
-                    call=call,
-                    view=tool_view,
-                    arguments=args,
-                    result_text=result_text,
-                )
                 try:
-                    async with timeout_scope(self._tool_timeout_seconds()):
+                    tool_timeout_seconds = self._tool_timeout_seconds()
+                    await self._send_tool_progress(
+                        call=call,
+                        view=tool_view,
+                        arguments=args,
+                        result_text=result_text,
+                    )
+                    async with timeout_scope(tool_timeout_seconds):
                         search_spec = tool_view.spec
                         assert search_spec is not None
                         search_res = await search_spec.handler(
@@ -1516,17 +1531,18 @@ class LlmToolsMixin:
                 tool_result = search_res if search_res else "未找到相关结果"
 
             elif tool_view.route is LlmToolExecutionRoute.BUILTIN_PROTOCOL:
-                await self._send_tool_progress(
-                    call=call,
-                    view=tool_view,
-                    arguments=args,
-                    result_text=result_text,
-                    confirmation_required=pending_transition,
-                )
                 try:
+                    tool_timeout_seconds = self._tool_timeout_seconds()
+                    await self._send_tool_progress(
+                        call=call,
+                        view=tool_view,
+                        arguments=args,
+                        result_text=result_text,
+                        confirmation_required=pending_transition,
+                    )
                     protocol_spec = tool_view.spec
                     assert protocol_spec is not None
-                    async with timeout_scope(self._tool_timeout_seconds()):
+                    async with timeout_scope(tool_timeout_seconds):
                         invocation = await protocol_spec.handler(**args)
                     if not isinstance(invocation, ProtocolInvocation):
                         raise TypeError("协议 Builtin 必须返回 ProtocolInvocation")
@@ -1577,16 +1593,12 @@ class LlmToolsMixin:
                         tool_result += "\n[系统提示]：结果不确定，绝对不要自动重试此副作用动作。"
                         trace_status = ToolCallStatus.FAILED
                         trace_error_type = "ProtocolResultUnknown"
+                        # 拦截依赖 _remember_tool_attempt 的按指纹/按名封禁；
+                        # 旧的 _current_tool_usage 计数打满写法已随按指纹限额
+                        # 迁移失效，不再有读取方，删除避免误导维护
                         self._remember_tool_attempt(
                             fingerprint,
                             PluginDispatchStatus.RESULT_UNKNOWN.value,
-                        )
-                        self._current_tool_usage[func_name] = (
-                            config_parser.get_config(
-                                "max_repeated_tool_calls",
-                                2,
-                            )
-                            + 1
                         )
                 except asyncio.CancelledError:
                     await self._record_agent_tool_outcome(
@@ -1745,13 +1757,14 @@ class LlmToolsMixin:
                         if runtime is not None and pending_status is ToolCallStatus.WAITING_CONFIRMATION:
                             await runtime.advance(AgentRunState.EXECUTING)
                         continue
+                    tool_timeout_seconds = self._tool_timeout_seconds()
                     await self._send_tool_progress(
                         call=call,
                         view=tool_view,
                         arguments=args,
                         result_text=result_text,
                     )
-                    async with timeout_scope(self._tool_timeout_seconds()):
+                    async with timeout_scope(tool_timeout_seconds):
                         result = await execute_custom_tool(
                             func_name,
                             tool_entry,
@@ -1807,14 +1820,15 @@ class LlmToolsMixin:
             else:
                 assert tool_view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN
                 command = args.get("command", "")
-                await self._send_tool_progress(
-                    call=call,
-                    view=tool_view,
-                    arguments=args,
-                    result_text=result_text,
-                )
                 try:
-                    async with timeout_scope(self._tool_timeout_seconds()):
+                    tool_timeout_seconds = self._tool_timeout_seconds()
+                    await self._send_tool_progress(
+                        call=call,
+                        view=tool_view,
+                        arguments=args,
+                        result_text=result_text,
+                    )
+                    async with timeout_scope(tool_timeout_seconds):
                         if tool_view.provider_authoritative:
                             plugin_spec = tool_view.spec
                             assert plugin_spec is not None

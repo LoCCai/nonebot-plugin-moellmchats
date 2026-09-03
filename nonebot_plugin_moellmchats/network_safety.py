@@ -212,6 +212,7 @@ def _validate_target(url: str, network_allow: tuple[str, ...]) -> _ValidatedTarg
         hostname in _BLOCKED_HOSTS
         or hostname.endswith(".internal")
         or hostname.endswith(".localhost")
+        or hostname.endswith(".local")
     ):
         raise SafeHttpError("网络工具拒绝访问元数据或内部主机")
     if not _host_allowed(hostname, network_allow):
@@ -448,6 +449,12 @@ async def _read_chunked_body(
     while True:
         line = await _readline(reader, limit=256, deadline=deadline)
         token = line.rstrip(b"\r\n").split(b";", 1)[0].strip()
+        # 严格十六进制：int(token,16) 会接受 "+5"/" 5"/"1_0" 等非规范形式，
+        # 与其余分帧解析的严格策略不一致
+        if not token or any(
+            character not in b"0123456789abcdefABCDEF" for character in token
+        ):
+            raise SafeHttpError("安全 HTTP chunk size 非法")
         try:
             size = int(token, 16)
         except ValueError:
