@@ -37,7 +37,6 @@ from .temperament_manager import temperament_manager
 
 cd = BoundedValueStore(lambda: 0)
 default_cooldown_store = MemoryCooldownStore(cd)
-is_repeat_ask_dict = BoundedValueStore(lambda: False)
 _CANCEL_NOTICE_TIMEOUT_SECONDS = 1.0
 
 
@@ -61,12 +60,10 @@ async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
 
 def reset_user_runtime_state(user_id: int | str) -> None:
     default_cooldown_store.reset_user(user_id)
-    is_repeat_ask_dict[user_id] = False
 
 
 def reset_all_runtime_state() -> None:
     default_cooldown_store.clear()
-    is_repeat_ask_dict.clear()
 
 
 async def _release_cooldown(
@@ -75,9 +72,9 @@ async def _release_cooldown(
     *,
     user_id: int | str,
 ) -> None:
+    del user_id
     if lease is not None:
         await store.release(lease)
-    is_repeat_ask_dict[user_id] = False
 
 
 async def _send_cancel_notice(matcher) -> None:
@@ -308,7 +305,6 @@ async def handle_llm(
             )
             raise
 
-        is_repeat_ask_dict[user_id] = False
         if isinstance(is_finished, str):
             await _release_cooldown(
                 action_store,

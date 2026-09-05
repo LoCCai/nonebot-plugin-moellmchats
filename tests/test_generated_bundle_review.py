@@ -7,6 +7,8 @@
 4. 安全 HTTP chunk size 接受非规范十六进制形式
 5. 取消清理未 settle，二次取消泄漏冷却租约
 6. 改写配置的超管命令 handler 必须带合成事件守卫
+7. f3bb850 合并后：tool_call_id 原样保留 / 拒绝记账 / junction / AST 集合
+8. 分类缓存 clear 与在飞发布的竞态由 clear-epoch 闭合
 """
 
 from __future__ import annotations
@@ -290,3 +292,60 @@ def test_ast_policy_treats_safe_public_get_as_network_capability() -> None:
 
     assert "safe_public_get" in _SAFE_HTTP_CALLS
     assert "safe_request" in _SAFE_HTTP_CALLS
+
+
+# ---------- 8. 分类缓存 clear 与在飞发布的竞态 ----------
+
+
+@pytest.mark.asyncio
+async def test_classification_clear_blocks_inflight_publish() -> None:
+    from test_classification_cache import _context, _record, _settings
+
+    from nonebot_plugin_moellmchats.classification_cache import (
+        MemoryClassificationCache,
+    )
+
+    cache = MemoryClassificationCache(settings=_settings())
+    record = _record(context=_context(prompt="inflight"))
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_builder():
+        started.set()
+        await release.wait()
+        return record
+
+    task = asyncio.create_task(cache.resolve_exact(record.key, slow_builder))
+    await started.wait()
+    # builder 在飞期间 clear：代次推进，发布必须被前置拦截
+    await cache.clear()
+    release.set()
+
+    settled = await task
+    assert settled.key == record.key
+    assert await cache.lookup(record.key) is None
+
+
+@pytest.mark.asyncio
+async def test_classification_discards_own_publish_that_landed_after_clear() -> None:
+    from test_classification_cache import _context, _record, _settings
+
+    from nonebot_plugin_moellmchats.classification_cache import (
+        MemoryClassificationCache,
+    )
+
+    cache = MemoryClassificationCache(settings=_settings())
+    record = _record(context=_context(prompt="raced"))
+
+    # 模拟"前置检查通过后、publish 恰落在 clear 之后"的窗口：
+    # 发布发生在新代次，构建方发布后核验应撤回自己的回写
+    published = await cache.publish(record)
+    cache._clear_epoch += 1
+    await cache._discard_if_own_publish(record.key, published)
+    assert await cache.lookup(record.key) is None
+
+    # 对照：当前代次内发布的记录不被误删
+    kept = _record(context=_context(prompt="kept"))
+    await cache.publish(kept)
+    await cache._discard_if_own_publish(kept.key, kept)
+    assert await cache.lookup(kept.key) is kept

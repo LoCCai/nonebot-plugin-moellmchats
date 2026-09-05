@@ -783,6 +783,9 @@ class MemoryClassificationCacheSettings:
 class _MemoryClassificationEntry:
     record: ClassificationCacheRecord
     expires_at: float
+    # 发布时点的 clear 代次：clear() 之后写入的记录带新代次，
+    # 在飞请求可据此识别"发布落在 clear 之后"并撤回自己的回写
+    clear_epoch: int = 0
 
 
 def _read_clock(clock: Clock) -> float:
@@ -834,6 +837,9 @@ class MemoryClassificationCache:
         self._owner_pid: int | None = None
         self._owner_loop: asyncio.AbstractEventLoop | None = None
         self._last_now: float | None = None
+        # clear() 的代次计数：在飞请求创建时记下代次，发布前必须确认
+        # 代次未变，否则 clear() 之前的记录会被在飞请求重新写回缓存
+        self._clear_epoch = 0
         self._lock = asyncio.Lock()
 
     @property
@@ -931,6 +937,7 @@ class MemoryClassificationCache:
             self._records[record.key] = _MemoryClassificationEntry(
                 record=record,
                 expires_at=now + record.key.ttl_seconds,
+                clear_epoch=self._clear_epoch,
             )
             self._total_bytes += record.result_bytes
             self._evict_locked()
@@ -940,6 +947,8 @@ class MemoryClassificationCache:
         self,
         key: ClassificationCacheKey,
         builder: ClassificationBuilder,
+        *,
+        clear_epoch: int,
     ) -> ClassificationCacheRecord:
         current_task = asyncio.current_task()
         try:
@@ -951,6 +960,10 @@ class MemoryClassificationCache:
                 raise TypeError("classification builder 必须返回 ClassificationCacheRecord")
             if record.key != key:
                 raise ValueError("classification builder 返回了错误 identity")
+            if clear_epoch != self._clear_epoch:
+                # 请求构建期间发生过 clear()：结果仍返回给等待方，
+                # 但不得把 clear 之前的记录重新写回缓存
+                return record
             try:
                 published = await self.publish(record)
             except ClassificationCacheConflictError:
@@ -969,11 +982,29 @@ class MemoryClassificationCache:
                 raise ClassificationCacheUnavailableError(
                     "classification cache 未确认精确发布结果"
                 )
+            # 发布与 clear 之间的窗口闭合：发布恰落在 clear 之后时，
+            # 刚写入的 entry 带的是新代次，这里撤回本次回写
+            if clear_epoch != self._clear_epoch:
+                await self._discard_if_own_publish(key, published)
             return published
         finally:
             async with self._lock:
                 if self._flights.get(key) is current_task:
                     self._flights.pop(key, None)
+
+    async def _discard_if_own_publish(
+        self,
+        key: ClassificationCacheKey,
+        published: ClassificationCacheRecord,
+    ) -> None:
+        async with self._lock:
+            entry = self._records.get(key)
+            if entry is None or entry.record != published:
+                return
+            if entry.clear_epoch == self._clear_epoch:
+                return
+            del self._records[key]
+            self._total_bytes -= entry.record.result_bytes
 
     @staticmethod
     def _consume_flight_result(
@@ -1006,7 +1037,7 @@ class MemoryClassificationCache:
             flight = self._flights.get(key)
             if flight is None:
                 flight = asyncio.create_task(
-                    self._build_and_publish(key, builder),
+                    self._build_and_publish(key, builder, clear_epoch=self._clear_epoch),
                     name=f"moellm-classification-{key.identity_digest[:12]}",
                 )
                 flight.add_done_callback(self._consume_flight_result)
@@ -1020,6 +1051,8 @@ class MemoryClassificationCache:
         async with self._lock:
             self._records.clear()
             self._total_bytes = 0
+            # 推进代次，让在飞请求发布前检测到 clear 并放弃回写
+            self._clear_epoch += 1
 
 
 async def resolve_classification(

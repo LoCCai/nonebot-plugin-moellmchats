@@ -56,10 +56,10 @@ runtime resource、trusted runner pool 或 lifecycle port 的 close 卡死时，
 
 ## P3：性能和可维护性
 
-- `UsageBatchQueue` / `AuditBatchQueue` 与旧 `is_repeat_ask_dict` 需确认生产入口后再删除或接通，不做无证据死代码清理。
+- ~~`UsageBatchQueue` / `AuditBatchQueue` 与旧 `is_repeat_ask_dict`~~ 2026-09-06 已核实 `is_repeat_ask_dict`（chat_runtime.py）全部 5 处引用均为写入、无任何读取方与测试引用，属只写死状态，已删除；`UsageBatchQueue`/`AuditBatchQueue` 仍待确认生产入口。
 - `tool_manager.py` 同时承担模板、目录、Provider、快照和重载职责，应在独立分支分解；双视图 parity 应尽量在 reload 时证明，不要在聊天请求中反复计算。
 - 同步可信 `ToolSpec` 与 runner workspace 扫描共用默认线程池，应评估独立有界 executor 或事件式监测。
-- `get_emotion` 的同步 glob/读图可在分段发送路径阻塞 event loop，可移到 `to_thread` 或启动快照。
+- ~~`get_emotion` 的同步 glob/读图可在分段发送路径阻塞 event loop~~ 2026-09-06 已在 `send_emotion_message` 中移入 `asyncio.to_thread`。
 - 非 root/Linux 的 Generated/Custom runner 仍 fail closed；如要支持无 root 或其他平台，必须重新证明 user namespace、UID 映射和 syscall 边界，不能降级为主进程执行。
 - `license = "GPL"` 本轮保持不变。发布前需由维护者明确选择 `GPL-3.0-only` 或 `GPL-3.0-or-later`，再修改 SPDX 表达式与发布元数据。
 

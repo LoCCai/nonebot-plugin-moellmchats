@@ -981,6 +981,10 @@ class LlmToolsMixin:
             assistant_msg["reasoning_content"] = reasoning_content
         send_message_list.append(assistant_msg)
 
+        # 与串行路径一致：先做预算检查再发进度。deadline 已耗尽时
+        # _tool_timeout_seconds 直接抛 TimeoutError，避免"正在调用 X"
+        # 发完立刻收到超时的矛盾组合（执行超时由 executor 自己管理）
+        self._tool_timeout_seconds()
         for index, prepared in enumerate(batch.calls):
             await self._send_tool_progress(
                 call=prepared.call,
