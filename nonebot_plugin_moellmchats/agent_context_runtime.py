@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast, runtime_checkabl
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from nonebot.log import logger
 
 from . import full_metrics as _full_metrics
 from . import platform_metrics as _platform_metrics
@@ -47,7 +48,7 @@ from .database_schema import (
     MODEL_PROVIDER_MAX_CHARS,
     PLATFORM_MAX_CHARS,
 )
-from .history_hot_cache import HistoryWindow
+from .history_hot_cache import HistoryHotCacheUnavailableError, HistoryWindow
 from .long_term_memory import (
     LongTermMemoryContext,
     LongTermMemoryQuery,
@@ -934,11 +935,33 @@ class AgentGenerationCoordinator:
                 )
             except asyncio.CancelledError:
                 raise
+            except HistoryHotCacheUnavailableError as error:
+                # 容量类边界（如窗口超过安全大小）只否定本窗发布：
+                # 大消息是正常业务形态，不应升级为整代禁用热缓存
+                logger.warning(
+                    "历史窗口超过缓存容量上限，本窗跳过发布: error_type={}",
+                    type(error).__name__,
+                )
             except Exception:
                 self._bypass_cache()
             else:
                 if not published:
-                    self._bypass_cache()
+                    # publish 返回 False 有两种情形：token 过期/代次切换等
+                    # 真实异常，或同会话并发 cache miss 的良性双载（另一个
+                    # 请求已抢先发布成功）。重查一次区分：对端窗口已出现
+                    # 即缓存健康，不得把良性竞态误判为失效而禁用整代热缓存
+                    try:
+                        recheck = await self._resources.history_cache.lookup(
+                            conversation_id,
+                            limit=normalized_limit,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self._bypass_cache()
+                    else:
+                        if recheck.window is None:
+                            self._bypass_cache()
         return messages
 
     async def load_latest_summary(

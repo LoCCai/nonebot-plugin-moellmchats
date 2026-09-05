@@ -96,11 +96,21 @@ class LlmPayloadMixin:
         )
         if context.generation != resources.generation:
             raise ToolSchemaCacheUnavailableError("tool schema cache context generation 漂移")
-        self._tool_schema_record = await resolve_tool_schema(
-            resources.tool_schema_cache,
-            context.cache_key,
-            lambda: snapshot.build_llm_payload_schema_record(context),
-        )
+        try:
+            self._tool_schema_record = await resolve_tool_schema(
+                resources.tool_schema_cache,
+                context.cache_key,
+                lambda: snapshot.build_llm_payload_schema_record(context),
+            )
+        except ToolSchemaCacheUnavailableError as error:
+            # 缓存运行期不可用（如 record 超过容量上限、后端异常）只应
+            # 走 _build_payload 的直连快照兜底，而不是让整轮对话失败；
+            # 代次不一致的 fail-closed 检查在上方保持不变
+            logger.warning(
+                "tool schema cache 不可用，回退直连快照构建: error_type={}",
+                type(error).__name__,
+            )
+            self._tool_schema_record = None
 
     async def _prepare_model_info(self, plain: str):
         """预处理：获取模型信息、处理难度分类与视觉判断"""

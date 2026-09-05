@@ -2583,20 +2583,35 @@ TOOLS_REGISTRY = [
         """
         从 mcp_servers.toml 发现 MCP 工具，并合并进 custom_tools。
         黑名单在这里过滤一次，get_brief_catalog/get_tool_schema 里也会再兜底过滤。
+
+        两段式：先完整发现并校验（黑名单/撞名），全部通过后才提交——
+        旧实现先 pop 旧 MCP 工具、discover_tools(commit=True) 先替换
+        manager 状态，之后撞名 raise 会留下"旧工具已弹、新工具未装、
+        mapping 已换"的半提交状态，一次撞名即让所有 MCP 工具静默消失。
         """
-        # 清理旧 MCP tools
+        candidate_servers = mcp_manager.load_config_candidate()
+        mcp_tools, mcp_mapping = await mcp_manager.discover_tools(
+            servers=candidate_servers,
+            commit=False,
+        )
+
+        conflicts = [
+            name
+            for name, schema in mcp_tools.items()
+            if not self.is_tool_blacklisted(name) and name in self.custom_tools
+        ]
+        if conflicts:
+            raise ValueError(f"MCP 工具名与现有工具冲突: {conflicts[0]}")
+
+        # 校验全部通过：先弹旧 MCP 工具，再原子提交 manager 状态并装入
         for name in list(getattr(self, "mcp_tool_names", set())):
             self.custom_tools.pop(name, None)
-
         self.mcp_tool_names = set()
-
-        mcp_tools = await mcp_manager.discover_tools()
+        mcp_manager.commit_discovery(candidate_servers, mcp_mapping)
 
         for name, schema in mcp_tools.items():
             if self.is_tool_blacklisted(name):
                 continue
-            if name in self.custom_tools:
-                raise ValueError(f"MCP 工具名与现有工具冲突: {name}")
             schema["source"] = "mcp"
             self.custom_tools[name] = schema
             self.mcp_tool_names.add(name)

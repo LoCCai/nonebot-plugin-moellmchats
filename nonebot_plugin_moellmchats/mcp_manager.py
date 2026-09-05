@@ -22,6 +22,9 @@ except ImportError:
 from .model_selector import config_path
 from .private_files import atomic_write_private_text, ensure_private_file
 
+# list_tools 分页跟随上限：防异常 server 返回永续 nextCursor 导致死循环
+_LIST_TOOLS_MAX_PAGES = 32
+
 
 class McpManager:
     """
@@ -183,20 +186,21 @@ description = "旧版 SSE MCP 示例"
                         continue
 
                     full_name = self._build_tool_name(server_name, raw_tool_name)
+                    if full_name in result or full_name in new_mapping:
+                        # 不同 (server, tool) 归一化后可能碰撞（如 "my.server"
+                        # 与 "my_server"），静默覆盖会让其中一个工具凭空消失
+                        logger.warning(
+                            "MCP 工具名归一化碰撞: {} 已被占用，后发现的 {} 被跳过"
+                            "（请调整 server/tool 命名）",
+                            full_name,
+                            f"{server_name}.{raw_tool_name}",
+                        )
+                        continue
 
                     new_mapping[full_name] = {
                         "server": server_name,
                         "tool": raw_tool_name,
                     }
-
-                    async def wrapper(
-                        _mcp_conf=deepcopy(conf),
-                        _mcp_tool_name=raw_tool_name,
-                        **kwargs,
-                    ):
-                        return await self.call_tool_with_config(
-                            _mcp_conf, _mcp_tool_name, kwargs
-                        )
 
                     result[full_name] = {
                         "name": full_name,
@@ -206,7 +210,7 @@ description = "旧版 SSE MCP 示例"
                             tool,
                         ),
                         "parameters": self._get_tool_input_schema(tool),
-                        "func": wrapper,
+                        "func": self._make_mcp_wrapper(deepcopy(conf), raw_tool_name),
                     }
 
                 logger.info(
@@ -226,6 +230,48 @@ description = "旧版 SSE MCP 示例"
             self.tool_to_server = new_mapping
             return result
         return result, new_mapping
+
+    def commit_discovery(
+        self,
+        servers: dict[str, dict[str, Any]],
+        mapping: dict[str, dict[str, str]],
+    ) -> None:
+        """供调用方完成全部校验后原子提交发现结果。
+
+        ``discover_tools(commit=True)`` 是先替换状态、调用方后校验，
+        撞名 raise 时会留下"旧工具已弹、新工具未装、mapping 已换"的
+        半提交状态；两段式流程应以本方法收尾。
+        """
+
+        self.servers = deepcopy(servers)
+        self.tool_to_server = mapping
+
+    def _make_mcp_wrapper(
+        self,
+        bound_conf: dict[str, Any],
+        bound_tool_name: str,
+    ):
+        """为单个 MCP 工具生成绑定配置的执行闭包。
+
+        必须用闭包绑定 conf/工具名：默认参数哨兵（``_mcp_conf=deepcopy(conf)``）
+        是具名参数，模型在工具参数里输出 ``{"_mcp_conf": {...stdio command...}}``
+        即可覆盖它并经 _run_stdio 执行任意本地命令。wrapper 额外过滤
+        ``_`` 前缀键，防止模型参数借 kwargs 透传给远端时夹带私有字段。
+        """
+
+        manager = self
+
+        async def wrapper(**kwargs):
+            payload = {
+                key: value
+                for key, value in kwargs.items()
+                if not key.startswith("_")
+            }
+            return await manager.call_tool_with_config(
+                bound_conf, bound_tool_name, payload
+            )
+
+        return wrapper
 
     async def call_tool_with_config(
         self, conf: dict[str, Any], tool_name: str, arguments: dict | None
@@ -267,8 +313,27 @@ description = "旧版 SSE MCP 示例"
         timeout = max(timeout, self._get_int_config(conf, "sse_read_timeout", timeout))
 
         async def op(session):
-            response = await session.list_tools()
-            return list(getattr(response, "tools", []) or [])
+            # MCP ListToolsResult 带 nextCursor 分页：不跟进会静默丢失
+            # 超过分页大小的后半部分工具
+            collected: list = []
+            cursor = None
+            for _ in range(_LIST_TOOLS_MAX_PAGES):
+                response = (
+                    await session.list_tools(cursor=cursor)
+                    if cursor is not None
+                    else await session.list_tools()
+                )
+                collected.extend(list(getattr(response, "tools", []) or []))
+                cursor = getattr(response, "nextCursor", None)
+                if not cursor:
+                    break
+            else:
+                logger.warning(
+                    "MCP Server {} list_tools 分页超过 {} 页上限，结果可能被截断",
+                    server_name,
+                    _LIST_TOOLS_MAX_PAGES,
+                )
+            return collected
 
         return await asyncio.wait_for(
             self._run_with_session(conf, op),
@@ -335,8 +400,29 @@ description = "旧版 SSE MCP 示例"
         if not isinstance(env, dict):
             raise ValueError("stdio MCP 配置中的 env 必须是字典")
 
-        # 保留系统环境，避免 PATH 等变量丢失。
-        merged_env = dict(os.environ)
+        # 只传 SDK 安全白名单（PATH/HOME/SYSTEMROOT 等已含其中）加常用
+        # 代理变量，不把宿主全量环境变量（LLM key、DB 密码等机密）泄露
+        # 给第三方 MCP server 进程；显式配置的 conf.env 仍然生效并优先。
+        from mcp.client.stdio import get_default_environment
+
+        try:
+            merged_env = dict(get_default_environment())
+        except Exception:
+            merged_env = {
+                key: os.environ[key]
+                for key in ("PATH", "HOME", "TEMP", "TMP", "SYSTEMROOT")
+                if key in os.environ
+            }
+        for proxy_key in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
+        ):
+            if proxy_key in os.environ:
+                merged_env.setdefault(proxy_key, os.environ[proxy_key])
         merged_env.update({str(k): str(v) for k, v in env.items()})
 
         params_kwargs = {

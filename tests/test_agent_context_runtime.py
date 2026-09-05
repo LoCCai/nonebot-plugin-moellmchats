@@ -268,19 +268,30 @@ class _HistoryCache:
         lookup_error: BaseException | None = None,
         invalidate_error: BaseException | None = None,
         publish_result: bool = True,
+        recheck_conversation_id: str | None = None,
     ) -> None:
         self.events = events
         self.lookup_error = lookup_error
         self.invalidate_error = invalidate_error
         self.publish_result = publish_result
+        # 模拟良性双载：publish 被抢先后，第二次 lookup 返回对端已发布的窗口
+        self.recheck_conversation_id = recheck_conversation_id
         self.lookup_calls = 0
 
     async def lookup(self, conversation_id: str, *, limit: int):
-        del conversation_id, limit
+        del limit
         self.events.append("cache.lookup")
         self.lookup_calls += 1
         if self.lookup_error is not None:
             raise self.lookup_error
+        if self.recheck_conversation_id is not None and self.lookup_calls > 1:
+            return HistoryCacheLookup(
+                window=HistoryWindow(
+                    conversation_id=self.recheck_conversation_id,
+                    messages=(),
+                    has_older=False,
+                )
+            )
         return HistoryCacheLookup(
             load_token=HistoryCacheLoadToken(
                 conversation_fingerprint="a" * 64,
@@ -1066,7 +1077,44 @@ async def test_cache_publish_rejection_bypasses_generation() -> None:
         limit=8,
     ) == (_message(1),)
     assert coordinator.cache_trusted is False
-    assert events[-1] == "cache.publish"
+    # publish 被拒后经过一次重查确认对端没有成功发布，才判定缓存失效
+    assert cache.lookup_calls == 2
+    assert events[-1] == "cache.lookup"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_benign_publish_race_keeps_cache_trusted() -> None:
+    # 同会话并发 miss 的良性双载：对端抢先发布成功时，publish False
+    # 不得把整个 generation 的热缓存禁用（修复前 _bypass_cache 全代生效）
+    resources, engine = _database_resources()
+    events: list[str] = []
+    conversation_id = _identity().conversation_id
+    cache = _HistoryCache(
+        events,
+        publish_result=False,
+        recheck_conversation_id=conversation_id,
+    )
+    resources._history_cache = cache
+
+    class Messages:
+        async def list_recent(self, cid, page):
+            del cid, page
+            events.append("repository.list_recent")
+            return RepositoryPage((_message(1),))
+
+    transactions = _FakeTransactions(
+        SimpleNamespace(message=Messages()),
+        events,
+    )
+    coordinator = AgentGenerationCoordinator(
+        resources,
+        transaction_factory_factory=lambda _resources: transactions,
+    )
+
+    assert await coordinator.load_history(conversation_id, limit=8) == (_message(1),)
+    assert coordinator.cache_trusted is True
+    assert cache.lookup_calls == 2
     await engine.dispose()
 
 

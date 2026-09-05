@@ -155,7 +155,8 @@ def cancel_request_by_arg(arg: str) -> str:
             return cancel_request(request_id)
         return "当前有多个正在处理的请求，请先使用「查看请求」确认编号，再使用「停止请求 编号」。"
 
-    if not arg.isdigit():
+    # isdigit 对上标/带圈数字（"²"、"①"）也为 True，int() 会抛 ValueError
+    if not (arg.isascii() and arg.isdigit()):
         return "参数错误，格式为：停止请求 编号 或 停止请求 all"
 
     return cancel_request(int(arg))

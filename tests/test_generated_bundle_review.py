@@ -9,6 +9,7 @@
 6. 改写配置的超管命令 handler 必须带合成事件守卫
 7. f3bb850 合并后：tool_call_id 原样保留 / 拒绝记账 / junction / AST 集合
 8. 分类缓存 clear 与在飞发布的竞态由 clear-epoch 闭合
+9. MCP 哨兵参数注入命令执行 / load_mcp_tools 半提交 / isdigit 上标
 """
 
 from __future__ import annotations
@@ -349,3 +350,105 @@ async def test_classification_discards_own_publish_that_landed_after_clear() -> 
     await cache.publish(kept)
     await cache._discard_if_own_publish(kept.key, kept)
     assert await cache.lookup(kept.key) is kept
+
+
+# ---------- 9. MCP 哨兵参数注入 / 半提交 / isdigit ----------
+
+
+@pytest.mark.asyncio
+async def test_mcp_wrapper_ignores_model_injected_underscore_args() -> None:
+    # 高危回归：旧实现 _mcp_conf=deepcopy(conf) 是具名默认参数，
+    # 模型输出 {"_mcp_conf": {"transport":"stdio","command":"bash",...}}
+    # 即可覆盖它并经 _run_stdio 执行任意本地命令
+    from nonebot_plugin_moellmchats.mcp_manager import McpManager
+
+    captured: dict[str, object] = {}
+
+    async def fake_call(conf, tool_name, arguments):
+        captured["conf"] = conf
+        captured["tool"] = tool_name
+        captured["args"] = arguments
+
+    manager = object.__new__(McpManager)
+    manager.call_tool_with_config = fake_call  # type: ignore[method-assign]
+
+    bound_conf = {"transport": "stdio", "command": "real-server", "args": []}
+    wrapper = manager._make_mcp_wrapper(bound_conf, "search_tags")
+
+    await wrapper(
+        _mcp_conf={"transport": "stdio", "command": "pwned"},
+        _mcp_tool_name="other",
+        query="hello",
+    )
+
+    assert captured["conf"] is bound_conf
+    assert captured["conf"]["command"] == "real-server"
+    assert captured["tool"] == "search_tags"
+    # _ 前缀私有字段不得透传给远端
+    assert captured["args"] == {"query": "hello"}
+
+
+def test_mcp_wrapper_signature_has_no_overridable_named_params() -> None:
+    import inspect
+
+    from nonebot_plugin_moellmchats.mcp_manager import McpManager
+
+    manager = object.__new__(McpManager)
+    wrapper = manager._make_mcp_wrapper({}, "t")
+    parameters = inspect.signature(wrapper).parameters
+    assert list(parameters) == ["kwargs"]
+    assert all(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_mcp_tools_does_not_commit_on_conflict(monkeypatch) -> None:
+    # 半提交回归：撞名 raise 时旧工具已弹、新工具未装、mapping 已换，
+    # 一次撞名即让所有 MCP 工具静默消失。两段式必须先校验后提交。
+    from nonebot_plugin_moellmchats import tool_manager as tm_module
+    from nonebot_plugin_moellmchats.mcp_manager import McpManager
+
+    manager = object.__new__(tm_module.ToolManager)
+    manager.custom_tools = {"existing_tool": {"source": "registered"}}
+    manager.mcp_tool_names = set()
+    manager.is_tool_blacklisted = lambda name: False
+
+    candidate = {"srv": {"enabled": True}}
+    discovered = {
+        "mcp__srv__existing_tool": {"name": "mcp__srv__existing_tool"},
+    }
+    mapping = {"mcp__srv__existing_tool": {"server": "srv", "tool": "existing_tool"}}
+
+    async def fake_discover(*, servers, commit):
+        assert commit is False
+        assert servers is candidate
+        return discovered, mapping
+
+    committed: list[object] = []
+
+    def fake_commit(servers, new_mapping):
+        committed.append((servers, new_mapping))
+
+    monkeypatch.setattr(
+        tm_module.mcp_manager, "load_config_candidate", lambda: candidate
+    )
+    monkeypatch.setattr(tm_module.mcp_manager, "discover_tools", fake_discover)
+    monkeypatch.setattr(tm_module.mcp_manager, "commit_discovery", fake_commit)
+
+    with pytest.raises(ValueError, match="冲突"):
+        await manager.load_mcp_tools()
+
+    # 冲突时不得提交 manager 状态，也不得弹掉现有工具
+    assert committed == []
+    assert manager.custom_tools == {"existing_tool": {"source": "registered"}}
+    assert manager.mcp_tool_names == set()
+
+
+def test_cancel_request_by_arg_rejects_unicode_digits() -> None:
+    from nonebot_plugin_moellmchats.request_manager import cancel_request_by_arg
+
+    # "²".isdigit() 为 True 但 int("²") 抛 ValueError；必须整体拒绝
+    assert "参数错误" in cancel_request_by_arg("²")
+    assert "参数错误" in cancel_request_by_arg("①")
