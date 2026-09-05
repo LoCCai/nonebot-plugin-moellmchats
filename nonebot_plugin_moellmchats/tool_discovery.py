@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+import hashlib
+import json
 import re
-from typing import Any
+from types import MappingProxyType
+from typing import Any, cast
+import unicodedata
 
 DISCOVERY_FEATURES_KEY = "discovery_features"
+COMPAT_COMMAND_PREFIXES_KEY = "_moellm_compat_command_prefixes"
 
 MAX_DISCOVERY_FEATURES = 128
 MAX_DISCOVERY_PLUGIN_CHARS = 48_000
 MAX_DISCOVERY_TRIGGERS = 16
+MAX_LLM_INTENTS = 16
 MAX_DISCOVERY_CATALOG_CHARS = 96_000
 
 _MAX_TITLE_CHARS = 80
@@ -18,6 +25,8 @@ _MAX_TRIGGER_CHARS = 240
 _MAX_PERMISSION_CHARS = 200
 _MAX_CATALOG_TRIGGER_CHARS = 640
 _MAX_COMPAT_DESCRIPTION_CHARS = 28_000
+_MIN_LLM_INTENT_CHARS = 4
+_MAX_LLM_INTENT_CHARS = 80
 
 _FT_TAG_RE = re.compile(r"</?ft(?:\s+[^>]*)?>", re.IGNORECASE)
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -36,6 +45,79 @@ _TRIGGER_LABELS = {
 }
 
 
+def _freeze_projection(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_projection(item) for key, item in value.items()}
+        )
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_projection(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class PicMenuProjectionSnapshot:
+    """Detached identity for one already-installed PicMenu memory generation."""
+
+    plugins: Mapping[str, Mapping[str, object]]
+    plugin_count: int
+    feature_count: int
+    digest: str
+
+    @classmethod
+    def empty(cls) -> "PicMenuProjectionSnapshot":
+        return cls.from_infos(())
+
+    @classmethod
+    def from_infos(cls, raw_infos: object) -> "PicMenuProjectionSnapshot":
+        projected = project_picmenu_infos(raw_infos)
+        canonical = json.dumps(
+            projected,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        detached = json.loads(canonical.decode("utf-8"))
+        feature_count = sum(
+            len(item.get("menu_data", ()))
+            for item in detached.values()
+            if isinstance(item, Mapping)
+            and isinstance(item.get("menu_data"), list)
+        )
+        return cls(
+            plugins=MappingProxyType(
+                {
+                    str(plugin_id): cast(
+                        "Mapping[str, object]",
+                        _freeze_projection(item),
+                    )
+                    for plugin_id, item in detached.items()
+                }
+            ),
+            plugin_count=len(detached),
+            feature_count=feature_count,
+            digest=hashlib.sha256(canonical).hexdigest(),
+        )
+
+    @property
+    def fingerprint(self) -> tuple[str, int, int]:
+        return self.digest, self.plugin_count, self.feature_count
+
+
+@dataclass(frozen=True)
+class BusinessIntentResolution:
+    """Fail-closed exact business-intent ownership decision."""
+
+    normalized_intent: str
+    status: str
+    owners: tuple[str, ...] = ()
+
+    @property
+    def owner(self) -> str | None:
+        return self.owners[0] if self.status == "unique" else None
+
+
 def _clean_text(value: object, limit: int) -> str:
     if not isinstance(value, str):
         return ""
@@ -43,6 +125,45 @@ def _clean_text(value: object, limit: int) -> str:
     cleaned = _CONTROL_RE.sub("", cleaned)
     cleaned = _WHITESPACE_RE.sub(" ", cleaned).strip()
     return cleaned[:limit]
+
+
+def normalize_llm_intent(value: object) -> str:
+    """Normalize one user phrase for exact alias matching.
+
+    NFKC and case-folding close width/case drift. Whitespace and Unicode
+    punctuation are removed so cosmetic chat punctuation cannot change the
+    owner, while lexical differences still require an explicit alias.
+    """
+
+    if not isinstance(value, str):
+        return ""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(
+        character
+        for character in normalized
+        if not character.isspace()
+        and not unicodedata.category(character).startswith("P")
+    )
+
+
+def _llm_intents(item: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = item.get("pmn_llm_intents")
+    if raw is None:
+        raw = item.get("llm_intents")
+    if not isinstance(raw, (list, tuple)) or len(raw) > MAX_LLM_INTENTS:
+        return ()
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        cleaned = _clean_text(value, _MAX_LLM_INTENT_CHARS + 1)
+        if not _MIN_LLM_INTENT_CHARS <= len(cleaned) <= _MAX_LLM_INTENT_CHARS:
+            continue
+        identity = normalize_llm_intent(cleaned)
+        if not identity or identity in seen:
+            continue
+        result.append(cleaned)
+        seen.add(identity)
+    return tuple(result)
 
 
 def _infer_trigger_type(method: str) -> str:
@@ -210,6 +331,9 @@ def normalize_menu_data(raw_menu: object) -> tuple[dict[str, object], ...]:
             "invocable": invocable,
             "hidden": (raw_item.get("pmn_hidden") if type(raw_item.get("pmn_hidden")) is bool else False),
         }
+        intents = _llm_intents(raw_item)
+        if intents:
+            feature["llm_intents"] = intents
         if detail and detail != summary:
             feature["details"] = detail
         if permission:
@@ -217,7 +341,7 @@ def normalize_menu_data(raw_menu: object) -> tuple[dict[str, object], ...]:
 
         feature_chars = sum(len(value) for value in (title, summary, detail, permission)) + sum(
             len(trigger["type"]) + len(trigger["value"]) for trigger in triggers
-        )
+        ) + sum(len(intent) for intent in intents)
         if consumed_chars + feature_chars > MAX_DISCOVERY_PLUGIN_CHARS:
             break
         features.append(feature)
@@ -308,6 +432,17 @@ def project_picmenu_infos(raw_infos: object) -> dict[str, dict[str, object]]:
                             )
                 if structured:
                     item["pmn_triggers"] = structured
+                raw_intents = _object_field(raw_item, "llm_intents")
+                if raw_intents is None:
+                    raw_intents = _object_field(raw_item, "pmn_llm_intents")
+                if isinstance(raw_intents, (list, tuple)):
+                    intents = [
+                        value
+                        for value in raw_intents
+                        if isinstance(value, str)
+                    ]
+                    if intents:
+                        item["pmn_llm_intents"] = intents
                 if item.get("func"):
                     menu.append(item)
 
@@ -318,6 +453,146 @@ def project_picmenu_infos(raw_infos: object) -> dict[str, dict[str, object]]:
                 projected[field_name] = field_value
         result[plugin_id] = projected
     return result
+
+
+def build_intent_owner_index(
+    plugin_info: Mapping[str, Mapping[str, Any]],
+    *,
+    picmenu_plugins: Mapping[str, Mapping[str, object]] | None = None,
+) -> Mapping[str, tuple[tuple[str, bool], ...]]:
+    """Build a detached alias -> (plugin, hidden) index for one generation."""
+
+    owners: dict[str, dict[str, bool]] = {}
+
+    def add_features(plugin_id: str, features: tuple[Mapping[str, Any], ...]) -> None:
+        for feature in features:
+            raw_intents = feature.get("llm_intents")
+            if not isinstance(raw_intents, (list, tuple)):
+                continue
+            hidden = feature.get("hidden") is True
+            for raw_intent in raw_intents:
+                normalized = normalize_llm_intent(raw_intent)
+                if not normalized:
+                    continue
+                by_plugin = owners.setdefault(normalized, {})
+                # If any declaration for the same plugin is public, the owner is
+                # public. Duplicate declarations do not create false ambiguity.
+                by_plugin[plugin_id] = by_plugin.get(plugin_id, True) and hidden
+
+    if picmenu_plugins is not None:
+        for plugin_id, info in picmenu_plugins.items():
+            if not isinstance(plugin_id, str) or not isinstance(info, Mapping):
+                continue
+            add_features(
+                plugin_id,
+                normalize_menu_data(info.get("menu_data")),
+            )
+    for plugin_id, info in plugin_info.items():
+        if not isinstance(plugin_id, str) or not isinstance(info, Mapping):
+            continue
+        add_features(plugin_id, discovery_features(info))
+
+    return MappingProxyType(
+        {
+            intent: tuple(sorted(by_plugin.items()))
+            for intent, by_plugin in sorted(owners.items())
+        }
+    )
+
+
+def resolve_business_intent(
+    plain: str,
+    *,
+    owners: Mapping[str, tuple[tuple[str, bool], ...]],
+    loaded_plugins: Mapping[str, object],
+    is_superuser: bool,
+    is_blacklisted,
+) -> BusinessIntentResolution:
+    """Resolve a normalized exact alias without falling through on denial."""
+
+    normalized = normalize_llm_intent(plain)
+    matches = owners.get(normalized, ())
+    if not matches:
+        return BusinessIntentResolution(normalized, "no_match")
+    plugin_ids = tuple(sorted({plugin_id for plugin_id, _hidden in matches}))
+    if len(plugin_ids) != 1:
+        return BusinessIntentResolution(normalized, "ambiguous", plugin_ids)
+    plugin_id, hidden = matches[0]
+    if hidden and not is_superuser:
+        return BusinessIntentResolution(normalized, "unavailable", (plugin_id,))
+    if plugin_id not in loaded_plugins or is_blacklisted(plugin_id):
+        return BusinessIntentResolution(normalized, "unavailable", (plugin_id,))
+    return BusinessIntentResolution(normalized, "unique", (plugin_id,))
+
+
+def discovery_directory_identity(
+    plugin_info: Mapping[str, Mapping[str, Any]],
+    intent_owners: Mapping[str, tuple[tuple[str, bool], ...]],
+) -> tuple[int, str]:
+    """Return a deterministic count/digest without handlers or credentials."""
+
+    detached: dict[str, object] = {}
+    for plugin_id, info in sorted(plugin_info.items()):
+        detached[plugin_id] = {
+            "name": _clean_text(info.get("name"), 512),
+            "description": _clean_text(info.get("description"), 2_000),
+            "usage": _clean_text(info.get("usage"), 8_000),
+            "features": discovery_features(info),
+        }
+    payload = {
+        "plugins": detached,
+        "intent_owners": {
+            intent: list(values) for intent, values in sorted(intent_owners.items())
+        },
+    }
+    def mutable(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {str(key): mutable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [mutable(item) for item in value]
+        return value
+
+    encoded = json.dumps(
+        mutable(payload),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return len(detached), hashlib.sha256(encoded).hexdigest()
+
+
+def preferred_command_prefix(prefixes: tuple[str, ...]) -> str:
+    if not isinstance(prefixes, tuple) or not all(
+        isinstance(prefix, str) for prefix in prefixes
+    ):
+        raise TypeError("command_start 必须是字符串元组")
+    unique = tuple(sorted(set(prefixes), key=lambda item: (len(item), item)))
+    if "/" in unique:
+        return "/"
+    return unique[0] if unique else ""
+
+
+def render_command_prefix_contract(
+    description: str,
+    *,
+    command_prefixes: tuple[str, ...],
+) -> str:
+    """Replace PicMenu placeholders and state the exact runtime prefix set."""
+
+    preferred = preferred_command_prefix(command_prefixes)
+    rendered = description.replace("<命令前缀>", preferred)
+    ordered = tuple(sorted(set(command_prefixes), key=lambda item: (len(item), item)))
+    alternatives = tuple(prefix for prefix in ordered if prefix != preferred)
+
+    def label(prefix: str) -> str:
+        return "无前缀" if prefix == "" else repr(prefix)
+
+    suffix = f"当前首选命令前缀为 {label(preferred)}。"
+    if alternatives:
+        suffix += "其他有效前缀：" + "、".join(label(prefix) for prefix in alternatives) + "。"
+    suffix += "command 必须使用这里列出的真实前缀；不要输出命令前缀占位文本。"
+    return f"{rendered}\n{suffix}"
 
 
 def _trigger_text(feature: Mapping[str, Any], *, limit: int) -> str:
@@ -405,11 +680,23 @@ def build_compatibility_description(
     info: Mapping[str, Any],
     *,
     is_superuser: bool = False,
+    command_prefixes: tuple[str, ...] | None = None,
 ) -> str:
     """Build the selected-plugin description from usage plus bounded menu hints."""
 
     if type(is_superuser) is not bool:
         raise TypeError("is_superuser 必须是布尔值")
+    if command_prefixes is None:
+        frozen_prefixes = info.get(COMPAT_COMMAND_PREFIXES_KEY, ("/",))
+        if not isinstance(frozen_prefixes, (list, tuple)) or not all(
+            isinstance(prefix, str) for prefix in frozen_prefixes
+        ):
+            raise TypeError("generation 内冻结的 command_start 非法")
+        command_prefixes = tuple(frozen_prefixes)
+    if not isinstance(command_prefixes, tuple) or not all(
+        isinstance(prefix, str) for prefix in command_prefixes
+    ):
+        raise TypeError("command_prefixes 必须是字符串元组")
 
     display_name = str(info.get("name") or plugin_id)
     description = str(info.get("description") or "无描述")
@@ -417,7 +704,10 @@ def build_compatibility_description(
     base = f"插件名称：{display_name}。功能描述：{description}。原始用法说明：{usage}"
     features = discovery_features(info)
     if not features:
-        return base
+        return render_command_prefix_contract(
+            base,
+            command_prefixes=command_prefixes,
+        )
 
     lines = [
         base,
@@ -450,9 +740,12 @@ def build_compatibility_description(
         lines.append(f"以下功能只由真实事件或定时任务触发，不得通过 command 伪造：{rendered}")
     lines.append(
         "生成 command 时只使用上面标为消息/命令触发的真实格式；"
-        "不要原样输出 <命令前缀> 占位符，也不要改为直接调用 Bot/NapCat API。"
+        "不要输出命令前缀占位文本，也不要改为直接调用 Bot/NapCat API。"
     )
-    result = "\n".join(lines)
+    result = render_command_prefix_contract(
+        "\n".join(lines),
+        command_prefixes=command_prefixes,
+    )
     if len(result) <= _MAX_COMPAT_DESCRIPTION_CHARS:
         return result
     return result[: _MAX_COMPAT_DESCRIPTION_CHARS - 12] + "\n...[菜单已截断]"

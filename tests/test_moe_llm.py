@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from nonebot.adapters.onebot.v11.exception import (
     ActionFailed,
     ApiNotAvailable,
@@ -63,6 +65,76 @@ def _llm(bot: _ScriptedBot) -> MoeLlm:
     llm.event = object()
     llm.emotion_flag = True
     return llm
+
+
+@pytest.mark.asyncio
+async def test_retry_notice_failure_is_bounded_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[str] = []
+
+    class Recorder:
+        def warning(self, message, *args) -> None:
+            records.append(str(message).format(*args))
+
+    class SlowBot:
+        async def send(self, _event, _message) -> None:
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(module, "logger", Recorder())
+    monkeypatch.setattr(module, "_PROGRESS_NOTICE_TIMEOUT_SECONDS", 0.01)
+    llm = _llm(SlowBot())  # type: ignore[arg-type]
+
+    await asyncio.wait_for(llm._send_retry_notice(1), timeout=0.2)
+
+    assert records
+    assert any("TimeoutError" in record for record in records)
+
+
+@pytest.mark.asyncio
+async def test_retry_notice_preserves_cancellation() -> None:
+    class CancelBot:
+        async def send(self, _event, _message) -> None:
+            raise asyncio.CancelledError
+
+    llm = _llm(CancelBot())  # type: ignore[arg-type]
+    with pytest.raises(asyncio.CancelledError):
+        await llm._send_retry_notice(1)
+
+
+@pytest.mark.asyncio
+async def test_tool_summary_failure_falls_back_without_private_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[str] = []
+
+    class Recorder:
+        def warning(self, message, *args) -> None:
+            records.append(str(message).format(*args))
+
+    monkeypatch.setattr(module, "logger", Recorder())
+    llm = _llm(_ScriptedBot([]))
+    llm.agent_runtime = None
+
+    async def fail() -> str:
+        raise RuntimeError("SECRET_SUMMARY_PAYLOAD")
+
+    assert await llm._call_tool_summary_safely(fail) == ""
+    assert records
+    assert all("SECRET_SUMMARY_PAYLOAD" not in record for record in records)
+    assert any("RuntimeError" in record for record in records)
+
+
+@pytest.mark.asyncio
+async def test_tool_summary_preserves_cancellation() -> None:
+    llm = _llm(_ScriptedBot([]))
+    llm.agent_runtime = None
+
+    async def cancel() -> str:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await llm._call_tool_summary_safely(cancel)
 
 
 @pytest.mark.asyncio

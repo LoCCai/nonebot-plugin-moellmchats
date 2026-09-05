@@ -54,6 +54,7 @@ def _catalog(
     tools_enabled: bool = True,
     web_search_enabled: bool = False,
     blacklist_patterns: tuple[str, ...] = (),
+    directory_digest: str = "0" * 64,
     catalog: str = "- alpha: alpha tool",
 ) -> ToolCatalogRecord:
     context = ToolCatalogRenderContext.capture(
@@ -63,6 +64,7 @@ def _catalog(
         tools_enabled=tools_enabled,
         web_search_enabled=web_search_enabled,
         blacklist_patterns=blacklist_patterns,
+        directory_digest=directory_digest,
     )
     return ToolCatalogRecord(context.cache_key, catalog)
 
@@ -91,6 +93,7 @@ def _context(
     policy_version: str = "categorize-json-v1",
     additional_capabilities: tuple[str, ...] = (),
     ttl_seconds: float = 60.0,
+    scene: str = "unknown",
 ) -> ClassificationRenderContext:
     return ClassificationRenderContext.capture(
         prompt=prompt,
@@ -100,6 +103,7 @@ def _context(
         policy_version=policy_version,
         additional_capabilities=additional_capabilities,
         ttl_seconds=ttl_seconds,
+        scene=scene,
     )
 
 
@@ -294,6 +298,7 @@ def test_context_binds_catalog_model_capability_policy_and_short_ttl() -> None:
         "provider_cutover": True,
         "tools_enabled": True,
         "ttl_seconds": 45.0,
+        "scene": "unknown",
         "web_search_enabled": False,
         "capability_count": 2,
         "context_independent": True,
@@ -316,9 +321,11 @@ def test_context_key_separates_every_dynamic_classification_input() -> None:
         _context(policy_version="categorize-json-v2"),
         _context(additional_capabilities=("tenant:trusted-tools",)),
         _context(ttl_seconds=30),
+        _context(scene="group"),
+        _context(catalog_record=_catalog(directory_digest="f" * 64)),
     )
 
-    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 13
+    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 15
 
 
 def test_permission_is_always_part_of_capability_identity() -> None:
@@ -1018,6 +1025,138 @@ async def test_resolver_propagates_cancellation_without_publish() -> None:
     with pytest.raises(asyncio.CancelledError):
         await resolve_classification(cache, record.key, builder)
     assert cache.published == []
+
+
+@pytest.mark.asyncio
+async def test_memory_resolver_single_flights_same_exact_key() -> None:
+    record = _record()
+    cache = MemoryClassificationCache()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def builder() -> ClassificationCacheRecord:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+        return record
+
+    first = asyncio.create_task(resolve_classification(cache, record.key, builder))
+    second = asyncio.create_task(resolve_classification(cache, record.key, builder))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    release.set()
+
+    assert await asyncio.gather(first, second) == [record, record]
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_resolver_keeps_different_keys_concurrent() -> None:
+    records = (
+        _record(context=_context(prompt="first")),
+        _record(context=_context(prompt="second")),
+    )
+    cache = MemoryClassificationCache()
+    entered = [asyncio.Event(), asyncio.Event()]
+    release = asyncio.Event()
+
+    def builder(index: int):
+        async def build() -> ClassificationCacheRecord:
+            entered[index].set()
+            await release.wait()
+            return records[index]
+
+        return build
+
+    tasks = [
+        asyncio.create_task(
+            resolve_classification(cache, record.key, builder(index))
+        )
+        for index, record in enumerate(records)
+    ]
+    await asyncio.wait_for(
+        asyncio.gather(*(event.wait() for event in entered)),
+        timeout=1,
+    )
+    release.set()
+    assert await asyncio.gather(*tasks) == list(records)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_does_not_cancel_shared_classification() -> None:
+    record = _record()
+    cache = MemoryClassificationCache()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def builder() -> ClassificationCacheRecord:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+        return record
+
+    cancelled = asyncio.create_task(
+        resolve_classification(cache, record.key, builder)
+    )
+    survivor = asyncio.create_task(
+        resolve_classification(cache, record.key, builder)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    release.set()
+
+    assert await survivor is record
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_flight_is_removed_and_can_be_retried() -> None:
+    record = _record()
+    cache = MemoryClassificationCache()
+    calls = 0
+
+    async def builder() -> ClassificationCacheRecord:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("first build failed")
+        return record
+
+    with pytest.raises(RuntimeError, match="first build failed"):
+        await resolve_classification(cache, record.key, builder)
+    assert await resolve_classification(cache, record.key, builder) is record
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_publish_conflict_rereads_verified_winner() -> None:
+    built = _record()
+    winner = ClassificationCacheRecord.from_result(
+        built.key,
+        difficulty="2",
+        vision_required=False,
+        required_plugins=[],
+        source=ClassificationResultSource.MODEL_SUCCESS,
+    )
+    cache = MemoryClassificationCache()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def builder() -> ClassificationCacheRecord:
+        entered.set()
+        await release.wait()
+        return built
+
+    task = asyncio.create_task(resolve_classification(cache, built.key, builder))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    assert await cache.publish(winner) is winner
+    release.set()
+    assert await task is winner
 
 
 def test_module_has_no_implicit_global_cache_instance() -> None:

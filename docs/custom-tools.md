@@ -99,17 +99,23 @@ TOOLS_REGISTRY = [
         "result_limit": 1000,
         "dependencies": [],
         "capabilities": {
-            "network": True,
+            "network": {"allow": ["notes.example"]},
             "process": False,
-            "workspace": True,
-            "host_filesystem": False,
+            "filesystem": {
+                "workspace": {"read": True, "write": True},
+                "host": False
+            },
+            "database": False,
+            "bot": False,
             "secrets": False,
         },
     }
 ]
 ```
 
-`permission` 仅支持 `user`/`superuser`，`effect` 仅支持 `read_only`/`mutating`。`capabilities` 只接受布尔型 `network`、`process`、`workspace`、`host_filesystem`、`secrets`；未知字段、字符串形式的布尔值等都会使候选 generation 拒绝加载。Custom File 属于管理员维护的信任域，因此字面量声明同时作为申请值和管理员上限。`workspace` 表示本次调用的私有临时工作目录；`host_filesystem` 控制是否放宽 Landlock 宿主读取限制；`secrets` 是预留字段，当前即使显式为 true 也不会注入宿主环境或密钥。
+`permission` 仅支持 `user`/`superuser`，`effect` 仅支持 `read_only`/`mutating`。新工具建议使用 Capability v2：`network` 写成 `{"allow": ["主机名"]}`，`process` 是布尔值，`filesystem.workspace/host` 可写布尔值或 `read/write` 对象，`database` 可写 `read/write`，`bot` 可写 `read/send/manage`，`secrets` 可写 `allow`。旧的五布尔字段仍可读取，但 `network=true` 等于所有公网主机，不应用于新工具。
+
+Custom File 属于管理员维护的信任域，字面量声明同时作为申请值和管理员上限。0.26.3 的隔离 runner 已消费指定主机的 network allowlist，但仍不支持 Custom File 直接获取 database/bot 对象；声明未迁移的权限会 fail closed。`workspace` 是本次调用的私有临时目录，`host` 会放宽 Landlock 宿主文件限制，`secrets` 仍不会注入宿主环境或密钥。未知字段、字符串布尔值、`write=true/read=false` 或权限层级倒置都会拒绝整个候选 generation。
 
 变更型工具不会把授权交给模型，也不会在工具 Schema 中加入 `confirm`。模型第一次调用时系统只固化参数及其 SHA-256，生成 6 位一次性确认码，并绑定当前 Bot/Adapter、用户、群组或私聊会话、工具名、runtime generation 和 Generated bundle digest。用户必须在默认 120 秒 TTL 内另发一条独立消息：
 
@@ -118,6 +124,57 @@ TOOLS_REGISTRY = [
 ```
 
 也可发送 `取消执行 A7F42C`。确认码在真正执行前即被原子消费，不能重放；用户、群组或 generation 不匹配时 fail closed。因此原消息包含“确认执行”、否定句或模型自行构造参数都不能授权执行。
+
+### 安全联网：只使用 `safe_request`
+
+0.26.3 起，Custom File 不得直接导入或调用 `aiohttp`、`httpx`、`requests`、`urllib`、`socket` 等网络客户端；即使声明了 network capability，AST Policy 也会拒绝该候选。隔离 worker 会向获准的函数全局注入 `safe_request`，工具文件不需要、也不应导入它。
+
+```python
+async def fetch_page(url: str) -> str:
+    """读取 api.example 下的有界文本页面。"""
+    response = await safe_request(
+        url,
+        headers={"Accept": "text/plain"},
+    )
+    if response.status != 200:
+        return f"HTTP {response.status}"
+    return response.text[:4000]
+
+
+TOOLS_REGISTRY = [
+    {
+        "name": "fetch_page",
+        "description": "读取 api.example 下的文本页面。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "pattern": "^https://api\\.example(?:/.*)?$",
+                    "maxLength": 2048,
+                }
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        "func": fetch_page,
+        "permission": "user",
+        "effect": "read_only",
+        "capabilities": {
+            "network": {"allow": ["api.example"]},
+            "process": False,
+            "filesystem": {"workspace": False, "host": False},
+            "database": False,
+            "bot": False,
+            "secrets": False,
+        },
+    }
+]
+```
+
+`SafeHttpResponse` 提供 `status`/`status_code`、只读 `headers`、`body`、`text`、`json()`、最终 `url` 和 `redirect_count`。`safe_request` 支持有界 `method`、`headers` 和 `body`；默认 GET。POST/PUT/PATCH/DELETE 或动态 method 会被 AST 保守提升为 `mutating`，仍须声明正确 effect 并经过二阶段确认。
+
+门面对所有重定向共享 15 秒总预算，最多 5 跳，请求体最多 256 KiB，响应体最多 1 MiB。每一跳都重新验证 allowlist 和公网 DNS 答案，将验证过的 IP 固定到实际连接，拒绝 URL 凭据、私网/元数据地址、HTTPS 降级和跨域敏感头继承。工具参数不能提供或扩大 allowlist。
 
 ---
 
@@ -162,21 +219,21 @@ async def extract_webpage(
 
 编写完成后会自动原子重载，也可使用 `刷新工具` 或 `重载LLM`，**无需重启 NoneBot**。语法、契约或 Policy 错误时旧 generation 保持可用。正式 Custom File / Generated loader 会把源码、Schema 与安全契约固化为当前 generation 的不可变 `ToolArtifact`；两类制品执行前都复核 generation 和 artifact digest，Generated Tool 还复核由 manifest、源码与测试形成的 bundle digest。已经开始的请求继续执行自己固定的旧制品，新请求才使用新 generation，不会在启动子进程时重新读取后来被修改的活动源文件。任何待确认操作在 generation 改变后都会失效，必须由新请求重新生成确认码。
 
-文件工具和 AI 生成工具均在 nobody 子进程执行，默认全局单并发、等待 4、墙钟 30 秒、CPU 10 秒、内存 256 MiB、64 KiB 输出和 64 MiB 工作目录。工作目录同时限制单文件大小、文件和目录条目数及目录深度；runner 在执行期间异步扫描，并在进程组结束后强制最终扫描。所有文件/生成工具都要求独立 PID/mount/IPC/UTS namespace，并把 hostname 固定为 `moellm-sandbox`；`network=false` 时再进入独立 network namespace。Generated Tool 的 effective 上限仅允许私有 workspace；Custom File 只有 `TOOLS_REGISTRY.capabilities` 的显式字面量声明才能放宽。允许 `process=true` 时才使用 `generated_tool_max_processes`（默认 16）的上限。它们不会收到生产环境变量、Bot、Event 或数据库对象；超时、取消和越限会杀死整个进程组。
+文件工具和 AI 生成工具均在 nobody 子进程执行，默认全局单并发、等待 4、墙钟 30 秒、CPU 10 秒、内存 256 MiB、64 KiB 输出和 64 MiB 工作目录。工作目录同时限制单文件大小、文件和目录条目数及目录深度；runner 在执行期间异步扫描，并在进程组结束后强制最终扫描。所有文件/生成工具都要求独立 PID/mount/IPC/UTS namespace，并把 hostname 固定为 `moellm-sandbox`；没有 network allowlist 时再进入独立 network namespace。Generated Tool 的 effective 上限仅允许私有 workspace；Custom File 只有 `TOOLS_REGISTRY.capabilities` 的显式字面量声明才能放宽，联网仍只能经过 `safe_request`。允许 `process=true` 时才使用 `generated_tool_max_processes`（默认 16）的上限。它们不会收到生产环境变量、Bot、Event 或数据库对象；超时、取消和越限会杀死整个进程组。
 
 两类 loader 还会运行结构化 AST Policy，对模块级语句、handler 及其可达 helper 生成 `ALLOW`、`DENY`、`CAPABILITY_REQUIRED` 或 `RISK` finding。阻断项会拒绝候选 generation；检测到的文件/数据库/HTTP 写入或系统命令会把工具的实际 effect 提升为 `mutating`。因此 Custom File 即使显式取得 `process=true`，也仍需经过 PendingAction 二阶段确认。Policy 只能做保守静态预检，不是完整代码证明。
 
 ## runner 隔离边界与运行要求
 
-下列内容描述当前 0.25 候选实现的安全边界。对应隔离增量已经完成 Python 3.10～3.13、mandatory root sandbox 与包外制品门禁，但仍未在生产发布；门禁通过不能替代目标主机的 `isolation=ready` 预检和隔离测试。
+下列内容描述当前 0.26.3 候选实现的安全边界。对应隔离增量必须完成 Python 3.10～3.13、mandatory root sandbox 与包外制品门禁后才能作为隔离测试候选；这些门禁也不能替代目标主机的 `isolation=ready` 预检和人工验收。
 
 - 运行环境必须支持 Linux `setrlimit`、进程组和 UID/GID 切换；主进程通常需要以 root 启动，worker 随后降权到 nobody（65534）。不能安全降权时，文件/生成工具拒绝执行，聊天、MCP 和可信 `ToolSpec` 仍可使用。
 - worker 使用 `python -I`、`no_new_privs` 和环境变量白名单，不会注入生产密钥或 Bot/数据库对象；启动预检结果可在 `查看LLM状态` 的 `isolation` 字段查看。
 - runner 先建立独立 PID/mount/IPC/UTS namespace，将 hostname 固定为 `moellm-sandbox`，把 namespace 根挂载递归设为只读，再把私有 workspace 做成独立 bind mount；只有 `workspace=true` 时该 bind mount 可写。`workspace=false` 时不注入 `_workspace`，私有 cwd 也保持只读。任一必要 namespace、hostname 或 mount 操作不可用时 fail closed。
-- Generated Tool 的草稿自测试和每次运行期调用都禁网；Custom File 在 `network=false` 时进入独立 network namespace，只有显式声明 `network=true` 才使用主机网络。系统没有 `unshare`、创建 namespace 失败或探针不通过时，对应工具 fail closed。
+- Generated Tool 的草稿自测试和每次运行期调用都禁网；Custom File 没有 effective network allowlist 时进入独立 network namespace，只有显式主机列表才会注入绑定的 `safe_request`。系统没有 `unshare`、创建 namespace 失败或探针不通过时，对应工具 fail closed。
 - `process=false` 同时把 worker 的进程额度收紧为 1，并用 libseccomp 拒绝 `execve`/`execveat`/`fork`/`vfork`/`clone`/`clone3`，防止工具用 `os.exec*` 原地替换 worker。libseccomp、任一 syscall 映射或规则加载不可用时，工具在编译不可信源码前 fail closed。Custom File 显式声明 `process=true` 后才移除该 deny filter 并恢复到配置的进程数上限；Generated Tool 当前不能申请放宽。
 - `host_filesystem=false` 时，Landlock 只开放运行 Python 所需的固定只读路径和私有 workspace；即使 `process=true`，也只额外开放固定 `/usr/local/bin`、`/usr/bin`、`/bin` 的读取/执行，PATH 同样固定。由于 Landlock ABI 1 不覆盖扩展属性，seccomp 还拒绝 `getxattr`、`lgetxattr`、`fgetxattr`、`listxattr`、`llistxattr`、`flistxattr`。Custom File 显式声明 `host_filesystem=true` 后可读取 nobody 按 DAC 本就能读取的宿主文件，因此必须视为高权限。
-- `network=false` 时，seccomp 拒绝所有 `socket(2)` family，而不只依赖 network namespace。`network=true` 但 `host_filesystem=false` 时继续拒绝 AF_UNIX 与 AF_VSOCK；所有受限组合的 `socketpair` 只保留 Python/asyncio 所需的 AF_UNIX/`SOCK_STREAM`，并拒绝其他 domain/base type 与 `io_uring_setup`。只有同时取得 network 与 host-filesystem 能力时，Custom File 才可能连接宿主 Unix socket。
+- 没有 network allowlist 时，seccomp 拒绝所有 `socket(2)` family，而不只依赖 network namespace。有网络权限但无宿主文件权限时继续拒绝 AF_UNIX 与 AF_VSOCK；所有受限组合的 `socketpair` 只保留 Python/asyncio 所需的 AF_UNIX/`SOCK_STREAM`，并拒绝其他 domain/base type 与 `io_uring_setup`。直接网络客户端还会被 Custom File AST Policy 拒绝；Policy 是保守静态检查，不是对恶意管理员代码的完整证明。
 - `add_key`、`request_key`、`keyctl` 三个 Linux keyring syscall 在所有 capability 组合下无条件拒绝，避免读取继承的 session keyring。
 - `secrets=true` 目前只保留契约位置，不会将生产环境变量、凭据文件或其他宿主密钥注入 worker。
 - 正式执行只接受 generation 固定的 `ToolArtifact`。worker 从 stdin 接收固化源码，结果通过独立的版本化 FD3 协议返回；stdout/stderr 仅作为有界日志读取，因此普通 `print` 或直接写 stdout 不会意外污染结果。不过 FD3 只是协议通道分离，不是对恶意工具代码的认证机制，也不会把已批准代码变成可信代码。
@@ -188,7 +245,7 @@ async def extract_webpage(
 
 超级管理员可发送 `添加LLM功能 <需求>`。系统使用当前聊天模型生成 `manifest.json`、`tool.py` 和 `tests.py`，完成 AST/Schema/敏感字面量检查与隔离测试，再由总结模型独立复核。复核通过仍只是草稿，必须查看完整审阅页，并复制其中的 `批准LLM功能 <ID> <至少8位哈希> <完整64位review stamp>`。
 
-功能需求长度为 1 到 4000 字符，同时只允许一个生成任务；生成和复核共用 LLM 准入与整任务预算。`manifest.json` 顶层可用 `capabilities` 申请 `network`、`process`、`workspace`、`host_filesystem`、`secrets`，每个值都必须是布尔型；每个工具必须声明 `name`、`description`、对象型 `parameters`、`handler`、`permission` 和 `effect`，可选 `timeout_seconds`（最多 30）与 `result_limit`（最多 6000）及 `dependencies`。Capability 和 permission 都只是申请值：当前 Generated Tool 的管理上限仅允许私有 workspace，其余四项不会因 manifest 声明为 true 而放开。`tests.py` 必须定义 `run_tests(tool_module)`。
+功能需求长度为 1 到 4000 字符，同时只允许一个生成任务；生成和复核共用 LLM 准入与整任务预算。`manifest.json` 顶层 `capabilities` 可使用旧五布尔格式或上文的结构化 v2 格式；每个工具必须声明 `name`、`description`、对象型 `parameters`、`handler`、`permission` 和 `effect`，可选 `timeout_seconds`（最多 30）与 `result_limit`（最多 6000）及 `dependencies`。Capability 和 permission 都只是申请值：当前 Generated Tool 的管理上限仅允许私有 workspace，network/process/host/database/bot/secrets 都不会因 manifest 申请而放开。`tests.py` 必须定义 `run_tests(tool_module)`。
 
 批准命令的第二个参数要求至少 8 位且与当前草稿内容哈希前缀匹配，第三个参数必须是完整 64 位 review stamp。stamp 绑定草稿 ID/digest、lifecycle revision/state digest 和同 bundle 当前 active digest；审阅后任何 lifecycle 变化都会拒绝旧 stamp，必须重新查看草稿。批准版本按完整 SHA-256 保存为只读目录；同一 `bundle_id` 的新草稿获批即为升级。批准、拒绝、权限、停用和回滚统一由 `RuntimeReloader` 先构建 after-state 候选，再以 revision/state digest CAS 提交 canonical lifecycle revision，最后发布当前进程 generation；Store 的内部 commit 入口不是生产 API。共享配置目录的其他新版进程由 watcher 最终收敛。已开始的请求继续固定旧的只读版本。
 
@@ -208,7 +265,7 @@ Generated manifest 的 `permission` 同样只是 `requested_permission`。无论
 
 插件源码变化仍需重启 NoneBot；若插件在运行时动态注册或替换 `ToolSpec`，还需执行 `刷新工具` 或 `重载LLM` 才会发布新的工具快照。
 
-变更型工具统一进入上述一次性 PendingAction 流程；独立 `确认执行 <确认码>` 消息通过 TTL、用户/会话、generation、工具版本和固化参数校验后才运行。主进程中的同步 `mutating` handler 无法在 `asyncio` 超时后终止后台线程，因此会在启动前明确拒绝；应改为可取消的 `async` handler，或迁移到可杀死进程组的 Custom File。URL 参数仍统一拒绝私网、环回、保留地址和云元数据地址。
+变更型工具统一进入上述一次性 PendingAction 流程；独立 `确认执行 <确认码>` 消息通过 TTL、用户/会话、generation、工具版本和固化参数校验后才运行。主进程中的同步 `mutating` handler 无法在 `asyncio` 超时后终止后台线程，因此会在启动前明确拒绝；应改为可取消的 `async` handler，或迁移到可杀死进程组的 Custom File。Custom File 的真实 HTTP 连接必须使用 `safe_request`；可信主进程 `ToolSpec` 不经过该隔离门面，插件作者必须在自己的 connector 中重新证明 DNS、重定向和实际连接目标，不能把参数预检当成完整 SSRF 防护。
 
 ---
 

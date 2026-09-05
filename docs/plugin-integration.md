@@ -21,13 +21,14 @@
 一次兼容调用的链路是：
 
 ```text
-紧凑功能目录判断意图并选中目标插件
+规范化用户原话并检查功能目录中的唯一 llm_intents 所有者
+  → 唯一所有者直接选中；无别名命中才请求分类模型
   → 只展开该插件的 usage 与可消息触发菜单
-  → 主模型生成一个 command 字符串
+  → 主模型按当前 generation 的真实 command_start 生成一个 command 字符串
   → 系统基于原消息构造合成 OneBot 消息
   → 默认只定向执行目标插件的 Matcher
-  → 捕获该插件通过 Bot 发送的文本/图片
-  → 把有界结果作为工具 observation 交回模型
+  → Adapter 成功回调后才确认文本、图片或副作用
+  → 把类型化执行状态和有界结果作为工具 observation 交回模型
 ```
 
 这条路线只有一个模型参数 `command`，不能为插件内部每个动作声明独立 JSON Schema、`permission` 或 `effect`。为了不把任意命令误称为只读，目录会把兼容插件保守标记为 `mutating`；但为保留既有插件行为，当前兼容边界不提供强类型 `ToolSpec` 那套逐工具二阶段确认。它也无法回滚 Matcher 已经产生的副作用。
@@ -43,9 +44,11 @@
 3. `PluginMetadata.extra["menu_data"]`；
 4. `PluginMetadata` 的 `name`、`description`、`usage`。
 
-PicMenu 桥接是可选的 duck-typed 读取，不是 Python 包依赖，也不会自行读取宿主的 `menu_config` 路径。系统只接受 PicMenu 已经安装到内存的目录，并且只为当前确实已加载的 NoneBot 插件补充功能；目录中存在但未加载的插件不会变成可执行工具。PicMenu 未加载、目录尚未就绪或接口异常时，会回退到插件元数据。
+PicMenu 桥接是可选的 duck-typed 读取，不是 Python 包依赖，也不会自行读取宿主的 `menu_config` 路径。系统只接受 PicMenu 已经安装到内存的目录，并且只为当前确实已加载的 NoneBot 插件补充功能；目录中存在但未加载的插件不会变成可执行工具。PicMenu 未加载或首次快照尚为空时使用插件元数据。系统会为内存投影计算功能数和 SHA-256，并把它纳入 watcher 指纹；目录稍后安装完整内容时会在一个监控周期内自动发布新 generation。读取器异常时保留上一份有效投影，不把完整目录悄悄降级为空目录。
 
-每个菜单功能会规范化为有界 discovery hint：功能名、摘要、触发类型/入口、条件提示、是否隐藏以及是否可由消息触发。`<ft ...>` 展示标签和控制字符会清理，错误类型不会被 `str()` 强行塞入快照；每插件最多 128 个功能、每功能最多 16 个触发入口、每插件最多 48,000 字符，最终分类目录还有 96,000 字符总上限。`pmn_hidden=true` 的功能不会进入普通用户的分类目录，也不会在普通用户命中同插件后泄漏到详细 Schema；被动事件和定时功能可以帮助理解插件范围，但选中后会明确标为“不得通过 command 伪造”。这些显示规则仍不代替 Matcher 的执行端权限检查。
+每个菜单功能会规范化为有界 discovery hint：功能名、摘要、触发类型/入口、条件提示、是否隐藏、是否可由消息触发，以及可选的 `llm_intents`。QWeb 功能目录使用 `llm_intents`，PicMenu 内存投影字段是 `pmn_llm_intents`；每项 4～80 字、每功能最多 16 项。别名仅参与发现，不授予权限，也不是模糊语义匹配：系统对用户原话做 Unicode NFKC、大小写、空白和标点规范化后进行精确匹配。
+
+唯一别名所有者会在分类模型之前直接选中，即使分类模型缓存曾返回其他插件也不会覆盖它。相同别名被多个插件声明时不猜测；所有者隐藏、被黑名单禁用、没有权限或插件未加载时也不会降级调用“看起来相近”的另一个插件，而是要求澄清或明确告知不可用。无别名命中才继续使用分类模型。`<ft ...>` 展示标签和控制字符会清理，错误类型不会被 `str()` 强行塞入快照；每插件最多 128 个功能、每功能最多 16 个触发入口、每插件最多 48,000 字符，最终分类目录还有 96,000 字符总上限。`pmn_hidden=true` 的功能不会进入普通用户的分类目录，也不会在普通用户命中同插件后泄漏到详细 Schema；被动事件和定时功能可以帮助理解插件范围，但选中后会明确标为“不得通过 command 伪造”。这些显示规则仍不代替 Matcher 的执行端权限检查。
 
 分类目录会形成类似：
 
@@ -53,15 +56,30 @@ PicMenu 桥接是可选的 duck-typed 读取，不是 Python 包依赖，也不�
 - qi_group_admin | 七七群管理 > 点赞与禅定 | 请求 Bot 点赞，或临时进入和解除禅定状态。 | 命令: 点赞 / 命令: 赞我 / 命令: 给我点赞
 ```
 
-分类模型只能返回第一列 `qi_group_admin`。随后主模型才看到该插件的详细菜单和通用 `command` Schema。菜单不携带 handler、OneBot API 名、凭据、`ToolEffect` 或授权位；执行时仍由目标 Matcher 复核群权限、次数、黑名单和业务状态。
+分类模型只能返回第一列 `qi_group_admin`。随后主模型才看到该插件的详细菜单和严格 `command` Schema：顶层禁止额外字段，`command` 只能是 1～1024 字字符串。说明使用候选 generation 构建时冻结的真实 NoneBot `command_start`：有 `/` 时优先 `/`，否则选最短且字典序最前的前缀；配置允许空前缀时会直接移除 `<命令前缀>` 占位符，并列出其他有效前缀。模型不需要也不允许猜测占位文本。菜单不携带 handler、OneBot API 名、凭据、`ToolEffect` 或授权位；执行时仍由目标 Matcher 复核群权限、次数、黑名单和业务状态。
 
 因此“给我点个赞”应先召回 `qi_group_admin`，再生成插件本来支持的“点赞/赞我”消息，最终仍走该插件的 `bot.send_like` 与每日次数逻辑。不要注册一个允许模型任意填写 API 名和参数的 `bot.call_api` 工具，那会绕过业务层。
 
-兼容 Matcher 的消息输出钩子覆盖 OneBot V11 的 `send_msg`、`send_group_msg`、`send_private_msg`，以及 OneBot V12 的 `send_message`，用于把目标插件的文本/图片结果收回工具 observation；`send_like` 不属于消息输出，不会被钩子吞掉或伪造成文本结果，仍由目标插件真实调用。
+兼容 Matcher 的消息输出钩子覆盖 OneBot V11 的 `send_msg`、`send_group_msg`、`send_private_msg`，以及 OneBot V12 的 `send_message`。`on_calling_api` 只暂存候选内容，只有 `on_called_api` 明确成功才会把文本/图片计入工具结果；失败发送不会再被发送前参数伪装成成功。`send_like` 不属于消息输出，不会被钩子吞掉；协议策略确认它成功且 Matcher 没有文本时，结果记为 `matched_side_effect`。
+
+兼容执行固定使用以下状态，不以“metadata 非空”代替真实成功：
+
+| 状态 | 含义 | 是否作为成功结果交给模型 |
+| --- | --- | --- |
+| `matched_with_output` | Matcher 命中，且 Adapter 已确认文本或图片发送成功 | 是 |
+| `matched_side_effect` | Matcher 命中，且至少一个包内策略认定的变更 API 已确认成功 | 是 |
+| `partial_success` | 已有可验证输出/副作用，随后 Matcher 或 API 又失败 | 否；明确告知部分成功，整任务内禁止再次调用该工具 |
+| `matched_empty` | Matcher 命中，但只有读取 API 或没有可验证结果 | 否；相同参数不得重放 |
+| `not_matched` | 检查完成但没有 Matcher 规则命中 | 否；相同参数不得重放 |
+| `failed` / `timed_out` | 处理异常或超时，且没有已验证结果 | 否；相同参数不得重放 |
+| `admission_rejected` | 有界兼容队列没有接纳本次执行 | 否；映射为拒绝 |
+| `result_unknown` | API 调用后断连、网络错误或响应不确定，无法证明是否生效 | 否；整任务内禁止再次调用该工具 |
+
+工具循环记录 `(generation, tool_name, canonical_arguments_digest)`。失败的原样调用不会挤占后续“不同工具或实质不同参数”的机会；`partial_success` 和 `result_unknown` 绝不自动重试同一工具。
 
 0.26.0 另有默认关闭的[固定 OneBot / NapCat 协议工具](./protocol-tools.md)。它把 244 项接口完整收入离线审计清单，但只给模型展示人工策略允许、当前 Bot 支持且当前调用者有权使用的固定动作；永久拒绝项不会生成 Schema。业务菜单和协议动作发生意图冲突时默认仍以本节 Matcher 为先，不会用协议 Broker 绕过已有业务检查。
 
-PicMenu/QWeb 在 MoEllmChats 初始 generation 之后才完成内存同步时，在隔离测试实例执行一次 `刷新工具` 即可发布新目录，无需把全部插件加入常驻，也无需重启 NoneBot。QWeb 后续目录 generation 变化同样需要触发一次工具重载，才能进入新的不可变 `RuntimeSnapshot`。
+PicMenu/QWeb 在 MoEllmChats 初始 generation 之后才完成内存同步时，默认 watcher 会在 `runtime_watch_interval_seconds` 的一个监控周期内检测摘要变化并自动发布新目录，无需把全部插件加入常驻，也无需重启 NoneBot。`刷新工具` 仍可用于人工立即收敛和诊断；摘要不变不会重复发布，读取异常则继续使用上一有效目录。
 
 ### 配置格式
 
@@ -73,7 +91,16 @@ PicMenu/QWeb 在 MoEllmChats 初始 generation 之后才完成内存同步时，
     "name": "百科搜索与群词条记忆",
     "description": "查询百科词条；也能按用户明确要求记录或遗忘群词条。",
     "usage": "查询：`[词汇]是什么?`\n记录：`记住 [A] 是 [B]`\n遗忘：`忘记 [A]`",
-    "dependencies": []
+    "dependencies": [],
+    "menu_data": [
+      {
+        "func": "查询词条",
+        "brief_des": "查询一个明确词条",
+        "trigger_method": "消息触发",
+        "trigger_condition": "[词汇]是什么?",
+        "llm_intents": ["帮我查询这个词条", "这个词条是什么意思"]
+      }
+    ]
   }
 }
 ```
@@ -85,6 +112,7 @@ PicMenu/QWeb 在 MoEllmChats 初始 generation 之后才完成内存同步时，
 | `description` | 是 | 说明什么时候该调用，也要写清“不适用”的情况 |
 | `usage` | 是 | 目标 Matcher 能识别的精确命令格式；不要只写自然语言概述 |
 | `dependencies` | 可选 | 分类选中本插件时一并注入的已存在工具标识数组 |
+| `menu_data` | 可选 | 功能级目录；功能可声明 `llm_intents` 精确别名，但仍不会改变插件权限或创建 handler |
 
 存在显式覆写时，自动 PicMenu/元数据菜单不会再合并，避免两套说明互相打架。若希望在覆写里继续提供功能目录，可增加与 `PluginMetadata` 相同格式的 `menu_data` 数组；否则分类模型只看到该覆写的名称和描述。主模型被选中后才看到完整 `usage`。`dependencies` 只是让依赖工具一并进入 Schema，不会预先执行它们，也不能绕过黑名单或权限。
 

@@ -1727,3 +1727,17 @@ Admin API
 届时 MoEllmChats 的定位将不再只是聊天插件，而更接近：
 
 > 面向 NoneBot / QQ 的可扩展 Agent Runtime。
+
+---
+
+# K-11：工具进度与恢复状态真实性（0.26.5）
+
+完整实施证据见 [K-11 专项状态](./13-tool-progress-execution-truth-20260901.md)。本节点依赖 K-10 的参数级重复限次与固定进度管理入口，顺序固定为：
+
+1. 逐调用确定性进度标题和 1 秒有界发送；
+2. 同一次工具决策响应的可选自然话术及固定 `SUPERUSER` 管理命令；
+3. NoneBot API 计数拆分、只读失败恢复与真正部分成功 observation；
+4. 0.26.5 配置、命令、架构、排错、安装、依赖和规划同步；
+5. 串行四版本、sandbox、制品、包外加载和实现/证据双 Actions。
+
+当前基线固定为 `7693b4de1c9240dccde8773557623056a51fa3b4`。实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已通过定向 `148 passed`、Python 3.10～3.13 串行普通全量各 `3129 passed, 1 skipped`、mandatory root sandbox `41 passed, 0 skipped`、静态/仓库检查、fresh wheel/sdist、Twine、四组包外加载及精确 push/pull_request 双 Actions；纯证据提交自身双 Actions 尚待关闭。这些不是生产证据。K-11 不新增运行依赖、数据库 migration、Redis key 或后台任务，也不操作七七、真实模型或 QQ。

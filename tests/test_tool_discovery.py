@@ -12,9 +12,14 @@ from nonebot_plugin_moellmchats.tool_discovery import (
     DISCOVERY_FEATURES_KEY,
     MAX_DISCOVERY_CATALOG_CHARS,
     MAX_DISCOVERY_FEATURES,
+    PicMenuProjectionSnapshot,
+    build_intent_owner_index,
     build_plugin_catalog_entries,
+    discovery_directory_identity,
     finalize_discovery_catalog,
+    normalize_llm_intent,
     normalize_menu_data,
+    resolve_business_intent,
     with_menu_discovery,
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolManager, ToolSnapshot
@@ -28,6 +33,7 @@ def _like_menu() -> list[dict[str, object]]:
             "trigger_condition": "<命令前缀>点赞 或 赞我 或 七七赞我",
             "brief_des": "<ft color=green>请求机器人给自己点赞</ft>",
             "detail_des": ("<ft size=40 color=green>每天可请求一次，随机获得1-10个赞</ft>"),
+            "pmn_llm_intents": ["给我点个赞", "给我点赞"],
         },
         {
             "func": "资料卡点赞通知",
@@ -74,6 +80,7 @@ def test_menu_metadata_becomes_bounded_clean_discovery_features() -> None:
         },
     )
     assert features[0]["invocable"] is True
+    assert features[0]["llm_intents"] == ("给我点个赞", "给我点赞")
     assert features[1]["invocable"] is False
     assert features[2]["permission"] == "普通用户"
     assert features[2]["triggers"] == (
@@ -285,6 +292,7 @@ def test_loaded_picmenu_memory_catalog_overrides_metadata_without_file_coupling(
             SimpleNamespace(type="command", value="<命令前缀>点赞"),
             SimpleNamespace(type="command", value="<命令前缀>给我点赞"),
         ],
+        llm_intents=["给我点个赞", "给我点赞"],
     )
     installed_catalog = [
         SimpleNamespace(
@@ -318,3 +326,162 @@ def test_loaded_picmenu_memory_catalog_overrides_metadata_without_file_coupling(
         {"type": "command", "value": "<命令前缀>点赞"},
         {"type": "command", "value": "<命令前缀>给我点赞"},
     )
+    assert info[DISCOVERY_FEATURES_KEY][0]["llm_intents"] == (
+        "给我点个赞",
+        "给我点赞",
+    )
+
+
+def test_business_intent_aliases_are_exact_normalized_and_fail_closed() -> None:
+    qi_post = with_menu_discovery(
+        {"name": "群报告"},
+        [
+            {
+                "func": "今日发言排行",
+                "brief_des": "今日排行",
+                "trigger_method": "命令",
+                "trigger_condition": "B话榜 今日",
+                "pmn_llm_intents": [
+                    "今天谁发言最多",
+                    "今日发言排行",
+                ],
+            }
+        ],
+    )
+    owners = build_intent_owner_index({"qi_post": qi_post})
+    assert normalize_llm_intent("  今天，谁发言最多？！ ") == (
+        normalize_llm_intent("今天谁发言最多")
+    )
+    unique = resolve_business_intent(
+        "今天，谁发言最多？！",
+        owners=owners,
+        loaded_plugins={"qi_post": qi_post},
+        is_superuser=False,
+        is_blacklisted=lambda _name: False,
+    )
+    assert unique.status == "unique"
+    assert unique.owner == "qi_post"
+    assert resolve_business_intent(
+        "今天谁发言比较多",
+        owners=owners,
+        loaded_plugins={"qi_post": qi_post},
+        is_superuser=False,
+        is_blacklisted=lambda _name: False,
+    ).status == "no_match"
+    assert resolve_business_intent(
+        "今天谁发言最多",
+        owners=owners,
+        loaded_plugins={},
+        is_superuser=False,
+        is_blacklisted=lambda _name: False,
+    ).status == "unavailable"
+    assert resolve_business_intent(
+        "今天谁发言最多",
+        owners=owners,
+        loaded_plugins={"qi_post": qi_post},
+        is_superuser=False,
+        is_blacklisted=lambda _name: True,
+    ).status == "unavailable"
+
+    duplicate = build_intent_owner_index(
+        {
+            "qi_post": qi_post,
+            "wrong_owner": with_menu_discovery(
+                {"name": "错误所有者"},
+                [
+                    {
+                        "func": "错误排行",
+                        "brief_des": "不得猜测",
+                        "trigger_method": "命令",
+                        "trigger_condition": "错误排行",
+                        "pmn_llm_intents": ["今天谁发言最多"],
+                    }
+                ],
+            ),
+        }
+    )
+    assert resolve_business_intent(
+        "今天谁发言最多",
+        owners=duplicate,
+        loaded_plugins={"qi_post": qi_post, "wrong_owner": {}},
+        is_superuser=True,
+        is_blacklisted=lambda _name: False,
+    ).status == "ambiguous"
+
+
+def test_hidden_intent_owner_requires_superuser_visibility() -> None:
+    info = with_menu_discovery(
+        {"name": "后台"},
+        [
+            {
+                "func": "隐藏功能",
+                "brief_des": "隐藏",
+                "trigger_method": "命令",
+                "trigger_condition": "隐藏功能",
+                "pmn_hidden": True,
+                "pmn_llm_intents": ["执行隐藏维护"],
+            }
+        ],
+    )
+    owners = build_intent_owner_index({"admin_plugin": info})
+    normal = resolve_business_intent(
+        "执行隐藏维护",
+        owners=owners,
+        loaded_plugins={"admin_plugin": info},
+        is_superuser=False,
+        is_blacklisted=lambda _name: False,
+    )
+    superuser = resolve_business_intent(
+        "执行隐藏维护",
+        owners=owners,
+        loaded_plugins={"admin_plugin": info},
+        is_superuser=True,
+        is_blacklisted=lambda _name: False,
+    )
+    assert normal.status == "unavailable"
+    assert superuser.status == "unique"
+
+
+def test_picmenu_projection_is_deeply_immutable_and_digest_bound() -> None:
+    feature = SimpleNamespace(
+        func="排行",
+        trigger_method="命令",
+        trigger_condition="B话榜 今日",
+        brief_des="今日排行",
+        detail_des="今日排行详情",
+        hidden=False,
+        triggers=[SimpleNamespace(type="command", value="B话榜 今日")],
+        llm_intents=["今天谁发言最多"],
+    )
+    infos = [
+        SimpleNamespace(
+            plugin_id="qi_post",
+            name="群报告",
+            description="排行",
+            usage="所有群成员",
+            pm_data=[feature],
+        )
+    ]
+    snapshot = PicMenuProjectionSnapshot.from_infos(infos)
+    assert snapshot.plugin_count == 1
+    assert snapshot.feature_count == 1
+    assert len(snapshot.digest) == 64
+    menu = snapshot.plugins["qi_post"]["menu_data"]
+    assert isinstance(menu, tuple)
+    try:
+        menu[0]["func"] = "漂移"
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("PicMenu projection must be deeply immutable")
+
+    plugin_info = {
+        "qi_post": with_menu_discovery(
+            {"name": "群报告"},
+            snapshot.plugins["qi_post"]["menu_data"],
+        )
+    }
+    owners = build_intent_owner_index(plugin_info)
+    count, digest = discovery_directory_identity(plugin_info, owners)
+    assert count == 1
+    assert len(digest) == 64

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from nonebot_plugin_moellmchats import ast_policy as ast_policy_module
 from nonebot_plugin_moellmchats.ast_policy import (
     PolicyDecision,
@@ -64,9 +66,14 @@ def test_generated_dynamic_features_and_process_calls_are_denied() -> None:
 
 
 def test_missing_network_capability_is_structured_blocker() -> None:
-    denied = _analyze("import socket\nasync def probe():\n    return socket.socket()\n")
+    source = (
+        "async def probe():\n"
+        "    response = await safe_request('https://api.example/data')\n"
+        "    return response.text\n"
+    )
+    denied = _analyze(source)
     allowed = _analyze(
-        "import socket\nasync def probe():\n    return socket.socket()\n",
+        source,
         source_type="custom_file",
         network=True,
     )
@@ -142,11 +149,10 @@ def test_handler_reports_propagate_only_reachable_helper_effects() -> None:
 
 def test_custom_capability_is_evaluated_per_reachable_handler() -> None:
     source = (
-        "def _network_helper():\n"
-        "    import socket\n"
-        "    return socket.socket()\n"
+        "async def _network_helper():\n"
+        "    return await safe_request('https://api.example/data')\n"
         "async def fetch():\n"
-        "    return _network_helper()\n"
+        "    return await _network_helper()\n"
         "async def local():\n"
         "    return 1\n"
         "def _unused_network():\n"
@@ -520,6 +526,75 @@ def test_orm_and_unknown_http_writes_are_conservatively_mutating() -> None:
         assert report.for_handler(name).detected_effect is ToolEffect.MUTATING
     for name in ("urlopen_get", "pool_get"):
         assert report.for_handler(name).detected_effect is ToolEffect.READ_ONLY
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import aiohttp\nasync def probe():\n    return aiohttp.ClientSession()\n",
+        "import httpx\nasync def probe():\n    return await httpx.AsyncClient().get('https://api.example')\n",
+        "import requests\nasync def probe():\n    return requests.get('https://api.example')\n",
+        "import urllib.request\nasync def probe():\n    return urllib.request.urlopen('https://api.example')\n",
+        "import socket\nasync def probe():\n    return socket.socket()\n",
+    ],
+)
+def test_custom_file_rejects_raw_network_clients_even_when_authorized(
+    source: str,
+) -> None:
+    report = _analyze(
+        source,
+        source_type="custom_file",
+        network=True,
+    )
+
+    assert report.allowed is False
+    assert any(item.code == "network.raw_client" for item in report.findings)
+
+
+def test_safe_request_effect_follows_fixed_or_dynamic_http_method() -> None:
+    read_only = _analyze(
+        "async def probe():\n"
+        "    first = await safe_request('https://api.example')\n"
+        "    second = await safe_request('https://api.example', method='HEAD')\n"
+        "    return first.text + second.text\n",
+        source_type="custom_file",
+        network=True,
+    )
+    mutating = _analyze(
+        "async def probe(method):\n"
+        "    await safe_request('https://api.example', method='POST', body='x')\n"
+        "    return await safe_request('https://api.example', method=method)\n",
+        source_type="custom_file",
+        network=True,
+    )
+
+    assert read_only.detected_effect is ToolEffect.READ_ONLY
+    assert mutating.detected_effect is ToolEffect.MUTATING
+
+
+def test_walrus_aliases_preserve_process_network_and_mutating_evidence() -> None:
+    process = _analyze(
+        "import os\nasync def probe():\n    return (runner := os.system)('id')\n",
+        source_type="custom_file",
+    )
+    network = _analyze(
+        "import requests\nasync def probe():\n"
+        "    return (fetch := requests.get)('https://api.example')\n",
+        source_type="custom_file",
+        network=True,
+    )
+    mutating = _analyze(
+        "from pathlib import Path\nasync def probe():\n"
+        "    return (write := Path.write_text)(Path('x'), 'value')\n",
+        source_type="custom_file",
+    )
+
+    assert process.allowed is False
+    assert any(item.capability == "process" for item in process.findings)
+    assert process.detected_effect is ToolEffect.MUTATING
+    assert network.allowed is False
+    assert any(item.code == "network.raw_client" for item in network.findings)
+    assert mutating.detected_effect is ToolEffect.MUTATING
 
 
 def test_call_graph_limit_fails_closed(monkeypatch) -> None:

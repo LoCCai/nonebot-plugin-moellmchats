@@ -315,10 +315,12 @@ async def format_message(event, bot) -> dict:
             pass
         elif msgseg.type == "text":
             if plain := msgseg.data.get("text", ""):
-                if plain.startswith("ai"):
-                    text_message.append(plain[2:])
-                else:
-                    text_message.append(plain)
+                # Strip only the standalone, case-insensitive wake word.  Text
+                # such as ``airpods`` or ``ai助手`` is ordinary user content.
+                wake_word = re.match(r"(?i)^ai(?=$|[\s\u3000])", plain)
+                if wake_word is not None:
+                    plain = plain[wake_word.end() :].lstrip()
+                text_message.append(plain)
 
     return {
         "text": text_message,

@@ -1,11 +1,14 @@
+import hashlib
 import re
 
 from nonebot.log import logger
 import ujson as json
 
 from .categorize import Categorize
+from .config import config_parser
 from .model_capabilities import ModelCapability
 from .model_selector import model_selector
+from .onebot_facade import event_group_id
 from .tool_schema_cache import (
     ToolSchemaCacheUnavailableError,
     ToolSchemaRecord,
@@ -62,6 +65,9 @@ class LlmPayloadMixin:
     async def _prepare_model_info(self, plain: str):
         """预处理：获取模型信息、处理难度分类与视觉判断"""
         self._tool_schema_record = None
+        self.tool_intent_digest = hashlib.sha256(
+            plain.encode("utf-8")
+        ).hexdigest()
         self.required_plugins = []
         difficulty = "1"
         # 1. 绝对的客观事实：只要真实提取到了图片URL，就必定触发视觉处理，不再完全依赖大模型分类判断
@@ -92,14 +98,17 @@ class LlmPayloadMixin:
                 runtime_generation=(
                     resources.generation if resources is not None else None
                 ),
+                scene=("group" if event_group_id(self.event) is not None else "private"),
             )
             category_result = await category.get_category()
+            self.tool_selection_source = category.selection_source
             if isinstance(category_result, str):
                 return category_result
             if isinstance(category_result, tuple):
                 difficulty, vision_required, required_plugins = category_result
                 logger.info(
-                    f"难度：{difficulty}, 视觉：{vision_required}, 需要插件：{required_plugins}"
+                    f"难度：{difficulty}, 视觉：{vision_required}, "
+                    f"需要插件：{required_plugins}, 选择来源：{self.tool_selection_source}"
                 )
                 self.required_plugins = required_plugins
                 has_image = has_image or vision_required
@@ -261,13 +270,32 @@ class LlmPayloadMixin:
 
             mention_hint = self._build_tool_mention_hint()
 
+            progress_enabled = config_parser.get_config(
+                "tool_progress_messages_enabled",
+                True,
+            )
+            model_preface_enabled = config_parser.get_config(
+                "tool_progress_model_preface_enabled",
+                False,
+            )
+            if progress_enabled and model_preface_enabled:
+                progress_rule = (
+                    "1. 调用工具时，可以在本次回复的文本(content)中用简短的一句话说明你要做什么，"
+                    "并在同一次回复中立刻发起 tool_calls；运行时会把这句话附在可信的固定进度提示后，"
+                    "不得提前声称成功。"
+                )
+            else:
+                progress_rule = (
+                    "1. 调用工具时不要输出执行前话术，直接在同一次回复中发起 tool_calls；"
+                    "固定进度提示由运行时按配置发送，工具结果和最终总结仍须正常输出。"
+                )
             send_message_list[0]["content"] += (
-                "。特别注意：1. 同步执行：如果你需要调用工具，必须在本次回复的文本(content)中用简短的一句话"
-                "说明你要做什么，并**在同一次回复中立刻发起工具调用(tool_calls)**！"
-                "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
-                "**自动且连续地调用下一个工具**，直至彻底完成要求。"
+                "。特别注意："
+                + progress_rule
+                + "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
+                "自动且连续地调用下一个工具，直至彻底完成要求。"
                 "3. 工具执行结束后，原始数据将被清理。因此你最终呈现给用户的回复content中，"
-                "**必须完整包含查询到的核心数据和关键结论**，这将作为你下一轮对话的记忆依据！"
+                "必须完整包含查询到的核心数据和关键结论，这将作为你下一轮对话的记忆依据。"
             )
 
             if mention_hint:

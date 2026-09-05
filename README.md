@@ -35,6 +35,14 @@
 
 - **完整紧凑目录 + 命中后展开（Function Calling）**：优先复用 PicMenu/QWeb 内存目录或 `PluginMetadata.extra.menu_data` 判断功能意图，只把命中插件的详细 Tool Schema 注入主模型；`resident_plugins` 仅作强制注入/诊断兜底，也支持原生 Python 工具与人工覆写
 
+- **0.26.2 业务所有者与真实执行状态**：功能可声明有界 `llm_intents` 精确别名，唯一可用所有者纠正分类模型，重复/隐藏/黑名单/未加载均 fail closed；NoneBot 兼容调用只有在 Adapter 成功回调后才确认输出或副作用，并区分未命中、空命中、部分成功与结果不确定，避免“模型说做了”被误当成真实成功
+
+- **0.26.3 取消、并发与安全联网加固**：统一 Python 3.10～3.13 超时/取消语义，确保 PostgreSQL rollback/close 和 spool 清理在连续取消下仍能 settle；分类缓存按 generation 和完整 key 做 single-flight；Custom File 联网只能经 IP 固定、逐跳重验的 `safe_request`，并阻断直接网络客户端与 walrus 别名绕过
+
+- **0.26.4 分类超时与工具循环修复**：分类传输超时立即降级，不再占用 JSON 解析重试；服务商 400/异常正文不进入日志；工具重复上限按 generation、工具名和规范化参数摘要计算；超级管理员可用固定指令 `设置工具进度 开/关` 即时切换前置提示
+
+- **0.26.5 工具进度与恢复状态真实性**：每个通过 Schema、权限、信任和重复检查的调用都会得到一条运行时固定进度提示；可选自然话术复用同一次工具决策响应并安全合并，不增加模型请求。已知只读 API 失败后由已确认输出恢复时不再伪装成 `partial_success`，真正的部分成功会明确保留已对用户可见的内容
+
 - **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
 
 - **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
@@ -43,7 +51,7 @@
 
 - **0.25 工具包热插拔**：超级管理员可让聊天模型生成工具草稿，由总结模型复核并分页核对 manifest、源码、测试、风险、capability、diff 与 SHA-256；批准时必须同时提交草稿 ID、至少 8 位内容哈希前缀和页面给出的完整 64 位 review stamp。`lifecycle_state.json` schema v3 以 revision/state digest CAS 管理唯一活动版本，并兼容读取 schema v2；版本按完整哈希只读保存，可无重启停用或回滚。生成工具即使声明 `permission=user`，也会默认以 `superuser` 生效，只有超管对精确包哈希和工具做人工授权后才可向普通用户开放
 
-- **Capability 受控的隔离 runner**：文件和生成工具不在 NoneBot 主进程执行，使用 nobody、环境变量白名单、资源上限、独立进程组和全局单并发。Capability 严格限定为五个布尔字段：`network`、`process`、`workspace`、`host_filesystem`、`secrets`；effective 值取申请与管理上限的交集。Generated Tool 的管理上限只开放私有 workspace；Custom File 只有静态字面量声明才能放宽能力。`secrets` 仍是预留字段，即使为 true 也不会注入宿主密钥。完整路径要求 Linux，隔离前提不足时 fail closed，详见[自定义工具文档](docs/custom-tools.md#runner-隔离边界与运行要求)
+- **Capability 受控的隔离 runner**：文件和生成工具不在 NoneBot 主进程执行，使用 nobody、环境变量白名单、资源上限、独立进程组和全局单并发。Capability v2 可表达 network 主机 allowlist、workspace/host 读写及预留的 database/bot/secrets 权限；旧五布尔格式仍兼容，effective 始终取申请与管理上限的交集。Generated Tool 的管理上限只开放私有 workspace；Custom File 只有静态字面量声明才能放宽能力，联网仍只能经 `safe_request`。`secrets` 即使获准也不会注入宿主密钥。完整路径要求 Linux，隔离前提不足时 fail closed，详见[自定义工具文档](docs/custom-tools.md#runner-隔离边界与运行要求)
 
 - **结构化预检与固定制品**：Custom File / Generated 候选 generation 会先经过输出 `ALLOW` / `DENY` / `CAPABILITY_REQUIRED` / `RISK` 的 AST Policy，再把源码、Schema 和安全契约固化为不可变 `ToolArtifact`；执行前复核 artifact digest，Generated Tool 还会复核 bundle digest，活动请求不会回读后来被修改的源文件
 
@@ -51,24 +59,25 @@
 
 ## 📦 安装
 
-截至 2026-08-28，进入 0.26.0 协议阶段前最后一个完成精确 push/PR 双门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，对应 run `33134760223` / `33134761967`；`bbc3963…` 只是更早的历史实现点。0.26.0 的精确源码提交和门禁状态以 [K 阶段实施状态](docs/规划/08-onebot-napcat-protocol-tools.md) 为准，不能把移动分支或本地脏工作树称为候选制品。不要把上游或默认 `master` 当成本轮集成 base；PyPI 是否已有 0.26.0 也必须独立核对。
+0.26.5 已按 [K-11 工具进度与恢复状态真实性](docs/规划/13-tool-progress-execution-truth-20260901.md) 完成实现与精确双 Actions 门禁。当前隔离测试恢复点是完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，不会在本任务中合并；PyPI 和七七实际安装状态必须分别核对。本证据提交还必须通过自身双 Actions，最终结果直接交付，不再创建第三个自指提交。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 
-### 使用 uv 安装（推荐）
+### 项目使用 uv 时
 
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
+uv add "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
-### 使用 pip 安装
+### 项目使用 pip/venv 时
 
 在 nonebot2 项目的根目录下打开命令行，输入以下指令即可安装：
 
 ```bash
-pip install "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@79d2268930251773cb4e91cdd9b13a9ec36a7d14"
+python -m pip install \
+  "nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-plugin-moellmchats.git@e704092a1e8d9ad215e4e9de35a9fe403483d56f"
 ```
 
 
@@ -114,7 +123,7 @@ COMMAND_START=["/",""]   # 可选
 
 **[→ 完整配置参考（含所有字段说明与示例）](docs/configuration.md)**
 
-文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)
+文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [故障排查](docs/troubleshooting.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)
 
 ## 🎮 使用
 
@@ -137,6 +146,8 @@ COMMAND_START=["/",""]   # 可选
 |        设置分类模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                    设置分类模型，如：`设置分类模型 1`                     |
 |        设置总结模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                设置工具包复核等总结任务使用的模型                         |
 |      设置工具/函数调用      | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    |              控制是否开启函数调用机制，如：`设置工具调用 开`              |
+|          设置工具进度       | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    | 工具进度总开关；开启时每个获准调用各发一条固定提示，如：`/设置工具进度 关` |
+|       设置工具自然话术      | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    | 将同一次工具决策中的一句脱敏自然话术合入固定提示；默认关闭，不增加模型请求 |
 |          刷新工具           | 超级管理员 | 私聊 / 群聊 |         无         | 原子热重载工具；成功显示新 generation 与分类计数，失败保留旧 generation |
 |          重载LLM            | 超级管理员 | 私聊 / 群聊 |         无         | 原子重载全部运行资源；失败时保留上一代快照 |
 |        查看LLM状态          | 超级管理员 | 私聊 / 群聊 |         无         | 查看队列、拒绝、缓存、工具、投递与最近重载状态 |

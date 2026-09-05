@@ -29,6 +29,7 @@ from nonebot_plugin_moellmchats.runtime_snapshot import (
     RuntimeSnapshot,
     runtime_snapshots,
 )
+from nonebot_plugin_moellmchats.tool_discovery import PicMenuProjectionSnapshot
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
 
 _SOURCE = """async def date_difference(value: int) -> str:
@@ -38,6 +39,7 @@ _TESTS = """async def run_tests(tool_module):
     assert await tool_module.date_difference(3) == "result=3"
     return "1 passed"
 """
+_EMPTY_PICMENU = PicMenuProjectionSnapshot.empty()
 
 
 def _generated_manifest() -> dict:
@@ -108,6 +110,9 @@ def _snapshot(generation: int, state: LifecycleState) -> RuntimeSnapshot:
         generated_state_revision=state.revision,
         generated_state_digest=state.state_digest,
         generated_active=state.active,
+        picmenu_plugin_count=_EMPTY_PICMENU.plugin_count,
+        picmenu_feature_count=_EMPTY_PICMENU.feature_count,
+        picmenu_digest=_EMPTY_PICMENU.digest,
     )
     return RuntimeSnapshot(
         generation=generation,
@@ -149,7 +154,12 @@ def _configure_transaction(
     monkeypatch.setattr(
         reloader,
         "fingerprint",
-        lambda *, generated_state=None: (("stable",),),
+        lambda *, generated_state=None, picmenu_projection=None: (("stable",),),
+    )
+    monkeypatch.setattr(
+        reloader,
+        "_capture_picmenu_projection",
+        lambda: _EMPTY_PICMENU,
     )
     monkeypatch.setattr(reloader, "_record_reload_success", lambda _snapshot: None)
     monkeypatch.setattr(reloader, "_record_reload_failure", lambda _error: None)
@@ -181,11 +191,13 @@ async def test_generated_change_builds_exact_after_state_and_override_snapshot(
         *,
         generated_state: LifecycleState,
         generated_source_overrides,
+        picmenu_projection: PicMenuProjectionSnapshot,
     ) -> _RuntimeCandidate:
         received.update(
             generation=generation,
             state=generated_state,
             overrides=generated_source_overrides,
+            picmenu_projection=picmenu_projection,
         )
         return _candidate(generation, generated_state)
 
@@ -207,6 +219,7 @@ async def test_generated_change_builds_exact_after_state_and_override_snapshot(
     assert received["generation"] == previous.generation + 1
     assert received["state"] is change.plan.after_state
     assert received["overrides"] is change.generated_source_overrides
+    assert received["picmenu_projection"] is _EMPTY_PICMENU
     assert value is change.result
 
 
@@ -334,7 +347,11 @@ async def test_post_publish_fingerprint_failure_keeps_success_and_retries(
         canonical["state"] = change.plan.after_state
         return canonical["state"]
 
-    def fingerprint(*, generated_state=None) -> tuple:
+    def fingerprint(
+        *,
+        generated_state=None,
+        picmenu_projection=None,
+    ) -> tuple:
         nonlocal fingerprint_calls
         fingerprint_calls += 1
         if fingerprint_calls == 3:
@@ -510,8 +527,10 @@ async def test_ordinary_reload_rejects_lifecycle_drift_during_candidate_build(
         generation: int,
         *,
         generated_state: LifecycleState,
+        picmenu_projection: PicMenuProjectionSnapshot,
     ) -> _RuntimeCandidate:
         assert generated_state is before
+        assert picmenu_projection is _EMPTY_PICMENU
         canonical["state"] = change.plan.after_state
         return _candidate(generation, generated_state)
 
@@ -567,7 +586,7 @@ def _configure_real_generated_loader(
     monkeypatch.setattr(
         reload_module.tool_manager,
         "build_plugin_info",
-        lambda: {},
+        lambda *, picmenu_projection: {},
     )
 
     def build_generated_candidate(
@@ -669,7 +688,7 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     monkeypatch.setattr(
         first,
         "fingerprint",
-        lambda *, generated_state=None: (
+        lambda *, generated_state=None, picmenu_projection=None: (
             (
                 "generated",
                 generated_state.revision,
@@ -762,7 +781,7 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     monkeypatch.setattr(
         second,
         "fingerprint",
-        lambda *, generated_state=None: (
+        lambda *, generated_state=None, picmenu_projection=None: (
             (
                 "generated",
                 (

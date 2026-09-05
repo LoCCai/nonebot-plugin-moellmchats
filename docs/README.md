@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档面向 0.26.0 开发候选。进入本阶段前最后一个已完成双远端门禁的 0.25 基线是 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，push/PR run 为 `33134760223` / `33134761967`；它不包含本页新增的全量协议工具。0.26.0 的精确实现 SHA 和门禁证据记录在[实施状态](./规划/08-onebot-napcat-protocol-tools.md)，未完成前不得把分支名当成可复现版本。PyPI 与七七安装状态是独立结论。
+> 当前文档已同步 0.26.5 K-11 源码契约；精确实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 的 push / PR 双 Actions 已全绿，可作为隔离测试恢复点。本证据提交仍须通过自身双 Actions。完整边界见[K-11 实施状态](./规划/13-tool-progress-execution-truth-20260901.md)，PR #5 不在本任务合并，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
@@ -18,12 +18,18 @@
 | [244 项协议动作总表](./protocol-actions.md) | 固定版本离线清单、逐动作暴露策略、请求字段与永久拒绝原因 |
 | [自定义工具开发](./custom-tools.md) | 隔离文件工具 capability、runner 边界与 AI 工具包热插拔 |
 | [NoneBot 插件与 ToolSpec 接入](./plugin-integration.md) | 兼容已有 Matcher，或编写强类型函数供 AI 调用 |
+| [故障排查](./troubleshooting.md) | 选错插件、Matcher 未命中、空结果、部分成功、结果不确定、重复拦截和进度提示 |
 | [性格系统](./personality.md) | `temperaments.json` 性格预设配置与用户切换管理 |
 | [完整指令表](./commands.md) | 所有 Bot 指令的参数与权限说明，包括二阶段确认、生成工具权限与请求管理 |
 | [Plan 1 完成审计](./规划/05-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
 | [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
 | [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
 | [全量 OneBot / NapCat 协议工具实施状态](./规划/08-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
+| [业务路由与执行状态真实性](./规划/09-business-routing-execution-truth.md) | 0.26.2 K-08 的目录竞态、唯一所有者、命令、真实状态、重试和门禁 |
+| [当前基线审查修复](./规划/10-code-review-fixes-20260829.md) | 0.26.3 K-09 的语义重放、取消清理、single-flight、安全 HTTP、AST/400 判定与门禁 |
+| [K-09 后续设计清单](./规划/11-pending-issues-backlog.md) | 未在 0.26.3 简化处理的 spool、usage、热缓存、排空、Redis、MCP 与结构问题 |
+| [LLM 运行事故修复](./规划/12-llm-runtime-incident-20260901.md) | 0.26.4 K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
+| [工具进度与恢复状态真实性](./规划/13-tool-progress-execution-truth-20260901.md) | 0.26.5 K-11 的逐调用固定提示、可选自然话术、只读失败恢复、部分成功总结和交付边界 |
 
 ---
 
@@ -62,4 +68,5 @@
 - [调度链路](./runtime-architecture.md)
 - [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [编写 ToolSpec 插件](./plugin-integration.md#方式二注册强类型-toolspec推荐)
+- [排查选错插件或调用失败](./troubleshooting.md)
 - [更新日志](../CHANGELOG.md)

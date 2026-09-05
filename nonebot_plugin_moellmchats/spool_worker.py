@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from . import platform_metrics as _platform_metrics
 from .audit_batch import AuditBatchQueue
 from .audit_event import AuditEventRecord
+from .compat import settle_awaitable
 from .database_engine import DatabaseEngineManager
 from .local_spool import (
     LocalSpoolDrainRequiredError,
@@ -69,6 +70,13 @@ class SpoolWriteCancellationUnknownError(
     asyncio.CancelledError,
 ):
     """Cancellation interrupted commit and therefore also carries unknown-result semantics."""
+
+
+class SpoolWriteCancellationCleanupError(
+    SpoolWriteError,
+    asyncio.CancelledError,
+):
+    """Cancellation remains primary, but pre-commit cleanup was not confirmed."""
 
 
 class SpoolWriteCommittedCleanupError(SpoolWriteError):
@@ -153,19 +161,30 @@ class PostgresSpoolRecordWriter(SpoolRecordWriter):
         return candidate
 
     @staticmethod
-    async def _rollback(session: AsyncSession) -> None:
-        try:
-            await session.rollback()
-        except BaseException:
-            return
+    async def _cleanup_session(
+        session: AsyncSession,
+        *,
+        rollback: bool,
+    ) -> tuple[tuple[BaseException, ...], bool]:
+        errors: list[BaseException] = []
+        interrupted = False
+        if rollback:
+            rollback_outcome = await settle_awaitable(session.rollback())
+            interrupted = rollback_outcome.interrupted
+            if rollback_outcome.error is not None:
+                errors.append(rollback_outcome.error)
+        close_outcome = await settle_awaitable(session.close())
+        interrupted = interrupted or close_outcome.interrupted
+        if close_outcome.error is not None:
+            errors.append(close_outcome.error)
+        return tuple(errors), interrupted
 
     @staticmethod
-    async def _close(session: AsyncSession) -> BaseException | None:
-        try:
-            await session.close()
-        except BaseException as error:
-            return error
-        return None
+    def _cleanup_suffix(errors: tuple[BaseException, ...]) -> str:
+        if not errors:
+            return ""
+        kinds = ",".join(_safe_error_type(error) for error in errors)
+        return f"；cleanup 未确认 ({kinds})"
 
     async def _write(
         self,
@@ -199,33 +218,60 @@ class PostgresSpoolRecordWriter(SpoolRecordWriter):
                     for record in audit_records:
                         await repository.append(record)
         except asyncio.CancelledError:
-            await self._rollback(session)
-            await self._close(session)
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=True,
+            )
+            if cleanup_errors:
+                raise SpoolWriteCancellationCleanupError(
+                    "PostgreSQL spool transaction 被取消且 cleanup 未确认"
+                    + self._cleanup_suffix(cleanup_errors)
+                ) from None
             raise
         except SpoolWorkerConfigurationError:
-            await self._rollback(session)
-            await self._close(session)
+            await self._cleanup_session(session, rollback=True)
             raise
         except Exception as error:
-            await self._rollback(session)
-            await self._close(session)
-            raise SpoolWriteUnwrittenError(f"PostgreSQL spool transaction 未写入 ({_safe_error_type(error)})") from None
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=True,
+            )
+            raise SpoolWriteUnwrittenError(
+                f"PostgreSQL spool transaction 未写入 ({_safe_error_type(error)})"
+                + self._cleanup_suffix(cleanup_errors)
+            ) from None
 
         try:
             await session.commit()
         except asyncio.CancelledError as error:
-            await self._close(session)
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=False,
+            )
             raise SpoolWriteCancellationUnknownError(
                 f"PostgreSQL spool commit 被取消且结果不可确认 ({_safe_error_type(error)})"
+                + self._cleanup_suffix(cleanup_errors)
             ) from None
         except Exception as error:
-            await self._close(session)
-            raise SpoolWriteResultUnknownError(f"PostgreSQL spool commit 结果不可确认 ({_safe_error_type(error)})") from None
+            cleanup_errors, _ = await self._cleanup_session(
+                session,
+                rollback=False,
+            )
+            raise SpoolWriteResultUnknownError(
+                f"PostgreSQL spool commit 结果不可确认 ({_safe_error_type(error)})"
+                + self._cleanup_suffix(cleanup_errors)
+            ) from None
 
-        close_error = await self._close(session)
-        if close_error is not None:
+        cleanup_errors, interrupted = await self._cleanup_session(
+            session,
+            rollback=False,
+        )
+        if interrupted:
+            raise asyncio.CancelledError
+        if cleanup_errors:
             raise SpoolWriteCommittedCleanupError(
-                f"PostgreSQL spool commit 已确认但 session 关闭失败 ({_safe_error_type(close_error)})"
+                "PostgreSQL spool commit 已确认但 session 关闭失败"
+                + self._cleanup_suffix(cleanup_errors)
             ) from None
 
     async def write_usage(self, records: tuple[ModelUsageRecord, ...]) -> None:
@@ -659,6 +705,7 @@ __all__ = [
     "SpoolWorkerPolicy",
     "SpoolWorkerResultUnknownError",
     "SpoolWorkerState",
+    "SpoolWriteCancellationCleanupError",
     "SpoolWriteCancellationUnknownError",
     "SpoolWriteCommittedCleanupError",
     "SpoolWriteError",

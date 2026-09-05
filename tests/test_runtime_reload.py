@@ -228,7 +228,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     monkeypatch.setattr(
         reload_module.tool_manager,
         "build_plugin_info",
-        lambda: {
+        lambda **_kwargs: {
             plugin_name: {
                 "name": "Runtime Plugin",
                 "description": "runtime plugin shadow",
@@ -325,9 +325,15 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         "legacy_plugin_names",
         "mcp_server_identifiers",
         "generated_state_revision",
-        "generated_state_digest",
-        "generated_active",
-    }
+            "generated_state_digest",
+            "generated_active",
+            "intent_owners",
+            "directory_entry_count",
+            "directory_digest",
+            "picmenu_plugin_count",
+            "picmenu_feature_count",
+            "picmenu_digest",
+        }
     provider_catalog = snapshot.provider_catalog
     assert provider_catalog is not None
     assert provider_catalog.schema_version == 3
@@ -595,7 +601,7 @@ async def test_builtin_plugin_collision_retains_previous_generation(
     monkeypatch.setattr(
         reload_module.tool_manager,
         "build_plugin_info",
-        lambda: {
+        lambda **_kwargs: {
             WEB_SEARCH_TOOL_SPEC.name: {
                 "name": "collision",
                 "description": "collision",
@@ -620,7 +626,7 @@ async def test_malformed_nonebot_plugin_candidate_retains_previous_generation(
     monkeypatch.setattr(
         reload_module.tool_manager,
         "build_plugin_info",
-        lambda: {"plugin_malformed": []},
+        lambda **_kwargs: {"plugin_malformed": []},
     )
 
     with pytest.raises(TypeError, match="NoneBot 插件"):
@@ -639,7 +645,7 @@ async def test_nonebot_plugin_parity_drift_retains_previous_generation(
     monkeypatch.setattr(
         reload_module.tool_manager,
         "build_plugin_info",
-        lambda: {
+        lambda **_kwargs: {
             "plugin_parity": {
                 "description": "plugin parity",
                 "usage": "/parity",
@@ -784,6 +790,60 @@ async def test_watcher_fingerprint_does_not_block_event_loop(monkeypatch) -> Non
     await asyncio.sleep(0.01)
     assert not task.done()
     await task
+
+
+@pytest.mark.asyncio
+async def test_watcher_preserves_published_empty_picmenu_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reloader = RuntimeReloader()
+    empty = (("picmenu-memory", "empty", 0, 0),)
+    full = (("picmenu-memory", "full", 28, 199),)
+    reloader._fingerprint = empty
+    reloaded = asyncio.Event()
+    never = asyncio.Event()
+
+    def fingerprint() -> tuple:
+        return full
+
+    async def reload(reason: str) -> ReloadResult:
+        assert reason == "file-watch"
+        reloader._fingerprint = full
+        reloaded.set()
+        return ReloadResult(
+            generation=2,
+            changed=(reason,),
+            custom_tools=0,
+            mcp_tools=0,
+        )
+
+    async def controlled_sleep(_delay: float) -> None:
+        if reloaded.is_set():
+            await never.wait()
+
+    from nonebot_plugin_moellmchats import runtime_reload as reload_module
+
+    monkeypatch.setattr(reloader, "fingerprint", fingerprint)
+    monkeypatch.setattr(reloader, "reload", reload)
+    monkeypatch.setattr(reloader, "_watch_sleep", controlled_sleep)
+    monkeypatch.setattr(
+        reload_module.config_parser,
+        "get_config",
+        lambda key, default=None: (
+            True if key == "runtime_watch_enabled" else 0
+            if key == "runtime_watch_interval_seconds"
+            else default
+        ),
+    )
+
+    task = asyncio.create_task(reloader.watch())
+    try:
+        await asyncio.wait_for(reloaded.wait(), timeout=1)
+        assert reloader._fingerprint == full
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 @pytest.mark.asyncio

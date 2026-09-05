@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+## [0.26.5] - 2026-09-01
+
+- 将 `tool_progress_messages_enabled=true` 明确定义为工具进度总开关：每个通过 Schema、权限、信任和重复检查的调用都会收到一条运行时生成的确定性提示；搜索、协议、NoneBot、Registered、Custom File、Generated 和 MCP 使用各自可信来源标签，并行批次逐项提示。
+- 新增 `tool_progress_model_preface_enabled=false`。仅在总开关开启时，复用当前工具决策响应中的一句自然话术并合并到固定提示，不增加模型请求；内容会折叠空白、截断并脱敏 QQ 号、URL、路径、凭据和 Base64。
+- 新增仅 `SUPERUSER` 可用的固定命令 `/设置工具自然话术 开|关|1|0`，别名为 `设置工具话术`、`设置调用话术`；它不经过 LLM，并复用原子配置写入和运行快照热更新。
+- 进度提示发送使用 1 秒预算；失败或超时只进入安全审计，不阻断工具，也不重试副作用；调用方取消继续原样传播。未知、越权、Schema 错误、重复受限或策略拒绝的调用不会显示为“正在执行”。
+- 修复 NoneBot 兼容执行真实性：已知只读 API 失败后，如果 Matcher 正常完成并产生 Adapter 已确认的正文、图片或副作用，则记录为已恢复并保持 `matched_with_output` / `matched_side_effect`；没有可验证结果、未知 API、变更 API 失败、处理异常或不确定副作用仍 fail closed。
+- 真正的 `partial_success` 反馈会携带已确认的有界文本和图片数量，明确告知模型这些内容已经对用户可见，禁止把整个动作总结为失败；`partial_success` / `result_unknown` 的同名工具封锁和副作用不重试边界保持不变。
+- 版本、配置、命令、架构、排错、安装、依赖和 K-11 规划状态同步到 0.26.5。本版本没有新增运行依赖、数据库 migration、Redis key 或后台任务。
+
+## [0.26.4] - 2026-09-01
+
+- 新增仅 `SUPERUSER` 可用的固定命令 `设置工具进度 开/关`，可即时切换工具调用前置话术与进度提示，不影响确认、结果、最终回复和后台审计。
+- 分类传输超时不再被误记为 JSON 解析失败或触发第二次完整请求；400/解析异常日志只保留安全原因和异常类型，不记录服务商响应正文。
+- `max_repeated_tool_calls` 改为按 generation、工具名和规范化参数摘要限次；同一工具的不同实质参数不会再被误判成原样重复，总工具轮次与 Agent 步数上限保持不变。
+
+## [0.26.3] - 2026-08-29
+
+- 统一 Python 3.10～3.13 的聊天超时异常；SSE 只接受 JSON object，摘要失败、重试通知和管理员取消通知均使用固定安全兜底，`CancelledError` 不再被通知异常替换。
+- PostgreSQL transaction factory 与 local spool writer 使用 shield/settle 清理，连续取消也必须等待 rollback/close 完成或返回类型化清理错误；原业务异常或取消保持主结果。
+- 分类缓存增加 generation-local `resolve_exact` single-flight：完整 key 相同只构建一次，异键仍并行，等待者取消不取消共享构建，失败可重试，发布冲突回读精确胜出记录。
+- Custom File 联网改为 worker 注入的 `safe_request`：逐跳重验公网 DNS 与 allowlist、固定验证 IP、手动有界重定向、拒绝 URL 凭据/HTTPS 降级/跨域敏感头，并统一总时间与请求/响应大小预算。
+- AST Policy 拒绝 Custom File 直接使用 `aiohttp`、`httpx`、`requests`、`urllib` 或 `socket`，跟踪 walrus/`NamedExpr` 别名；`safe_request` 的非 GET/HEAD 或动态 method 保守判定为变更型。
+- 工具生成的 HTTP 400 内容安全判断只匹配结构化 `code`/`type` 精确值；普通消息中的 `audit`、`safety` 等单词不再误触发内容安全拦截。
+- 修复个人上下文字符串键、有界 Store 只读成员检查、成员名失败缓存、`ai` 唤醒边界、Tavily TLS/占位密钥，以及布尔配置与未知键兼容告警。
+
+## [0.26.2] - 2026-08-28
+
+- PicMenu 内存目录增加确定性计数和 SHA-256 身份，并纳入 runtime watcher；即使首次 generation 先看到空目录，完整目录稍后安装也会在一个监控周期内自动发布新 generation，读取异常继续保留上一有效快照。
+- 功能目录支持 `llm_intents` 精确意图别名。唯一、可见且已加载的业务所有者可覆盖分类模型；重复所有者、黑名单、权限不足或未加载均 fail closed，不再猜测另一个插件。
+- NoneBot 兼容命令 Schema 改为严格对象、只接受 1～1024 字 `command`，并把当前 generation 的真实 `command_start` 冻结进说明；`/` 优先，否则选择最短且字典序最前的前缀，空前缀会移除占位符。
+- 新增九种 `PluginDispatchResult` 真实状态。消息发送只在 Adapter 成功回调后计入结果；已确认副作用、空命中、未命中、处理失败、超时、队列拒绝、部分成功和结果不确定不再被任意 metadata 或发送前内容伪装成成功。
+- 工具循环按 generation、工具名和规范化参数摘要阻止失败原样重放；部分成功或结果不确定会封锁本任务内的同一工具，同时仍允许选择不同工具或实质不同参数继续。
+- 新增 `tool_progress_messages_enabled=true`。关闭时只隐藏模型前置话术和“正在执行”提示；确认消息、插件结果、最终总结和后台安全审计始终保留。
+
+## [0.26.1] - 2026-08-28
+
+- 将固定冷却管理入口改为优先级 0 的全文锚定 Matcher，直接识别 `/设置LLM冷却 0`、`!设置LLM冷却 0`、`！设置LLM冷却 0` 及无前缀形式；它不再依赖标准命令前缀预处理，仍只允许 `SUPERUSER` 且不会进入 LLM 链路。
 - 新增仅 `SUPERUSER` 可用的固定命令 `设置LLM冷却`（别名 `设置LLMCD`、`设置对话冷却`），允许在 `0`～`86400` 秒内热修改每用户对话冷却；`0` 明确关闭冷却，命令不经过 LLM 或 Generated Tool。
 - 工具草稿模型请求现在对非内容安全类 HTTP 400 执行一次最小参数兼容重试，并只回显结构化、定长且经过凭据、URL 与本地路径脱敏的错误摘要；非 JSON 错误正文继续隐藏。
 

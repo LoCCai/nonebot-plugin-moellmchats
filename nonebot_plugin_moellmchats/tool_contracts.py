@@ -23,7 +23,7 @@ _NETWORK_TARGET_RE = re.compile(
 _SECRET_NAME_RE = re.compile(r"^(?:\*|[A-Za-z_][A-Za-z0-9_]{0,127})$")
 
 CAPABILITY_SCHEMA_VERSION = 2
-CAPABILITY_DETECTOR_VERSION = 1
+CAPABILITY_DETECTOR_VERSION = 2
 
 TOOL_RESULT_SCHEMA_VERSION = 1
 TOOL_RESULT_MAX_PAYLOAD_BYTES = 16 * 1_024 * 1_024
@@ -225,10 +225,10 @@ class ToolCapabilityV2:
     """Structured, deny-by-default capability profile.
 
     Version 2 can express network and secret allow-lists, separate workspace
-    and host read/write access, and reserved database/bot rights. The current
-    isolated runner still accepts only profiles that have an exact legacy-v1
-    projection; scoped or new rights remain fail closed until their consumer is
-    migrated in D-08.
+    and host read/write access, and reserved database/bot rights. The isolated
+    Custom File runner consumes scoped network allow-lists through the trusted
+    ``safe_request`` facade. Rights without a migrated consumer remain fail
+    closed.
     """
 
     network_allow: tuple[str, ...] = ()
@@ -465,6 +465,21 @@ class ToolCapabilityV2:
         return (
             self.network_allow in {(), ("*",)}
             and self.workspace_read == self.workspace_write
+            and self.host_filesystem_read == self.host_filesystem_write
+            and not self.database_read
+            and not self.database_write
+            and not self.bot_read
+            and not self.bot_send
+            and not self.bot_manage
+            and self.secret_names in {(), ("*",)}
+        )
+
+    @property
+    def safe_http_runner_compatible(self) -> bool:
+        """Whether the isolated runner can consume this profile exactly."""
+
+        return (
+            self.workspace_read == self.workspace_write
             and self.host_filesystem_read == self.host_filesystem_write
             and not self.database_read
             and not self.database_write

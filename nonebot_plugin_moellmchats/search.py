@@ -51,11 +51,21 @@ class Search:
         )
         return "extract_webpage" in tools
 
-    async def get_search(self) -> str:
+    async def get_search(self) -> str | bool | None:
+        api_key = str(config_parser.get_config("search_api") or "").strip()
+        if not api_key or api_key.casefold() in {
+            "your api",
+            "your_api",
+            "yourkey",
+            "changeme",
+        }:
+            logger.warning("web_search 未配置有效的 search_api，已跳过搜索请求")
+            return "搜索功能尚未配置 search_api 密钥，管理员配置后才能使用网络搜索。"
+
         url = "https://api.tavily.com/search"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": config_parser.get_config("search_api"),
+            "Authorization": api_key,
             "Accept-Encoding": "identity",
         }
         data = {
@@ -65,9 +75,7 @@ class Search:
 
         try:
             has_extractor = self._has_selectable_extractor()
-            async with get_session().post(
-                url, headers=headers, json=data, ssl=False
-            ) as response:
+            async with get_session().post(url, headers=headers, json=data) as response:
                 response_data = await response.json()
 
                 answer = response_data.get("answer", "")

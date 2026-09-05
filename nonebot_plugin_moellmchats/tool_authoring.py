@@ -16,6 +16,7 @@ from .compat import timeout as timeout_scope
 from .config import config_parser
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import BundleValidation, generated_tool_store
+from .model_error_policy import is_content_policy_error_info
 from .model_selector import model_selector
 from .private_files import harden_private_tree
 from .runtime_metrics import runtime_metrics
@@ -40,15 +41,6 @@ _REVIEW_SYSTEM = """你是独立代码复核员。审查给定 Python 工具包�
 _MODEL_ERROR_BODY_LIMIT = 16_384
 _MODEL_ERROR_MESSAGE_LIMIT = 300
 _MODEL_ERROR_FIELD_LIMIT = 80
-_CONTENT_POLICY_MARKERS = (
-    "datainspectionfailed",
-    "content_filter",
-    "sensitive",
-    "safety",
-    "violation",
-    "audit",
-    "prohibited",
-)
 _BEARER_SECRET_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
 _NAMED_SECRET_RE = re.compile(
     r"(?i)\b(authorization|api[_ -]?key|access[_ -]?token|token|cookie|"
@@ -112,8 +104,7 @@ def _extract_model_error_info(body: str) -> dict[str, str]:
 
 
 def _is_content_policy_error(body: str) -> bool:
-    normalized = body.casefold()
-    return any(marker in normalized for marker in _CONTENT_POLICY_MARKERS)
+    return is_content_policy_error_info(_extract_model_error_info(body))
 
 
 def _format_model_http_error(

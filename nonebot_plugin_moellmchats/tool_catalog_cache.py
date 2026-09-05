@@ -108,6 +108,7 @@ class ToolCatalogCacheKey:
     web_search_enabled: bool
     blacklist_digest: str
     protocol_scope_digest: str = "0" * 64
+    directory_digest: str = "0" * 64
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -124,11 +125,14 @@ class ToolCatalogCacheKey:
             raise ValueError("tool catalog blacklist_digest 必须是 SHA-256")
         if not isinstance(self.protocol_scope_digest, str) or not _SHA256_RE.fullmatch(self.protocol_scope_digest):
             raise ValueError("tool catalog protocol_scope_digest 必须是 SHA-256")
+        if not isinstance(self.directory_digest, str) or not _SHA256_RE.fullmatch(self.directory_digest):
+            raise ValueError("tool catalog directory_digest 必须是 SHA-256")
 
     @property
     def policy_digest(self) -> str:
         payload = {
             "blacklist_digest": self.blacklist_digest,
+            "directory_digest": self.directory_digest,
             "provider_cutover": self.provider_cutover,
             "protocol_scope_digest": self.protocol_scope_digest,
             "tools_enabled": self.tools_enabled,
@@ -158,6 +162,7 @@ class ToolCatalogRenderContext:
     web_search_enabled: bool
     blacklist_patterns: tuple[str, ...] = field(repr=False)
     protocol_scope_digest: str = "0" * 64
+    directory_digest: str = "0" * 64
     blacklist_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -174,6 +179,8 @@ class ToolCatalogRenderContext:
         patterns, digest = _canonical_blacklist(self.blacklist_patterns)
         if not isinstance(self.protocol_scope_digest, str) or not _SHA256_RE.fullmatch(self.protocol_scope_digest):
             raise ValueError("tool catalog protocol_scope_digest 必须是 SHA-256")
+        if not isinstance(self.directory_digest, str) or not _SHA256_RE.fullmatch(self.directory_digest):
+            raise ValueError("tool catalog directory_digest 必须是 SHA-256")
         object.__setattr__(self, "blacklist_patterns", patterns)
         object.__setattr__(self, "blacklist_digest", digest)
 
@@ -188,6 +195,7 @@ class ToolCatalogRenderContext:
         web_search_enabled: bool,
         blacklist_patterns: tuple[str, ...],
         protocol_scope_digest: str = "0" * 64,
+        directory_digest: str = "0" * 64,
     ) -> ToolCatalogRenderContext:
         return cls(
             generation=generation,
@@ -197,6 +205,7 @@ class ToolCatalogRenderContext:
             web_search_enabled=web_search_enabled,
             blacklist_patterns=blacklist_patterns,
             protocol_scope_digest=protocol_scope_digest,
+            directory_digest=directory_digest,
         )
 
     @property
@@ -213,6 +222,7 @@ class ToolCatalogRenderContext:
             web_search_enabled=self.web_search_enabled,
             blacklist_digest=self.blacklist_digest,
             protocol_scope_digest=self.protocol_scope_digest,
+            directory_digest=self.directory_digest,
         )
 
     def is_blacklisted(self, tool_name: str) -> bool:

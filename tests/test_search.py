@@ -246,3 +246,48 @@ async def test_search_parity_failure_happens_before_network_request(
 def test_search_rejects_non_boolean_actor() -> None:
     with pytest.raises(TypeError, match="is_superuser"):
         Search("query", is_superuser=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "placeholder",
+    ["your api", "your_api", "yourkey", "changeme", "", "  "],
+)
+async def test_search_placeholder_api_key_skips_request(
+    monkeypatch: pytest.MonkeyPatch,
+    placeholder: str,
+) -> None:
+    from nonebot_plugin_moellmchats import search as search_module
+
+    session = _FakeSession()
+    monkeypatch.setattr(search_module, "get_session", lambda: session)
+
+    def get_config(key: str, default=None):
+        if key == "search_api":
+            return placeholder
+        return default
+
+    monkeypatch.setattr(search_module.config_parser, "get_config", get_config)
+
+    result = await Search("query").get_search()
+
+    assert session.calls == []
+    assert isinstance(result, str)
+    assert "search_api" in result
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_tls_verification_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _registered_snapshot()
+    session = _patch_search_dependencies(
+        monkeypatch,
+        provider_cutover=True,
+        blacklisted=False,
+    )
+
+    await Search("query", tool_snapshot=snapshot).get_search()
+
+    assert len(session.calls) == 1
+    assert "ssl" not in session.calls[0]

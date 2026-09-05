@@ -38,10 +38,14 @@ from .tool_artifacts import ToolArtifact
 from .tool_catalog_cache import ToolCatalogRecord, ToolCatalogRenderContext
 from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
 from .tool_discovery import (
+    BusinessIntentResolution,
+    PicMenuProjectionSnapshot,
     build_compatibility_description,
+    build_intent_owner_index,
     build_plugin_catalog_entries,
+    discovery_directory_identity,
     finalize_discovery_catalog,
-    project_picmenu_infos,
+    resolve_business_intent,
     with_menu_discovery,
 )
 from .tool_providers import (
@@ -452,6 +456,14 @@ class ToolSnapshot:
     generated_state_revision: int = 0
     generated_state_digest: str = ""
     generated_active: Mapping[str, str] = field(default_factory=dict)
+    intent_owners: Mapping[str, tuple[tuple[str, bool], ...]] = field(
+        default_factory=dict
+    )
+    directory_entry_count: int = 0
+    directory_digest: str = ""
+    picmenu_plugin_count: int = 0
+    picmenu_feature_count: int = 0
+    picmenu_digest: str = ""
 
     def __post_init__(self) -> None:
         for field_name in ("plugin_info", "custom_tools", "tool_dependencies"):
@@ -459,6 +471,51 @@ class ToolSnapshot:
             if not isinstance(value, Mapping):
                 raise ValueError(f"ToolSnapshot.{field_name} 必须是映射")
             object.__setattr__(self, field_name, immutable_mapping(value))
+        intent_owners = self.intent_owners
+        if not isinstance(intent_owners, Mapping):
+            raise ValueError("ToolSnapshot.intent_owners 必须是映射")
+        normalized_owners: dict[str, tuple[tuple[str, bool], ...]] = {}
+        for intent, owners in intent_owners.items():
+            if (
+                not isinstance(intent, str)
+                or not intent
+                or not isinstance(owners, (list, tuple))
+                or not all(
+                    isinstance(owner, (list, tuple))
+                    and len(owner) == 2
+                    and isinstance(owner[0], str)
+                    and owner[0]
+                    and type(owner[1]) is bool
+                    for owner in owners
+                )
+            ):
+                raise ValueError("ToolSnapshot.intent_owners 内容非法")
+            normalized_owners[intent] = tuple(
+                sorted((str(owner[0]), bool(owner[1])) for owner in owners)
+            )
+        if not normalized_owners:
+            normalized_owners = dict(build_intent_owner_index(self.plugin_info))
+        object.__setattr__(
+            self,
+            "intent_owners",
+            immutable_mapping(normalized_owners),
+        )
+        expected_count, expected_digest = discovery_directory_identity(
+            self.plugin_info,
+            normalized_owners,
+        )
+        if self.directory_entry_count not in {0, expected_count}:
+            raise ValueError("ToolSnapshot.directory_entry_count 与目录不一致")
+        object.__setattr__(self, "directory_entry_count", expected_count)
+        if self.directory_digest and self.directory_digest != expected_digest:
+            raise ValueError("ToolSnapshot.directory_digest 与目录不一致")
+        object.__setattr__(self, "directory_digest", expected_digest)
+        for field_name in ("picmenu_plugin_count", "picmenu_feature_count"):
+            value = getattr(self, field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"ToolSnapshot.{field_name} 必须是非负整数")
+        if self.picmenu_digest and not re.fullmatch(r"[a-f0-9]{64}", self.picmenu_digest):
+            raise ValueError("ToolSnapshot.picmenu_digest 必须是 SHA-256")
         if not isinstance(self.mcp_tool_names, AbstractSet) or not all(isinstance(name, str) for name in self.mcp_tool_names):
             raise ValueError("ToolSnapshot.mcp_tool_names 必须是工具名集合")
         object.__setattr__(self, "mcp_tool_names", frozenset(self.mcp_tool_names))
@@ -558,6 +615,27 @@ class ToolSnapshot:
                 self.generated_state_digest,
                 self.generated_active,
             ),
+        )
+
+    def resolve_business_intent(
+        self,
+        plain: str,
+        *,
+        is_superuser: bool = False,
+        is_blacklisted=None,
+    ) -> BusinessIntentResolution:
+        if type(is_superuser) is not bool:
+            raise TypeError("business intent is_superuser 必须是布尔值")
+        if is_blacklisted is None:
+            is_blacklisted = tool_manager.is_tool_blacklisted
+        if not callable(is_blacklisted):
+            raise TypeError("business intent blacklist predicate 必须可调用")
+        return resolve_business_intent(
+            plain,
+            owners=self.intent_owners,
+            loaded_plugins=self.plugin_info,
+            is_superuser=is_superuser,
+            is_blacklisted=is_blacklisted,
         )
 
     def expand_dependencies(
@@ -1498,6 +1576,7 @@ class ToolSnapshot:
             web_search_enabled=model_selector.get_web_search(),
             blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
             protocol_scope_digest=current_protocol_cache_digest(),
+            directory_digest=self.directory_digest,
         )
 
     def build_brief_catalog_record(
@@ -1607,9 +1686,8 @@ class ToolManager:
 编写或修改完后，在群聊中发送管理员指令：`/刷新工具` 或 `/重载工具` 即可即时生效！
 """
 
-import re
 import datetime
-import aiohttp
+import re
 from typing import Annotated
 
 # ==========================================
@@ -1649,20 +1727,24 @@ async def extract_webpage(
     if not url.startswith(("http://", "https://")):
         return "提取失败：请提供有效的URL（以http://或https://开头）"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; MoEllmChats custom tool example)"
-    }
-    timeout = aiohttp.ClientTimeout(total=30)
-
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    return f"提取失败：网页返回状态码 {response.status}"
-                html = await response.text()
+        # safe_request 由隔离 runner 注入，不要导入 aiohttp/httpx/requests/socket。
+        # 下方 TOOLS_REGISTRY 的 network.allow 会限制真正可连接的主机。
+        response = await safe_request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; "
+                    "MoEllmChats custom tool example)"
+                )
+            },
+        )
+        if response.status != 200:
+            return f"提取失败：网页返回状态码 {response.status}"
+        html = response.text
 
         # 使用正则移除 script 和 style 标签及其内容
-        text = re.sub(r'<(script|style).*?>.*?</\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r'<(script|style).*?>.*?</\\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
         # 移除所有剩余的 HTML 标签
         text = re.sub(r'<[^>]+>', ' ', text)
 
@@ -1677,6 +1759,60 @@ async def extract_webpage(
         return f"网页提取成功，以下是内容摘要：\\n{text}"
     except Exception as e:
         return f"提取网页失败，发生错误：{str(e)}"
+
+# 一旦声明 TOOLS_REGISTRY，只有列出的函数会成为工具。
+# 联网工具必须使用结构化 network.allow，这里只是示例域名；
+# 复制后请同时替换 Schema 约束、函数用途和 allowlist。
+TOOLS_REGISTRY = [
+    {
+        "name": "get_current_datetime",
+        "description": "获取当前系统日期、时间和星期。",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "func": get_current_datetime,
+        "permission": "user",
+        "effect": "read_only",
+        "capabilities": {
+            "network": False,
+            "process": False,
+            "filesystem": {"workspace": False, "host": False},
+            "database": False,
+            "bot": False,
+            "secrets": False,
+        },
+    },
+    {
+        "name": "extract_webpage",
+        "description": "读取 example.com 示例页面并提取文本。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "example.com 下的完整 HTTPS URL",
+                    "pattern": r"^https://example\\.com(?:/.*)?$",
+                    "maxLength": 2048,
+                }
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        "func": extract_webpage,
+        "permission": "user",
+        "effect": "read_only",
+        "capabilities": {
+            "network": {"allow": ["example.com"]},
+            "process": False,
+            "filesystem": {"workspace": False, "host": False},
+            "database": False,
+            "bot": False,
+            "secrets": False,
+        },
+    },
+]
 '''
             with open(template_file, "w", encoding="utf-8") as f:
                 f.write(template_content)
@@ -2023,9 +2159,13 @@ async def extract_webpage(
         return expanded
 
     @staticmethod
-    def _picmenu_plugin_info(loaded_plugins: list[object]) -> dict:
-        """Read PicMenu's already-installed memory snapshot when available."""
+    def capture_picmenu_projection(
+        loaded_plugins: list[object] | None = None,
+    ) -> PicMenuProjectionSnapshot:
+        """Detach PicMenu's current installed generation or fail on read drift."""
 
+        if loaded_plugins is None:
+            loaded_plugins = list(nonebot.plugin.get_loaded_plugins())
         for plugin in loaded_plugins:
             module_name = getattr(plugin, "module_name", "")
             if not isinstance(module_name, str) or not (
@@ -2036,23 +2176,48 @@ async def extract_webpage(
             data_source = sys.modules.get(f"{module_name}.data_source")
             get_infos = getattr(data_source, "get_infos", None)
             if not callable(get_infos):
-                return {}
+                raise RuntimeError("PicMenu 已加载但内存目录读取器不可用")
             try:
-                projected = project_picmenu_infos(get_infos())
-            except Exception:
-                logger.warning("读取 PicMenu 内存功能目录失败，降级使用插件元数据")
-                return {}
-            if projected:
-                logger.debug(f"已读取 PicMenu 内存功能目录: {len(projected)} 个插件")
-            return projected
-        return {}
+                snapshot = PicMenuProjectionSnapshot.from_infos(get_infos())
+            except Exception as error:
+                raise RuntimeError("读取 PicMenu 内存功能目录失败") from error
+            logger.debug(
+                "已读取 PicMenu 内存功能目录: "
+                f"plugins={snapshot.plugin_count} "
+                f"features={snapshot.feature_count} "
+                f"digest={snapshot.digest[:12]}"
+            )
+            return snapshot
+        return PicMenuProjectionSnapshot.empty()
 
-    def build_plugin_info(self) -> dict:
+    @staticmethod
+    def _picmenu_plugin_info(loaded_plugins: list[object]) -> dict:
+        """Backward-compatible detached projection for legacy callers/tests."""
+
+        snapshot = ToolManager.capture_picmenu_projection(loaded_plugins)
+        return {
+            plugin_id: mutable_value(info)
+            for plugin_id, info in snapshot.plugins.items()
+        }
+
+    def build_plugin_info(
+        self,
+        *,
+        picmenu_projection: PicMenuProjectionSnapshot | None = None,
+    ) -> dict:
         plugin_info = {}
         # 读取自定义插件描述
         custom_info = self._load_custom_plugin_info()
         loaded_plugins = list(nonebot.plugin.get_loaded_plugins())
-        picmenu_info = self._picmenu_plugin_info(loaded_plugins)
+        if picmenu_projection is None:
+            try:
+                picmenu_projection = self.capture_picmenu_projection(loaded_plugins)
+            except RuntimeError:
+                logger.warning("读取 PicMenu 内存功能目录失败，降级使用插件元数据")
+                picmenu_projection = PicMenuProjectionSnapshot.empty()
+        if not isinstance(picmenu_projection, PicMenuProjectionSnapshot):
+            raise TypeError("picmenu_projection 必须是 PicMenuProjectionSnapshot")
+        picmenu_info = picmenu_projection.plugins
 
         for plugin in loaded_plugins:
             if "saa" in plugin.name:
@@ -2708,9 +2873,12 @@ async def extract_webpage(
                                             "严格根据该插件的原始用法说明和菜单功能提示，"
                                             "生成可以直接触发该插件的机器人指令字符串。"
                                         ),
+                                        "minLength": 1,
+                                        "maxLength": 1024,
                                     }
                                 },
                                 "required": ["command"],
+                                "additionalProperties": False,
                             },
                         },
                     }

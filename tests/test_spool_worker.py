@@ -8,13 +8,19 @@ import inspect
 from pathlib import Path
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nonebot_plugin_moellmchats.audit_batch import AuditBatchPolicy, AuditBatchQueue
 from nonebot_plugin_moellmchats.audit_event import AuditEventRecord
+from nonebot_plugin_moellmchats.database_engine import (
+    DatabaseEngineManager,
+    DatabaseEngineSettings,
+)
 from nonebot_plugin_moellmchats.local_spool import LocalSpoolSettings, LocalUsageAuditSpool
 from nonebot_plugin_moellmchats.model_usage import ModelUsageRecord
 from nonebot_plugin_moellmchats.platform_metrics import PlatformMetricsRegistry
 from nonebot_plugin_moellmchats.spool_worker import (
+    PostgresSpoolRecordWriter,
     SpoolWorkerDrainRequiredError,
     SpoolWorkerPolicy,
     SpoolWorkerResultUnknownError,
@@ -84,6 +90,32 @@ class _Writer:
         self.audit.append(records)
         self.audit_called.set()
         self._finish()
+
+
+class _BlockingCleanupSession(AsyncSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[str] = []
+        self.rollback_started = asyncio.Event()
+        self.rollback_release = asyncio.Event()
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
+
+    def begin(self):
+        self.events.append("begin")
+        return super().begin()
+
+    async def rollback(self) -> None:
+        self.events.append("rollback.start")
+        self.rollback_started.set()
+        await self.rollback_release.wait()
+        self.events.append("rollback.done")
+
+    async def close(self) -> None:
+        self.events.append("close.start")
+        self.close_started.set()
+        await self.close_release.wait()
+        self.events.append("close.done")
 
 
 def _worker(
@@ -205,6 +237,51 @@ async def test_confirmed_commit_with_cleanup_failure_is_acknowledged_once(tmp_pa
     snapshot = worker.metrics.snapshot()
     assert snapshot.spool_committed_records == 1
     assert snapshot.spool_failure_total == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_spool_repeated_cancellation_still_rolls_back_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = DatabaseEngineManager(
+        DatabaseEngineSettings(
+            database_url="postgresql+asyncpg://local:local@db.invalid/local",
+        )
+    )
+    session = _BlockingCleanupSession()
+    writer = PostgresSpoolRecordWriter(
+        manager,
+        sessionmaker_factory=lambda *_args, **_kwargs: lambda: session,
+    )
+
+    async def cancelled_append(_repository, _records) -> None:
+        session.events.append("append")
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.spool_worker.PostgresUsageRepository.append_batch",
+        cancelled_append,
+    )
+    task = asyncio.create_task(writer.write_usage((_usage(),)))
+    await asyncio.wait_for(session.rollback_started.wait(), timeout=1)
+    task.cancel()
+    session.rollback_release.set()
+    await asyncio.wait_for(session.close_started.wait(), timeout=1)
+    task.cancel()
+    session.close_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert session.events == [
+        "begin",
+        "append",
+        "rollback.start",
+        "rollback.done",
+        "close.start",
+        "close.done",
+    ]
+    await manager.dispose()
 
 
 def test_spool_worker_module_has_no_import_time_worker_or_awaitable() -> None:

@@ -10,7 +10,6 @@ import nonebot_plugin_moellmchats.categorize as categorize_module
 from nonebot_plugin_moellmchats.categorize import Categorize
 from nonebot_plugin_moellmchats.classification_cache import (
     ClassificationCacheRecord,
-    ClassificationCacheUnavailableError,
     MemoryClassificationCache,
 )
 from nonebot_plugin_moellmchats.llm_payload import LlmPayloadMixin
@@ -19,6 +18,7 @@ from nonebot_plugin_moellmchats.tool_catalog_cache import (
     MemoryToolCatalogCache,
     ToolCatalogCacheUnavailableError,
 )
+from nonebot_plugin_moellmchats.tool_discovery import with_menu_discovery
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
 from nonebot_plugin_moellmchats.tool_schema_cache import (
     MemoryToolSchemaCache,
@@ -79,6 +79,13 @@ class _CountingSnapshot:
         self.legacy_schema_calls += 1
         return self._snapshot.get_llm_payload_tools(*args, **kwargs)
 
+    def resolve_business_intent(self, *args: Any, **kwargs: Any):
+        return self._snapshot.resolve_business_intent(*args, **kwargs)
+
+    @property
+    def directory_digest(self) -> str:
+        return self._snapshot.directory_digest
+
 
 class _FakeResponse:
     def __init__(
@@ -105,6 +112,19 @@ class _FakeResponse:
 
     async def text(self) -> str:
         return "test response"
+
+
+class _TimeoutResponse(_FakeResponse):
+    async def __aenter__(self):
+        raise asyncio.TimeoutError
+
+
+class _UnreadableBodyResponse(_FakeResponse):
+    async def json(self) -> dict[str, Any]:
+        raise AssertionError("classification error response body must not be read")
+
+    async def text(self) -> str:
+        raise AssertionError("classification error response body must not be read")
 
 
 class _FakeSession:
@@ -202,6 +222,7 @@ def _categorizer(
     *,
     catalog_cache,
     classification_cache=None,
+    scene: str = "unknown",
 ) -> Categorize:
     return Categorize(
         plain,
@@ -210,6 +231,7 @@ def _categorizer(
         tool_catalog_cache=catalog_cache,
         classification_cache=classification_cache,
         runtime_generation=snapshot.generation,
+        scene=scene,
     )
 
 
@@ -318,12 +340,11 @@ async def test_catalog_consumer_rejects_generation_and_backend_timeout(
             runtime_generation=snapshot.generation + 1,
         )
 
-    with pytest.raises(ToolCatalogCacheUnavailableError, match="lookup"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=_TimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=_TimeoutCache(),
+    ).get_category() == ("1", False, [])
 
 
 @pytest.mark.asyncio
@@ -404,6 +425,169 @@ async def test_classification_consumer_hits_without_second_model_request(
     assert first == second == ("2", False, ["alpha"])
     assert snapshot.catalog_builds == 1
     assert session.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unique_business_owner_bypasses_wrong_classifier_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    owner_info = with_menu_discovery(
+        {
+            "name": "群报告",
+            "description": "今日发言排行",
+            "usage": "/B话榜 今日",
+        },
+        [
+            {
+                "func": "B 话榜与即时排行",
+                "brief_des": "今日排行",
+                "trigger_method": "命令",
+                "trigger_condition": "B话榜 今日",
+                "pmn_llm_intents": [
+                    "今天谁发言最多",
+                    "今日谁发言最多",
+                    "看一下今日的群发言排行",
+                    "查看今日群发言排行",
+                    "今日发言榜",
+                    "今日发言排行",
+                    "今天发言榜",
+                    "今天发言排行",
+                    "今天谁说话最多",
+                    "今天谁话最多",
+                ],
+            }
+        ],
+    )
+    snapshot = _CountingSnapshot(
+        ToolSnapshot(
+            generation=42,
+            plugin_info={
+                "qi_post": owner_info,
+                "qi_db_analytics": {
+                    "name": "统计",
+                    "description": "错误分类候选",
+                    "usage": "/查询",
+                },
+            },
+            custom_tools={},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+        )
+    )
+    session = _FakeSession(
+        [_model_response(required_plugins=["qi_db_analytics"])]
+    )
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+
+    variants = [
+        "今天谁发言最多",
+        "今日谁发言最多",
+        "看一下今日的群发言排行",
+        "查看今日群发言排行",
+        "今日发言榜",
+        "今日发言排行",
+        "今天发言榜",
+        "今天发言排行",
+        "今天谁说话最多",
+        "今天谁话最多",
+    ]
+    for phrase in variants:
+        categorizer = _categorizer(
+            phrase,
+            snapshot,
+            catalog_cache=MemoryToolCatalogCache(),
+            scene="group",
+        )
+        assert await categorizer.get_category() == (
+            "0",
+            False,
+            ["qi_post"],
+        )
+        assert categorizer.selection_source == "business_intent_owner"
+    assert session.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_business_owner_ambiguity_and_unavailability_do_not_fall_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+
+    def info(name: str, *, hidden: bool = False):
+        return with_menu_discovery(
+            {"name": name, "description": name, "usage": name},
+            [
+                {
+                    "func": name,
+                    "brief_des": name,
+                    "trigger_method": "命令",
+                    "trigger_condition": name,
+                    "pmn_hidden": hidden,
+                    "pmn_llm_intents": ["今天谁发言最多"],
+                }
+            ],
+        )
+
+    ambiguous = _CountingSnapshot(
+        ToolSnapshot(
+            generation=42,
+            plugin_info={"qi_post": info("排行"), "other": info("其他")},
+            custom_tools={},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+        )
+    )
+    session = _FakeSession([])
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    result = await _categorizer(
+        "今天谁发言最多",
+        ambiguous,
+        catalog_cache=MemoryToolCatalogCache(),
+    ).get_category()
+    assert isinstance(result, str)
+    assert "多个" in result
+
+    hidden = _CountingSnapshot(
+        ToolSnapshot(
+            generation=43,
+            plugin_info={"qi_post": info("隐藏排行", hidden=True)},
+            custom_tools={},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+        )
+    )
+    result = await _categorizer(
+        "今天谁发言最多",
+        hidden,
+        catalog_cache=MemoryToolCatalogCache(),
+    ).get_category()
+    assert isinstance(result, str)
+    assert "不可用" in result
+    assert session.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_classification_cache_separates_group_and_private_scene(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    session = _FakeSession([_model_response(), _model_response()])
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    catalog_cache = MemoryToolCatalogCache()
+    classification_cache = MemoryClassificationCache()
+
+    for scene in ("group", "private"):
+        result = await _categorizer(
+            "same prompt",
+            snapshot,
+            catalog_cache=catalog_cache,
+            classification_cache=classification_cache,
+            scene=scene,
+        ).get_category()
+        assert result == ("1", False, ["alpha"])
+    assert session.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -519,7 +703,118 @@ async def test_timeout_fallback_classification_is_never_published(
 
 
 @pytest.mark.asyncio
-async def test_classification_cache_timeout_does_not_become_model_fallback(
+async def test_transport_timeout_does_not_consume_parse_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    cache = _RecordingClassificationCache()
+    session = _FakeSession(
+        [
+            _TimeoutResponse(_model_response()),
+            _FakeResponse(_model_response()),
+        ]
+    )
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+
+    result = await _categorizer(
+        "transport timeout",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+        classification_cache=cache,
+    ).get_category()
+
+    assert result == ("1", False, [])
+    assert cache.publish_count == 0
+    assert session.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_http_400_retry_does_not_read_or_log_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    session = _FakeSession(
+        [
+            _UnreadableBodyResponse(
+                {"private": "provider-response-must-not-appear"},
+                status=400,
+            ),
+            _FakeResponse(_model_response()),
+        ]
+    )
+    log_messages: list[str] = []
+
+    class _RecordingLogger:
+        @staticmethod
+        def _record(message: object, *args: object) -> None:
+            rendered = str(message)
+            if args:
+                rendered = rendered.format(*args)
+            log_messages.append(rendered)
+
+        debug = _record
+        info = _record
+        warning = _record
+
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    monkeypatch.setattr(categorize_module, "logger", _RecordingLogger())
+
+    result = await _categorizer(
+        "400 retry",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+    ).get_category()
+
+    assert result == ("1", False, ["alpha"])
+    assert session.call_count == 2
+    assert all("provider-response-must-not-appear" not in message for message in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_repeated_http_400_never_reads_or_logs_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    snapshot = _CountingSnapshot(_snapshot())
+    private_marker = "second-provider-response-must-not-appear"
+    session = _FakeSession(
+        [
+            _UnreadableBodyResponse({"private": private_marker}, status=400),
+            _UnreadableBodyResponse({"private": private_marker}, status=400),
+        ]
+    )
+    log_messages: list[str] = []
+
+    class _RecordingLogger:
+        @staticmethod
+        def _record(message: object, *args: object) -> None:
+            rendered = str(message)
+            if args:
+                rendered = rendered.format(*args)
+            log_messages.append(rendered)
+
+        debug = _record
+        info = _record
+        warning = _record
+
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    monkeypatch.setattr(categorize_module, "logger", _RecordingLogger())
+
+    result = await _categorizer(
+        "repeated 400",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+    ).get_category()
+
+    assert result is False
+    assert session.call_count == 2
+    assert all(private_marker not in message for message in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_classification_cache_timeout_degrades_without_model_bypass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_runtime(monkeypatch)
@@ -527,13 +822,12 @@ async def test_classification_cache_timeout_does_not_become_model_fallback(
     session = _FakeSession([])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
 
-    with pytest.raises(ClassificationCacheUnavailableError, match="lookup"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=MemoryToolCatalogCache(),
-            classification_cache=_TimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+        classification_cache=_TimeoutCache(),
+    ).get_category() == ("1", False, [])
 
     assert session.call_count == 0
 
@@ -545,12 +839,11 @@ async def test_cache_publish_timeouts_are_normalized_without_bypass(
     _configure_runtime(monkeypatch)
     snapshot = _CountingSnapshot(_snapshot())
 
-    with pytest.raises(ToolCatalogCacheUnavailableError, match="publish"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=_PublishTimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=_PublishTimeoutCache(),
+    ).get_category() == ("1", False, [])
 
     schema = _PayloadHarness(snapshot, _PublishTimeoutCache())
     with pytest.raises(ToolSchemaCacheUnavailableError, match="publish"):
@@ -558,13 +851,12 @@ async def test_cache_publish_timeouts_are_normalized_without_bypass(
 
     session = _FakeSession([_model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
-    with pytest.raises(ClassificationCacheUnavailableError, match="publish"):
-        await _categorizer(
-            "hello",
-            snapshot,
-            catalog_cache=MemoryToolCatalogCache(),
-            classification_cache=_PublishTimeoutCache(),
-        ).get_category()
+    assert await _categorizer(
+        "hello",
+        snapshot,
+        catalog_cache=MemoryToolCatalogCache(),
+        classification_cache=_PublishTimeoutCache(),
+    ).get_category() == ("1", False, [])
     assert session.call_count == 1
 
 

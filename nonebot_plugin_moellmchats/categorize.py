@@ -1,12 +1,13 @@
+import asyncio
 import re
 import time
-import traceback
 
 import aiohttp
 from nonebot.log import logger
 import ujson as json
 
 from .classification_cache import (
+    ClassificationCacheError,
     ClassificationCacheKey,
     ClassificationCacheProtocol,
     ClassificationCacheRecord,
@@ -16,6 +17,7 @@ from .classification_cache import (
     ClassificationResultSource,
     resolve_classification,
 )
+from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .model_capabilities import ModelCapability
@@ -30,7 +32,7 @@ from .tool_catalog_cache import (
 from .tool_manager import tool_manager
 from .utils import get_session
 
-_CLASSIFICATION_POLICY_VERSION = "categorize-json-v2-menu-discovery"
+_CLASSIFICATION_POLICY_VERSION = "categorize-json-v3-business-owner"
 _CategoryResult = tuple[str, bool, list[str]] | str | bool
 
 
@@ -55,6 +57,7 @@ class Categorize:
         tool_catalog_cache: ToolCatalogCacheProtocol | None = None,
         classification_cache: ClassificationCacheProtocol | None = None,
         runtime_generation: int | None = None,
+        scene: str = "unknown",
     ):
         if tool_catalog_cache is not None and not isinstance(
             tool_catalog_cache,
@@ -65,7 +68,14 @@ class Categorize:
             classification_cache,
             ClassificationCacheProtocol,
         ):
-            raise TypeError("classification_cache 必须实现 ClassificationCacheProtocol")
+            legacy_methods = (
+                getattr(classification_cache, "lookup", None),
+                getattr(classification_cache, "publish", None),
+            )
+            if not all(callable(method) for method in legacy_methods):
+                raise TypeError(
+                    "classification_cache 必须实现 ClassificationCacheProtocol"
+                )
         if classification_cache is not None and tool_catalog_cache is None:
             raise ValueError("classification cache 必须依赖同代 tool catalog cache")
         if tool_catalog_cache is not None:
@@ -81,6 +91,10 @@ class Categorize:
         self.tool_catalog_cache = tool_catalog_cache
         self.classification_cache = classification_cache
         self.runtime_generation = runtime_generation
+        if scene not in {"group", "private", "channel", "unknown"}:
+            raise ValueError("categorize scene 非法")
+        self.scene = scene
+        self.selection_source = "classification_model"
 
     async def get_category(self) -> _CategoryResult:
         started = time.monotonic()
@@ -90,6 +104,12 @@ class Categorize:
                 return await self._get_category()
         except TimeoutError:
             logger.warning("分类模型超过时间预算，降级为无工具中等难度")
+            return "1", "[图片]" in self.plain, []
+        except (ClassificationCacheError, ToolCatalogCacheUnavailableError) as error:
+            logger.warning(
+                "分类缓存不可用，降级为无工具中等难度: error_type={}",
+                type(error).__name__,
+            )
             return "1", "[图片]" in self.plain, []
         finally:
             runtime_metrics.classification_seconds += time.monotonic() - started
@@ -192,10 +212,19 @@ class Categorize:
                     timeout=aiohttp.ClientTimeout(total=config_parser.get_config("classification_timeout_seconds", 20)),
                     proxy=category_model_config.get("proxy"),
                 ) as resp:
-                    if resp.status == 400 and try_times == 0:
-                        err_text = await resp.text()
-                        logger.info(f"模型不支持结构化输出或参数异常，将降级重试。详情: {err_text}")
-                        raise ValueError("Model does not support json_object format")
+                    if resp.status == 400:
+                        # Never decode or log a provider's 400 payload.  Leaving
+                        # the context releases the response without loading an
+                        # unknown-sized error body into application memory.
+                        if try_times == 0:
+                            logger.info(
+                                "分类模型返回 HTTP 400，将移除 json_object 后有限重试"
+                            )
+                        else:
+                            logger.warning(
+                                "分类模型兼容重试仍返回 HTTP 400，已省略响应正文"
+                            )
+                        continue
 
                     response = await resp.json()
 
@@ -243,9 +272,18 @@ class Categorize:
 
             except _UncacheableClassificationResult:
                 raise
-            except Exception:
-                logger.warning(traceback.format_exc())
-                logger.warning(f"分类结果解析异常，当前尝试次数 {try_times + 1}，返回正文已省略。")
+            except (TimeoutError, asyncio.TimeoutError) as error:
+                # A transport timeout is not a parse failure.  Propagate one
+                # normalized exception so the outer classification deadline
+                # degrades immediately instead of spending another full
+                # per-attempt timeout and defeating the request budget.
+                raise TimeoutError from error
+            except Exception as error:
+                logger.warning(
+                    "分类模型响应不可用，准备有限重试: attempt={} error_type={}",
+                    try_times + 1,
+                    type(error).__name__,
+                )
                 continue
 
         if cache_key is not None:
@@ -256,6 +294,41 @@ class Categorize:
         return False
 
     async def _get_category(self) -> _CategoryResult:
+        if model_selector.get_use_tools() and self.tool_snapshot is not None:
+            resolution = self.tool_snapshot.resolve_business_intent(
+                self.plain,
+                is_superuser=self.is_superuser,
+            )
+            if resolution.status == "unique":
+                self.selection_source = "business_intent_owner"
+                owner = resolution.owner
+                assert owner is not None
+                logger.info(
+                    "业务意图所有者命中: "
+                    f"generation={getattr(self.tool_snapshot, 'generation', 0)} "
+                    f"directory_digest={getattr(self.tool_snapshot, 'directory_digest', '')[:12]} "
+                    f"scene={self.scene} plugin={owner}"
+                )
+                return "0", "[图片]" in self.plain, [owner]
+            if resolution.status == "ambiguous":
+                self.selection_source = "business_intent_ambiguous"
+                logger.warning(
+                    "业务意图存在重复所有者，已拒绝猜测: "
+                    f"generation={getattr(self.tool_snapshot, 'generation', 0)} "
+                    f"directory_digest={getattr(self.tool_snapshot, 'directory_digest', '')[:12]} "
+                    f"scene={self.scene} owner_count={len(resolution.owners)}"
+                )
+                return "这个说法同时对应多个已登记功能，请补充更具体的功能名或指令。"
+            if resolution.status == "unavailable":
+                self.selection_source = "business_intent_unavailable"
+                logger.warning(
+                    "业务意图所有者当前不可执行，已禁止降级到其他插件: "
+                    f"generation={getattr(self.tool_snapshot, 'generation', 0)} "
+                    f"directory_digest={getattr(self.tool_snapshot, 'directory_digest', '')[:12]} "
+                    f"scene={self.scene}"
+                )
+                return "这个功能当前不可用或你没有可见权限，已停止执行，未改用其他插件。"
+
         catalog, catalog_record = await self._resolve_catalog()
         logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
         prompt = self._build_prompt(catalog)
@@ -302,6 +375,7 @@ class Categorize:
             model_identity=model_identity,
             request_scope=ClassificationRequestScope.standard_prompt(),
             policy_version=_CLASSIFICATION_POLICY_VERSION,
+            scene=self.scene,
         )
 
         async def build_record() -> ClassificationCacheRecord:

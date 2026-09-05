@@ -63,7 +63,25 @@ args = ["mcp-server-filesystem", "/tmp"]
 
 MoEllmChats 可以读取“已经加载的 PicMenu Next 当前内存目录”，用其中的菜单补充 NoneBot 插件意图。该桥接只按公开字段做类型受限的 duck typing：不会 import PicMenu SDK，不会读取 QWeb/PicMenu 文件路径，也不会为了发现目录发起网络或数据库请求。
 
-因此无需把 `nonebot-plugin-picmenu-next`、QWeb 或七七项目包加入本项目 `pyproject.toml`。宿主没有 PicMenu 时直接使用 `PluginMetadata.extra.menu_data`；PicMenu 存在但内存目录未就绪时也安全回退。只有 PicMenu 已把目录安装到内存、且目标 NoneBot 插件真实加载时，该目录才会进入下一次 `刷新工具`/`重载LLM` 候选快照。
+因此无需把 `nonebot-plugin-picmenu-next`、QWeb 或七七项目包加入本项目 `pyproject.toml`。宿主没有 PicMenu 时直接使用 `PluginMetadata.extra.menu_data`；PicMenu 初始内存目录为空时先发布 Metadata 目录。watcher 会把 PicMenu 投影的插件数、功能数和 SHA-256 纳入指纹，目录稍后安装完整内容时自动发布新 generation；读取异常保留上一有效投影，不会为了恢复发现功能而安装或更新任何额外依赖。
+
+0.26.2 的目录摘要、NFKC 意图规范化、参数摘要和状态对象只使用 Python 标准库 `hashlib`、`json`、`unicodedata`、`dataclasses` 与现有 NoneBot Adapter 钩子，没有增加运行依赖、数据库表或 migration。七七侧的 QWeb/PicMenu 字段桥接属于宿主源码契约，不会打进本插件 wheel，也不是本插件的 pip 依赖。
+
+### 0.26.3 安全 HTTP 与并发修复没有新增依赖
+
+`safe_request` 使用 Python 标准库的 `asyncio`、`socket`、`ssl`、`ipaddress` 和 `urllib.parse` 实现有界 HTTP/1.1 门面，不要求安装 `httpx`、`requests` 或额外 DNS 包。Custom File 仍不能直接导入网络客户端；工具只接收 worker 注入的门面，network allowlist 来自已审核的静态 Capability，不能由模型参数扩大。
+
+分类 single-flight、连续取消 cleanup、SSE 解析和 400 结构化判断也只复用标准库及已有 SQLAlchemy/asyncpg 接口。0.26.3 没有新增配置项、数据库 migration、Redis key 或后台服务；安装依赖集合保持不变。
+
+### 0.26.4 运行修复没有新增依赖或 migration
+
+分类超时分流复用标准库 `asyncio` 和现有 `aiohttp`；工具参数摘要复用标准库 `hashlib/json` 与已有内存计数器；`设置工具进度` 复用 NoneBot Matcher 和现有 `ConfigParser.set_config()`。0.26.4 没有新增 Python/系统依赖、数据库表、migration、Redis key、后台任务或配置字段，只为 0.26.2 已存在的 `tool_progress_messages_enabled` 增加固定超级管理员入口。
+
+### 0.26.5 工具进度与恢复状态修复没有新增依赖
+
+确定性进度标题、敏感文本折叠和参数摘要继续只使用标准库 `re`、`unicodedata`、`hashlib` 与现有 NoneBot Bot/Event 接口；1 秒预算复用包内 Python 3.10～3.13 兼容 timeout。自然话术来自同一次工具决策响应，不会增加模型调用。只读恢复与未解决失败计数只扩展进程内 `PluginDispatchResult` 和既有审计 metadata。
+
+因此 0.26.5 的运行依赖和 0.26.4 完全相同，没有新增数据库表、migration、Redis key、后台任务或外部服务。唯一新增配置字段是布尔值 `tool_progress_model_preface_enabled=false`，由已有 LocalStore 配置文件、`ConfigParser.set_config()` 和 runtime watcher 管理。
 
 ### 协议清单不是新运行依赖
 
@@ -147,5 +165,8 @@ MCP 不经过文件/生成工具的 nobody sandbox：
 3. 保留 `mcp[cli]` 的现有兼容声明；MCP server 可执行文件仍需独立管理，不能把 SDK extra 当成 server 清单。
 4. 新增的 PicMenu/QWeb 菜单发现只消费已加载模块的内存投影，不新增 Python、系统或服务依赖。
 5. 协议清单生成器、文档/依赖检查和制品检查只使用 Python 标准库；`build`、`pyright`、`ruff`、`twine` 只属于开发门禁，不会进入普通安装依赖或在运行时联网。
+6. 0.26.3 的安全 HTTP、single-flight 和取消清理复用标准库及已有依赖；没有把 `httpx`、`requests`、额外 DNS 客户端或新后端加入安装集合。
+7. 0.26.4 只修正分类超时、日志脱敏和内存工具计数，并为既有布尔配置增加 Matcher；依赖集合与 0.26.3 相同，不新增 migration。
+8. 0.26.5 只扩展进程内进度显示、调度状态计数和一个布尔配置；不新增 Python/系统依赖、migration、Redis key 或后台任务。
 
 依赖约束本身只说明 resolver 允许的范围。最终可安装性还要由 fresh wheel/sdist 构建和包外安装 smoke 验证，见[安装验收](./installation.md#隔离功能验收清单)。
