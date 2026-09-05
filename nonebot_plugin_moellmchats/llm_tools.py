@@ -389,10 +389,27 @@ class LlmToolsMixin:
         if not isinstance(parsed_arguments, Mapping):
             parsed_arguments = {}
         safe_arguments = dict(parsed_arguments)
+        # 与正常执行路径一致的记账：越界幻觉调用也要计入指纹用量与
+        # 尝试状态，否则模型反复幻觉同名同参可绕开重复调用限额，
+        # 逐轮空转到 max_tool_rounds 才进总结兜底
+        fingerprint = (
+            int(getattr(self.tool_snapshot, "generation", 0)),
+            safe_name,
+            self._canonical_arguments_digest(safe_arguments),
+        )
+        if not hasattr(self, "_current_tool_usage"):
+            self._current_tool_usage = Counter()
+        self._current_tool_usage[safe_name] += 1
+        self._tool_fingerprint_usage()[fingerprint] += 1
+        self._remember_tool_attempt(fingerprint, PluginDispatchStatus.FAILED.value)
         send_message_list.append(
             {
                 "role": "tool",
-                "tool_call_id": str(call.get("id") or ""),
+                # 与其余 13 处 tool 消息写入保持一致：原样使用 call["id"]。
+                # str() 强转会让 int 型 id 变字符串、缺失 id 变 ""，
+                # 与 assistant 侧保存的原始 id 错位（严格网关下一轮 400，
+                # _append_tool_round_history 的精确匹配也会失败）
+                "tool_call_id": call["id"],
                 "content": (
                     f"工具 {safe_name} 不在本轮模型实际收到的工具 Schema 中，已拒绝执行。"
                     "只能使用本轮 tools 字段列出的工具，不得猜测其他插件。"

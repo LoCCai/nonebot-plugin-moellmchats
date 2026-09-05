@@ -700,6 +700,10 @@ async def safe_public_get(url: str) -> SafeHttpResponse:
     The caller can supply only the URL: method, headers and the public-host
     ceiling are fixed here, while ``safe_request`` still revalidates DNS and
     pins an approved address on every redirect hop.
+
+    注意：该门面固定公网主机上限（等价 ``("*",)``），不会收窄到自定义文件
+    工具声明的 network allowlist——因此它已加入 ast_policy 的
+    ``_SAFE_HTTP_CALLS``，导入即要求 network capability，禁止静默绕过。
     """
 
     return await safe_request(

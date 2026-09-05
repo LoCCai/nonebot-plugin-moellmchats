@@ -154,7 +154,7 @@ def load_emotions_candidate(config: dict) -> tuple[str, ...]:
     if not config.get("emotions_enabled"):
         return ()
     directory = Path(str(config.get("emotions_dir") or ""))
-    if directory.is_symlink() or not directory.is_dir():
+    if _emotion_directory_is_link(directory) or not directory.is_dir():
         raise ValueError(f"表情目录不可用: {directory}")
     return tuple(
         item.name
@@ -217,9 +217,29 @@ def _open_emotion_image(path: Path, *, read_body: bool) -> bytes | None:
         os.close(descriptor)
 
 
+def _emotion_directory_is_link(path: Path) -> bool:
+    """目录本身是否为链接。
+
+    除 symlink 外，Windows 的 NTFS junction（mklink /J，reparse tag 为
+    mount point）在 ``Path.is_symlink()`` 下返回 False、且 Windows 无
+    ``O_NOFOLLOW``，需按文件属性单独识别，否则指向任意本地目录的
+    junction 会被当作合法表情分组发布。
+    """
+
+    if path.is_symlink():
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        attributes = os.stat(path, follow_symlinks=False).st_file_attributes
+    except OSError:
+        return True
+    return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def _emotion_image_paths(directory: Path) -> tuple[Path, ...]:
     try:
-        if directory.is_symlink() or not directory.is_dir():
+        if _emotion_directory_is_link(directory) or not directory.is_dir():
             return ()
         candidates = sorted(directory.iterdir(), key=lambda path: path.name)
     except OSError:

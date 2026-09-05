@@ -167,10 +167,14 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 delivered = True
             for emotion_name in emotion_names_list:
                 # 发送
-                if emotion := get_emotion(
+                # get_emotion 会逐文件 open/fstat/read 挑选并读取图片，
+                # 大表情包时是成百次阻塞系统调用，必须移出事件循环
+                emotion = await asyncio.to_thread(
+                    get_emotion,
                     emotion_name,
                     protocol=onebot_protocol(self.bot, self.event) or "onebot_v11",
-                ):
+                )
+                if emotion:
                     try:
                         await self.bot.send(self.event, emotion)
                         delivered = True
@@ -423,6 +427,9 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             # 达到最大轮次时，移除工具强制总结
             if tool_round == max_tool_rounds:
                 data.pop("tools", None)
+                # 与视觉 no_tools 分支一致：本轮 payload 已无 tools，
+                # 激活集必须同步绑空，防止幻觉 tool_calls 在该轮被放行
+                self._bind_active_llm_tool_schema([])
                 current_stream_flag = data["stream"]
                 send_message_list.append(
                     {

@@ -238,7 +238,9 @@ _NETWORK_MODULES = {
     "urllib",
     "websockets",
 }
-_SAFE_HTTP_CALLS = {"safe_request"}
+# safe_public_get 与 safe_request 同为安全 HTTP 门面：自定义文件工具
+# import 任一都必须触发 network capability 检查，不能借公开门面静默绕过
+_SAFE_HTTP_CALLS = {"safe_request", "safe_public_get"}
 _GENERATED_DENIED_MODULES = {"builtins", "ctypes", "pickle", "posix"}
 _GENERATED_DENIED_BUILTINS = {
     "__import__",

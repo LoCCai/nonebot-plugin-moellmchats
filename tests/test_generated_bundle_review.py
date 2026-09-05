@@ -251,3 +251,42 @@ def test_superuser_config_handlers_reject_synthetic_events() -> None:
         start = source.index(command)
         block = source[start : start + 400]
         assert "is_synthetic_event" in block, f"{command} 缺少合成事件守卫"
+
+
+# ---------- 7. f3bb850 合并后的判例（tool_call_id 原样 / 拒绝记账 / junction） ----------
+
+@pytest.mark.asyncio
+async def test_schema_reject_preserves_raw_call_id_and_counts_usage() -> None:
+    from test_llm_tools import Harness, _agent_request_runtime, _call
+
+    harness = Harness({})
+    harness.agent_runtime = await _agent_request_runtime()
+    harness._active_llm_tool_names = frozenset()  # 任何名字都越界
+    messages = await harness._execute_tools(
+        [_call(7, "ghost_tool", '{"a": 1}')], "", [], ""
+    )
+
+    # tool_call_id 必须与其余 tool 消息写入一致：原样保留（不做 str 强转）
+    assert messages[-1]["tool_call_id"] == "7"
+    assert "不在本轮模型实际收到的工具 Schema" in messages[-1]["content"]
+    # 越界幻觉调用同样计入指纹用量与按名计数，防止绕开重复调用限额
+    digest = harness._canonical_arguments_digest({"a": 1})
+    assert harness._tool_fingerprint_usage()[(1, "ghost_tool", digest)] == 1
+    assert harness._current_tool_usage["ghost_tool"] == 1
+
+
+def test_emotion_directory_link_helper_on_plain_directory(tmp_path) -> None:
+    from nonebot_plugin_moellmchats.utils import _emotion_directory_is_link
+
+    plain = tmp_path / "group"
+    plain.mkdir()
+    assert _emotion_directory_is_link(plain) is False
+    # 无法 stat 的路径按链接处理（fail-closed）
+    assert _emotion_directory_is_link(tmp_path / "missing") is True
+
+
+def test_ast_policy_treats_safe_public_get_as_network_capability() -> None:
+    from nonebot_plugin_moellmchats.ast_policy import _SAFE_HTTP_CALLS
+
+    assert "safe_public_get" in _SAFE_HTTP_CALLS
+    assert "safe_request" in _SAFE_HTTP_CALLS
