@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前文档已同步 0.26.5 K-11 源码契约；精确实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 的 push / PR 双 Actions 已全绿，可作为隔离测试恢复点。本证据提交仍须通过自身双 Actions。完整边界见[K-11 实施状态](./规划/13-tool-progress-execution-truth-20260901.md)，PR #5 不在本任务合并，PyPI 与七七实际安装状态仍需分别核对。
+> 当前工作树已完成 0.26.6 K-12 与 K-13 的本地实现和完整本地门禁，包括网页/表情安全、完整指令、Tool Schema 作用域和同插件菜单恢复；尚未创建或推送 0.26.6 精确提交。最后一个远端已验证恢复点仍是 0.26.5 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`。完整边界见[K-12 实施状态](./规划/14-url-routing-emotion-webpage-20260901.md)和[K-13 实施状态](./规划/15-tool-schema-command-recovery-20260901.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
@@ -30,6 +30,8 @@
 | [K-09 后续设计清单](./规划/11-pending-issues-backlog.md) | 未在 0.26.3 简化处理的 spool、usage、热缓存、排空、Redis、MCP 与结构问题 |
 | [LLM 运行事故修复](./规划/12-llm-runtime-incident-20260901.md) | 0.26.4 K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
 | [工具进度与恢复状态真实性](./规划/13-tool-progress-execution-truth-20260901.md) | 0.26.5 K-11 的逐调用固定提示、可选自然话术、只读失败恢复、部分成功总结和交付边界 |
+| [网页路由、表情与安全正文提取](./规划/14-url-routing-emotion-webpage-20260901.md) | 0.26.6 K-12 的媒体传播所有权、表情文件校验、公网 GET 门面和七七离线浏览器提取 |
+| [指令投递与工具作用域真实性](./规划/15-tool-schema-command-recovery-20260901.md) | 0.26.6 K-13 的完整指令进度、本轮 Schema 强制许可、菜单恢复和 PicStatus 入口收口 |
 
 ---
 

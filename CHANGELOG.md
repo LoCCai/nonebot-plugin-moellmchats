@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.26.6] - 2026-09-01
+
+- NoneBot 工具进度不再只显示命令首词；改为显示经过折叠、截断和敏感字段脱敏的完整可执行指令，例如 `正在投递插件：nonebot_plugin_picstatus_ng｜指令：/zt 拓扑 全部`，相邻查询不再全部刷成相同的 `zt`。
+- 将每次模型请求实际注入的 Tool Schema 与当前 generation 绑定，并在串行、并行和超额调用处理前重新校验。模型即使猜出全局目录中存在、但本轮没有收到的插件名，也会以 `schema_scope_rejected` 拒绝，且不会发送虚假的执行进度或进入 Matcher。
+- NoneBot 插件返回 `not_matched` / `matched_empty` 时，会把本轮已授权同一插件的真实菜单重新注入 observation，并要求先尝试帮助、列表、拓扑或全部等发现指令，再以不同参数精确查询；不得借失败改调 Schema 外插件。
+- 自由合成 NoneBot 菜单指令的任务最低使用中等难度模型；配套 PicStatus/QWeb 菜单将规范入口收口为 `zt`，并补充拓扑、节点和宽带资源意图。该修复不要求把业务插件设为常驻。
+- 表情目录只发布至少含一张合格图片的分类；发送前再次校验普通文件、非符号链接、JPEG/PNG/GIF/WebP/BMP 扩展名与文件头、非空及 8 MiB 大小上限。`Thumbs.db`、伪装扩展名、空文件、过大文件和损坏后文件不再进入 OneBot Base64 图片发送。
+- 新增包内公开只读网络门面 `safe_public_get(url)`。调用方只能提供 URL；GET 方法、请求头和公网 allowlist 固定，底层继续逐跳重验 DNS、公网地址、IP 固定、重定向、HTTPS 降级与响应预算。
+- 与七七源码配套修复裸链接路由：明确投递给 Bot 的消息不进入自动视频探测，普通裸链接只有在媒体链路确认既有 intake 或真实视频候选后才停止事件传播；普通网页、502、无视频结果继续交给 LLM。
+- 七七 Registered Tool `extract_webpage` 先通过 `safe_public_get` 获取 HTML/纯文本，移除脚本、表单、iframe、资源标签及全部属性，再将离线文档交给阻断所有网络请求的共享浏览器池；池不可用时回退 BeautifulSoup 静态正文。HTTP 正文仍可返回，但只有满足 `ToolResultCitation` HTTPS 契约时才附带引用。
+- Python 3.10 条件下显式约束 NoneBot 已有的传递依赖 `pygtrie>=2.4.1,<2.6.0`，避开 2.6.0 使用 `typing.Self` 导致的导入失败；不新增安装分发包。七七网页工具复用其既有 BeautifulSoup、Playwright 和共享浏览器池。
+- 本版本不增加数据库 migration、Redis key 或后台任务。
+
 ## [0.26.5] - 2026-09-01
 
 - 将 `tool_progress_messages_enabled=true` 明确定义为工具进度总开关：每个通过 Schema、权限、信任和重复检查的调用都会收到一条运行时生成的确定性提示；搜索、协议、NoneBot、Registered、Custom File、Generated 和 MCP 使用各自可信来源标签，并行批次逐项提示。

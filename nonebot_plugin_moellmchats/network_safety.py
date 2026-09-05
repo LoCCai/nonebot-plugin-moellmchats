@@ -68,6 +68,14 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _ALLOWED_METHODS = frozenset(
     {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"}
 )
+_PUBLIC_DOCUMENT_HEADERS = MappingProxyType(
+    {
+        "accept": (
+            "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1"
+        ),
+        "user-agent": "Mozilla/5.0 (compatible; MoEllmChats-PublicDocument/1.0)",
+    }
+)
 
 Resolver = Callable[[str, int], Awaitable[Sequence[tuple[Any, ...]]]]
 Connector = Callable[
@@ -685,10 +693,28 @@ async def safe_request(
     raise SafeHttpError("安全 HTTP 重定向状态异常")
 
 
+async def safe_public_get(url: str) -> SafeHttpResponse:
+    """Fetch one public document through the fixed, read-only HTTP boundary.
+
+    This facade is intended for package-owned and registered read-only tools.
+    The caller can supply only the URL: method, headers and the public-host
+    ceiling are fixed here, while ``safe_request`` still revalidates DNS and
+    pins an approved address on every redirect hop.
+    """
+
+    return await safe_request(
+        url,
+        method="GET",
+        headers=_PUBLIC_DOCUMENT_HEADERS,
+        _network_allow=("*",),
+    )
+
+
 __all__ = [
     "SAFE_HTTP_VERSION",
     "SafeHttpError",
     "SafeHttpResponse",
+    "safe_public_get",
     "safe_request",
     "validate_public_url",
     "validate_url_arguments",

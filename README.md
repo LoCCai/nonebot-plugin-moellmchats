@@ -43,6 +43,10 @@
 
 - **0.26.5 工具进度与恢复状态真实性**：每个通过 Schema、权限、信任和重复检查的调用都会得到一条运行时固定进度提示；可选自然话术复用同一次工具决策响应并安全合并，不增加模型请求。已知只读 API 失败后由已确认输出恢复时不再伪装成 `partial_success`，真正的部分成功会明确保留已对用户可见的内容
 
+- **0.26.6 网页路由与表情素材加固**：表情分类只有在包含扩展名、文件头、大小和文件类型均合格的图片时才会公布，发送前使用 no-follow 再校验；新增固定公网只读 `safe_public_get`，供七七先安全获取并净化网页，再用阻断网络的共享浏览器池离线提取正文
+
+- **0.26.6 指令投递与工具作用域真实性**：NoneBot 进度显示脱敏后的完整指令；每轮执行严格绑定主模型实际收到的 Tool Schema，阻断跨插件幻觉调用。兼容插件未命中或空命中时重新提供同插件真实菜单，引导先查帮助、列表、拓扑或全部，再精确查询
+
 - **固定 OneBot / NapCat 协议工具（0.26.0，默认关闭）**：离线收录 OneBot v11 38、v12 31、NapCat 4.18.19 175 项动作，按当前 Bot、用户、场景和人工策略过滤；模型只填写固定动作的严格 Schema，永久拒绝凭证、原始发包、生命周期和任意文件接口，不提供通用 `call_api`
 
 - **分步 Agent 与二阶段确认**：标准路径每轮只执行一个工具，默认最多 6 步、同工具最多 2 次；Registered、Custom File 与 Generated Tool 中显式声明的变更型工具首次只生成一次性确认码，用户必须在同一会话另发 `确认执行 <确认码>` 才会执行，也可随时取消；只有程序化配置的受信只读批次才可能并行
@@ -59,7 +63,7 @@
 
 ## 📦 安装
 
-0.26.5 已按 [K-11 工具进度与恢复状态真实性](docs/规划/13-tool-progress-execution-truth-20260901.md) 完成实现与精确双 Actions 门禁。当前隔离测试恢复点是完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，不会在本任务中合并；PyPI 和七七实际安装状态必须分别核对。本证据提交还必须通过自身双 Actions，最终结果直接交付，不再创建第三个自指提交。
+当前工作树已完成 [K-12 网页路由、表情素材与安全正文提取](docs/规划/14-url-routing-emotion-webpage-20260901.md) 和 [K-13 指令投递与工具作用域真实性](docs/规划/15-tool-schema-command-recovery-20260901.md) 的 0.26.6 本地实现与完整本地门禁；尚未形成可安装的精确提交或远端门禁。当前最后一个已验证隔离恢复点仍是 0.26.5 完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。下方安装命令在 0.26.6 完成提交和门禁前仍固定到该恢复点，不得把本地 HEAD 或移动分支冒充已验证版本。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 

@@ -70,6 +70,9 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self.dynamic_context = ""
         self._pending_vision_images: list = []  # 本轮工具调用返回的待处理图片
         self._tool_schema_record = None
+        self._active_llm_tool_names: frozenset[str] = frozenset()
+        self._active_llm_tool_descriptions: dict[str, str] = {}
+        self._active_llm_tool_generation: int | None = None
         self._current_tool_usage = Counter()
         self._current_tool_fingerprint_usage = Counter()
         self._tool_call_fingerprints: dict[tuple[int, str, str], str] = {}
@@ -526,6 +529,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                             data.pop("stream_options", None)
                         if vision_model_info.get("no_tools"):
                             data.pop("tools", None)
+                            self._bind_active_llm_tool_schema([])
                         # 以 user 消息注入图片，视觉模型在下一轮可直接看到
                         image_content: list[dict[str, Any]] = [
                             {

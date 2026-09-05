@@ -125,7 +125,12 @@ class RuntimeReloader:
         )
         emotions_dir = Path(str(config_parser.get_config("emotions_dir", "")))
         if emotions_dir.is_dir():
-            paths.extend(sorted(emotions_dir.iterdir()))
+            emotion_groups = sorted(emotions_dir.iterdir())
+            paths.extend(emotion_groups)
+            for group in emotion_groups:
+                if group.is_symlink() or not group.is_dir():
+                    continue
+                paths.extend(sorted(group.iterdir()))
         return paths
 
     def fingerprint(

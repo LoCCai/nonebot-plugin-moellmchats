@@ -176,6 +176,15 @@ TOOLS_REGISTRY = [
 
 门面对所有重定向共享 15 秒总预算，最多 5 跳，请求体最多 256 KiB，响应体最多 1 MiB。每一跳都重新验证 allowlist 和公网 DNS 答案，将验证过的 IP 固定到实际连接，拒绝 URL 凭据、私网/元数据地址、HTTPS 降级和跨域敏感头继承。工具参数不能提供或扩大 allowlist。
 
+不要把 0.26.6 的 `safe_public_get` 与这里的 worker 注入混用：
+
+- Custom File 只能调用 worker 注入的 `safe_request`，不得从插件包导入 `safe_request` 或 `safe_public_get`；
+- Custom File 必须在 `capabilities.network.allow` 中逐个声明真实 API 主机，不能用 `"*"` 接收任意模型 URL；
+- `safe_public_get` 供包内可信、主进程运行的 Registered 只读文档工具使用，固定为任意**公网** GET，仍不允许私网或元数据地址；
+- Generated Tool 继续禁网，不会注入任一网络门面。
+
+需要接入 Bot/Event、宿主浏览器池或任意公网文档阅读时，应写独立 NoneBot 集成插件并注册强类型 `ToolSpec`，参见[Registered Tool 公网网页示例](./plugin-integration.md#registered-tool-读取用户指定的公网网页)，不要把浏览器或宿主对象塞进 Custom File worker。
+
 ---
 
 ## 工具依赖拓扑（TOOL_DEPENDENCIES）
