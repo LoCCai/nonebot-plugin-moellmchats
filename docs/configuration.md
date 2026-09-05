@@ -199,9 +199,9 @@ LOCALSTORE_USE_CWD=true
 | `show_datetime` | `false` | 是否在 system prompt 注入当前时间 | 需要时间感知时开启，会让缓存更易变化 |
 | `poke_llm_rate` | `0.3` | 群聊戳一戳走 LLM 的概率；0 表示关闭 | 控制成本和打扰程度 |
 
-`tool_progress_messages_enabled=true` 时，运行时为每个真正获准的调用单独生成一条提示。例如 NoneBot 为 `正在投递插件：bread_shop｜功能：抢面包`，搜索为 `正在调用搜索工具：web_search`，协议为 `正在调用协议接口：napcat_v11__send_like｜功能：发送点赞`。Registered、Custom File、Generated 和 MCP 也会显示固定来源与工具名。并行批次逐项发送；二阶段动作只显示“正在准备工具确认”，不会冒充已执行。未知工具、参数错误、越权、策略拒绝和重复受限调用不会发送“正在执行”。
+`tool_progress_messages_enabled=true` 时，运行时为每个真正获准的调用单独生成一条提示。例如 NoneBot 为 `正在投递插件：nonebot_plugin_picstatus_ng｜指令：/zt 拓扑 全部`，搜索为 `正在调用搜索工具：web_search`，协议为 `正在调用协议接口：napcat_v11__send_like｜功能：发送点赞`。Registered、Custom File、Generated 和 MCP 也会显示固定来源与工具名。并行批次逐项发送；二阶段动作只显示“正在准备工具确认”，不会冒充已执行。未知工具、参数错误、越权、策略拒绝、非本轮 Schema 工具和重复受限调用不会发送“正在执行”。
 
-固定提示只使用可信工具身份、协议摘要或 NoneBot 指令首词，不显示完整参数。发送有 1 秒预算；失败或超时只写安全状态和异常类型，不阻断工具，也不会重试副作用。提示本身不是成功证据，最终仍以 Adapter 成功回调和类型化工具结果为准。
+固定提示只使用可信工具身份、协议摘要，或 NoneBot 的完整可显示指令。NoneBot 指令会先做 Unicode 规范化、折叠空白、有界截断，并脱敏 QQ/数字 ID、URL、本地路径、Token、Cookie、Authorization 和 Base64；不会显示原始工具 JSON 或其他来源的模型可控参数。发送有 1 秒预算；失败或超时只写安全状态和异常类型，不阻断工具，也不会重试副作用。提示本身不是成功证据，最终仍以 Adapter 成功回调和类型化工具结果为准。
 
 `tool_progress_model_preface_enabled=true` 时，当前工具决策响应可以同时给出一句自然话术；运行时会折叠空白、截断并脱敏 QQ 号、URL、本地路径、Token、Cookie、Authorization 和 Base64，再把它合并到同一条固定提示中。它不会额外调用模型；并行批次只把话术附在第一项。空白话术按空处理，绝不会压掉固定提示。
 

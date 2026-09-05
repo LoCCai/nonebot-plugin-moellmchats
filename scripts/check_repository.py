@@ -154,6 +154,7 @@ def _check_dependencies() -> tuple[int, int]:
         "nonebot-adapter-onebot",
         "nonebot-plugin-localstore",
         "nonebot2",
+        "pygtrie",
         "python-dotenv",
         "redis",
         "sqlalchemy",
@@ -162,6 +163,11 @@ def _check_dependencies() -> tuple[int, int]:
     }
     if set(runtime) - {"python"} != expected_runtime:
         raise RepositoryCheckError(f"runtime dependency set drifted: {sorted(set(runtime) - {'python'})}")
+    if runtime.get("pygtrie") != {
+        "version": ">=2.4.1,<2.6.0",
+        "python": "<3.11",
+    }:
+        raise RepositoryCheckError("Python 3.10 pygtrie compatibility constraint drifted")
     expected_development = {
         "build",
         "fakeredis",
@@ -188,8 +194,8 @@ def _check_dependencies() -> tuple[int, int]:
         for item in includes
     ):
         raise RepositoryCheckError("wheel/sdist protocol resource include is missing")
-    if poetry.get("version") != "0.26.5":
-        raise RepositoryCheckError("package version is not 0.26.5")
+    if poetry.get("version") != "0.26.6":
+        raise RepositoryCheckError("package version is not 0.26.6")
     return len(expected_runtime), len(expected_development)
 
 

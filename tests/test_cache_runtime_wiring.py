@@ -475,9 +475,7 @@ async def test_unique_business_owner_bypasses_wrong_classifier_selection(
             mcp_tool_names=set(),
         )
     )
-    session = _FakeSession(
-        [_model_response(required_plugins=["qi_db_analytics"])]
-    )
+    session = _FakeSession([_model_response(required_plugins=["qi_db_analytics"])])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
 
     variants = [
@@ -503,6 +501,83 @@ async def test_unique_business_owner_bypasses_wrong_classifier_selection(
             "0",
             False,
             ["qi_post"],
+        )
+        assert categorizer.selection_source == "business_intent_owner"
+    assert session.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_picstatus_observed_intents_override_database_or_search_hallucination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    status_info = with_menu_discovery(
+        {
+            "name": "PicStatus 运行状态",
+            "description": "运行拓扑与资源历史",
+            "usage": "/zt 拓扑 全部",
+        },
+        [
+            {
+                "func": "运行拓扑",
+                "brief_des": "查看完整节点列表",
+                "trigger_method": "命令",
+                "pmn_triggers": [
+                    {"type": "command", "value": "zt 拓扑 全部"},
+                ],
+                "pmn_llm_intents": [
+                    "你不能找找全部的列表然后判断我说的宽带是哪个吗",
+                ],
+            },
+            {
+                "func": "资源历史",
+                "brief_des": "查看宽带资源曲线",
+                "trigger_method": "命令",
+                "pmn_triggers": [
+                    {
+                        "type": "command",
+                        "value": "zt 资源 [宿主名] [24h|7d|30d|90d]",
+                    },
+                ],
+                "pmn_llm_intents": [
+                    "用状态模块看一下我们的宽带近一天的状态图",
+                ],
+            },
+        ],
+    )
+    snapshot = _CountingSnapshot(
+        ToolSnapshot(
+            generation=42,
+            plugin_info={
+                "nonebot_plugin_picstatus_ng": status_info,
+                "qi_db_analytics": {
+                    "name": "统计",
+                    "description": "错误候选",
+                    "usage": "/查询",
+                },
+            },
+            custom_tools={},
+            tool_dependencies={},
+            mcp_tool_names=set(),
+        )
+    )
+    session = _FakeSession([_model_response(required_plugins=["qi_db_analytics", "web_search"])])
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+
+    for phrase in (
+        "用状态模块看一下我们的宽带近一天的状态图",
+        "你不能找找全部的列表然后判断我说的宽带是哪个吗",
+    ):
+        categorizer = _categorizer(
+            phrase,
+            snapshot,
+            catalog_cache=MemoryToolCatalogCache(),
+            scene="group",
+        )
+        assert await categorizer.get_category() == (
+            "0",
+            False,
+            ["nonebot_plugin_picstatus_ng"],
         )
         assert categorizer.selection_source == "business_intent_owner"
     assert session.call_count == 0

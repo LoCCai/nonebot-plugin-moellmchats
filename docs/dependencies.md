@@ -28,6 +28,7 @@ Python 3.14 及更高版本虽然可能满足元数据范围，但尚未进入�
 | `ujson>=5.12.0,<6.0.0` | 兼容既有配置和模型 payload JSON 路径 | 否 |
 | `nonebot-plugin-localstore>=0.7.0,<0.8.0` | 确定配置目录并创建插件私有文件 | 只访问本地配置目录 |
 | `python-dotenv>=1.2.2,<2.0.0` | 保留 NoneBot `.env` 配置链的显式安全版本下限 | 否；插件源码不直接 import 它 |
+| `pygtrie>=2.4.1,<2.6.0`（仅 Python `<3.11`） | 约束 NoneBot 的传递依赖；`pygtrie 2.6.0` 在 Python 3.10 导入时使用不存在的 `typing.Self` | 否；3.11～3.13 仍由 NoneBot 自己解析兼容版本 |
 | `redis>=5.2.0,<7.0.0` | 可选 Redis admission、冷却、PendingAction 和 history backend | 否；默认没有 Redis URL，也不会创建 client |
 | `sqlalchemy>=2.0.0,<3.0.0` | Agent/history/summary/usage/audit 的可选 PostgreSQL Schema、Repository 与 engine | 否；默认使用 Memory 组合 |
 | `tomli>=2.0.1,<3.0.0`（仅 Python `<3.11`） | Python 3.10 读取 TOML；3.11+ 使用标准库 `tomllib` | 否 |
@@ -82,6 +83,18 @@ MoEllmChats 可以读取“已经加载的 PicMenu Next 当前内存目录”，
 确定性进度标题、敏感文本折叠和参数摘要继续只使用标准库 `re`、`unicodedata`、`hashlib` 与现有 NoneBot Bot/Event 接口；1 秒预算复用包内 Python 3.10～3.13 兼容 timeout。自然话术来自同一次工具决策响应，不会增加模型调用。只读恢复与未解决失败计数只扩展进程内 `PluginDispatchResult` 和既有审计 metadata。
 
 因此 0.26.5 的运行依赖和 0.26.4 完全相同，没有新增数据库表、migration、Redis key、后台任务或外部服务。唯一新增配置字段是布尔值 `tool_progress_model_preface_enabled=false`，由已有 LocalStore 配置文件、`ConfigParser.set_config()` 和 runtime watcher 管理。
+
+### 0.26.6 网页门面与表情校验没有新增功能依赖
+
+`safe_public_get` 继续只使用 K-09 已有的标准库 `asyncio`、`socket`、`ssl`、`ipaddress` 和 `urllib.parse` 网络门面。表情扩展名、文件头、大小、普通文件和 no-follow 复核也只使用标准库 `os`、`stat` 与 `pathlib`。这些功能没有新增 Python 包、数据库 migration、Redis key、后台任务或配置字段。
+
+2026-09-01 的四版本门禁同时发现新发布的 `pygtrie 2.6.0` 会在 Python 3.10 导入时引用该版本标准库尚不存在的 `typing.Self`，导致 NoneBot 在加载插件之前失败。0.26.6 因此把 NoneBot 已有的传递依赖在 Python `<3.11` 条件下显式约束为 `pygtrie>=2.4.1,<2.6.0`；这不会新增安装包，也不约束 3.11～3.13，只确保声明支持的 3.10 可以解析到可导入版本。
+
+配套的七七 `extract_webpage` 属于宿主源码，不打进本插件 wheel。它复用七七已经声明的 `beautifulsoup4`、Playwright/HTMLRender 依赖与 `browser_pool_fx`，不会把这些包新增到 MoEllmChats 的依赖清单。浏览器只处理经安全门面获取并移除主动内容和全部属性的离线 HTML，且 Context 阻断所有网络请求。
+
+### 0.26.6 指令作用域与菜单恢复没有新增依赖
+
+本轮 Tool Schema 绑定、规范化指令显示、菜单恢复提示和难度下限只复用标准库 `collections.abc`、`hashlib`、`re`、`unicodedata` 及现有运行快照/工具目录。PicStatus 的入口和 PicMenu/QWeb 功能目录调整也只是元数据与 Matcher 配置变化。没有新增 Python 包、数据库 migration、Redis key、后台任务或外部服务。
 
 ### 协议清单不是新运行依赖
 
@@ -168,5 +181,6 @@ MCP 不经过文件/生成工具的 nobody sandbox：
 6. 0.26.3 的安全 HTTP、single-flight 和取消清理复用标准库及已有依赖；没有把 `httpx`、`requests`、额外 DNS 客户端或新后端加入安装集合。
 7. 0.26.4 只修正分类超时、日志脱敏和内存工具计数，并为既有布尔配置增加 Matcher；依赖集合与 0.26.3 相同，不新增 migration。
 8. 0.26.5 只扩展进程内进度显示、调度状态计数和一个布尔配置；不新增 Python/系统依赖、migration、Redis key 或后台任务。
+9. 0.26.6 的公网 GET 和表情校验只使用标准库；七七网页工具复用宿主已有 BeautifulSoup、Playwright 和共享池。另对 Python 3.10 显式约束已存在的 NoneBot 传递依赖 `pygtrie<2.6.0`，不新增安装分发包。
 
 依赖约束本身只说明 resolver 允许的范围。最终可安装性还要由 fresh wheel/sdist 构建和包外安装 smoke 验证，见[安装验收](./installation.md#隔离功能验收清单)。

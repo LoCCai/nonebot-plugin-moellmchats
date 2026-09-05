@@ -147,6 +147,8 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 
 这就是“完整紧凑索引、命中后展开”：日常闲聊不用携带全部 Tool Schema，也不要求把业务插件常驻。`resident_plugins` 只是显式强制注入/诊断兜底。不同来源的工具名必须全局唯一；冲突会拒绝整代候选，不会按加载顺序静默覆盖。
 
+0.26.6 起，详细 Schema 不只约束模型输入，还成为本轮执行的强制许可集合。运行时把主模型实际收到的工具名、说明和 generation 绑定到请求；串行、并行和本轮超额调用都会在进度发送、权限判断及 Matcher 投递之前复核。全局 generation 中存在但本轮未注入的工具会记录为 `schema_scope_rejected`，不会因为模型记住旧会话工具名或猜中插件名而执行。因此“模型调用了数据库模块”不再等价于“数据库模块被允许”；本轮 Schema 才是执行边界。
+
 菜单字段会清理展示标签与控制字符，拒绝错误类型，并限制每插件功能数、每功能触发数、字段长度和总字符数；PicMenu 隐藏功能既不进入普通用户分类目录，也不会在插件命中后的普通用户详细 Schema 中展开。它们与 plugin info、ToolSpec、`command_start` 和目录摘要一起固化到同代不可变快照；分类和 Schema 缓存共同防止空目录/完整目录、不同 generation、场景或权限交叉复用。兼容 `command` Schema 禁止额外字段，字符串长度为 1～1024；说明列出当前 generation 的首选及其他真实命令前缀，不要求模型猜 `<命令前缀>`。真实事件/定时功能只作发现提示，不能由合成 command 伪造。菜单可见性只是前置过滤，执行端仍必须复核真实权限。
 
 协议工具在请求进入 Agent generation 后另外建立一次不可变能力快照。v11 调用 `get_version_info`，只有 `app_name=NapCat.Onebot` 才增加 NapCat 扩展；v12 调用 `get_supported_actions`，只取 Bot 声明支持与包内标准清单的交集。探测失败只让当前请求看不到协议工具，不会中止普通聊天。
@@ -157,7 +159,24 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 
 默认路径每轮最多真正执行一个工具。若模型一次返回多个调用，超出的调用会记录为跳过；模型拿到本轮 observation 后可在下一轮继续调用。总轮次取 `max_tool_rounds` 与 `max_agent_steps` 的较小值；同一工具使用同一组规范化参数还受 `max_repeated_tool_calls` 限制，不同参数不会被误判成原样循环。
 
+NoneBot 兼容插件的 command 需要主模型根据真实菜单合成，因此即使分类器把语义标成简单，只要本轮选中了菜单插件，选模难度也至少提升为中等。插件返回 `not_matched` 或 `matched_empty` 时，observation 会重新附上同一个已授权插件的真实菜单，并要求优先尝试帮助、列表、拓扑或全部等发现入口；取得候选后再用不同 command 精确查询。恢复过程不能转去本轮 Schema 外的插件，也不会把所有插件常驻来换取命中率。
+
 Custom File 若声明有界 network allowlist，只能调用 worker 注入的 `safe_request`；直接使用 `aiohttp`、`httpx`、`requests`、`urllib` 或 `socket` 会在 AST 预检中拒绝。该门面每一跳都重新校验 allowlist 与全部 DNS 地址，只连接已经验证的公网 IP，关闭自动重定向并拒绝 URL 凭据、HTTPS 降级和跨域敏感头继承；最多 5 次重定向，所有跳共享固定时间与请求/响应大小预算。它是管理员工具的受控网络门面，不是对任意 Python 源码绝对安全的证明。
+
+可信 Registered 文档工具另有 0.26.6 的固定只读门面 `safe_public_get(url)`。它不接受 method、headers、body、resolver、connector 或 allowlist 参数，内部固定为任意公网 GET，并复用同一套逐跳 DNS/IP/重定向/预算边界。七七的指定网页阅读链路是：
+
+```text
+用户消息中的 URL
+  → parser_media 只做非 to_me 的推测媒体所有权检查
+  → Registered extract_webpage
+  → safe_public_get 固定公网 GET
+  → HTML 主动内容、资源标签、注释和全部属性净化
+  → browser_pool_fx 的新 Context + 阻断 **/* + set_content 离线正文提取
+  → 浏览器池超时/不可用时 BeautifulSoup 静态正文
+  → 有界 ToolResult + 满足 HTTPS 引用契约时附带去查询参数的 citation
+```
+
+共享浏览器进程可能以 no-sandbox、忽略证书或关闭 Web Security 的兼容参数运行，所以它不直接导航模型 URL，也不加载原页面脚本或子资源。安全 HTTP 负责网络真实性，浏览器池只负责净化后 DOM 的离线文本语义；两层不能交换顺序。
 
 工具结果统一转换为 `ToolResult`：
 

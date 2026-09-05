@@ -18,6 +18,7 @@ from nonebot_plugin_moellmchats.agent_context_runtime import (
 from nonebot_plugin_moellmchats.agent_runtime import (
     AgentRunState,
     AgentStep,
+    AgentStepStatus,
     DeadlineContext,
     ToolCall,
     ToolCallStatus,
@@ -112,6 +113,24 @@ class Harness(LlmToolsMixin):
             tool_dependencies={},
             mcp_tool_names=set(),
         )
+        active_names = set(self.tool_snapshot.custom_tools) | set(self.tool_snapshot.plugin_info)
+        active_names.update(spec.name for spec in builtin_tool_specs())
+        provider_catalog = self.tool_snapshot.provider_catalog
+        if provider_catalog is not None:
+            active_names.update(provider_catalog.tools)
+        self._active_llm_tool_names = frozenset(active_names)
+        self._active_llm_tool_generation = self.tool_snapshot.generation
+        self._active_llm_tool_descriptions = {}
+        for name, entry in {
+            **dict(self.tool_snapshot.custom_tools),
+            **dict(self.tool_snapshot.plugin_info),
+        }.items():
+            description = entry.get("description")
+            tool_spec = entry.get("tool_spec")
+            if isinstance(tool_spec, ToolSpec):
+                description = tool_spec.description
+            if isinstance(description, str):
+                self._active_llm_tool_descriptions[name] = description
         self.messages_handler = SimpleNamespace(
             messages_entity=SimpleNamespace(
                 add_used_plugins=lambda value: None,
@@ -226,10 +245,7 @@ def _complete_catalog(
     )
     registrations = {
         registration.provider_id: registration
-        for registration in (
-            ProviderRegistration.from_provider(provider)
-            for provider in providers
-        )
+        for registration in (ProviderRegistration.from_provider(provider) for provider in providers)
     }
     records: dict[str, DiscoveredTool] = {}
     for provider, specs in (
@@ -297,9 +313,7 @@ async def test_only_one_tool_executes_each_round() -> None:
             "second": {"func": second},
         }
     )
-    messages = await harness._execute_tools(
-        [_call(1, "first"), _call(2, "second")], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "first"), _call(2, "second")], "", [], "")
     assert calls == {"first": 1}
     assert "已跳过" in messages[-1]["content"]
 
@@ -1197,10 +1211,7 @@ async def test_real_tool_path_records_completed_rejected_and_round_limit_calls()
         "skipped",
         "skipped",
     ]
-    assert all(
-        call.tool_source.value == "registered"
-        for call in runtime.tool_calls
-    )
+    assert all(call.tool_source.value == "registered" for call in runtime.tool_calls)
 
 
 @pytest.mark.asyncio
@@ -1417,17 +1428,13 @@ async def test_mutating_tool_always_requires_separate_nonce_confirmation() -> No
         {"mutate": spec.as_legacy_schema()},
         "不要确认执行，也不要改任何东西",
     )
-    messages = await harness._execute_tools(
-        [_call(1, "mutate", '{"confirm": true}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "mutate", '{"confirm": true}')], "", [], "")
     assert executions == []
     assert "尚未执行" in messages[-1]["content"]
     assert "确认执行" in messages[-1]["content"]
 
     harness = Harness({"mutate": spec.as_legacy_schema()}, "确认执行")
-    messages = await harness._execute_tools(
-        [_call(2, "mutate", '{"confirm": true}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(2, "mutate", '{"confirm": true}')], "", [], "")
     assert executions == []
     assert "尚未执行" in messages[-1]["content"]
     await pending_action_store.clear()
@@ -1462,9 +1469,7 @@ async def test_generation_redis_pending_failure_rejects_without_memory_fallback(
     )
     resources = RuntimeResourceBuilder(
         RuntimeResourceSettings(
-            redis=RedisClientSettings(
-                redis_url="redis://user:private-secret@redis.invalid/0"
-            ),
+            redis=RedisClientSettings(redis_url="redis://user:private-secret@redis.invalid/0"),
             redis_pending_actions=RedisPendingActionSettings(),
         ),
         redis_manager_factory=lambda settings: RedisClientManager(
@@ -1496,9 +1501,7 @@ async def test_generation_redis_pending_failure_rejects_without_memory_fallback(
     tool_snapshot = ToolSnapshot(
         generation=1,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(1, registered=(spec,)),
@@ -1561,10 +1564,7 @@ async def test_duplicate_mutating_prompt_uses_remaining_ttl(monkeypatch) -> None
         "",
     )
 
-    assert duplicate.bot.sent[-1] == (
-        "工具 mutate 会修改外部状态，尚未执行。\n"
-        "请在 1 秒内单独发送：确认执行 ABC123"
-    )
+    assert duplicate.bot.sent[-1] == ("工具 mutate 会修改外部状态，尚未执行。\n请在 1 秒内单独发送：确认执行 ABC123")
     assert "请在 1 秒内" in messages[-1]["content"]
 
 
@@ -1637,17 +1637,13 @@ async def test_structured_tool_result_uses_one_model_and_history_rendering() -> 
     assert '"image_count":1' in content
     assert "private-image-reference" not in content
     assert harness._pending_vision_images == ["private-image-reference"]
-    assert harness.messages_handler.messages_entity.tool_messages[-1][
-        "content"
-    ] == content[:300]
+    assert harness.messages_handler.messages_entity.tool_messages[-1]["content"] == content[:300]
 
 
 @pytest.mark.asyncio
 async def test_non_object_tool_arguments_become_tool_error() -> None:
     harness = Harness({})
-    messages = await harness._execute_tools(
-        [_call(1, "web_search", "[]")], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "web_search", "[]")], "", [], "")
     assert "必须是 JSON 对象" in messages[-1]["content"]
     assert harness.bot.sent == []
 
@@ -1655,9 +1651,7 @@ async def test_non_object_tool_arguments_become_tool_error() -> None:
 @pytest.mark.asyncio
 async def test_missing_required_argument_becomes_tool_error() -> None:
     harness = Harness({})
-    messages = await harness._execute_tools(
-        [_call(1, "web_search", "{}")], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "web_search", "{}")], "", [], "")
     assert "缺少必填参数" in messages[-1]["content"]
     assert harness.bot.sent == []
 
@@ -1752,9 +1746,7 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
             "plugin_demo",
         )
     ]
-    assert harness.bot.sent == [
-        "正在投递插件：plugin_demo｜功能：demo"
-    ]
+    assert harness.bot.sent == ["正在投递插件：plugin_demo｜指令：/demo"]
     assert "visible output" in messages[-1]["content"]
 
 
@@ -1829,9 +1821,7 @@ async def test_plugin_failure_fingerprint_blocks_only_identical_retry(
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
-    legacy, _specs = build_nonebot_plugin_candidate(
-        {"plugin_demo": {"description": "demo", "usage": "/demo"}}
-    )
+    legacy, _specs = build_nonebot_plugin_candidate({"plugin_demo": {"description": "demo", "usage": "/demo"}})
     commands: list[str] = []
 
     async def dispatch(_bot, _event, command, _source, *, plugin_name):
@@ -1884,9 +1874,7 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
-    legacy, _specs = build_nonebot_plugin_candidate(
-        {"plugin_demo": {"description": "demo", "usage": "/demo"}}
-    )
+    legacy, _specs = build_nonebot_plugin_candidate({"plugin_demo": {"description": "demo", "usage": "/demo"}})
     calls = 0
 
     async def dispatch(*_args, **_kwargs):
@@ -1898,13 +1886,9 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
             matcher_matched=1,
             api_failed=1,
             api_unknown=(1 if status is PluginDispatchStatus.RESULT_UNKNOWN else 0),
-            successful_captures=(
-                1 if status is PluginDispatchStatus.PARTIAL_SUCCESS else 0
-            ),
+            successful_captures=(1 if status is PluginDispatchStatus.PARTIAL_SUCCESS else 0),
             text=("已发送部分内容" if status is PluginDispatchStatus.PARTIAL_SUCCESS else ""),
-            images=("private-image-reference",)
-            if status is PluginDispatchStatus.PARTIAL_SUCCESS
-            else (),
+            images=("private-image-reference",) if status is PluginDispatchStatus.PARTIAL_SUCCESS else (),
         )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
@@ -1923,10 +1907,7 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
     )
 
     assert calls == 1
-    assert (
-        "结果不确定" in first[-1]["content"]
-        or "这部分执行成功" in first[-1]["content"]
-    )
+    assert "结果不确定" in first[-1]["content"] or "这部分执行成功" in first[-1]["content"]
     if status is PluginDispatchStatus.PARTIAL_SUCCESS:
         assert "已发送部分内容" in first[-1]["content"]
         assert "已确认发送图片 1 张" in first[-1]["content"]
@@ -2015,9 +1996,7 @@ async def test_progress_message_combines_optional_model_preface_once(
         "",
     )
 
-    assert harness.bot.sent == [
-        "正在调用工具：query_once\n说明：我来查询一下 不会提前下结论"
-    ]
+    assert harness.bot.sent == ["正在调用工具：query_once\n说明：我来查询一下 不会提前下结论"]
 
 
 @pytest.mark.asyncio
@@ -2119,15 +2098,16 @@ def test_protocol_progress_uses_trusted_action_summary() -> None:
         {},
         confirmation_required=False,
         model_preface="",
-    ) == (
-        "正在调用协议接口：napcat_v11__send_like｜功能：发送点赞"
+    ) == ("正在调用协议接口：napcat_v11__send_like｜功能：发送点赞")
+    assert (
+        LlmToolsMixin._build_tool_progress_message(
+            view,
+            {},
+            confirmation_required=True,
+            model_preface="",
+        )
+        == "正在准备工具确认：napcat_v11__send_like"
     )
-    assert LlmToolsMixin._build_tool_progress_message(
-        view,
-        {},
-        confirmation_required=True,
-        model_preface="",
-    ) == "正在准备工具确认：napcat_v11__send_like"
 
 
 def test_progress_model_preface_redacts_sensitive_values() -> None:
@@ -2257,19 +2237,13 @@ async def test_progress_cancellation_propagates_before_tool_execution() -> None:
 
 
 def test_command_audit_preview_never_exposes_arguments_or_locations() -> None:
-    preview = LlmToolsMixin._safe_command_preview(
-        "/排行 123456 https://example.invalid/path?token=secret"
-    )
+    preview = LlmToolsMixin._safe_command_preview("/排行 123456 https://example.invalid/path?token=secret")
     assert preview.startswith("/排行 <args> [tokens=3,chars=")
     assert "123456" not in preview
     assert "example.invalid" not in preview
     assert "secret" not in preview
-    assert "secret" not in LlmToolsMixin._safe_command_preview(
-        "Authorization secret-token"
-    )
-    assert LlmToolsMixin._safe_command_preview(
-        "/var/private/config.json token"
-    ).startswith("<redacted>")
+    assert "secret" not in LlmToolsMixin._safe_command_preview("Authorization secret-token")
+    assert LlmToolsMixin._safe_command_preview("/var/private/config.json token").startswith("<redacted>")
 
 
 @pytest.mark.asyncio
@@ -2290,9 +2264,7 @@ async def test_hallucinated_superuser_tool_is_rejected_without_breaking_reply() 
     )
     harness = Harness({"admin_only": spec.as_legacy_schema()})
     harness.event.user_id = 2
-    messages = await harness._execute_tools(
-        [_call(1, "admin_only")], "normal answer", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "admin_only")], "normal answer", [], "")
     assert executions == 0
     assert "仅允许超级用户" in messages[-1]["content"]
     assert harness.sent == []
@@ -2322,9 +2294,7 @@ async def test_nested_argument_type_error_becomes_tool_error() -> None:
         handler=nested,
     )
     harness = Harness({"nested": spec.as_legacy_schema()})
-    messages = await harness._execute_tools(
-        [_call(1, "nested", '{"payload":{"count":"bad"}}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "nested", '{"payload":{"count":"bad"}}')], "", [], "")
     assert "类型错误" in messages[-1]["content"]
 
 
@@ -2416,7 +2386,7 @@ async def test_llm_tools_rejects_unknown_name_before_legacy_dispatch(
         "",
     )
 
-    assert "不在当前 generation" in messages[-1]["content"]
+    assert "不在本轮模型实际收到的工具 Schema" in messages[-1]["content"]
     assert "已拒绝执行" in messages[-1]["content"]
     assert harness.sent == []
     assert harness.bot.sent == []
@@ -2442,9 +2412,7 @@ async def test_provider_catalog_execution_enforces_trust_permission() -> None:
     snapshot = ToolSnapshot(
         generation=3,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(3, registered=(spec,)),
@@ -2476,11 +2444,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     monkeypatch.setattr(
         config_parser,
         "get_config",
-        lambda key, default=None: (
-            False
-            if key == "tool_progress_messages_enabled"
-            else original_get_config(key, default)
-        ),
+        lambda key, default=None: False if key == "tool_progress_messages_enabled" else original_get_config(key, default),
     )
 
     async def mutate() -> str:
@@ -2499,9 +2463,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     snapshot = ToolSnapshot(
         generation=4,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(4, registered=(spec,)),
@@ -2523,9 +2485,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     assert runtime is not None
     assert runtime.tool_calls[-1].status is ToolCallStatus.WAITING_CONFIRMATION
     assert runtime.tool_calls[-1].confirmation_id is not None
-    assert AgentRunState.WAITING_CONFIRMATION in {
-        run.state for run in runtime.run_history
-    }
+    assert AgentRunState.WAITING_CONFIRMATION in {run.state for run in runtime.run_history}
     assert runtime.run.state is AgentRunState.EXECUTING
     assert harness.sent == []
     assert len(harness.bot.sent) == 1
@@ -2694,3 +2654,118 @@ async def test_llm_tools_config_rollback_keeps_legacy_nonebot_adapter(
 
     assert rollback_calls == [("/rollback", "rollback_plugin")]
     assert "rollback output" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_model_hallucinated_plugin_outside_round_schema_is_never_dispatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {
+            "nonebot_plugin_picstatus_ng": {
+                "description": "runtime status",
+                "usage": "/zt 拓扑 全部",
+            },
+            "qi_db_analytics": {
+                "description": "database analytics",
+                "usage": "/查询",
+            },
+        }
+    )
+    dispatched: list[tuple[str, str]] = []
+
+    async def dispatch(_bot, _event, command, _source, *, plugin_name):
+        dispatched.append((plugin_name, command))
+        raise AssertionError("out-of-schema plugin must not reach NoneBot dispatch")
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    harness.agent_runtime = await _agent_request_runtime()
+    harness._active_llm_tool_names = frozenset({"nonebot_plugin_picstatus_ng"})
+    messages = await harness._execute_tools(
+        [_call(1, "qi_db_analytics", '{"command":"/zt 拓扑 全部"}')],
+        "",
+        [],
+        "",
+    )
+
+    assert dispatched == []
+    assert harness.bot.sent == []
+    assert "不在本轮模型实际收到的工具 Schema" in messages[-1]["content"]
+    assert harness.agent_runtime.steps[-1].status is AgentStepStatus.SKIPPED
+    assert harness.agent_runtime.steps[-1].error == "ToolSchemaScopeRejected"
+
+
+@pytest.mark.asyncio
+async def test_nonebot_not_matched_feedback_reinjects_same_plugin_discovery_menu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {
+            "nonebot_plugin_picstatus_ng": {
+                "description": "runtime status",
+                "usage": ("/zt 帮助\n/zt 拓扑 全部\n/zt 节点 <名称或ID> 24h\n/zt 资源 [宿主名] 24h"),
+            }
+        }
+    )
+
+    async def dispatch(_bot, _event, _command, _source, *, plugin_name):
+        assert plugin_name == "nonebot_plugin_picstatus_ng"
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.NOT_MATCHED,
+            matcher_checked=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    messages = await harness._execute_tools(
+        [
+            _call(
+                1,
+                "nonebot_plugin_picstatus_ng",
+                '{"command":"/错误状态 宽带"}',
+            )
+        ],
+        "",
+        [],
+        "",
+    )
+
+    feedback = messages[-1]["content"]
+    assert "同插件恢复指引" in feedback
+    assert "先选择帮助、列表、拓扑或全部" in feedback
+    assert "/zt 拓扑 全部" in feedback
+    assert "不得改调其他未展示工具" in feedback
+
+
+def test_nonebot_progress_renders_full_bounded_redacted_command() -> None:
+    view = LlmToolExecutionView(
+        tool_name="nonebot_plugin_picstatus_ng",
+        generation=1,
+        route=LlmToolExecutionRoute.NONEBOT_PLUGIN,
+        source=ToolSource.NONEBOT_PLUGIN,
+        spec=None,
+        legacy_entry={},
+        provider_authoritative=False,
+    )
+
+    assert (
+        LlmToolsMixin._build_tool_progress_message(
+            view,
+            {"command": "/zt 拓扑 全部"},
+            confirmation_required=False,
+            model_preface="",
+        )
+        == "正在投递插件：nonebot_plugin_picstatus_ng｜指令：/zt 拓扑 全部"
+    )
+
+    redacted = LlmToolsMixin._safe_progress_command(
+        "/zt 节点 1143785758 https://example.invalid/?token=secret /root/private/config.json"
+    )
+    assert "1143785758" not in redacted
+    assert "example.invalid" not in redacted
+    assert "/root/private" not in redacted

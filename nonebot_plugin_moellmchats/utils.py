@@ -1,8 +1,9 @@
 import inspect
-from os import listdir
+import os
 from pathlib import Path
 from random import choice
 import re
+import stat
 from traceback import format_exc
 from typing import Annotated, get_args, get_origin, get_type_hints
 
@@ -29,6 +30,12 @@ except ImportError:
 Bot_NICKNAME: str = next(iter(nonebot.get_driver().config.nickname))  # bot的nickname
 # 表情包名字缓存
 _emotions_cache = None
+
+_EMOTION_IMAGE_EXTENSIONS = frozenset(
+    {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+)
+_MAX_EMOTION_IMAGE_BYTES = 8 * 1_024 * 1_024
+_EMOTION_HEADER_BYTES = 16
 
 _DEFAULT_REPLIES = {
     "hello": [
@@ -147,9 +154,81 @@ def load_emotions_candidate(config: dict) -> tuple[str, ...]:
     if not config.get("emotions_enabled"):
         return ()
     directory = Path(str(config.get("emotions_dir") or ""))
-    if not directory.is_dir():
+    if directory.is_symlink() or not directory.is_dir():
         raise ValueError(f"表情目录不可用: {directory}")
-    return tuple(sorted(item.name for item in directory.iterdir()))
+    return tuple(
+        item.name
+        for item in sorted(directory.iterdir(), key=lambda path: path.name)
+        if not item.is_symlink()
+        and item.is_dir()
+        and _emotion_image_paths(item)
+    )
+
+
+def _matches_emotion_header(extension: str, header: bytes) -> bool:
+    extension = extension.casefold()
+    if extension == ".png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if extension in {".jpg", ".jpeg"}:
+        return header.startswith(b"\xff\xd8\xff")
+    if extension == ".gif":
+        return header.startswith((b"GIF87a", b"GIF89a"))
+    if extension == ".webp":
+        return (
+            len(header) >= 12
+            and header.startswith(b"RIFF")
+            and header[8:12] == b"WEBP"
+        )
+    if extension == ".bmp":
+        return header.startswith(b"BM")
+    return False
+
+
+def _open_emotion_image(path: Path, *, read_body: bool) -> bytes | None:
+    if path.suffix.casefold() not in _EMOTION_IMAGE_EXTENSIONS:
+        return None
+    try:
+        if path.is_symlink():
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except (OSError, ValueError):
+        return None
+    try:
+        file_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or not 0 < file_stat.st_size <= _MAX_EMOTION_IMAGE_BYTES
+        ):
+            return None
+        with os.fdopen(descriptor, "rb", closefd=False) as file:
+            data = file.read(
+                file_stat.st_size + 1 if read_body else _EMOTION_HEADER_BYTES
+            )
+        if read_body and len(data) != file_stat.st_size:
+            return None
+        if not _matches_emotion_header(path.suffix, data[:_EMOTION_HEADER_BYTES]):
+            return None
+        return data
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def _emotion_image_paths(directory: Path) -> tuple[Path, ...]:
+    try:
+        if directory.is_symlink() or not directory.is_dir():
+            return ()
+        candidates = sorted(directory.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return ()
+    return tuple(
+        path
+        for path in candidates
+        if _open_emotion_image(path, read_body=False) is not None
+    )
 
 
 def parse_emotion(text: str) -> tuple:
@@ -188,9 +267,17 @@ def get_emotions_names() -> list:
     global _emotions_cache
     if _emotions_cache is None:
         try:
-            # 初次调用时读取磁盘并缓存
-            _emotions_cache = listdir(config_parser.get_config("emotions_dir"))
-        except OSError:
+            _emotions_cache = list(
+                load_emotions_candidate(
+                    {
+                        "emotions_enabled": config_parser.get_config(
+                            "emotions_enabled"
+                        ),
+                        "emotions_dir": config_parser.get_config("emotions_dir"),
+                    }
+                )
+            )
+        except (OSError, ValueError):
             logger.warning(f"读取表情包目录失败:\n{format_exc()}")
             _emotions_cache = []
 
@@ -207,20 +294,24 @@ def get_emotion(
         # Optional local emotions are paths/bytes, not v12 implementation-owned
         # file_id values.  Skip the attachment without failing the main reply.
         return None
+    if (
+        not isinstance(emoji_name, str)
+        or not emoji_name
+        or Path(emoji_name).name != emoji_name
+        or emoji_name not in get_emotions_names()
+    ):
+        return None
     path = Path(config_parser.get_config("emotions_dir")) / emoji_name
-    emotion_image_list = list(path.glob("*"))
+    emotion_image_list = _emotion_image_paths(path)
     if not emotion_image_list:
         return None
-    image = path / choice(emotion_image_list)
-    try:
-        with open(image, "rb") as f:
-            img = f.read()
-            from nonebot.adapters.onebot.v11 import MessageSegment
-
-            return MessageSegment.image(img)
-    except OSError:
-        logger.warning(format_exc())
+    image = choice(emotion_image_list)
+    img = _open_emotion_image(image, read_body=True)
+    if img is None:
         return None
+    from nonebot.adapters.onebot.v11 import MessageSegment
+
+    return MessageSegment.image(img)
 
 
 # 消息格式转换

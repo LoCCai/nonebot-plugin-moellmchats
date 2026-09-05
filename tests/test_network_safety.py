@@ -8,9 +8,43 @@ from nonebot_plugin_moellmchats import network_safety as module
 from nonebot_plugin_moellmchats.network_safety import (
     SAFE_HTTP_MAX_RESPONSE_BYTES,
     SafeHttpError,
+    safe_public_get,
     safe_request,
     validate_public_url,
 )
+
+
+@pytest.mark.asyncio
+async def test_safe_public_get_fixes_method_headers_and_public_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def request(url: str, **kwargs):
+        calls.append((url, kwargs))
+        return module.SafeHttpResponse(
+            status=200,
+            headers={"content-type": "text/html"},
+            body=b"<html></html>",
+            url=url,
+            redirect_count=0,
+        )
+
+    monkeypatch.setattr(module, "safe_request", request)
+
+    response = await safe_public_get("https://example.com/article")
+
+    assert response.status == 200
+    assert calls == [
+        (
+            "https://example.com/article",
+            {
+                "method": "GET",
+                "headers": module._PUBLIC_DOCUMENT_HEADERS,
+                "_network_allow": ("*",),
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

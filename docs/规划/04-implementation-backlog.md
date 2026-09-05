@@ -1741,3 +1741,31 @@ Admin API
 5. 串行四版本、sandbox、制品、包外加载和实现/证据双 Actions。
 
 当前基线固定为 `7693b4de1c9240dccde8773557623056a51fa3b4`。实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已通过定向 `148 passed`、Python 3.10～3.13 串行普通全量各 `3129 passed, 1 skipped`、mandatory root sandbox `41 passed, 0 skipped`、静态/仓库检查、fresh wheel/sdist、Twine、四组包外加载及精确 push/pull_request 双 Actions；纯证据提交自身双 Actions 尚待关闭。这些不是生产证据。K-11 不新增运行依赖、数据库 migration、Redis key 或后台任务，也不操作七七、真实模型或 QQ。
+
+---
+
+# K-12：网页路由、表情素材与安全正文提取（0.26.6）
+
+完整实施状态见 [K-12 专项文档](./14-url-routing-emotion-webpage-20260901.md)。依赖顺序固定为：
+
+1. 自动媒体 Matcher 只在确认媒体所有权后阻断传播，明确 `to_me` 的网页请求直接交给聊天路由；
+2. 表情分类与发送共用扩展名、文件头、普通文件、no-follow、非空和大小上限校验；
+3. 包内公开 `safe_public_get(url)` 固定 GET 与公网 ceiling，复用 K-09 的逐跳 IP 固定网络门面；
+4. 七七 `extract_webpage` 只把净化后的离线 HTML 交给阻断所有请求的共享浏览器池，并保留静态回退；
+5. 0.26.6 文档、四版本、静态、sandbox、制品与包外门禁。
+
+当前基线是 0.26.5 证据提交 `8bdb202f5e60f05ecbbc0cb4248cdd5ae623c595`，仅有本地实施证据；未提交或推送 0.26.6，未安装或重启七七，未发送真实模型或 QQ 请求。功能实现不新增安装包、migration、Redis key 或后台任务；Python 3.10 条件下显式约束已存在的 NoneBot 传递依赖 `pygtrie<2.6.0`，七七复用已有 BeautifulSoup、Playwright 与浏览器池。
+
+---
+
+# K-13：指令投递与工具作用域真实性（0.26.6）
+
+完整实施状态见 [K-13 专项文档](./15-tool-schema-command-recovery-20260901.md)。本节点依赖 K-08 的真实 Matcher 状态、K-11 的逐调用进度和 K-12 的当前 generation 工作树，顺序固定为：
+
+1. NoneBot 进度从命令首词改为有界、脱敏的完整可显示指令；
+2. 把主模型实际收到的 Tool Schema 和 generation 绑定为请求级强制许可；
+3. `not_matched` / `matched_empty` 只在同一授权插件内重新提供完整菜单并引导发现式查询；
+4. NoneBot command 合成设置中等难度下限，PicStatus 默认入口收口并同步 PicMenu/QWeb 意图；
+5. 定向、四版本、静态、sandbox、制品和包外加载门禁。
+
+现场证据证明数据库错调不是 `resident_plugins` 造成：两份配置的常驻列表都为空，旧执行器仍接受本轮 Schema 外的全局插件。K-13 以执行端 `schema_scope_rejected` 修复根因，不通过把插件全部常驻扩大 Schema。四版本、静态、sandbox、制品、包外加载、PicStatus 和七七目录本地门禁均已通过；尚未提交、推送、安装、重启或导入 CMS。七七 `.env.prod` 的显式 `PS_COMMAND` 仍含旧别名，需在后续维护窗口由用户移除并重载。

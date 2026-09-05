@@ -205,6 +205,59 @@ register_tool(CURRENT_CHAT_TOOL)
 
 `require("nonebot_plugin_moellmchats")` 必须在导入接口之前执行，确保依赖插件先加载。再按宿主项目的既有方式加载 `moellm_whoami`；如果项目扫描 `src/plugins`，通常无需把它发布到 PyPI。
 
+### Registered Tool 读取用户指定的公网网页
+
+0.26.6 起，可信主进程插件可以导入 `safe_public_get(url)` 实现只读网页工具。这个门面只允许调用方提供 URL；HTTP 方法固定为 GET，请求头和公网范围固定，底层仍逐跳校验 DNS 与全部地址、固定实际连接 IP，并拒绝 URL 凭据、私网/元数据地址、HTTPS 降级、重定向循环、超时和超过 1 MiB 的响应。
+
+```python
+from nonebot_plugin_moellmchats.network_safety import (
+    SafeHttpError,
+    safe_public_get,
+)
+from nonebot_plugin_moellmchats import (
+    ToolCapabilityV2,
+    ToolEffect,
+    ToolPolicy,
+    ToolResult,
+    ToolSpec,
+    register_tool,
+)
+
+
+async def read_public_page(*, url: str) -> ToolResult:
+    try:
+        response = await safe_public_get(url)
+    except SafeHttpError:
+        return ToolResult(text="该地址没有通过公网安全检查。")
+    if response.status != 200:
+        return ToolResult(text=f"网页返回 HTTP {response.status}。")
+    return ToolResult(text=response.text[:12000])
+
+
+register_tool(
+    ToolSpec(
+        name="read_public_page",
+        description="读取用户明确提供的公网网页；用于总结或评价指定链接。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "minLength": 1, "maxLength": 2048}
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        handler=read_public_page,
+        effect=ToolEffect.READ_ONLY,
+        permission="user",
+        policy=ToolPolicy.configured(
+            ToolCapabilityV2(network_allow=("*",)),
+        ),
+    )
+)
+```
+
+`("*",)` 只适用于确实要读取任意公网文档的包内可信工具，不能用来放宽 Custom File 的主机清单。若宿主还有共享浏览器池，也不要把模型 URL 直接交给 `page.goto()`：七七采用“安全 GET → 删除脚本、iframe、表单、资源标签、注释和全部属性 → 浏览器 Context 阻断 `**/*` → `set_content()` 离线提取 → BeautifulSoup 静态回退”。其浏览器预设包含 no-sandbox、忽略证书等兼容选项，直接导航用户 URL 不能证明 SSRF 或 DNS rebinding 安全。
+
 ### `ToolSpec` 字段
 
 构造签名为：
@@ -308,6 +361,10 @@ handler 推荐返回 `ToolResult`：
 ```
 
 常驻只跳过分类选择，不跳过 `use_tools`、黑名单、权限、generation 或安全策略。黑名单优先于依赖和常驻。正常业务召回应依赖完整紧凑目录；`resident_plugins` 只用于临时验收、诊断分类漏选或管理员明确要求每轮强制注入，不应把所有插件常驻。
+
+执行端还会绑定每次主模型请求实际注入的 Tool Schema。插件即使存在于当前 generation，只要没有出现在本轮 Schema 中，模型猜出的调用也会在进度发送和 Matcher 之前拒绝。插件接入方不需要、也不应通过常驻整个目录绕过这条边界。
+
+对于带菜单的兼容插件，建议把“帮助、列表、拓扑、全部、搜索候选”等发现入口明确写进 `pmn_triggers`、`llm_intents` 和功能说明。运行时在 `not_matched` / `matched_empty` 后会把同一授权插件的真实菜单重新提供给模型，允许先调用发现入口，再用实质不同的 `command` 精确查询；它不会因此开放另一个插件。入口变更时要同时更新 Matcher 默认别名、`PluginMetadata.extra.menu_data` 和宿主 Feature Catalog，避免菜单仍教模型生成已经删除的命令。
 
 ## 相关页面
 

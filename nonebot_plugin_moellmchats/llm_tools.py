@@ -24,7 +24,6 @@ from .event_simulator import (
 )
 from .nonebot_plugin_tools import (
     PluginDispatchError,
-    configured_command_prefixes,
 )
 from .parallel_execution import (
     ReadOnlyParallelExecutionError,
@@ -67,6 +66,8 @@ from .utils import parse_emotion
 _PROGRESS_SEND_TIMEOUT_SECONDS = 1.0
 _PROGRESS_PREFACE_MAX_CHARS = 160
 _PROGRESS_FEATURE_MAX_CHARS = 64
+_PROGRESS_COMMAND_MAX_CHARS = 240
+_RECOVERY_MENU_MAX_CHARS = 4_000
 
 if TYPE_CHECKING:
     from .agent_context_runtime import AgentRequestRuntime
@@ -117,6 +118,9 @@ class LlmToolsMixin:
         _tool_call_fingerprints: dict[tuple[int, str, str], str]
         _tool_retry_blocked_tools: set[str]
         _tool_progress_statuses: dict[str, str]
+        _active_llm_tool_names: frozenset[str]
+        _active_llm_tool_descriptions: dict[str, str]
+        _active_llm_tool_generation: int | None
         tool_selection_source: str
         tool_intent_digest: str
 
@@ -162,10 +166,7 @@ class LlmToolsMixin:
             or "?" in verb
             or "\\" in verb
             or "=" in verb
-            or any(
-                marker in lowered
-                for marker in ("token", "cookie", "authorization", "secret")
-            )
+            or any(marker in lowered for marker in ("token", "cookie", "authorization", "secret"))
             or (verb.startswith("/") and "/" in verb[1:])
         ):
             verb = "<redacted>"
@@ -175,9 +176,7 @@ class LlmToolsMixin:
         return f"{verb}{suffix} [tokens={len(tokens)},chars={len(compact)}]"
 
     def _progress_messages_enabled(self) -> bool:
-        return bool(
-            config_parser.get_config("tool_progress_messages_enabled", True)
-        )
+        return bool(config_parser.get_config("tool_progress_messages_enabled", True))
 
     def _progress_model_preface_enabled(self) -> bool:
         return bool(
@@ -204,7 +203,7 @@ class LlmToolsMixin:
         return str(user_id) in {str(item) for item in superusers}
 
     @staticmethod
-    def _safe_progress_preface(content: object) -> str:
+    def _redact_progress_text(content: object, *, max_chars: int) -> str:
         if not isinstance(content, str):
             return ""
         compact = " ".join(unicodedata.normalize("NFKC", content).split())
@@ -237,7 +236,24 @@ class LlmToolsMixin:
             compact,
         )
         compact = re.sub(r"(?<!\d)\d{5,}(?!\d)", "<id>", compact)
-        return compact[:_PROGRESS_PREFACE_MAX_CHARS]
+        if len(compact) <= max_chars:
+            return compact
+        return compact[: max_chars - 1].rstrip() + "…"
+
+    @classmethod
+    def _safe_progress_preface(cls, content: object) -> str:
+        return cls._redact_progress_text(
+            content,
+            max_chars=_PROGRESS_PREFACE_MAX_CHARS,
+        )
+
+    @classmethod
+    def _safe_progress_command(cls, command: object) -> str:
+        rendered = cls._redact_progress_text(
+            command,
+            max_chars=_PROGRESS_COMMAND_MAX_CHARS,
+        )
+        return rendered or "<未提供可显示指令>"
 
     @staticmethod
     def _safe_progress_feature(value: object, *, fallback: str) -> str:
@@ -269,22 +285,8 @@ class LlmToolsMixin:
         return compact[:_PROGRESS_FEATURE_MAX_CHARS]
 
     @classmethod
-    def _nonebot_progress_feature(cls, arguments: Mapping[str, Any]) -> str:
-        command = arguments.get("command")
-        if not isinstance(command, str):
-            return "插件指令"
-        compact = " ".join(unicodedata.normalize("NFKC", command).split())
-        if not compact:
-            return "插件指令"
-        verb = compact.split(" ", 1)[0]
-        for prefix in sorted(
-            configured_command_prefixes(),
-            key=lambda item: (-len(item), item),
-        ):
-            if prefix and verb.startswith(prefix):
-                verb = verb[len(prefix) :]
-                break
-        return cls._safe_progress_feature(verb, fallback="插件指令")
+    def _nonebot_progress_command(cls, arguments: Mapping[str, Any]) -> str:
+        return cls._safe_progress_command(arguments.get("command"))
 
     @classmethod
     def _protocol_progress_feature(cls, view: LlmToolExecutionView) -> str:
@@ -324,7 +326,7 @@ class LlmToolsMixin:
             heading += f"｜功能：{cls._protocol_progress_feature(view)}"
         elif view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN:
             heading = f"正在投递插件：{view.tool_name}"
-            heading += f"｜功能：{cls._nonebot_progress_feature(arguments)}"
+            heading += f"｜指令：{cls._nonebot_progress_command(arguments)}"
         else:
             source_labels = {
                 ToolSource.REGISTERED: "注册工具",
@@ -338,6 +340,102 @@ class LlmToolsMixin:
         if model_preface:
             return f"{heading}\n说明：{model_preface}"
         return heading
+
+    def _active_schema_allows(self, tool_name: object) -> bool:
+        if not isinstance(tool_name, str) or not tool_name:
+            return False
+        active_generation = getattr(self, "_active_llm_tool_generation", None)
+        snapshot_generation = getattr(self.tool_snapshot, "generation", None)
+        if (
+            not isinstance(active_generation, int)
+            or isinstance(active_generation, bool)
+            or active_generation != snapshot_generation
+        ):
+            return False
+        active_names = getattr(self, "_active_llm_tool_names", None)
+        return isinstance(active_names, frozenset) and tool_name in active_names
+
+    async def _reject_call_outside_active_schema(
+        self,
+        *,
+        call: Mapping[str, Any],
+        tool_name: object,
+        send_message_list: list,
+        created_at: float,
+        started_monotonic: float,
+    ) -> bool:
+        if self._active_schema_allows(tool_name):
+            return False
+        safe_name = tool_name if isinstance(tool_name, str) and tool_name else "未知工具"
+        try:
+            raw_arguments = call.get("function", {}).get("arguments") or "{}"
+            parsed_arguments = json.loads(raw_arguments)
+        except Exception:
+            parsed_arguments = {}
+        if not isinstance(parsed_arguments, Mapping):
+            parsed_arguments = {}
+        safe_arguments = dict(parsed_arguments)
+        send_message_list.append(
+            {
+                "role": "tool",
+                "tool_call_id": str(call.get("id") or ""),
+                "content": (
+                    f"工具 {safe_name} 不在本轮模型实际收到的工具 Schema 中，已拒绝执行。"
+                    "只能使用本轮 tools 字段列出的工具，不得猜测其他插件。"
+                ),
+            }
+        )
+        await self._record_agent_tool_outcome(
+            call=call,
+            tool_view=None,
+            arguments=safe_arguments,
+            status=ToolCallStatus.REJECTED,
+            created_at=created_at,
+            started_monotonic=started_monotonic,
+            error_type="ToolSchemaScopeRejected",
+        )
+        self._log_tool_execution(
+            call=call,
+            tool_name=safe_name,
+            arguments=safe_arguments,
+            arguments_digest=self._canonical_arguments_digest(safe_arguments),
+            status="schema_scope_rejected",
+            retry_decision="blocked",
+            duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+        )
+        return True
+
+    def _same_plugin_discovery_recovery(
+        self,
+        tool_name: str,
+        status: PluginDispatchStatus,
+    ) -> str:
+        if status not in {
+            PluginDispatchStatus.NOT_MATCHED,
+            PluginDispatchStatus.MATCHED_EMPTY,
+        }:
+            return ""
+        guidance = (
+            "\n\n[同插件恢复指引] 只能继续使用本轮已授权的同一个插件，"
+            "不得改调其他未展示工具。请重新核对下面的真实菜单；"
+            "若节点、目标或名称不确定，先选择帮助、列表、拓扑或全部等发现指令，"
+            "得到候选后再用实质不同的 command 精确查询。"
+        )
+        if not self._active_schema_allows(tool_name):
+            return guidance
+        descriptions = getattr(self, "_active_llm_tool_descriptions", None)
+        if not isinstance(descriptions, Mapping):
+            return guidance
+        description = descriptions.get(tool_name)
+        if not isinstance(description, str) or not description.strip():
+            return guidance
+        menu = description.strip()
+        marker = "菜单功能提示"
+        if marker in menu:
+            menu = menu[menu.index(marker) :]
+        if len(menu) > _RECOVERY_MENU_MAX_CHARS:
+            menu = menu[: _RECOVERY_MENU_MAX_CHARS - 12].rstrip() + "\n...[菜单已截断]"
+        return f"{guidance}\n{menu}"
 
     def _set_tool_progress_status(
         self,
@@ -535,15 +633,9 @@ class LlmToolsMixin:
             "api_unknown": dispatch.api_unknown if dispatch else 0,
             "api_read_failed": dispatch.api_read_failed if dispatch else 0,
             "api_read_recovered": dispatch.api_read_recovered if dispatch else 0,
-            "api_unresolved_failed": (
-                dispatch.api_unresolved_failed if dispatch else 0
-            ),
-            "api_unresolved_unknown": (
-                dispatch.api_unresolved_unknown if dispatch else 0
-            ),
-            "mutating_api_success": (
-                dispatch.mutating_api_succeeded if dispatch else 0
-            ),
+            "api_unresolved_failed": (dispatch.api_unresolved_failed if dispatch else 0),
+            "api_unresolved_unknown": (dispatch.api_unresolved_unknown if dispatch else 0),
+            "mutating_api_success": (dispatch.mutating_api_succeeded if dispatch else 0),
             "progress_status": self._tool_progress_status(call),
             "status": status,
             "duration_ms": max(0, int(duration_ms)),
@@ -576,11 +668,7 @@ class LlmToolsMixin:
 
         def count(name: str) -> int:
             value = raw.get(name, 0)
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value < 0
-            ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"plugin_dispatch.{name} 非法")
             return value
 
@@ -704,6 +792,8 @@ class LlmToolsMixin:
             tool_name = function.get("name")
             arguments_text = function.get("arguments")
             if not isinstance(tool_name, str) or not tool_name or not isinstance(arguments_text, str):
+                return None
+            if not self._active_schema_allows(tool_name):
                 return None
             if tool_name not in runner.eligible_tools or tool_name not in graph.tools:
                 return None
@@ -1125,9 +1215,7 @@ class LlmToolsMixin:
 
         for prepared in batch.calls:
             outcome = outcomes[prepared.tool_name]
-            arguments_digest = self._canonical_arguments_digest(
-                prepared.arguments
-            )
+            arguments_digest = self._canonical_arguments_digest(prepared.arguments)
             fingerprint = (
                 int(getattr(self.tool_snapshot, "generation", 0)),
                 prepared.tool_name,
@@ -1222,6 +1310,14 @@ class LlmToolsMixin:
             trace_started_monotonic = time.monotonic()
             result_limit = config_parser.get_config("max_tool_result_chars", 6000)
             func_name = call["function"]["name"]
+            if await self._reject_call_outside_active_schema(
+                call=call,
+                tool_name=func_name,
+                send_message_list=send_message_list,
+                created_at=trace_created_at,
+                started_monotonic=trace_started_monotonic,
+            ):
+                continue
             tool_view = self.tool_snapshot.resolve_llm_tool_execution(
                 func_name,
                 is_superuser=is_superuser,
@@ -1272,14 +1368,10 @@ class LlmToolsMixin:
                     call=call,
                     tool_name=func_name,
                     arguments=safe_arguments,
-                    arguments_digest=self._canonical_arguments_digest(
-                        safe_arguments
-                    ),
+                    arguments_digest=self._canonical_arguments_digest(safe_arguments),
                     status="arguments_rejected",
                     retry_decision="allow_corrected_arguments",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
             assert isinstance(args, dict)
@@ -1314,19 +1406,14 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="retry_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
             fingerprint_usage = self._tool_fingerprint_usage()
             repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
             if fingerprint_usage[fingerprint] + 1 > repeated_limit:
-                tool_result = (
-                    f"工具 {func_name} 使用相同参数已达到单任务重复调用上限 "
-                    f"{repeated_limit}，请基于已有结果完成回答。"
-                )
+                tool_result = f"工具 {func_name} 使用相同参数已达到单任务重复调用上限 {repeated_limit}，请基于已有结果完成回答。"
                 send_message_list.append(
                     {
                         "role": "tool",
@@ -1350,9 +1437,7 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="repeat_limit_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
@@ -1380,9 +1465,7 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="unknown_tool_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
@@ -1426,17 +1509,11 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="trust_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
-            if (
-                tool_view.spec is not None
-                and tool_view.spec.permission == "superuser"
-                and not is_superuser
-            ):
+            if tool_view.spec is not None and tool_view.spec.permission == "superuser" and not is_superuser:
                 send_message_list.append(
                     {
                         "role": "tool",
@@ -1460,9 +1537,7 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="permission_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
@@ -1564,10 +1639,7 @@ class LlmToolsMixin:
                             arguments_digest=arguments_digest,
                             status=ToolCallStatus.WAITING_CONFIRMATION.value,
                             retry_decision="await_confirmation",
-                            duration_ms=int(
-                                (time.monotonic() - trace_started_monotonic)
-                                * 1000
-                            ),
+                            duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                         )
                         if runtime is not None:
                             await runtime.advance(AgentRunState.EXECUTING)
@@ -1656,13 +1728,7 @@ class LlmToolsMixin:
                                 arguments_digest=arguments_digest,
                                 status="pending_validation_rejected",
                                 retry_decision="blocked",
-                                duration_ms=int(
-                                    (
-                                        time.monotonic()
-                                        - trace_started_monotonic
-                                    )
-                                    * 1000
-                                ),
+                                duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                             )
                             continue
                         await self._send_tool_progress(
@@ -1732,15 +1798,9 @@ class LlmToolsMixin:
                             arguments_digest=arguments_digest,
                             status=pending_status.value,
                             retry_decision=(
-                                "await_confirmation"
-                                if pending_status
-                                is ToolCallStatus.WAITING_CONFIRMATION
-                                else "blocked"
+                                "await_confirmation" if pending_status is ToolCallStatus.WAITING_CONFIRMATION else "blocked"
                             ),
-                            duration_ms=int(
-                                (time.monotonic() - trace_started_monotonic)
-                                * 1000
-                            ),
+                            duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                         )
                         if runtime is not None and pending_status is ToolCallStatus.WAITING_CONFIRMATION:
                             await runtime.advance(AgentRunState.EXECUTING)
@@ -1826,13 +1886,9 @@ class LlmToolsMixin:
                             )
                             if not isinstance(plugin_result, ToolResult):
                                 raise TypeError("NoneBot Provider handler 必须返回 ToolResult")
-                            dispatch_result = self._dispatch_from_tool_result(
-                                plugin_result
-                            )
+                            dispatch_result = self._dispatch_from_tool_result(plugin_result)
                             if dispatch_result is None:
-                                raise TypeError(
-                                    "NoneBot Provider handler 缺少调度状态"
-                                )
+                                raise TypeError("NoneBot Provider handler 缺少调度状态")
                             if not dispatch_result.succeeded:
                                 raise PluginDispatchError(dispatch_result)
                         else:
@@ -1847,17 +1903,14 @@ class LlmToolsMixin:
                                 raw_dispatch_result,
                                 PluginDispatchResult,
                             ):
-                                raise TypeError(
-                                    "NoneBot 兼容调度必须返回 PluginDispatchResult"
-                                )
+                                raise TypeError("NoneBot 兼容调度必须返回 PluginDispatchResult")
                             dispatch_result = raw_dispatch_result
                             if not dispatch_result.succeeded:
                                 raise PluginDispatchError(dispatch_result)
                             plugin_result = ToolResult(
                                 text=(
                                     dispatch_result.text
-                                    if dispatch_result.status
-                                    is PluginDispatchStatus.MATCHED_WITH_OUTPUT
+                                    if dispatch_result.status is PluginDispatchStatus.MATCHED_WITH_OUTPUT
                                     else "插件已成功执行一次由 Bot API 确认的副作用动作。"
                                 ),
                                 images=dispatch_result.images,
@@ -1885,15 +1938,13 @@ class LlmToolsMixin:
                     )
                 except PluginDispatchError as error:
                     dispatch_result = error.result
-                    trace_status = self._trace_status_for_dispatch(
-                        dispatch_result.status
-                    )
-                    trace_error_type = (
-                        "PluginDispatch"
-                        + dispatch_result.status.value.title().replace("_", "")
-                    )
+                    trace_status = self._trace_status_for_dispatch(dispatch_result.status)
+                    trace_error_type = "PluginDispatch" + dispatch_result.status.value.title().replace("_", "")
                     plugin_result = None
-                    tool_result = str(error)
+                    tool_result = str(error) + self._same_plugin_discovery_recovery(
+                        func_name,
+                        dispatch_result.status,
+                    )
                     self._remember_tool_attempt(
                         fingerprint,
                         dispatch_result.status.value,
@@ -1903,9 +1954,7 @@ class LlmToolsMixin:
                     trace_status = ToolCallStatus.FAILED
                     trace_error_type = "ToolExecutionError"
                     plugin_result = None
-                    tool_result = (
-                        "插件处理异常；不要重复调用相同工具和参数。"
-                    )
+                    tool_result = "插件处理异常；不要重复调用相同工具和参数。"
                     self._remember_tool_attempt(
                         fingerprint,
                         PluginDispatchStatus.FAILED.value,
@@ -1919,11 +1968,7 @@ class LlmToolsMixin:
                     )
                     if plugin_images:
                         self._pending_vision_images.extend(plugin_images)
-                    visible_metadata = {
-                        key: value
-                        for key, value in plugin_result.metadata.items()
-                        if key != "plugin_dispatch"
-                    }
+                    visible_metadata = {key: value for key, value in plugin_result.metadata.items() if key != "plugin_dispatch"}
                     visible_plugin_result = ToolResult(
                         text=plugin_result.text,
                         images=plugin_result.images,
@@ -1932,9 +1977,7 @@ class LlmToolsMixin:
                         structured=plugin_result.structured,
                         citations=plugin_result.citations,
                     )
-                    rendered_plugin_result = render_tool_result(
-                        visible_plugin_result
-                    )
+                    rendered_plugin_result = render_tool_result(visible_plugin_result)
                     if rendered_plugin_result:
                         tool_result = f"插件执行返回结果：\n{rendered_plugin_result}{_PLUGIN_SYSTEM_HINT}"
                     else:
@@ -1942,6 +1985,10 @@ class LlmToolsMixin:
                         trace_error_type = "PluginDispatchEmptyInvariant"
                         tool_result = (
                             "插件命中但没有可验证结果；不要重复调用相同工具和参数。"
+                            + self._same_plugin_discovery_recovery(
+                                func_name,
+                                PluginDispatchStatus.MATCHED_EMPTY,
+                            )
                         )
                         self._remember_tool_attempt(
                             fingerprint,
@@ -1984,9 +2031,7 @@ class LlmToolsMixin:
                 status=attempt_status,
                 retry_decision=retry_decision,
                 dispatch=dispatch_result,
-                duration_ms=int(
-                    (time.monotonic() - trace_started_monotonic) * 1000
-                ),
+                duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
             )
             if result_limit is not None and len(tool_result) > result_limit:
                 tool_result = tool_result[:result_limit] + "\n...[工具结果已截断]"
@@ -2015,6 +2060,14 @@ class LlmToolsMixin:
             func_name = call.get("function", {}).get("name", "未知插件")
             skipped_created_at = time.time()
             skipped_started_monotonic = time.monotonic()
+            if await self._reject_call_outside_active_schema(
+                call=call,
+                tool_name=func_name,
+                send_message_list=send_message_list,
+                created_at=skipped_created_at,
+                started_monotonic=skipped_started_monotonic,
+            ):
+                continue
             try:
                 skipped_view = self.tool_snapshot.resolve_llm_tool_execution(
                     func_name,
@@ -2047,9 +2100,7 @@ class LlmToolsMixin:
                 started_monotonic=skipped_started_monotonic,
                 error_type="ToolRoundCallLimit",
             )
-            skipped_digest = self._canonical_arguments_digest(
-                skipped_arguments
-            )
+            skipped_digest = self._canonical_arguments_digest(skipped_arguments)
             self._log_tool_execution(
                 call=call,
                 tool_name=func_name,
@@ -2057,9 +2108,7 @@ class LlmToolsMixin:
                 arguments_digest=skipped_digest,
                 status="round_limit_rejected",
                 retry_decision="allow_next_round",
-                duration_ms=int(
-                    (time.monotonic() - skipped_started_monotonic) * 1000
-                ),
+                duration_ms=int((time.monotonic() - skipped_started_monotonic) * 1000),
             )
 
         # 将本 round 的工具消息（截断结果）追加到历史记录 entity，供下轮对话使用

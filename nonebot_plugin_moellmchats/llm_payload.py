@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import hashlib
 import re
 
@@ -17,18 +18,63 @@ from .tool_schema_cache import (
 
 
 class LlmPayloadMixin:
+    @staticmethod
+    def _schema_tool_bindings(
+        tools_schema: object,
+    ) -> tuple[frozenset[str], dict[str, str]]:
+        """Detach the exact tool namespace exposed in one model payload."""
+
+        if not isinstance(tools_schema, list):
+            return frozenset(), {}
+        names: set[str] = set()
+        descriptions: dict[str, str] = {}
+        for raw_tool in tools_schema:
+            if not isinstance(raw_tool, Mapping):
+                continue
+            function = raw_tool.get("function")
+            if not isinstance(function, Mapping):
+                continue
+            name = function.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            names.add(name)
+            description = function.get("description")
+            if isinstance(description, str) and description:
+                descriptions[name] = description
+        return frozenset(names), descriptions
+
+    def _bind_active_llm_tool_schema(self, tools_schema: object) -> None:
+        """Bind execution admission to the exact generation-local LLM schema."""
+
+        names, descriptions = self._schema_tool_bindings(tools_schema)
+        generation = getattr(self.tool_snapshot, "generation", None)
+        self._active_llm_tool_generation = (
+            generation if isinstance(generation, int) and not isinstance(generation, bool) else None
+        )
+        self._active_llm_tool_names = names
+        self._active_llm_tool_descriptions = descriptions
+
+    def _apply_compatibility_tool_difficulty_floor(
+        self,
+        difficulty: str,
+        required_plugins: object,
+    ) -> str:
+        """Use at least the medium model for free-form NoneBot command synthesis."""
+
+        if difficulty != "0" or not isinstance(required_plugins, (list, tuple, set)):
+            return difficulty
+        plugin_info = getattr(self.tool_snapshot, "plugin_info", None)
+        if not isinstance(plugin_info, Mapping):
+            return difficulty
+        if any(isinstance(plugin_name, str) and plugin_name in plugin_info for plugin_name in required_plugins):
+            return "1"
+        return difficulty
+
     def _tool_schema_request_inputs(self) -> tuple[set[str], bool, bool]:
         resident_plugins = set(model_selector.get_resident_plugins())
-        selected_plugins = (
-            set(getattr(self, "required_plugins", [])) | resident_plugins
-        )
-        model_supports_tools = (
-            model_selector.get_use_tools()
-            and not self.model_info.get("no_tools", False)
-        )
-        search_enabled = (
-            model_selector.get_web_search() if model_supports_tools else False
-        )
+        selected_plugins = set(getattr(self, "required_plugins", [])) | resident_plugins
+        model_supports_tools = model_selector.get_use_tools() and not self.model_info.get("no_tools", False)
+        search_enabled = model_selector.get_web_search() if model_supports_tools else False
         return selected_plugins, model_supports_tools, search_enabled
 
     async def _prepare_tool_schema_record(self) -> None:
@@ -40,12 +86,8 @@ class LlmPayloadMixin:
         resources = runtime.coordinator.resources
         snapshot = self.tool_snapshot
         if getattr(snapshot, "generation", None) != resources.generation:
-            raise ToolSchemaCacheUnavailableError(
-                "tool schema cache consumer generation 不一致"
-            )
-        selected_plugins, tools_enabled, search_enabled = (
-            self._tool_schema_request_inputs()
-        )
+            raise ToolSchemaCacheUnavailableError("tool schema cache consumer generation 不一致")
+        selected_plugins, tools_enabled, search_enabled = self._tool_schema_request_inputs()
         context = snapshot.capture_llm_payload_schema_context(
             selected_plugins,
             tools_enabled=tools_enabled,
@@ -53,9 +95,7 @@ class LlmPayloadMixin:
             is_superuser=self.is_superuser,
         )
         if context.generation != resources.generation:
-            raise ToolSchemaCacheUnavailableError(
-                "tool schema cache context generation 漂移"
-            )
+            raise ToolSchemaCacheUnavailableError("tool schema cache context generation 漂移")
         self._tool_schema_record = await resolve_tool_schema(
             resources.tool_schema_cache,
             context.cache_key,
@@ -65,39 +105,24 @@ class LlmPayloadMixin:
     async def _prepare_model_info(self, plain: str):
         """预处理：获取模型信息、处理难度分类与视觉判断"""
         self._tool_schema_record = None
-        self.tool_intent_digest = hashlib.sha256(
-            plain.encode("utf-8")
-        ).hexdigest()
+        self._active_llm_tool_names = frozenset()
+        self._active_llm_tool_descriptions = {}
+        self._active_llm_tool_generation = None
+        self.tool_intent_digest = hashlib.sha256(plain.encode("utf-8")).hexdigest()
         self.required_plugins = []
         difficulty = "1"
         # 1. 绝对的客观事实：只要真实提取到了图片URL，就必定触发视觉处理，不再完全依赖大模型分类判断
         has_image = bool(self.messages_handler.current_images)
-        if (
-            model_selector.get_moe()
-            or model_selector.get_web_search()
-            or model_selector.get_use_tools()
-        ):
+        if model_selector.get_moe() or model_selector.get_web_search() or model_selector.get_use_tools():
             runtime = getattr(self, "agent_runtime", None)
-            resources = (
-                runtime.coordinator.resources if runtime is not None else None
-            )
+            resources = runtime.coordinator.resources if runtime is not None else None
             category = Categorize(
                 plain,
                 self.tool_snapshot,
                 is_superuser=self.is_superuser,
-                tool_catalog_cache=(
-                    resources.tool_catalog_cache
-                    if resources is not None
-                    else None
-                ),
-                classification_cache=(
-                    resources.classification_cache
-                    if resources is not None
-                    else None
-                ),
-                runtime_generation=(
-                    resources.generation if resources is not None else None
-                ),
+                tool_catalog_cache=(resources.tool_catalog_cache if resources is not None else None),
+                classification_cache=(resources.classification_cache if resources is not None else None),
+                runtime_generation=(resources.generation if resources is not None else None),
                 scene=("group" if event_group_id(self.event) is not None else "private"),
             )
             category_result = await category.get_category()
@@ -106,6 +131,13 @@ class LlmPayloadMixin:
                 return category_result
             if isinstance(category_result, tuple):
                 difficulty, vision_required, required_plugins = category_result
+                routed_difficulty = self._apply_compatibility_tool_difficulty_floor(
+                    difficulty,
+                    required_plugins,
+                )
+                if routed_difficulty != difficulty:
+                    logger.info(f"NoneBot 菜单指令需要命令合成，难度由 {difficulty} 提升为 {routed_difficulty}")
+                    difficulty = routed_difficulty
                 logger.info(
                     f"难度：{difficulty}, 视觉：{vision_required}, "
                     f"需要插件：{required_plugins}, 选择来源：{self.tool_selection_source}"
@@ -115,11 +147,7 @@ class LlmPayloadMixin:
 
         requires_tools = bool(
             model_selector.get_use_tools()
-            and (
-                self.required_plugins
-                or model_selector.get_resident_plugins()
-                or model_selector.get_web_search()
-            )
+            and (self.required_plugins or model_selector.get_resident_plugins() or model_selector.get_web_search())
         )
         required_capabilities = ModelCapability(
             text=True,
@@ -169,9 +197,7 @@ class LlmPayloadMixin:
         parts = []
 
         if mentions:
-            mention_desc = "，".join(
-                f"#{i+1} {m.get('name', '未知用户')}" for i, m in enumerate(mentions)
-            )
+            mention_desc = "，".join(f"#{i + 1} {m.get('name', '未知用户')}" for i, m in enumerate(mentions))
             parts.append(f"当前消息额外提到的人：{mention_desc}。")
 
         if reply_user and reply_user.get("name"):
@@ -197,15 +223,11 @@ class LlmPayloadMixin:
     def _build_payload(self, send_message_list: list) -> tuple[dict, bool]:
         """构建发给大模型的 payload 与工具 schema"""
         if self.messages_handler.current_images:
-            logger.info(
-                f"检测到图片且当前模型为 {self.model_info['model']}，正在构建多模态请求..."
-            )
+            logger.info(f"检测到图片且当前模型为 {self.model_info['model']}，正在构建多模态请求...")
             current_msg = send_message_list[-1]
             vision_content = [{"type": "text", "text": current_msg["content"]}]
             for img_url in self.messages_handler.current_images:
-                vision_content.append(
-                    {"type": "image_url", "image_url": {"url": img_url}}
-                )
+                vision_content.append({"type": "image_url", "image_url": {"url": img_url}})
             send_message_list[-1] = {
                 "role": current_msg["role"],
                 "content": vision_content,
@@ -225,24 +247,18 @@ class LlmPayloadMixin:
         if extra_payload := self.model_info.get("extra_payload"):
             if isinstance(extra_payload, dict):
                 data.update(extra_payload)
-        selected_plugins, model_supports_tools, search_enabled = (
-            self._tool_schema_request_inputs()
-        )
+        selected_plugins, model_supports_tools, search_enabled = self._tool_schema_request_inputs()
         schema_record = getattr(self, "_tool_schema_record", None)
         if schema_record is None:
-            all_plugins_set, tools_schema = (
-                self.tool_snapshot.get_llm_payload_tools(
-                    selected_plugins,
-                    tools_enabled=model_supports_tools,
-                    search_enabled=search_enabled,
-                    is_superuser=self.is_superuser,
-                )
+            all_plugins_set, tools_schema = self.tool_snapshot.get_llm_payload_tools(
+                selected_plugins,
+                tools_enabled=model_supports_tools,
+                search_enabled=search_enabled,
+                is_superuser=self.is_superuser,
             )
         else:
             if not isinstance(schema_record, ToolSchemaRecord):
-                raise ToolSchemaCacheUnavailableError(
-                    "tool schema cache consumer record 类型非法"
-                )
+                raise ToolSchemaCacheUnavailableError("tool schema cache consumer record 类型非法")
             context = self.tool_snapshot.capture_llm_payload_schema_context(
                 selected_plugins,
                 tools_enabled=model_supports_tools,
@@ -250,19 +266,12 @@ class LlmPayloadMixin:
                 is_superuser=self.is_superuser,
             )
             runtime = getattr(self, "agent_runtime", None)
-            if (
-                runtime is not None
-                and context.generation
-                != runtime.coordinator.resources.generation
-            ):
-                raise ToolSchemaCacheUnavailableError(
-                    "tool schema cache materialize generation 漂移"
-                )
+            if runtime is not None and context.generation != runtime.coordinator.resources.generation:
+                raise ToolSchemaCacheUnavailableError("tool schema cache materialize generation 漂移")
             if schema_record.key != context.cache_key:
-                raise ToolSchemaCacheUnavailableError(
-                    "tool schema cache materialize identity 漂移"
-                )
+                raise ToolSchemaCacheUnavailableError("tool schema cache materialize identity 漂移")
             all_plugins_set, tools_schema = schema_record.materialize()
+        self._bind_active_llm_tool_schema(tools_schema)
         logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
 
         if tools_schema:
@@ -290,16 +299,19 @@ class LlmPayloadMixin:
                     "固定进度提示由运行时按配置发送，工具结果和最终总结仍须正常输出。"
                 )
             send_message_list[0]["content"] += (
-                "。特别注意："
-                + progress_rule
-                + "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
+                "。特别注意：" + progress_rule + "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
                 "自动且连续地调用下一个工具，直至彻底完成要求。"
                 "3. 工具执行结束后，原始数据将被清理。因此你最终呈现给用户的回复content中，"
                 "必须完整包含查询到的核心数据和关键结论，这将作为你下一轮对话的记忆依据。"
+                "4. 只能调用本次 tools 字段明确列出的工具，绝对不要猜测或沿用其他轮次、"
+                "其他会话中的工具名。"
+                "5. NoneBot 插件返回未命中或无可验证结果时，只能继续使用同一个本轮已授权插件；"
+                "重新阅读其完整菜单，若节点、目标或名称不确定，先调用菜单中的帮助、列表、"
+                "拓扑或全部等发现指令，再根据返回候选进行精确查询。"
             )
 
             if mention_hint:
-                send_message_list[0]["content"] += " 4. " + mention_hint
+                send_message_list[0]["content"] += " 6. " + mention_hint
 
             current_stream_flag = False
             logger.debug("检测到需要调用工具，已自动将本次请求切换为非流式")
@@ -329,11 +341,7 @@ class LlmPayloadMixin:
 
                     mention_idx = idx - 1
                     if 0 <= mention_idx < len(mentions):
-                        name = (
-                            mentions[mention_idx].get("name")
-                            or mentions[mention_idx].get("qq")
-                            or f"目标{idx}"
-                        )
+                        name = mentions[mention_idx].get("name") or mentions[mention_idx].get("qq") or f"目标{idx}"
                         return f"@{name}"
                 except Exception:
                     pass
