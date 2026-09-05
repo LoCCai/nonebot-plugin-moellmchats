@@ -259,20 +259,45 @@ async def test_memory_cache_rejects_invalid_limits_and_publish_inputs() -> None:
     lookup = await cache.lookup("conversation-alpha", limit=2)
     assert lookup.load_token is not None
 
-    for limit in (0, 3, True):
+    for limit in (0, True):
         with pytest.raises(ValueError, match="limit"):
             await cache.lookup("conversation-alpha", limit=limit)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="load_token"):
         await cache.publish(object(), _window(1))  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="window"):
         await cache.publish(lookup.load_token, object())  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="max_messages"):
-        await cache.publish(lookup.load_token, _window(1, 2, 3))
     with pytest.raises(ValueError, match="不匹配"):
         await cache.publish(
             lookup.load_token,
             _window(1, conversation_id="conversation-beta"),
         )
+
+
+@pytest.mark.asyncio
+async def test_memory_cache_truncates_oversize_publish_and_backfills_short_window() -> None:
+    # 旧契约：limit 超容量 / publish 超容量都抛 ValueError，会被上游
+    # except Exception 放大成整代永久禁用热缓存。新契约：钳制 + 截断 +
+    # 短窗回源，行为正确且缓存保持健康
+    cache = MemoryHistoryHotCache(
+        settings=_settings(max_messages=2),
+        generation_factory=lambda: _GENERATION_A,
+    )
+    # limit 超过 max_messages 不再抛错：正常签发 token
+    first = await cache.lookup("conversation-alpha", limit=3)
+    assert first.load_token is not None
+
+    # 超容量发布截断保留最新段并标记 has_older
+    assert await cache.publish(first.load_token, _window(1, 2, 3)) is True
+
+    # 短窗（len < 请求 limit）且 has_older：回源重填而不是静默少读
+    second = await cache.lookup("conversation-alpha", limit=3)
+    assert second.load_token is not None
+
+    # 请求 limit 不超过窗口时正常命中
+    hit = await cache.lookup("conversation-alpha", limit=2)
+    assert hit.window is not None
+    assert [message.message_id for message in hit.window.messages] == [2, 3]
+    assert hit.window.has_older is True
 
 
 @pytest.mark.asyncio

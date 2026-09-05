@@ -100,6 +100,12 @@ def _validate_limit(value: object, *, maximum: int) -> int:
     )
 
 
+# 单窗口消息数的协议上限：与 agent_context_runtime._HISTORY_LIMIT 对齐。
+# lookup 的请求 limit 超过缓存容量（max_messages 可被调小）时按容量钳制，
+# 不得抛错——上游会把异常升级为整代禁用热缓存
+_MAX_WINDOW_MESSAGES = 200
+
+
 def _window_payload_bytes(window: HistoryWindow) -> int:
     payload = {
         "conversation_id": window.conversation_id,
@@ -176,7 +182,7 @@ class HistoryWindow:
             limit,
             label="HistoryWindow.recent limit",
             minimum=1,
-            maximum=200,
+            maximum=_MAX_WINDOW_MESSAGES,
         )
         if len(self.messages) <= normalized_limit:
             return self
@@ -411,7 +417,7 @@ class MemoryHistoryHotCache:
         limit: int,
     ) -> HistoryCacheLookup:
         conversation_id = validate_conversation_id(conversation_id)
-        normalized_limit = _validate_limit(limit, maximum=self._settings.max_messages)
+        normalized_limit = _validate_limit(limit, maximum=_MAX_WINDOW_MESSAGES)
         self._require_owner()
         async with self._lock:
             now = _read_clock(self._clock)
@@ -430,7 +436,14 @@ class MemoryHistoryHotCache:
                 self._states.move_to_end(fingerprint)
             if state.window is None:
                 return HistoryCacheLookup(load_token=self._token(fingerprint, state))
-            return HistoryCacheLookup(window=state.window.recent(normalized_limit))
+            window = state.window
+            if len(window.messages) < normalized_limit and window.has_older:
+                # 窗口短于请求且数据库侧可能还有更早消息（发布时 limit
+                # 较小或容量被调小）：回源重填，而不是静默少读
+                return HistoryCacheLookup(load_token=self._token(fingerprint, state))
+            return HistoryCacheLookup(
+                window=window.recent(min(normalized_limit, self._settings.max_messages))
+            )
 
     async def publish(
         self,
@@ -442,7 +455,14 @@ class MemoryHistoryHotCache:
         if not isinstance(window, HistoryWindow):
             raise TypeError("window 必须是 HistoryWindow")
         if len(window.messages) > self._settings.max_messages:
-            raise ValueError("HistoryWindow.messages 超过 cache max_messages")
+            # 发布方 limit 超过缓存容量（如 max_messages 被调小）：截断保留
+            # 最新段并标记 has_older，而不是抛错让上游整代禁用热缓存。
+            # 后续 lookup 会因短窗回源，行为正确只是无缓存收益
+            window = HistoryWindow(
+                conversation_id=window.conversation_id,
+                messages=window.messages[-self._settings.max_messages :],
+                has_older=True,
+            )
         if _window_payload_bytes(window) > self._settings.max_payload_bytes:
             raise HistoryHotCacheUnavailableError("Memory history hot cache window 超过安全大小限制")
         if _conversation_fingerprint(window.conversation_id) != load_token.conversation_fingerprint:
