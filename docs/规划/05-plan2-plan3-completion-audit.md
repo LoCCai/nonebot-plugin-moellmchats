@@ -1,5 +1,5 @@
 ---
-title: 06-plan2-plan3-completion-audit
+title: 05-plan2-plan3-completion-audit
 date: 2026-08-23T11:38:16+00:00
 lastmod: 2026-08-25T00:00:00+00:00
 ---
@@ -147,7 +147,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 文件只允许 opaque、安全 locator，不允许把任意主机路径变成模型数据。
 - adapter、runner、历史 preview 与模型 payload 使用同一 canonical rendering；旧 `text/images/metadata` 构造保持兼容。
 - 实现提交 `f9ad1e56af1f278c006c2267dbbd98f9af227a1d` 已完成上述真实路径接线，四版本定向各 `115 passed`、联合 `711 passed, 1 skipped`、四版本及 Python 3.10 最低依赖全量各 `2663 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`。
-- Ruff/Pyright/diff/format、fresh wheel/sdist/Twine、sdist 重建一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/structured contract/零真实 I/O smoke 全部通过；详细哈希和证据目录见 `04-implementation-backlog.md`。
+- Ruff/Pyright/diff/format、fresh wheel/sdist/Twine、sdist 重建一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/structured contract/零真实 I/O smoke 全部通过；详细哈希和证据目录见 `14-implementation-backlog.md`。
 - 本地证据 HEAD `bd5be3ac4607be9ea73c53959c206f3f681fa22a` 的 push `32645696166` / PR `32645699029` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-03 已完成，I-04 依赖已解除。
 
 ### I-04 Agent Domain / Schema / PostgreSQL Repository Alignment
@@ -158,7 +158,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 用 keyset/CAS、复合 identity 和有界字段拒绝跨 run/step 错挂与陈旧替换。
 - 实现提交 `87366a500ce6915c169b68cc2679aa91559b49c8` 已完成上述 primitive；现有 11 表/8 revision 无缺口，因此未新增空 `0009`、未运行 migration。
 - I-04 定向 `425 passed`、数据库相关联合 `588 passed`、四版本及 Python 3.10 最低依赖全量各 `2704 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright/diff/format 均通过。
-- fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/Repository 构造零事务/零真实 I/O smoke 全部通过；详细哈希和证据目录见 `04-implementation-backlog.md`。
+- fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/Repository 构造零事务/零真实 I/O smoke 全部通过；详细哈希和证据目录见 `14-implementation-backlog.md`。
 - I-04 精确 HEAD push/PR 双 `release-gate` 待关闭，I-05 继续锁定；未连接真实 PostgreSQL/Redis/模型，未合并、发布、部署或重启。
 - 本地证据 HEAD `99119dbabc78a4c00c8feec5ac686fc6f8c4ac22` 的 push `32650714465` / PR `32650717079` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-04 已完成，I-05 依赖已解除。
 
@@ -168,7 +168,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 默认安全兼容模式不得连接 PostgreSQL/Redis；只有显式配置通过校验后才允许惰性创建资源。
 - startup/shutdown 次序、部分初始化回滚、取消、重复关闭与 reload generation 切换必须确定且可测试。
 - 实现提交 `eba88c54faf63f9693f61615a54151941c30a23f` 已满足上述资源组合与生命周期契约；四版本定向各 `34 passed`、联合 `1101 passed`、四版本及 Python 3.10 最低依赖全量各 `2738 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`。
-- Ruff/Pyright、104 成员 fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/resource lifecycle/零真实 I/O smoke 全部通过；详细哈希与目录见 `04-implementation-backlog.md`。
+- Ruff/Pyright、104 成员 fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/resource lifecycle/零真实 I/O smoke 全部通过；详细哈希与目录见 `14-implementation-backlog.md`。
 - 本地证据 HEAD `fe4e4e3d78e0fe8ef6917d380529062465c7f7c6` 的 push `32694202902` / PR `32694205818` 各 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。I-05 已完成，I-06 依赖已解除；未接真实聊天入口，未迁移、未连接真实服务、未合并、发布、部署或重启。
 
 ### I-06 Agent / History / Summary / Long-Memory Runtime Wiring
@@ -177,7 +177,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 编排 committed history、hot cache、session summary、long-memory prompt、usage 与 audit；明确每类后端不可用时的继续、降级或拒绝语义。
 - 默认 Memory 兼容模式保持现有用户行为；持久化写入的 durable commit 与 cache invalidate 顺序必须可证明。
 - 实现提交 `a0dba24eab16da2deeecacd2981848a124467a59` 已将 generation host、单一 Deadline、AgentRun/Step/ToolCall、committed history/cache、summary/LTM、usage/audit 接入真实聊天/模型/工具生命周期；默认 Memory 零后端 I/O，显式 PostgreSQL 只用短事务且未知 commit 不重放。
-- 四版本定向各 `26 passed`、联合 `1024 passed`、四版本与 Python 3.10 最低依赖全量各 `2786 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright、105 成员 fresh wheel/sdist/Twine、sdist 重建一致与四组包外 11 表/8 revision/Memory Agent 生命周期/零真实 I/O smoke 均通过。详细哈希和证据目录见 `04-implementation-backlog.md`。
+- 四版本定向各 `26 passed`、联合 `1024 passed`、四版本与 Python 3.10 最低依赖全量各 `2786 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright、105 成员 fresh wheel/sdist/Twine、sdist 重建一致与四组包外 11 表/8 revision/Memory Agent 生命周期/零真实 I/O smoke 均通过。详细哈希和证据目录见 `14-implementation-backlog.md`。
 - 本地证据 HEAD `fe3b48f212de1e79bdcad7c1f48c456bc3f317a8` 的 push `32703751436` / PR `32703756205` 各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。最终文档 HEAD `caf6e2c0f7d603835964042d7fae124e7c83a12f` 的 push `32704551636` / PR `32704555524` 也已各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功并保持四方 HEAD 一致。I-06 已最终完成，I-07 实现依赖完全解除；未迁移、未连接真实服务、未合并、发布、部署或重启。
 
 ### I-07 Read-only Parallel Runtime Wiring
@@ -187,7 +187,7 @@ Plan 2 / Plan 3 验收清单中的 `[x]` 只表示前两层均已完成并验证
 - 不以提高每轮数量为理由绕过现有重复调用、结果上限、审计和 PendingAction 边界。
 - I-06 最终文档 HEAD `caf6e2c0f7d603835964042d7fae124e7c83a12f` 的 push `32704551636` / PR `32704555524` 双 `release-gate` 已关闭。在此前提下，实现提交 `37abc1e6db908c3e826ee7548900cd336b669f9c` 新增 generation-local `parallel_tool_graph` 并与 `trusted_runner_tools / TrustedRunnerPool` 强制双重显式 opt-in，真实 `_execute_tools()` 只在 provider-authoritative、trust allowed、强类型 `READ_ONLY`、无 policy/确认/capability、allowlist 命中、依赖闭包完整且有显式 `parallel_with` 时使用 G-09/G-10。
 - 并行路径复用 I-06 的单一 Deadline 与 Agent trace；首错取消并 drain，请求顺序回填。请求局部锁串行化 trace 持久化以保证 step index 唯一；关键写失败 fail closed，禁止重放未知结果。不合格的整批调用完整回退原串行/PendingAction/拒绝语义，不做部分并行。
-- 四版本定向各 `68 passed`、联合 `471 passed`、四版本及 Python 3.10 最低依赖全量各 `2799 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright、105 成员 fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/真实并发度 2/原序回填/唯一 trace/零真实 I/O smoke 全绿。详细哈希和证据目录见 `04-implementation-backlog.md`。
+- 四版本定向各 `68 passed`、联合 `471 passed`、四版本及 Python 3.10 最低依赖全量各 `2799 passed, 1 skipped`，mandatory root Sandbox `41 passed, 0 skipped`；Ruff/Pyright、105 成员 fresh wheel/sdist/Twine、sdist 重建字节一致及 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/真实并发度 2/原序回填/唯一 trace/零真实 I/O smoke 全绿。详细哈希和证据目录见 `14-implementation-backlog.md`。
 - 本地证据 HEAD `f00476245f96c3d50a98399452febb8fc21aa17b` 的 push `32712268122` / PR `32712272403` 各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。最终文档 HEAD `9fd1871a6e039a10c1f374f25b8db113016aa3ef` 的 push `32713316379` / PR `32713320021` 也各 11/11 success、`non_success=[]`、唯一 `release-gate` 成功并保持四方 HEAD 一致。I-07 最终完成，I-08 实现依赖完全解除；未迁移、未连接真实服务、未合并、发布、部署或重启；`uv.lock` 未修改、未暂存、未提交。
 
 ### I-08 Platform / Spool / Failure Policy / Cache Consumer Wiring

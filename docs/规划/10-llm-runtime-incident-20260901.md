@@ -1,5 +1,5 @@
 ---
-title: 12-llm-runtime-incident-20260901
+title: 10-llm-runtime-incident-20260901
 date: 2026-09-01T00:00:00+00:00
 lastmod: 2026-09-01T00:00:00+00:00
 ---

@@ -1,14 +1,14 @@
 ---
-title: 02-plan-future-architecture
+title: 03-plan-future-architecture
 date: 2026-08-19T14:55:10+08:00
 lastmod: 2026-08-24T15:36:01+00:00
 ---
 
-# 02-plan-future-architecture
+# 03-plan-future-architecture
 
 # Plan 2：后续功能与架构优化
 
-> 最终验收口径复核（2026-08-24）：Plan 2 验收清单统一以“真实开发版 runtime 已消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 与 I-09 本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁均已关闭；隔离最终矩阵已复核全部已勾选项。Plan 2 的 Primitive 与 Runtime integration 两层开发态验收已完成。本次远端证据回填提交定义为最终文档 HEAD，以其自身精确双 `release-gate` 作为 I-09 最终判据；不为记录该自指门禁另起提交。生产模型、平台挂载、发布与部署未观察；D-09 继续受真实发布周期 parity 观察锁定，本轮不以本地或 CI 替代。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+> 最终验收口径复核（2026-08-24）：Plan 2 验收清单统一以“真实开发版 runtime 已消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 与 I-09 本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁均已关闭；隔离最终矩阵已复核全部已勾选项。Plan 2 的 Primitive 与 Runtime integration 两层开发态验收已完成。本次远端证据回填提交定义为最终文档 HEAD，以其自身精确双 `release-gate` 作为 I-09 最终判据；不为记录该自指门禁另起提交。生产模型、平台挂载、发布与部署未观察；D-09 继续受真实发布周期 parity 观察锁定，本轮不以本地或 CI 替代。完整证据与依赖见 [Plan 2 / Plan 3 完成度审计](./05-plan2-plan3-completion-audit.md)。
 
 > I-01 本地门禁（2026-08-23）：规划基线 `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 已严格关闭。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增独立 `model_capabilities.py`，固定 text/vision/tools/json-schema/reasoning/streaming 六能力、context/output limits、精确 Decimal 每百万 token 成本、四态 availability 与 generation-bound descriptor；三类摘要分别绑定 raw identity、capability+limits 和完整 descriptor，未知成本与零成本严格区分，repr 不暴露 raw identity。四版本定向各 `98 passed`、联合各 `492 passed`、普通全量及最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；静态、fresh 制品/重建和四组包外零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 锁定；本阶段不读取/改写模型配置，不接 `ModelSelector`，不发网络请求。
 
@@ -52,7 +52,7 @@ lastmod: 2026-08-24T15:36:01+00:00
 
 > 推荐目标版本：`0.26 → 0.30`
 
-> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E、F-01～F-14 与 G-01 已完成精确 HEAD 双 run gate；legacy sidecar 继续保留，D-09 因无发布周期观察且禁止生产操作而保持锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 用不可变 Conversation/Message records 和调用方显式持有的 `AsyncSession` 实现 PostgreSQL Repository；历史查询固定显式列、`conversation_id`、`id DESC`、有限 `LIMIT+1` 与应用层反转，游标绑定会话指纹和 `before_message_id`，不使用 OFFSET。写入以 `RETURNING` 确认 statement 结果但不隐式 commit/rollback/retry，未知结果 fail closed 且错误脱敏。本地四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，静态、最低依赖、fresh 制品及四组包外零数据库 I/O smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 实施门禁（2026-08-22）：Plan 1、Plan 2 的 D-01a～D-08f、Milestone E、F-01～F-14 与 G-01 已完成精确 HEAD 双 run gate；legacy sidecar 继续保留，D-09 因无发布周期观察且禁止生产操作而保持锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 用不可变 Conversation/Message records 和调用方显式持有的 `AsyncSession` 实现 PostgreSQL Repository；历史查询固定显式列、`conversation_id`、`id DESC`、有限 `LIMIT+1` 与应用层反转，游标绑定会话指纹和 `before_message_id`，不使用 OFFSET。写入以 `RETURNING` 确认 statement 结果但不隐式 commit/rollback/retry，未知结果 fail closed 且错误脱敏。本地四版本定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，静态、最低依赖、fresh 制品及四组包外零数据库 I/O smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实数据库/Redis，未部署。逐项状态见 [Plan 1 完成审计](./02-plan1-completion-audit.md) 与 [实施 Backlog](./14-implementation-backlog.md)。
 
 > G-02 本地门禁（2026-08-22）：G-01 最终闭环 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 双 run 已全绿。实现提交 `e865838` 以不可变 committed `HistoryWindow` 和短期失效代际统一 Memory/Redis hot-cache contract；Memory 使用固定 TTL、LRU/容量/载荷上限并绑定单 PID/event loop，Redis 只接受显式 client，以会话哈希 key、canonical 有界 payload、TTL 与 WATCH/MULTI 拒绝晚到或重复发布。PostgreSQL 仍是唯一真源；publish 只允许调用方在确认 committed source view 后执行，invalidate 只允许在 durable commit 后执行。四版本定向各 `84 passed`、联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，最低依赖、静态、fresh 制品和四组包外零 I/O smoke 均通过。精确 HEAD 双 run 远端门禁待完成，G-03 继续锁定；未接现有聊天路径、配置、生命周期或生产。
 

@@ -1,5 +1,5 @@
 ---
-title: 10-code-review-fixes-20260829
+title: 09-code-review-fixes-20260829
 date: 2026-08-29T00:00:00+00:00
 lastmod: 2026-08-29T00:00:00+00:00
 ---
@@ -62,4 +62,4 @@ K-09B～K-09G 的 0.26.3 实现提交为 `86ee2a6a35d57e0f8e6f14bae2e3af39b88992
 
 ## 恢复点
 
-0.26.3 的实现恢复点是 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`；安装与回退必须使用完整 SHA，不能跟随移动分支。继续维护时先核对 `uv.lock` 仍未跟踪且未被本阶段提交，再从[11-pending-issues-backlog](./11-pending-issues-backlog.md)按依赖另开设计批次。
+0.26.3 的实现恢复点是 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241`；安装与回退必须使用完整 SHA，不能跟随移动分支。继续维护时先核对 `uv.lock` 仍未跟踪且未被本阶段提交，再从[15-pending-issues-backlog](./15-pending-issues-backlog.md)按依赖另开设计批次。

@@ -1,10 +1,12 @@
 ---
-title: 14-url-routing-emotion-webpage-20260901
+title: 12-url-routing-emotion-webpage-20260901
 date: 2026-09-01T00:00:00+00:00
 lastmod: 2026-09-01T00:00:00+00:00
 ---
 
 # K-12 网页路由、表情素材与安全正文提取（0.26.6）
+
+> 状态更新（2026-09-06）：K-12 的实现已随提交 `f3bb85055cb68fed05a9d719cc2ec9f8a7d0c15`（feat: harden webpage and tool routing）在 `feat/generated-tool-bundles` 创建并推送，并经合并进入 `fix/generated-bundles-review` 整合分支（合并后审查另修复了 `safe_public_get` AST 能力缺口、Windows junction 表情绕过、表情读盘阻塞事件循环三项）。下文「尚未创建提交/推送」的表述已过时，保留为历史证据；安装与真实 QQ 运行验收仍未发生。
 
 > 当前状态：以 `feat/generated-tool-bundles` 的 0.26.5 证据提交 `8bdb202f5e60f05ecbbc0cb4248cdd5ae623c595` 为基线，0.26.6 本地实现、四版本、静态、sandbox、制品和七七定向门禁已经完成。尚未创建 0.26.6 提交、推送、Actions、安装或七七运行验收；0.26.5 的已验证恢复点仍是 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`。
 

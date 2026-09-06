@@ -1,38 +1,68 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-09-01T00:00:00+00:00
+lastmod: 2026-09-06T00:00:00+00:00
 ---
 
 # 00-roadmap-overview
 
 # MoEllmChats 0.25+ 后续推进总路线图
 
-> 完成度复核（2026-08-24）：Plan 1 / Milestone A～C 与后续安全、架构、数据库、缓存、并行、平台接线均已按依赖顺序完成；I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭。I-09 已完成隔离最终矩阵，且本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁也已关闭；Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成。本次远端证据回填提交定义为最终文档 HEAD，只有其自身精确双 `release-gate` 通过后才判定 I-09 与开发态总目标最终闭环，不再为记录该自指门禁另起文档提交。生产迁移、真实 PostgreSQL/Redis/模型、发布和部署均未观察；D-09 因缺少真实发布周期 parity 观察继续锁定。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+## 文档索引（2026-09-06 重排）
+
+按「已完成的计划与审计在前、待实施的计划书在后」重新编号；旧编号→新编号对照如下。文内历史叙述中的旧编号链接已全部同步为新路径。
+
+**已完成（阶段记录，按时间序）**
+
+| 新编号 | 内容 | 旧编号 | 状态 |
+| --- | --- | --- | --- |
+| 01 | Plan 1：安全修复 + 核心架构重构 | 01 | 已闭环（见 02 审计） |
+| 02 | Plan 1 完成审计 | 05 | 已闭环 |
+| 03 | Plan 2：后续功能与架构优化 | 02 | 已闭环（见 05 审计） |
+| 04 | Plan 3：处理效率与数据库接入优化 | 03 | 已闭环（见 05 审计） |
+| 05 | Plan 2 / Plan 3 完成度审计 | 06 | 开发态总目标已闭环；D-09 锁定 |
+| 06 | J 阶段：功能级意图发现与 OneBot 投递可靠性（0.26.0） | 07 | 已闭环 |
+| 07 | K-01～K-07：全量 OneBot / NapCat 协议工具（0.26.0/0.26.1） | 08 | 已闭环 |
+| 08 | K-08：业务路由与执行状态真实性（0.26.2） | 09 | 已闭环 |
+| 09 | K-09：当前基线审查修复（0.26.3） | 10 | 已闭环 |
+| 10 | K-10：LLM 运行事故修复（0.26.4） | 12 | 已闭环 |
+| 11 | K-11：工具进度与恢复状态真实性（0.26.5） | 13 | 已闭环 |
+| 12 | K-12：网页路由、表情素材与安全正文提取（0.26.6） | 14 | 实现已随 `f3bb850…` 提交推送 |
+| 13 | K-13：指令投递与工具作用域真实性（0.26.6） | 15 | 实现已随 `f3bb850…` 提交推送 |
+| 14 | 实施 Backlog 与里程碑建议（历史记录） | 04 | 已闭环，仅 D-09 锁定 |
+
+**待实施（活跃计划书）**
+
+| 新编号 | 内容 | 旧编号 | 状态 |
+| --- | --- | --- | --- |
+| 15 | K-09 后续待修复与设计清单 | 11 | 活跃：spool/usage 幂等键/Redis admission/MCP 依赖契约等 |
+| 16 | 平台 API 与插件接入链路优化计划书 | 16 | P0 三项已收口；P1 缓存键重构（最高价值）与 P2～P5 待实施 |
+
+> 完成度复核（2026-08-24）：Plan 1 / Milestone A～C 与后续安全、架构、数据库、缓存、并行、平台接线均已按依赖顺序完成；I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭。I-09 已完成隔离最终矩阵，且本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁也已关闭；Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成。本次远端证据回填提交定义为最终文档 HEAD，只有其自身精确双 `release-gate` 通过后才判定 I-09 与开发态总目标最终闭环，不再为记录该自指门禁另起文档提交。生产迁移、真实 PostgreSQL/Redis/模型、发布和部署均未观察；D-09 因缺少真实发布周期 parity 观察继续锁定。详见 [Plan 2 / Plan 3 完成度审计](./05-plan2-plan3-completion-audit.md)。
 
 > 状态续记（2026-08-25）：上述最终判据已经满足。最终文档 HEAD `7705cdd46e8dffd29ee50440fcf8ede94e76dd7d` 的 push run `32746463522` 与 PR run `32746468781` 各 11/11 success、各唯一 `release-gate` 为 `completed/success`；本地、origin、`ls-remote` 与 PR #2 head 一致，PR 仍为 `OPEN / MERGEABLE / CLEAN`。Plan 1～3 的开发态依赖链已闭环；PR 合并、正式发布、目标 Bot 安装、真实后端/migration 和 D-09 发布周期观察仍未发生。
 
-> 状态续记（2026-08-27）：七七隔离加载反馈暴露插件级目录无法召回“给我点个赞”，以及正文成功后 NapCat 表情发送 `ActionFailed(retcode=1200)` 拖垮整轮的问题。新增 [功能级意图发现与 OneBot 投递可靠性](./07-intent-discovery-onebot-reliability.md) J-01～J-07 依赖链；J-01～J-05 已在精确实现提交 `bbc3963a361259f4d98c29003937afb1cbe976f9` 完成。实现 push `33066587717` / PR `33080256433` 与证据提交 `45f7a6e6d5d1017fd8f3d9dc4a65ed497a2862b9` 的 push `33081113984` / PR `33081119792` 均为 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支；PR #3 以该分支为 base 且为 `OPEN / CLEAN`。J-06 已完成只读依赖、拓扑、临时锁解析与禁网无 driver 加载前置；七七当前仍是同仓库 `8e7f054…`，尚未修改依赖、`.venv` 或重载进程。J-07 发布/生产继续锁定。
+> 状态续记（2026-08-27）：七七隔离加载反馈暴露插件级目录无法召回“给我点个赞”，以及正文成功后 NapCat 表情发送 `ActionFailed(retcode=1200)` 拖垮整轮的问题。新增 [功能级意图发现与 OneBot 投递可靠性](./06-intent-discovery-onebot-reliability.md) J-01～J-07 依赖链；J-01～J-05 已在精确实现提交 `bbc3963a361259f4d98c29003937afb1cbe976f9` 完成。实现 push `33066587717` / PR `33080256433` 与证据提交 `45f7a6e6d5d1017fd8f3d9dc4a65ed497a2862b9` 的 push `33081113984` / PR `33081119792` 均为 11/11 success、`non_success=[]`、各唯一 `release-gate` 成功。PR #2 已合并到本仓库自己的 `feat/llm-runtime-backpressure` 集成分支；PR #3 以该分支为 base 且为 `OPEN / CLEAN`。J-06 已完成只读依赖、拓扑、临时锁解析与禁网无 driver 加载前置；七七当前仍是同仓库 `8e7f054…`，尚未修改依赖、`.venv` 或重载进程。J-07 发布/生产继续锁定。
 
-> 状态续记（2026-08-28）：J 阶段在 `bbc3963…` 后继续修复可选表情边界，进入新阶段前的最终 0.25 基线为 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`；其 push/PR run `33134760223` / `33134761967` 是当前前置双门禁。新增 [全量 OneBot / NapCat 协议工具实施状态](./08-onebot-napcat-protocol-tools.md) K-01～K-08 依赖链：固定收录 v11 38、v12 31、NapCat 175 项，默认总开关关闭，完整收录与允许执行分离。K-01～K-07 已完成本地实现与 Python 3.12 普通全量/Ruff 首轮验证，四版本、制品、包外加载和远端双门禁仍待关闭；K-08 继续锁定，七七依赖/进程、真实 QQ、合并与发布均未操作。
+> 状态续记（2026-08-28）：J 阶段在 `bbc3963…` 后继续修复可选表情边界，进入新阶段前的最终 0.25 基线为 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`；其 push/PR run `33134760223` / `33134761967` 是当前前置双门禁。新增 [全量 OneBot / NapCat 协议工具实施状态](./07-onebot-napcat-protocol-tools.md) K-01～K-08 依赖链：固定收录 v11 38、v12 31、NapCat 175 项，默认总开关关闭，完整收录与允许执行分离。K-01～K-07 已完成本地实现与 Python 3.12 普通全量/Ruff 首轮验证，四版本、制品、包外加载和远端双门禁仍待关闭；K-08 继续锁定，七七依赖/进程、真实 QQ、合并与发布均未操作。
 
 > 状态续记（2026-08-28 09:17 UTC）：上段是 K 阶段实施中的历史快照，K-01～K-08 随后已经完成。PR #3 后续已由本任务之外的操作合并；0.26.0 的当前隔离测试安装点是 `20cfe44576a3f6f8dbf1bd5a330407a936fe481a`，其 push run `33155319608` 为 12/12 success、唯一 `release-gate` 成功。该提交没有 PR run，旧 `79d2268…` 只用于回退到 0.25.0；安装命令与校验方式以[安装页](../installation.md)为准。
 
 > 状态续记（2026-08-28 09:42 UTC）：七七随后安装并重启了 `20cfe44…`，现场 `/设置LLM冷却 0` 被日志记录但未进入冷却 Handler；同窗口的模型选择属于其他 @Bot 请求，不能误判成该命令进入 LLM。0.26.1 将该应急入口改成优先级 0 的全文固定 Matcher，当前隔离测试安装点更新为 `5d7f7958e9535f97c7b977d5fbe0fb57d68352ba`。其 push run [`33160123847`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33160123847) 为 12/12 success、唯一 `release-gate` 成功；未取得 PR run，也尚未把 0.26.1 安装到七七或声称线上验收。
 
-> 状态续记（2026-08-28 14:52 UTC）：新增 [K-08 业务路由与执行状态真实性](./09-business-routing-execution-truth.md)，按 PicMenu 快照竞态 → 唯一意图所有者 → generation 命令前缀 → Matcher/API 真实状态 → 重试审计 → 进度显示开关推进 0.26.2。主体实现、Python 3.10～3.13 普通全量、mandatory root sandbox、静态/文档/依赖检查、fresh 制品和四组包外加载均已通过；实现提交、远端 push 和新 PR 双门禁仍待关闭。七七只改 QWeb/PicMenu 目录桥接源码，不改依赖、锁、配置、已安装包或进程；没有发送真实 QQ 动作。
+> 状态续记（2026-08-28 14:52 UTC）：新增 [K-08 业务路由与执行状态真实性](./08-business-routing-execution-truth.md)，按 PicMenu 快照竞态 → 唯一意图所有者 → generation 命令前缀 → Matcher/API 真实状态 → 重试审计 → 进度显示开关推进 0.26.2。主体实现、Python 3.10～3.13 普通全量、mandatory root sandbox、静态/文档/依赖检查、fresh 制品和四组包外加载均已通过；实现提交、远端 push 和新 PR 双门禁仍待关闭。七七只改 QWeb/PicMenu 目录桥接源码，不改依赖、锁、配置、已安装包或进程；没有发送真实 QQ 动作。
 
 > K-08 实现远端闭环（2026-08-28 14:58 UTC）：实现提交 `e340fb77d9c215316c9d4afd69799aedbfcf34fc` 的 push run [`33182635178`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182635178) 与 PR run [`33182676186`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33182676186) 均为 12/12 success、各唯一 `release-gate` 成功。新 PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 的 base 为本仓库 `feat/llm-runtime-backpressure`，核验时 `OPEN / MERGEABLE / CLEAN`；未合并、未发布、未部署，七七依赖和进程未操作，也没有真实 QQ 动作。
 
-> K-09 当前基线审查修复（2026-08-29）：新增 [0.26.3 审查修复状态](./10-code-review-fixes-20260829.md) 与[后续设计清单](./11-pending-issues-backlog.md)。核心 11 项语义重放提交 `0a9b7c4…` 的 push/PR run `33240925332` / `33240926968` 已完成第一道双门禁；PostgreSQL 连续取消清理、分类 single-flight、安全 HTTP、walrus AST 与结构化 400 判定实现提交 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241` 的 push/PR run `33244154109` / `33244155607` 均 12/12 success、各唯一 `release-gate` 成功，PR #5 为 `OPEN / MERGEABLE / CLEAN`。旧 `fix/analysis-fixes` 远程实为 `6a25cf8…`，其 run `33198457610` 因 5 项 Ruff 错误失败，不是可发布证据。
+> K-09 当前基线审查修复（2026-08-29）：新增 [0.26.3 审查修复状态](./09-code-review-fixes-20260829.md) 与[后续设计清单](./15-pending-issues-backlog.md)。核心 11 项语义重放提交 `0a9b7c4…` 的 push/PR run `33240925332` / `33240926968` 已完成第一道双门禁；PostgreSQL 连续取消清理、分类 single-flight、安全 HTTP、walrus AST 与结构化 400 判定实现提交 `86ee2a6a35d57e0f8e6f14bae2e3af39b8899241` 的 push/PR run `33244154109` / `33244155607` 均 12/12 success、各唯一 `release-gate` 成功，PR #5 为 `OPEN / MERGEABLE / CLEAN`。旧 `fix/analysis-fixes` 远程实为 `6a25cf8…`，其 run `33198457610` 因 5 项 Ruff 错误失败，不是可发布证据。
 
-> K-10 LLM 运行事故修复（2026-09-01）：新增 [0.26.4 实施状态](./12-llm-runtime-incident-20260901.md)，依次处理分类传输超时立即降级、400/异常日志脱敏、按 generation/工具/规范化参数摘要限次，以及仅 SUPERUSER 可用的固定 `设置工具进度` 指令。实现提交 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8` 的 push/PR run `33485504350` / `33485508930` 均 12/12 success、各唯一 `release-gate` 成功，PR #5 为 `OPEN / MERGEABLE / CLEAN`；该 SHA 是 0.26.4 精确安装恢复点。本文件所在证据提交仍须通过自身双 Actions 才最终闭环。七七的依赖、锁文件、`.venv` 和进程不在本阶段操作范围内。
+> K-10 LLM 运行事故修复（2026-09-01）：新增 [0.26.4 实施状态](./10-llm-runtime-incident-20260901.md)，依次处理分类传输超时立即降级、400/异常日志脱敏、按 generation/工具/规范化参数摘要限次，以及仅 SUPERUSER 可用的固定 `设置工具进度` 指令。实现提交 `2b87cdf410b3c77792b5d8c9d37ab11b379d72c8` 的 push/PR run `33485504350` / `33485508930` 均 12/12 success、各唯一 `release-gate` 成功，PR #5 为 `OPEN / MERGEABLE / CLEAN`；该 SHA 是 0.26.4 精确安装恢复点。本文件所在证据提交仍须通过自身双 Actions 才最终闭环。七七的依赖、锁文件、`.venv` 和进程不在本阶段操作范围内。
 
-> K-11 工具进度与恢复状态真实性（2026-09-01）：新增 [0.26.5 实施状态](./13-tool-progress-execution-truth-20260901.md)，依次完成确定性逐调用提示、可选同响应自然话术与固定超管命令、只读 API 降级恢复、真正部分成功的已确认结果反馈、版本文档和完整门禁。实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已通过完整本地门禁；push run `33495001417` 与 PR run `33495005164` 均 12/12 success、各唯一 `release-gate` 成功，PR #5 为 `OPEN / MERGEABLE / CLEAN`。该 SHA 已成为 0.26.5 精确隔离测试恢复点，本文件所在证据提交仍须通过自身双 Actions；不修改或重启七七，不发送真实 QQ 动作，不合并 PR 或发布 PyPI。
+> K-11 工具进度与恢复状态真实性（2026-09-01）：新增 [0.26.5 实施状态](./11-tool-progress-execution-truth-20260901.md)，依次完成确定性逐调用提示、可选同响应自然话术与固定超管命令、只读 API 降级恢复、真正部分成功的已确认结果反馈、版本文档和完整门禁。实现提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f` 已通过完整本地门禁；push run `33495001417` 与 PR run `33495005164` 均 12/12 success、各唯一 `release-gate` 成功，PR #5 为 `OPEN / MERGEABLE / CLEAN`。该 SHA 已成为 0.26.5 精确隔离测试恢复点，本文件所在证据提交仍须通过自身双 Actions；不修改或重启七七，不发送真实 QQ 动作，不合并 PR 或发布 PyPI。
 
-> K-12 网页路由、表情与安全正文提取（2026-09-01）：新增 [0.26.6 实施状态](./14-url-routing-emotion-webpage-20260901.md)，按自动媒体传播所有权 → 表情候选/发送复核 → 固定公网只读 GET → 七七净化后离线浏览器提取 → 版本与门禁推进。当前仅有本地源码和定向证据，尚未提交、推送、安装或重启；0.26.5 `e704092…` 继续是最后一个已验证恢复点。
+> K-12 网页路由、表情与安全正文提取（2026-09-01）：新增 [0.26.6 实施状态](./12-url-routing-emotion-webpage-20260901.md)，按自动媒体传播所有权 → 表情候选/发送复核 → 固定公网只读 GET → 七七净化后离线浏览器提取 → 版本与门禁推进。当前仅有本地源码和定向证据，尚未提交、推送、安装或重启；0.26.5 `e704092…` 继续是最后一个已验证恢复点。
 
-> K-13 指令投递与工具作用域真实性（2026-09-01）：新增 [0.26.6 实施状态](./15-tool-schema-command-recovery-20260901.md)，按完整可显示指令 → 请求级 Tool Schema 强制许可 → 同插件菜单发现恢复 → command 难度下限 → PicStatus/QWeb 入口同步推进。现场数据库错调已确认是旧执行器接受本轮 Schema 外全局插件，不是常驻列表过多。四版本、静态、sandbox、制品、包外加载、PicStatus 和七七目录本地门禁均已通过；尚未提交、推送、安装、重启或导入 CMS，0.26.5 `e704092…` 仍是最后一个已验证恢复点。
+> K-13 指令投递与工具作用域真实性（2026-09-01）：新增 [0.26.6 实施状态](./13-tool-schema-command-recovery-20260901.md)，按完整可显示指令 → 请求级 Tool Schema 强制许可 → 同插件菜单发现恢复 → command 难度下限 → PicStatus/QWeb 入口同步推进。现场数据库错调已确认是旧执行器接受本轮 Schema 外全局插件，不是常驻列表过多。四版本、静态、sandbox、制品、包外加载、PicStatus 和七七目录本地门禁均已通过；尚未提交、推送、安装、重启或导入 CMS，0.26.5 `e704092…` 仍是最后一个已验证恢复点。
 
 > I-01 本地门禁（2026-08-23）：规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增纯 stdlib、深度不可变且无 transport/credential 字段的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability`；能力、limits、精确 `NUMERIC(24,12)` Decimal 成本、availability 与 generation 均有界，identity/capability/full descriptor 三类 canonical SHA-256 分离。四版本定向各 `98 passed`、相关联合各 `492 passed`、普通全量及 Python 3.10 最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品/同哈希重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/descriptor/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 继续锁定；未读取现有模型配置或凭据，未改变 `ModelSelector`，未发模型请求，未迁移、未连接真实服务、未部署。
 
@@ -74,7 +104,7 @@ lastmod: 2026-09-01T00:00:00+00:00
 
 > I-09 本地证据远端闭环（2026-08-24）：本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的 push `32745646558` / PR `32745651110` 均精确命中该 SHA、各 11/11 success、`non_success=[]`、各唯一 `completed/success release-gate`；本地、origin、`ls-remote` 与 PR head 四方一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。本次回填提交即最终文档 HEAD，其自身精确双门禁为 I-09 的最终判据；未合并、发布、部署、迁移或连接真实服务。
 
-> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07、Plan 2 的 D-01a～D-08f、Milestone E 的 E-01～E-08、F-01～F-14 与 G-01 已按依赖顺序完成精确 HEAD 双 run 门禁；D-09 因缺少发布周期 parity 观察且禁止生产操作而继续锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变 `ConversationRecord / MessageRecord` 与显式 `AsyncSession` 注入的 PostgreSQL Conversation/Message Repository；最近历史只查询显式列，以 `(conversation_id, id DESC, LIMIT+1)` 做绑定会话指纹的稳定 keyset 分页，并在应用层恢复时间正序。Repository 不创建、提交、回滚、关闭 session，不隐式重试；`RETURNING` 只确认当前事务内 statement 结果，durable commit 仍由调用方负责。Integrity 冲突、缺失 replace、未知写入/读取结果与后端不可用分开处理，错误不泄漏 endpoint、凭据或消息内容，取消原样传播。本地四版本 G-01 定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低 SQLAlchemy/Alembic/asyncpg 兼容、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md) 与 [实施 Backlog](./04-implementation-backlog.md)。
+> 进度注记（2026-08-22）：Plan 1 的 Milestone A、B 与 C-01～C-07、Plan 2 的 D-01a～D-08f、Milestone E 的 E-01～E-08、F-01～F-14 与 G-01 已按依赖顺序完成精确 HEAD 双 run 门禁；D-09 因缺少发布周期 parity 观察且禁止生产操作而继续锁定，G-02 依赖已解除。G-01 实现提交 `b3566d6513f142d86de91898a6c6b8f14a4e131d` 新增深度不可变 `ConversationRecord / MessageRecord` 与显式 `AsyncSession` 注入的 PostgreSQL Conversation/Message Repository；最近历史只查询显式列，以 `(conversation_id, id DESC, LIMIT+1)` 做绑定会话指纹的稳定 keyset 分页，并在应用层恢复时间正序。Repository 不创建、提交、回滚、关闭 session，不隐式重试；`RETURNING` 只确认当前事务内 statement 结果，durable commit 仍由调用方负责。Integrity 冲突、缺失 replace、未知写入/读取结果与后端不可用分开处理，错误不泄漏 endpoint、凭据或消息内容，取消原样传播。本地四版本 G-01 定向各 `36 passed`、相关联合各 `173 passed`、普通全量各 `1244 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`；Ruff/Pyright、最低 SQLAlchemy/Alembic/asyncpg 兼容、fresh 制品和四组包外 10 表/7 revision/DDL/reload/零数据库 execute/connect smoke 均通过。G-01 本地证据 HEAD `d086e8ee87c5e25d8b692e8a7aadb239ef42464a` 的 push run `32593099818` / PR run `32593102078` 均为 11/11 green、各恰好一个成功 `release-gate`；远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。未读取生产 DSN、未创建全局 engine/session、未接配置、startup/shutdown、legacy sidecar、现有内存聊天路径或生产 runtime，未运行 migration，未连接真实 PostgreSQL/Redis；未合并、未 promotion、未发布、未部署。逐项证据见 [Plan 1 完成审计](./02-plan1-completion-audit.md) 与 [实施 Backlog](./14-implementation-backlog.md)。
 
 > G-02 本地门禁（2026-08-22）：G-01 闭环文档 HEAD `11531889583fd5d11cf0871f503c6ff037c38395` 的 push run `32593312310` / PR run `32593315775` 已各 11/11 green、各恰好一个成功 `release-gate`，本地、远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `e865838` 新增 backend-neutral `HistoryHotCacheProtocol`、受 PID/event-loop 约束的 TTL/LRU Memory backend 与显式注入 redis-py client 的 Redis backend。`HistoryWindow` 只接受同会话、正 BIGINT identity、严格递增的已持久化不可变消息；miss 会先保留短期 128-bit 失效代际，只有匹配代际的 committed source window 可 CAS 发布，durable commit 后的 invalidate 会拒绝此前启动的晚到加载。Redis key 只含会话 SHA-256 指纹，wire payload 采用有界 canonical JSON、固定 TTL 与 WATCH/MULTI；损坏、超限、无 TTL 或异常响应均不作为命中，错误脱敏且取消原样传播。本地四版本定向各 `84 passed`、相关联合各 `455 passed`、普通全量各 `1328 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；最低 Redis/SQLAlchemy/Alembic/asyncpg、Ruff/Pyright、fresh 制品与四组包外零 Redis command/数据库 I/O smoke 均通过。G-02 尚待精确 HEAD 双 run 远端门禁，G-03 继续锁定；未接配置、生命周期、`MessagesHandler`、PostgreSQL Repository 或生产 runtime，未读取连接信息、未连接真实服务、未迁移、未合并、未发布、未部署。
 
@@ -542,13 +572,13 @@ AST 只能作为：
 
 - `01-plan-security-refactor.md`
   安全修复、核心重构、Runner、生命周期、CI。
-- `02-plan-future-architecture.md`
+- `03-plan-future-architecture.md`
   ToolProvider、Tool Graph、Agent Runtime、模型能力与 API。
-- `03-plan-performance-database.md`
+- `04-plan-performance-database.md`
   Redis/PostgreSQL、性能、缓存、上下文、数据库设计。
-- `04-implementation-backlog.md`
+- `14-implementation-backlog.md`
   可直接转换为 GitHub Issue / Milestone 的实施任务清单。
-- `05-plan1-completion-audit.md`
+- `02-plan1-completion-audit.md`
   A-01～C-07 的源码、pytest node、门禁状态与最终关闭条件。
-- `06-plan2-plan3-completion-audit.md`
+- `05-plan2-plan3-completion-audit.md`
   H-08 后的 Plan 2 / Plan 3 运行态缺口、Milestone I 依赖顺序与非生产门禁。

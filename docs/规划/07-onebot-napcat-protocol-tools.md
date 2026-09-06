@@ -1,5 +1,5 @@
 ---
-title: 08-onebot-napcat-protocol-tools
+title: 07-onebot-napcat-protocol-tools
 date: 2026-08-28T00:00:00+00:00
 lastmod: 2026-08-28T09:42:00+00:00
 ---
@@ -27,7 +27,7 @@ lastmod: 2026-08-28T09:42:00+00:00
 | K-07 配置、文档与包 | K-06 | 已实现并完成本地发布门禁 | 0.26.0、四开关、支持/权限/动作总表、模型/调度/插件说明、wheel/sdist 资源与 MIT 归属 |
 | K-G 0.26.0 GitHub 交付（历史标签） | K-07 全部本地门禁 | 原交付已完成；PR #3 后续由外部操作合并 | 原实现 SHA 的 push/PR 各唯一成功 release-gate；本阶段没有执行合并、发布或部署 |
 
-0.26.2 起，`K-08` 专指后续的[业务路由与执行状态真实性](./09-business-routing-execution-truth.md)，不复用本表的历史 GitHub 交付标签。
+0.26.2 起，`K-08` 专指后续的[业务路由与执行状态真实性](./08-business-routing-execution-truth.md)，不复用本表的历史 GitHub 交付标签。
 
 ## 固定来源与确定性身份
 
@@ -108,7 +108,7 @@ PR #3 在 `20cfe44…` 推送前已经合并并固定在旧 head `348293c…`，
 - Ruff、文档 11 JSON / 8 TOML / 8 Python 示例、117 个本地链接、12 个运行依赖、10 个开发依赖和 244 项协议资源检查通过；
 - Python 3.10/3.12 × wheel/sdist 四组包外加载均成功，runtime generation 为 1。
 
-PR #3 早已合并旧 head，0.26.1 没有 pull_request run；若回退到该版本，安装命令必须固定完整 `5d7f795…`，不能复用 #3 的历史 PR 结果。当前 0.26.2 安装点及新双门禁见 [K-08](./09-business-routing-execution-truth.md)；0.26.1 未在七七完成线上验收，本阶段也没有发布 PyPI。
+PR #3 早已合并旧 head，0.26.1 没有 pull_request run；若回退到该版本，安装命令必须固定完整 `5d7f795…`，不能复用 #3 的历史 PR 结果。当前 0.26.2 安装点及新双门禁见 [K-08](./08-business-routing-execution-truth.md)；0.26.1 未在七七完成线上验收，本阶段也没有发布 PyPI。
 
 文档提交无法在自身内容中写入自己的 SHA 或由自身触发的 run ID，否则会形成无穷自引用；其身份应由 Git 历史、远端引用和对应 Actions 共同绑定。PR #3 已合并后产生的文档修订只会触发 push run，不得被描述成新的 PR 双门禁。每个被验收的 run 仍必须全部 job 成功，且恰好一个 `release-gate` 为 `completed/success`；不 promotion、不发布 PyPI。
 
@@ -118,5 +118,5 @@ PR #3 早已合并旧 head，0.26.1 没有 pull_request run；若回退到该版
 2. 保留未跟踪 `uv.lock`，不得提交、修改或删除；
 3. 核对本地 HEAD、`origin/feat/generated-tool-bundles` 和 `git ls-remote`；PR #3 已合并，不能再作为当前分支 head 依据；
 4. K-07 协议实现 SHA `cf69468…` 的历史远端双门禁已完成；0.26.1 `5d7f795…` 与 0.26.0 `20cfe44…` 只作历史/回退证据；
-5. 当前 0.26.2 安装点和 PR #5 双门禁以 [K-08](./09-business-routing-execution-truth.md) 为准，不得复用 #3 的结果；
+5. 当前 0.26.2 安装点和 PR #5 双门禁以 [K-08](./08-business-routing-execution-truth.md) 为准，不得复用 #3 的结果；
 6. 不检查或修改七七依赖/进程，除非用户另行明确授权新的部署阶段。

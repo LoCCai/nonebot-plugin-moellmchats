@@ -162,5 +162,5 @@ PostgreSQL transaction 与 spool writer 会让同一个 rollback/close 子任务
 - [安装与隔离验收](./installation.md)
 - [OneBot / NapCat 协议工具](./protocol-tools.md)
 - [Custom File 与安全 HTTP](./custom-tools.md#安全联网只使用-safe_request)
-- [K-09 实施状态](./规划/10-code-review-fixes-20260829.md)
-- [K-10 实施状态](./规划/12-llm-runtime-incident-20260901.md)
+- [K-09 实施状态](./规划/09-code-review-fixes-20260829.md)
+- [K-10 实施状态](./规划/10-llm-runtime-incident-20260901.md)

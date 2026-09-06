@@ -8,7 +8,7 @@ lastmod: 2026-08-20T00:00:00+00:00
 
 # Plan 1：安全修复 + 核心架构重构
 
-> 实施注记（2026-08-20）：`0.25.0-rc1`、`0.25.0-rc2` 与 stable 的 C-01～C-07 已完成实现、本地总门禁和远端发布门禁。精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR run `32396257506` / `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。本轮未合并、未 promotion、未部署；Plan 2 只在上述门禁关闭后开始。逐项证据见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+> 实施注记（2026-08-20）：`0.25.0-rc1`、`0.25.0-rc2` 与 stable 的 C-01～C-07 已完成实现、本地总门禁和远端发布门禁。精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push/PR run `32396257506` / `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。本轮未合并、未 promotion、未部署；Plan 2 只在上述门禁关闭后开始。逐项证据见 [Plan 1 完成审计](./02-plan1-completion-audit.md)。
 
 > 推荐目标版本：`0.25.0-rc1 → 0.25.x stable`
 

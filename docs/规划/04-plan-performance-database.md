@@ -1,14 +1,14 @@
 ---
-title: 03-plan-performance-database
+title: 04-plan-performance-database
 date: 2026-08-19T14:55:10+08:00
 lastmod: 2026-08-24T15:36:01+00:00
 ---
 
-# 03-plan-performance-database
+# 04-plan-performance-database
 
 # Plan 3：处理效率与数据库接入优化
 
-> 最终验收口径复核（2026-08-24）：Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 与 I-09 本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁均已关闭；隔离最终矩阵已复核 Schema、Repository、Redis、cache、batch、并行和 metrics 的组合结果。Plan 3 的 Primitive 与 Runtime integration 两层开发态验收已完成。本次远端证据回填提交定义为最终文档 HEAD，以其自身精确双 `release-gate` 作为 I-09 最终判据；不为记录该自指门禁另起提交。生产 migration、真实 PostgreSQL/Redis、发布和部署均未发生，不能由本地或 CI 替代。详见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。
+> 最终验收口径复核（2026-08-24）：Plan 3 验收清单统一以“开发仓库真实 runtime 已组合消费且验证”为 `[x]`。I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 与 I-09 本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁均已关闭；隔离最终矩阵已复核 Schema、Repository、Redis、cache、batch、并行和 metrics 的组合结果。Plan 3 的 Primitive 与 Runtime integration 两层开发态验收已完成。本次远端证据回填提交定义为最终文档 HEAD，以其自身精确双 `release-gate` 作为 I-09 最终判据；不为记录该自指门禁另起提交。生产 migration、真实 PostgreSQL/Redis、发布和部署均未发生，不能由本地或 CI 替代。详见 [Plan 2 / Plan 3 完成度审计](./05-plan2-plan3-completion-audit.md)。
 
 > I-01 本地门禁（2026-08-23）：实现提交 `4a643e062b83055722351df12d402e518dc51b51` 固化无凭据的模型 capability/limits/cost/availability descriptor，并将 Decimal 成本精确对齐现有 `NUMERIC(24,12)`、provider/model 长度对齐既有 Schema。四版本定向各 `98 passed`、模型/分类/cache/usage/metrics/runtime 联合各 `492 passed`、普通全量及 Python 3.10 最低数据库/Redis 依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`，制品与四组包外 11 表/8 revision/离线 DDL/零数据库与 Redis I/O smoke 均通过。I-01 精确 HEAD 双 run 待完成，I-02 锁定；G-06 Classification Cache 尚未接真实分类路径，未读取连接信息、未迁移、未连接服务。
 

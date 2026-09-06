@@ -1,12 +1,12 @@
 ---
-title: 05-plan1-completion-audit
+title: 02-plan1-completion-audit
 date: 2026-08-20T00:00:00+00:00
 lastmod: 2026-08-20T00:00:00+00:00
 ---
 
 # Plan 1 完成审计
 
-本文把 [Plan 1](./01-plan-security-refactor.md) 与 [实施 Backlog](./04-implementation-backlog.md) 的 A-01～A-05、B-01～B-08、C-01～C-07 映射到当前开发工作树中的源码、具体测试 node 和发布门禁。它是审计索引，不把“代码已实现”“某次定向测试通过”“当前完整门禁通过”“已推送 GitHub”“已部署生产”混为一谈。
+本文把 [Plan 1](./01-plan-security-refactor.md) 与 [实施 Backlog](./14-implementation-backlog.md) 的 A-01～A-05、B-01～B-08、C-01～C-07 映射到当前开发工作树中的源码、具体测试 node 和发布门禁。它是审计索引，不把“代码已实现”“某次定向测试通过”“当前完整门禁通过”“已推送 GitHub”“已部署生产”混为一谈。
 
 ## 当前结论
 

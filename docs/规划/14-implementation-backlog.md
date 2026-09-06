@@ -1,12 +1,14 @@
 ---
-title: 04-implementation-backlog
+title: 14-implementation-backlog
 date: 2026-08-19T14:55:10+08:00
 lastmod: 2026-08-24T15:36:01+00:00
 ---
 
-# 04-implementation-backlog
+# 14-implementation-backlog
 
 # MoEllmChats 实施 Backlog 与 GitHub Milestone 建议
+
+> 编排更新（2026-09-06）：本文件是 Plan 1～3 / A～I / G 系列实施期的里程碑 backlog **历史记录**，文内所列 gate 已按状态段全部闭环（仅 D-09 发布周期观察因缺真实生产 parity 而继续锁定）。当前活跃待办已迁移至 [K-09 后续待修复与设计清单](./15-pending-issues-backlog.md) 与 [平台 API 与插件接入优化计划书](./16-platform-api-and-catalog-optimization-plan.md)，本文件不再滚动更新。
 
 > 本文件可直接用于拆 GitHub Issue。
 
@@ -76,7 +78,7 @@ lastmod: 2026-08-24T15:36:01+00:00
 - Plan 1 修复后精确 HEAD `f6c7628025cb5d34519499d86b979de448406d5b` 的 push run `32396257506` 与 PR run `32396261932` 各 11 个 job 全绿、各只有一个成功 `release-gate`；PR 基分支 `feat/llm-runtime-backpressure` 已要求 `strict=true` 的 `release-gate`。
 - 每项状态分别标明本地实现、远端门禁与部署边界；远端 green 不代表 Qiqi 运行实例已经更新。
 - Plan 1 发布门禁已关闭且未部署。Plan 2 的 D-01a～D-08f 已完成各自精确 HEAD 双 run gate；D-08f 最终闭环 HEAD `ea022bd31020880c72a66802aa3f036389d0169d` 对应 push run `32443308534` / PR run `32443313095`，两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / CLEAN`。D-09 因尚无至少一个发布周期的 parity 观察且禁止生产操作而保持锁定，legacy sidecar 继续保留。
-- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环，F-01～F-06 已完成精确 HEAD 双 run gate。F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 对应 push run `32469057942` / PR run `32469061094`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 新增 Tool Bundle metadata 与线性 revision `0005_tool_bundle_metadata`；四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `435 passed`，四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 Schema/graph/DDL/reload smoke 均通过。F-08 当前仅本地门禁完成，精确 HEAD 双 run gate 待完成，F-09 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./05-plan1-completion-audit.md)。
+- Milestone E 已在不依赖 D-09 清理、也不接数据库的增量边界内闭环，F-01～F-06 已完成精确 HEAD 双 run gate。F-07 最终 HEAD `dcff410498a862bed302687e1383cab0f554da6c` 对应 push run `32469057942` / PR run `32469061094`；两者均 11/11 green、各恰好一个成功 `release-gate`，远端分支与 PR head 一致，PR #2 为 `OPEN / MERGEABLE / CLEAN`。F-08 实现提交 `7afa3c81a6604a09533b0b1b487d3c484f9f1909` 新增 Tool Bundle metadata 与线性 revision `0005_tool_bundle_metadata`；四版本定向各 `44 passed`，联合 Engine/Repository/Agent/Graph/Scheduler/Conflict `435 passed`，四版本普通全量各 `989 passed, 1 skipped`，mandatory root Sandbox `40 passed, 0 skipped`，静态、fresh 制品及四组包外 Schema/graph/DDL/reload smoke 均通过。F-08 当前仅本地门禁完成，精确 HEAD 双 run gate 待完成，F-09 继续锁定；没有全局 engine/session、Repository 实现、数据库连接或在线 migration。逐项源码与测试映射见 [Plan 1 完成审计](./02-plan1-completion-audit.md)。
 
 ---
 
@@ -1372,7 +1374,7 @@ prompt 与预算：service 依次尝试相关完整 record，单条加入后超�
 
 **状态：规划审计基线与 I-01～I-08 最终文档双 run gate、I-09 本地最终矩阵及本地证据文档 HEAD 双 gate 均已关闭；本次回填提交自身双 gate 为最终判据**
 
-Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./06-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
+Milestone I 把 A～H 已验证的脱离态 primitive 接入真实开发版聊天/runtime 路径。完整缺口和状态口径见 [Plan 2 / Plan 3 完成度审计](./05-plan2-plan3-completion-audit.md)。本里程碑不合并、不发布、不部署、不读取生产连接信息、不连接真实 PostgreSQL/Redis、不运行在线 migration；D-09 继续独立锁定。
 
 ---
 
@@ -1732,7 +1734,7 @@ Admin API
 
 # K-11：工具进度与恢复状态真实性（0.26.5）
 
-完整实施证据见 [K-11 专项状态](./13-tool-progress-execution-truth-20260901.md)。本节点依赖 K-10 的参数级重复限次与固定进度管理入口，顺序固定为：
+完整实施证据见 [K-11 专项状态](./11-tool-progress-execution-truth-20260901.md)。本节点依赖 K-10 的参数级重复限次与固定进度管理入口，顺序固定为：
 
 1. 逐调用确定性进度标题和 1 秒有界发送；
 2. 同一次工具决策响应的可选自然话术及固定 `SUPERUSER` 管理命令；
@@ -1746,7 +1748,7 @@ Admin API
 
 # K-12：网页路由、表情素材与安全正文提取（0.26.6）
 
-完整实施状态见 [K-12 专项文档](./14-url-routing-emotion-webpage-20260901.md)。依赖顺序固定为：
+完整实施状态见 [K-12 专项文档](./12-url-routing-emotion-webpage-20260901.md)。依赖顺序固定为：
 
 1. 自动媒体 Matcher 只在确认媒体所有权后阻断传播，明确 `to_me` 的网页请求直接交给聊天路由；
 2. 表情分类与发送共用扩展名、文件头、普通文件、no-follow、非空和大小上限校验；
@@ -1760,7 +1762,7 @@ Admin API
 
 # K-13：指令投递与工具作用域真实性（0.26.6）
 
-完整实施状态见 [K-13 专项文档](./15-tool-schema-command-recovery-20260901.md)。本节点依赖 K-08 的真实 Matcher 状态、K-11 的逐调用进度和 K-12 的当前 generation 工作树，顺序固定为：
+完整实施状态见 [K-13 专项文档](./13-tool-schema-command-recovery-20260901.md)。本节点依赖 K-08 的真实 Matcher 状态、K-11 的逐调用进度和 K-12 的当前 generation 工作树，顺序固定为：
 
 1. NoneBot 进度从命令首词改为有界、脱敏的完整可显示指令；
 2. 把主模型实际收到的 Tool Schema 和 generation 绑定为请求级强制许可；

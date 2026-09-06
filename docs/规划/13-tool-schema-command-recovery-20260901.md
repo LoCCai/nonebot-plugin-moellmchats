@@ -1,10 +1,12 @@
 ---
-title: 15-tool-schema-command-recovery-20260901
+title: 13-tool-schema-command-recovery-20260901
 date: 2026-09-01T00:00:00+00:00
 lastmod: 2026-09-01T00:00:00+00:00
 ---
 
 # K-13 指令投递与工具作用域真实性（0.26.6）
+
+> 状态更新（2026-09-06）：K-13 的实现（请求级 Tool Schema 强制许可 `_active_llm_tool_names`/`_reject_call_outside_active_schema`、同插件菜单发现恢复 `_same_plugin_discovery_recovery`、command 难度下限等）已随提交 `f3bb85055cb68fed05a9d719cc2ec9f8a7d0c15` 在 `feat/generated-tool-bundles` 创建并推送，并经合并进入 `fix/generated-bundles-review` 整合分支（合并后另修复了 schema 拒绝路径的 tool_call_id 一致性与指纹记账）。下文「尚未提交/推送」已过时，保留为历史证据；真实模型/QQ 验收仍未发生。
 
 > 当前状态：以 `feat/generated-tool-bundles` 的未提交 0.26.6/K-12 工作树为依赖基线，K-13 源码、PicStatus 双副本、QWeb Feature Catalog、四版本、静态、sandbox 和制品本地门禁均已通过。尚未提交、推送、安装、重启或做真实模型/QQ 验收。最后一个远端已验证恢复点仍是 0.26.5 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`。
 

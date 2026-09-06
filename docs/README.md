@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前工作树已完成 0.26.6 K-12 与 K-13 的本地实现和完整本地门禁，包括网页/表情安全、完整指令、Tool Schema 作用域和同插件菜单恢复；尚未创建或推送 0.26.6 精确提交。最后一个远端已验证恢复点仍是 0.26.5 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`。完整边界见[K-12 实施状态](./规划/14-url-routing-emotion-webpage-20260901.md)和[K-13 实施状态](./规划/15-tool-schema-command-recovery-20260901.md)，PyPI 与七七实际安装状态仍需分别核对。
+> 当前工作树已完成 0.26.6 K-12 与 K-13 的本地实现和完整本地门禁，包括网页/表情安全、完整指令、Tool Schema 作用域和同插件菜单恢复；尚未创建或推送 0.26.6 精确提交。最后一个远端已验证恢复点仍是 0.26.5 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`。完整边界见[K-12 实施状态](./规划/12-url-routing-emotion-webpage-20260901.md)和[K-13 实施状态](./规划/13-tool-schema-command-recovery-20260901.md)，PyPI 与七七实际安装状态仍需分别核对。
 
 ---
 
@@ -21,18 +21,31 @@
 | [故障排查](./troubleshooting.md) | 选错插件、Matcher 未命中、空结果、部分成功、结果不确定、重复拦截和进度提示 |
 | [性格系统](./personality.md) | `temperaments.json` 性格预设配置与用户切换管理 |
 | [完整指令表](./commands.md) | 所有 Bot 指令的参数与权限说明，包括二阶段确认、生成工具权限与请求管理 |
-| [Plan 1 完成审计](./规划/05-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
-| [Plan 2 / Plan 3 完成度审计](./规划/06-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
-| [功能级意图发现与 OneBot 可靠性](./规划/07-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
-| [全量 OneBot / NapCat 协议工具实施状态](./规划/08-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
-| [业务路由与执行状态真实性](./规划/09-business-routing-execution-truth.md) | 0.26.2 K-08 的目录竞态、唯一所有者、命令、真实状态、重试和门禁 |
-| [当前基线审查修复](./规划/10-code-review-fixes-20260829.md) | 0.26.3 K-09 的语义重放、取消清理、single-flight、安全 HTTP、AST/400 判定与门禁 |
-| [K-09 后续设计清单](./规划/11-pending-issues-backlog.md) | 未在 0.26.3 简化处理的 spool、usage、热缓存、排空、Redis、MCP 与结构问题 |
-| [LLM 运行事故修复](./规划/12-llm-runtime-incident-20260901.md) | 0.26.4 K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
-| [工具进度与恢复状态真实性](./规划/13-tool-progress-execution-truth-20260901.md) | 0.26.5 K-11 的逐调用固定提示、可选自然话术、只读失败恢复、部分成功总结和交付边界 |
-| [网页路由、表情与安全正文提取](./规划/14-url-routing-emotion-webpage-20260901.md) | 0.26.6 K-12 的媒体传播所有权、表情文件校验、公网 GET 门面和七七离线浏览器提取 |
-| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | 调用链机制速览、目录/Schema 缓存键重构设计与分批实施计划 |
-| [指令投递与工具作用域真实性](./规划/15-tool-schema-command-recovery-20260901.md) | 0.26.6 K-13 的完整指令进度、本轮 Schema 强制许可、菜单恢复和 PicStatus 入口收口 |
+**已完成（阶段记录，按时间序；总路线图与文档索引见 [00](./规划/00-roadmap-overview.md)）**
+
+| 页面 | 内容 |
+|------|------|
+| [Plan 1：安全修复与核心架构重构](./规划/01-plan-security-refactor.md) | 安全修复与核心架构重构的原始计划（完成审计见 02） |
+| [Plan 1 完成审计](./规划/02-plan1-completion-audit.md) | A-01～C-07 的源码、测试 node、门禁状态与最终关闭条件 |
+| [Plan 2：后续功能与架构优化](./规划/03-plan-future-architecture.md) | 结构化 ToolResult、模型能力/路由、Agent runtime 等原始计划（审计见 05） |
+| [Plan 3：处理效率与数据库接入优化](./规划/04-plan-performance-database.md) | 并行执行、缓存与 PostgreSQL 接入的原始计划（审计见 05） |
+| [Plan 2 / Plan 3 完成度审计](./规划/05-plan2-plan3-completion-audit.md) | H-08 后的运行态缺口、Milestone I 依赖顺序与非生产门禁 |
+| [功能级意图发现与 OneBot 可靠性（0.26.0）](./规划/06-intent-discovery-onebot-reliability.md) | 菜单/QWeb 发现链路、两阶段展开、表情降级和七七隔离验收门禁 |
+| [全量 OneBot / NapCat 协议工具实施状态（0.26.0/0.26.1）](./规划/07-onebot-napcat-protocol-tools.md) | K-01～K-07 依赖顺序、实现边界、本地/远端证据和恢复点 |
+| [业务路由与执行状态真实性（0.26.2）](./规划/08-business-routing-execution-truth.md) | K-08 的目录竞态、唯一所有者、命令、真实状态、重试和门禁 |
+| [当前基线审查修复（0.26.3）](./规划/09-code-review-fixes-20260829.md) | K-09 的语义重放、取消清理、single-flight、安全 HTTP、AST/400 判定与门禁 |
+| [LLM 运行事故修复（0.26.4）](./规划/10-llm-runtime-incident-20260901.md) | K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
+| [工具进度与恢复状态真实性（0.26.5）](./规划/11-tool-progress-execution-truth-20260901.md) | K-11 的逐调用固定提示、可选自然话术、只读失败恢复、部分成功总结和交付边界 |
+| [网页路由、表情与安全正文提取（0.26.6）](./规划/12-url-routing-emotion-webpage-20260901.md) | K-12 的媒体传播所有权、表情文件校验、公网 GET 门面和七七离线浏览器提取 |
+| [指令投递与工具作用域真实性（0.26.6）](./规划/13-tool-schema-command-recovery-20260901.md) | K-13 的完整指令进度、本轮 Schema 强制许可、菜单恢复和 PicStatus 入口收口 |
+| [实施 Backlog 与里程碑建议（历史记录）](./规划/14-implementation-backlog.md) | Plan 1～3 实施期 backlog，gate 已全部闭环，仅 D-09 发布周期观察锁定 |
+
+**待实施（活跃计划书）**
+
+| 页面 | 内容 |
+|------|------|
+| [K-09 后续待修复与设计清单](./规划/15-pending-issues-backlog.md) | spool 诊断、usage 幂等键、热缓存、排空上限、Redis admission、MCP 依赖契约与结构问题 |
+| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | 调用链机制速览、目录/Schema 缓存键重构设计（P1 最高价值）与分批实施计划 |
 
 ---
 

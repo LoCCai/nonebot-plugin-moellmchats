@@ -1,5 +1,5 @@
 ---
-title: 13-tool-progress-execution-truth-20260901
+title: 11-tool-progress-execution-truth-20260901
 date: 2026-09-01T00:00:00+00:00
 lastmod: 2026-09-01T00:00:00+00:00
 ---

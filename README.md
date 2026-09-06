@@ -63,7 +63,7 @@
 
 ## 📦 安装
 
-当前工作树已完成 [K-12 网页路由、表情素材与安全正文提取](docs/规划/14-url-routing-emotion-webpage-20260901.md) 和 [K-13 指令投递与工具作用域真实性](docs/规划/15-tool-schema-command-recovery-20260901.md) 的 0.26.6 本地实现与完整本地门禁；尚未形成可安装的精确提交或远端门禁。当前最后一个已验证隔离恢复点仍是 0.26.5 完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。下方安装命令在 0.26.6 完成提交和门禁前仍固定到该恢复点，不得把本地 HEAD 或移动分支冒充已验证版本。
+当前工作树已完成 [K-12 网页路由、表情素材与安全正文提取](docs/规划/12-url-routing-emotion-webpage-20260901.md) 和 [K-13 指令投递与工具作用域真实性](docs/规划/13-tool-schema-command-recovery-20260901.md) 的 0.26.6 本地实现与完整本地门禁；尚未形成可安装的精确提交或远端门禁。当前最后一个已验证隔离恢复点仍是 0.26.5 完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。下方安装命令在 0.26.6 完成提交和门禁前仍固定到该恢复点，不得把本地 HEAD 或移动分支冒充已验证版本。
 
 这表示候选制品可以进入**隔离测试**，不表示已部署或生产验证。Git 安装必须固定完整 SHA，不要依赖可移动分支头。完整的加载、验收、停止条件和回退步骤见[安装、升级与测试验收](docs/installation.md)。
 

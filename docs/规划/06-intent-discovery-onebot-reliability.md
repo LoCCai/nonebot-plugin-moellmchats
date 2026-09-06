@@ -1,12 +1,12 @@
 ---
-title: 07-intent-discovery-onebot-reliability
+title: 06-intent-discovery-onebot-reliability
 date: 2026-08-27T00:00:00+00:00
 lastmod: 2026-08-28T00:00:00+00:00
 ---
 
 # 功能级意图发现与 OneBot 投递可靠性
 
-> 状态更正（2026-08-28）：`bbc3963…` 是本阶段最初实现点，不再是当前候选。后续表情降级修复已收口到 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，其 push/PR run `33134760223` / `33134761967` 已完成双门禁。0.26.0 的全量协议工作另见 [K 阶段实施状态](./08-onebot-napcat-protocol-tools.md)；以下 `bbc3963…` 记录保留为历史证据，不应用作新协议功能的安装 SHA。
+> 状态更正（2026-08-28）：`bbc3963…` 是本阶段最初实现点，不再是当前候选。后续表情降级修复已收口到 `79d2268930251773cb4e91cdd9b13a9ec36a7d14`，其 push/PR run `33134760223` / `33134761967` 已完成双门禁。0.26.0 的全量协议工作另见 [K 阶段实施状态](./07-onebot-napcat-protocol-tools.md)；以下 `bbc3963…` 记录保留为历史证据，不应用作新协议功能的安装 SHA。
 
 ## 目标与边界
 
