@@ -186,3 +186,6 @@ CLAUDE.md
 
 # codecompanion
 .codecompanion-plan/
+
+# Mimosa 钩子在 docs 内生成的运行状态，不入库
+docs/规划/.mimosa/
