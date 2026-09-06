@@ -287,7 +287,10 @@ class MemoryToolCatalogCacheSettings:
     """Bounded process-local catalog cache policy."""
 
     max_entries: int = 256
-    max_catalog_bytes: int = 262_144
+    # 目录字符预算上限 96,000；CJK 为主时 UTF-8 约 3 字节/字符（≈288KB），
+    # 再留 record 包装与 digest 开销余量。旧默认 262,144 会让大目录部署
+    # 在 publish 时抛 ToolCatalogCacheUnavailableError，被分类降级为无工具
+    max_catalog_bytes: int = 1_048_576
     max_total_bytes: int = 8_388_608
 
     def __post_init__(self) -> None:

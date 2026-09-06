@@ -177,7 +177,31 @@ def _rewrite_reply_id(
     return result
 
 
-def _extract_send_data(message, *, protocol: str) -> dict:
+async def _read_local_image_base64(raw: str) -> str | None:
+    """读取 file:// 本地图片并编码为 data URL。
+
+    读盘与 base64 编码可能针对大图，必须移出事件循环：本函数在
+    ``on_calling_api`` 全局钩子内被调用，同步 IO 会阻塞整个 Bot 的
+    消息处理。
+    """
+
+    local_path = unquote(urlparse(raw).path)
+
+    def _load() -> bytes | None:
+        try:
+            with open(local_path, "rb") as file:
+                return file.read()
+        except Exception:
+            return None
+
+    payload = await asyncio.to_thread(_load)
+    if payload is None:
+        logger.warning("读取插件返回的本地图片失败")
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(payload).decode()
+
+
+async def _extract_send_data(message, *, protocol: str) -> dict:
     normalized = _message_class(protocol)(message)
     text: list[str] = []
     images: list[str] = []
@@ -187,13 +211,9 @@ def _extract_send_data(message, *, protocol: str) -> dict:
             if raw.startswith("base64://"):
                 images.append("data:image/jpeg;base64," + raw[9:])
             elif raw.startswith("file://"):
-                try:
-                    local_path = unquote(urlparse(raw).path)
-                    with open(local_path, "rb") as file:
-                        payload = base64.b64encode(file.read()).decode()
-                    images.append("data:image/jpeg;base64," + payload)
-                except Exception:
-                    logger.warning("读取插件返回的本地图片失败")
+                data_url = await _read_local_image_base64(raw)
+                if data_url is not None:
+                    images.append(data_url)
             elif raw:
                 images.append(raw)
             text.append("[图片]")
@@ -253,7 +273,7 @@ async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
             protocol=protocol,
         )
         data["message"] = fixed
-        output = _extract_send_data(fixed, protocol=protocol)
+        output = await _extract_send_data(fixed, protocol=protocol)
     context["pending_api"][id(data)] = {
         "api": api,
         "effect": _api_effect(protocol, api),

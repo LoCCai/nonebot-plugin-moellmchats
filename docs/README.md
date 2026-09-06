@@ -31,6 +31,7 @@
 | [LLM 运行事故修复](./规划/12-llm-runtime-incident-20260901.md) | 0.26.4 K-10 的分类超时、日志脱敏、参数级重复限次、固定进度指令与交付边界 |
 | [工具进度与恢复状态真实性](./规划/13-tool-progress-execution-truth-20260901.md) | 0.26.5 K-11 的逐调用固定提示、可选自然话术、只读失败恢复、部分成功总结和交付边界 |
 | [网页路由、表情与安全正文提取](./规划/14-url-routing-emotion-webpage-20260901.md) | 0.26.6 K-12 的媒体传播所有权、表情文件校验、公网 GET 门面和七七离线浏览器提取 |
+| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | 调用链机制速览、目录/Schema 缓存键重构设计与分批实施计划 |
 | [指令投递与工具作用域真实性](./规划/15-tool-schema-command-recovery-20260901.md) | 0.26.6 K-13 的完整指令进度、本轮 Schema 强制许可、菜单恢复和 PicStatus 入口收口 |
 
 ---

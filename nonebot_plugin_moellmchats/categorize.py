@@ -331,7 +331,6 @@ class Categorize:
 
         catalog, catalog_record = await self._resolve_catalog()
         logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
-        prompt = self._build_prompt(catalog)
 
         # 判断是否开启 MoE，若未开启（但因为开启了工具走到这里），则使用默认模型（selected_model）
         required_capabilities = ModelCapability(
@@ -354,6 +353,7 @@ class Categorize:
             )
             logger.debug("未开启MoE，使用默认模型进行工具/联网/视觉判断分类")
         if self.classification_cache is None:
+            prompt = self._build_prompt(catalog)
             result = await self._request_category_model(
                 category_model_config,
                 prompt,
@@ -379,6 +379,9 @@ class Categorize:
         )
 
         async def build_record() -> ClassificationCacheRecord:
+            # prompt 延迟到缓存未命中时构建：命中路径（含 single-flight
+            # waiter）无需白拼 ~百 KB 目录字符串
+            prompt = self._build_prompt(catalog)
             result = await self._request_category_model(
                 category_model_config,
                 prompt,
