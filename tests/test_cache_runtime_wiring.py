@@ -15,6 +15,9 @@ from nonebot_plugin_moellmchats.classification_cache import (
 )
 from nonebot_plugin_moellmchats.llm_payload import LlmPayloadMixin
 from nonebot_plugin_moellmchats.model_selector import model_selector
+from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
+    build_nonebot_plugin_candidate,
+)
 import nonebot_plugin_moellmchats.protocol_context as protocol_context_module
 from nonebot_plugin_moellmchats.protocol_context import protocol_request_scope
 from nonebot_plugin_moellmchats.tool_catalog_cache import (
@@ -32,9 +35,8 @@ from nonebot_plugin_moellmchats.tool_schema_cache import (
 
 
 def _snapshot(generation: int = 42) -> ToolSnapshot:
-    return ToolSnapshot(
-        generation=generation,
-        plugin_info={
+    plugin_info, _specs = build_nonebot_plugin_candidate(
+        {
             "alpha": {
                 "name": "Alpha",
                 "description": "alpha tool",
@@ -46,6 +48,11 @@ def _snapshot(generation: int = 42) -> ToolSnapshot:
                 "usage": "/beta <query>",
             },
         },
+        command_prefixes=("/",),
+    )
+    return ToolSnapshot(
+        generation=generation,
+        plugin_info=plugin_info,
         custom_tools={},
         tool_dependencies={},
         mcp_tool_names=set(),

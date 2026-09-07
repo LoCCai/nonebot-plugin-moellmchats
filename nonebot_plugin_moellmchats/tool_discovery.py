@@ -11,6 +11,7 @@ import unicodedata
 
 DISCOVERY_FEATURES_KEY = "discovery_features"
 COMPAT_COMMAND_PREFIXES_KEY = "_moellm_compat_command_prefixes"
+COMPAT_DESCRIPTION_VIEWS_KEY = "_moellm_compat_description_views"
 
 MAX_DISCOVERY_FEATURES = 128
 MAX_DISCOVERY_PLUGIN_CHARS = 48_000
@@ -43,6 +44,28 @@ _TRIGGER_LABELS = {
     "event": "事件",
     "schedule": "定时",
 }
+
+
+@dataclass(frozen=True)
+class CompatibilityDescriptionViews:
+    """Immutable actor-specific descriptions frozen into one generation."""
+
+    user: str
+    superuser: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("user", "superuser"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"兼容插件 {field_name} 描述不能为空")
+            if len(value) > _MAX_COMPAT_DESCRIPTION_CHARS:
+                raise ValueError(f"兼容插件 {field_name} 描述超过安全上限")
+
+    def __deepcopy__(
+        self,
+        _memo: dict[int, object],
+    ) -> CompatibilityDescriptionViews:
+        return self
 
 
 def _freeze_projection(value: object) -> object:
@@ -704,48 +727,96 @@ def build_compatibility_description(
     base = f"插件名称：{display_name}。功能描述：{description}。原始用法说明：{usage}"
     features = discovery_features(info)
     if not features:
-        return render_command_prefix_contract(
+        result = render_command_prefix_contract(
             base,
             command_prefixes=command_prefixes,
         )
-
-    lines = [
-        base,
-        "菜单功能提示（仅用于选择和生成消息，不代表权限；目标插件仍会复核权限与业务规则）：",
-    ]
-    passive_names: list[str] = []
-    for feature in features:
-        if feature.get("hidden") is True and not is_superuser:
-            continue
-        name = feature.get("name")
-        summary = feature.get("summary")
-        if not isinstance(name, str) or not isinstance(summary, str):
-            continue
-        if feature.get("invocable") is not True:
-            passive_names.append(name)
-            continue
-        feature_parts = [f"- {name}: {summary}"]
-        triggers = _trigger_text(feature, limit=_MAX_CATALOG_TRIGGER_CHARS)
-        if triggers:
-            feature_parts.append(triggers)
-        details = feature.get("details")
-        if isinstance(details, str) and details and details != summary:
-            feature_parts.append(f"说明: {details}")
-        permission = feature.get("permission")
-        if isinstance(permission, str) and permission:
-            feature_parts.append(f"条件: {permission}")
-        lines.append("；".join(feature_parts))
-    if passive_names:
-        rendered = "、".join(passive_names)
-        lines.append(f"以下功能只由真实事件或定时任务触发，不得通过 command 伪造：{rendered}")
-    lines.append(
-        "生成 command 时只使用上面标为消息/命令触发的真实格式；"
-        "不要输出命令前缀占位文本，也不要改为直接调用 Bot/NapCat API。"
-    )
-    result = render_command_prefix_contract(
-        "\n".join(lines),
-        command_prefixes=command_prefixes,
-    )
+    else:
+        lines = [
+            base,
+            "菜单功能提示（仅用于选择和生成消息，不代表权限；目标插件仍会复核权限与业务规则）：",
+        ]
+        passive_names: list[str] = []
+        for feature in features:
+            if feature.get("hidden") is True and not is_superuser:
+                continue
+            name = feature.get("name")
+            summary = feature.get("summary")
+            if not isinstance(name, str) or not isinstance(summary, str):
+                continue
+            if feature.get("invocable") is not True:
+                passive_names.append(name)
+                continue
+            feature_parts = [f"- {name}: {summary}"]
+            triggers = _trigger_text(feature, limit=_MAX_CATALOG_TRIGGER_CHARS)
+            if triggers:
+                feature_parts.append(triggers)
+            details = feature.get("details")
+            if isinstance(details, str) and details and details != summary:
+                feature_parts.append(f"说明: {details}")
+            permission = feature.get("permission")
+            if isinstance(permission, str) and permission:
+                feature_parts.append(f"条件: {permission}")
+            lines.append("；".join(feature_parts))
+        if passive_names:
+            rendered = "、".join(passive_names)
+            lines.append(
+                "以下功能只由真实事件或定时任务触发，不得通过 command 伪造："
+                f"{rendered}"
+            )
+        lines.append(
+            "生成 command 时只使用上面标为消息/命令触发的真实格式；"
+            "不要输出命令前缀占位文本，也不要改为直接调用 Bot/NapCat API。"
+        )
+        result = render_command_prefix_contract(
+            "\n".join(lines),
+            command_prefixes=command_prefixes,
+        )
     if len(result) <= _MAX_COMPAT_DESCRIPTION_CHARS:
         return result
     return result[: _MAX_COMPAT_DESCRIPTION_CHARS - 12] + "\n...[菜单已截断]"
+
+
+def build_compatibility_description_views(
+    plugin_id: str,
+    info: Mapping[str, Any],
+    *,
+    command_prefixes: tuple[str, ...] | None = None,
+) -> CompatibilityDescriptionViews:
+    """Build the two permission views once while publishing a generation."""
+
+    user = build_compatibility_description(
+        plugin_id,
+        info,
+        command_prefixes=command_prefixes,
+    )
+    has_hidden_features = any(
+        feature.get("hidden") is True for feature in discovery_features(info)
+    )
+    superuser = (
+        build_compatibility_description(
+            plugin_id,
+            info,
+            is_superuser=True,
+            command_prefixes=command_prefixes,
+        )
+        if has_hidden_features
+        else user
+    )
+    return CompatibilityDescriptionViews(user=user, superuser=superuser)
+
+
+def compatibility_description_for_actor(
+    plugin_id: str,
+    info: Mapping[str, Any],
+    *,
+    is_superuser: bool = False,
+) -> str:
+    """Select a validated generation-cached description without rerendering."""
+
+    if type(is_superuser) is not bool:
+        raise TypeError("is_superuser 必须是布尔值")
+    views = info.get(COMPAT_DESCRIPTION_VIEWS_KEY)
+    if type(views) is not CompatibilityDescriptionViews:
+        raise ValueError(f"NoneBot 插件 {plugin_id} 缺少合法的注册期描述缓存")
+    return views.superuser if is_superuser else views.user

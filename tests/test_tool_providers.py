@@ -21,6 +21,10 @@ from nonebot_plugin_moellmchats.tool_artifacts import (
     source_sha256,
 )
 from nonebot_plugin_moellmchats.tool_contracts import ToolPolicy, ToolSpec
+from nonebot_plugin_moellmchats.tool_discovery import (
+    COMPAT_DESCRIPTION_VIEWS_KEY,
+    CompatibilityDescriptionViews,
+)
 from nonebot_plugin_moellmchats.tool_providers import (
     BuiltinToolProvider,
     BuiltinToolResources,
@@ -1521,6 +1525,24 @@ async def test_nonebot_plugin_provider_fails_closed_for_legacy_drift() -> None:
     reject({})
     drifted = {name: dict(entry) for name, entry in legacy.items()}
     drifted["plugin_primary"]["description"] = "drifted"
+    reject(drifted)
+    drifted = {name: dict(entry) for name, entry in legacy.items()}
+    drifted["plugin_primary"][COMPAT_DESCRIPTION_VIEWS_KEY] = {
+        "user": "tampered",
+        "superuser": "tampered",
+    }
+    reject(drifted)
+    drifted = {name: dict(entry) for name, entry in legacy.items()}
+    views = legacy["plugin_primary"][COMPAT_DESCRIPTION_VIEWS_KEY]
+    detached_user = (" " + views.user)[1:]
+    assert detached_user == views.user
+    assert detached_user is not views.user
+    drifted["plugin_primary"][COMPAT_DESCRIPTION_VIEWS_KEY] = (
+        CompatibilityDescriptionViews(
+            user=views.user,
+            superuser=detached_user,
+        )
+    )
     reject(drifted)
     drifted = {name: dict(entry) for name, entry in legacy.items()}
     drifted["plugin_primary"]["tool_spec"] = replace(specs[0])

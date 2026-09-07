@@ -1786,6 +1786,17 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
         mcp_tool_names={mcp_spec.name},
         provider_catalog=catalog,
     )
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    monkeypatch.setattr(
+        manager_module,
+        "build_compatibility_description",
+        lambda *_args, **_kwargs: pytest.fail(
+            "legacy/provider payload 渲染不得重建兼容描述"
+        ),
+        raising=False,
+    )
     blacklist: list[str] = []
     monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: blacklist)
     selected = {

@@ -17,7 +17,8 @@ from .event_simulator import (
 from .tool_contracts import ToolEffect, ToolResult, ToolSpec
 from .tool_discovery import (
     COMPAT_COMMAND_PREFIXES_KEY,
-    build_compatibility_description,
+    COMPAT_DESCRIPTION_VIEWS_KEY,
+    build_compatibility_description_views,
 )
 
 _COMMAND_PARAMETERS = {
@@ -236,18 +237,20 @@ def build_nonebot_plugin_candidate(
                 "tool_spec",
                 "source",
                 COMPAT_COMMAND_PREFIXES_KEY,
+                COMPAT_DESCRIPTION_VIEWS_KEY,
             )
         ):
             raise ValueError(
                 f"NoneBot 插件 {plugin_name} 不得伪造保留 Provider 字段"
             )
+        description_views = build_compatibility_description_views(
+            plugin_name,
+            info,
+            command_prefixes=command_prefixes,
+        )
         spec = ToolSpec(
             name=plugin_name,
-            description=build_compatibility_description(
-                plugin_name,
-                info,
-                command_prefixes=command_prefixes,
-            ),
+            description=description_views.user,
             parameters=_COMMAND_PARAMETERS,
             handler=_build_handler(plugin_name),
             # A legacy command can reach arbitrary plugin behavior.  Keep the
@@ -259,6 +262,7 @@ def build_nonebot_plugin_candidate(
         info["tool_spec"] = spec
         info["source"] = "nonebot_plugin"
         info[COMPAT_COMMAND_PREFIXES_KEY] = command_prefixes
+        info[COMPAT_DESCRIPTION_VIEWS_KEY] = description_views
         candidate[plugin_name] = info
         specs.append(spec)
     return candidate, tuple(specs)

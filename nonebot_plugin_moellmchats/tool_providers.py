@@ -25,7 +25,11 @@ from .tool_contracts import (
     ToolPolicy,
     ToolSpec,
 )
-from .tool_discovery import build_compatibility_description
+from .tool_discovery import (
+    COMPAT_DESCRIPTION_VIEWS_KEY,
+    CompatibilityDescriptionViews,
+    build_compatibility_description_views,
+)
 
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _BUNDLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -1870,8 +1874,23 @@ class NoneBotPluginProvider:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} source 不一致")
             if entry.get("tool_spec") is not spec:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} ToolSpec 不一致")
-            description = build_compatibility_description(name, entry)
-            if spec.description != description:
+            description_views = entry.get(COMPAT_DESCRIPTION_VIEWS_KEY)
+            if type(description_views) is not CompatibilityDescriptionViews:
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} description 注册期缓存非法"
+                )
+            expected_views = build_compatibility_description_views(name, entry)
+            if description_views != expected_views:
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} description 注册期缓存漂移"
+                )
+            expected_shared = expected_views.superuser is expected_views.user
+            actual_shared = description_views.superuser is description_views.user
+            if expected_shared is not actual_shared:
+                raise ValueError(
+                    f"nonebot-plugin legacy 工具 {name} description 缓存共享关系漂移"
+                )
+            if spec.description != description_views.user:
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} description 不一致")
             if spec.permission != "user" or spec.effect is not ToolEffect.MUTATING or not callable(spec.handler):
                 raise ValueError(f"nonebot-plugin legacy 工具 {name} 兼容契约不一致")

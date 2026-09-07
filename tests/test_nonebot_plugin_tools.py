@@ -16,6 +16,7 @@ from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
 from nonebot_plugin_moellmchats.tool_contracts import ToolEffect, ToolResult
 from nonebot_plugin_moellmchats.tool_discovery import (
     COMPAT_COMMAND_PREFIXES_KEY,
+    COMPAT_DESCRIPTION_VIEWS_KEY,
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolManager, tool_manager
 
@@ -45,6 +46,11 @@ def test_nonebot_plugin_candidate_is_detached_canonical_and_conservative() -> No
     ]
     assert legacy["plugin_demo"]["source"] == "nonebot_plugin"
     assert legacy["plugin_demo"]["tool_spec"] is spec
+    description_views = legacy["plugin_demo"][COMPAT_DESCRIPTION_VIEWS_KEY]
+    assert description_views.user == spec.description
+    assert description_views.superuser is description_views.user
+    with pytest.raises(FrozenInstanceError):
+        description_views.user = "tampered"
     assert spec.name == "plugin_demo"
     assert spec.permission == "user"
     assert spec.effect is ToolEffect.MUTATING
@@ -72,6 +78,17 @@ def test_nonebot_plugin_candidate_rejects_malformed_or_reserved_legacy_info() ->
             {
                 "plugin_demo": {
                     COMPAT_COMMAND_PREFIXES_KEY: ("!",),
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="保留 Provider 字段"):
+        build_nonebot_plugin_candidate(
+            {
+                "plugin_demo": {
+                    COMPAT_DESCRIPTION_VIEWS_KEY: {
+                        "user": "spoofed",
+                        "superuser": "spoofed",
+                    },
                 }
             }
         )
@@ -227,6 +244,77 @@ def test_nonebot_plugin_schema_keeps_generation_frozen_command_prefixes(
     assert "当前首选命令前缀为 '!'" in description
     assert "其他有效前缀：'##'" in description
     assert "<命令前缀>" not in description
+
+
+def test_nonebot_plugin_description_without_menu_is_still_bounded() -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {"plugin_demo": {"description": "x" * 40_000}}
+    )
+
+    views = legacy["plugin_demo"][COMPAT_DESCRIPTION_VIEWS_KEY]
+    assert len(specs[0].description) <= 28_000
+    assert specs[0].description.endswith("...[菜单已截断]")
+    assert views.user is specs[0].description
+    assert views.superuser is views.user
+
+
+def test_nonebot_plugin_schema_reuses_generation_cached_permission_views(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy, specs = build_nonebot_plugin_candidate(
+        {
+            "plugin_demo": {
+                "name": "Demo",
+                "description": "demo plugin",
+                "usage": "<命令前缀>demo",
+                "discovery_features": (
+                    {
+                        "name": "公开功能",
+                        "summary": "普通用户可见",
+                        "triggers": ({"type": "command", "value": "demo"},),
+                        "invocable": True,
+                        "hidden": False,
+                    },
+                    {
+                        "name": "隐藏功能",
+                        "summary": "仅超级用户可见",
+                        "triggers": ({"type": "command", "value": "demo admin"},),
+                        "invocable": True,
+                        "hidden": True,
+                    },
+                ),
+            }
+        },
+        command_prefixes=("##", "!"),
+    )
+    views = legacy["plugin_demo"][COMPAT_DESCRIPTION_VIEWS_KEY]
+    assert views.user == specs[0].description
+    assert "公开功能" in views.user
+    assert "隐藏功能" not in views.user
+    assert "隐藏功能" in views.superuser
+    assert "!demo" in views.user
+
+    monkeypatch.setattr(
+        "nonebot_plugin_moellmchats.tool_discovery.build_compatibility_description",
+        lambda *_args, **_kwargs: pytest.fail("Schema 渲染不得重建兼容描述"),
+    )
+    monkeypatch.setattr(tool_manager, "is_tool_blacklisted", lambda _name: False)
+
+    user_schema = ToolManager.build_tool_schema(
+        ["plugin_demo"],
+        plugin_info=legacy,
+        custom_tools={},
+        is_superuser=False,
+    )
+    admin_schema = ToolManager.build_tool_schema(
+        ["plugin_demo"],
+        plugin_info=legacy,
+        custom_tools={},
+        is_superuser=True,
+    )
+
+    assert user_schema[0]["function"]["description"] is views.user
+    assert admin_schema[0]["function"]["description"] is views.superuser
 
 
 @pytest.mark.asyncio

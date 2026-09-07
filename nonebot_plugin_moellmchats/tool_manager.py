@@ -40,9 +40,9 @@ from .tool_contracts import ToolSpec, tool_registry, validate_parameters_schema
 from .tool_discovery import (
     BusinessIntentResolution,
     PicMenuProjectionSnapshot,
-    build_compatibility_description,
     build_intent_owner_index,
     build_plugin_catalog_entries,
+    compatibility_description_for_actor,
     discovery_directory_identity,
     finalize_discovery_catalog,
     resolve_business_intent,
@@ -2833,7 +2833,7 @@ TOOLS_REGISTRY = [
                     "function": {
                         "name": item.spec.name,
                         "description": (
-                            build_compatibility_description(
+                            compatibility_description_for_actor(
                                 name,
                                 plugin_info[name],
                                 is_superuser=is_superuser,
@@ -2905,7 +2905,7 @@ TOOLS_REGISTRY = [
                         "type": "function",
                         "function": {
                             "name": name,
-                            "description": build_compatibility_description(
+                            "description": compatibility_description_for_actor(
                                 name,
                                 info,
                                 is_superuser=is_superuser,
