@@ -917,6 +917,7 @@ class ProtocolBroker:
             event,
             generation=generation,
             is_superuser=is_superuser,
+            force_refresh=True,
         )
         if not snapshot.enabled:
             raise ProtocolExecutionError("确认时协议能力探测失败，动作未执行")

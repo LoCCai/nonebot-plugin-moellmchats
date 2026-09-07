@@ -1,16 +1,16 @@
 ---
 title: 16-platform-api-and-catalog-optimization-plan
 date: 2026-09-06T00:00:00+00:00
-lastmod: 2026-09-06T00:00:00+00:00
+lastmod: 2026-09-07T00:00:00+00:00
 ---
 
 # 平台 API 与插件接入链路优化计划书
 
-> 来源：2026-09-06 对「Bot 平台 API 处理 / 原生功能 / 插件中间件 / 调用接口」四类机制的专项梳理。基线 `e1b2192…`（分支 `fix/generated-bundles-review`）。本页只列**尚未实施**的项；零/低风险批次（P0）已随本轮实施，见文末记录。所有行号以基线为准，实施时以符号定位。
+> 来源：2026-09-06 对「Bot 平台 API 处理 / 原生功能 / 插件中间件 / 调用接口」四类机制的专项梳理。审查基线 `e1b2192…`，整合实施基线 `ee99c7d…`（唯一分支 `feat/generated-tool-bundles`）。本页同时维护待实施项与已收口记录；所有旧行号仅作定位提示，实施时以符号为准。
 
 ## 机制链路速览（实施前必读）
 
-外部插件功能的一生：加载期（reload generation）经 PicMenu 投影 → 菜单规范化（每插件 128 功能/48,000 字符）→ `ToolSpec` 注册（兼容描述截 28,000 字符）→ `ToolSnapshot` 冻结（intent 索引 + `directory_digest` + 6 provider parity）；每请求经业务意图 O(1) 直达（命中则免目录免分类模型）→ 目录缓存解析（键含 `protocol_scope_digest`）→ 分类（缓存 TTL 60s，single-flight）→ Schema 组装（同键结构）→ 合成事件投递（targeted/full-bus）→ API 证据状态机回传。协议动作表（244 项）为模块级单次构建；成员名/协议探测分别为 600s 单飞缓存与每消息探测。
+外部插件功能的一生：加载期（reload generation）经 PicMenu 投影 → 菜单规范化（每插件 128 功能/48,000 字符）→ `ToolSpec` 注册（兼容描述截 28,000 字符）→ `ToolSnapshot` 冻结（intent 索引 + `directory_digest` + 6 provider parity）；每请求经业务意图 O(1) 直达（命中则免目录免分类模型）→ 目录缓存解析（键含 `protocol_scope_digest`）→ 分类（缓存 TTL 60s，single-flight）→ Schema 组装（同键结构）→ 合成事件投递（targeted/full-bus）→ API 证据状态机回传。协议动作表（244 项）为模块级单次构建；成员名/协议探测分别使用 600 秒与 300 秒单飞缓存。
 
 ## P1（最高价值）：协议缓存键与目录内容因子同步重构
 
@@ -53,11 +53,12 @@ lastmod: 2026-09-06T00:00:00+00:00
 - 方案：`build_nonebot_plugin_candidate`（`nonebot_plugin_tools.py:209-264`）把渲染结果按 `is_superuser` 二态缓存进 `info`（多数插件无 hidden 功能可共享一份）；代内输入（info + 冻结 command_start 前缀）不变，天然安全。
 - 风险：低。
 
-## P4：协议能力探测会话级缓存
+## P4（已完成）：协议能力探测会话级缓存
 
 - 位置：`protocol_context.py:220`（v11 `get_version_info`）、`:238`（v12 `get_supported_actions`）。
 - 现状：每条消息一次探测 Bot API 网络调用；实现名/版本与支持动作在 bot 会话内几乎不变。
-- 方案：按 `(bot_id, implementation)` 缓存探测结果 TTL 300s，模式对齐 `member_cache`（单飞 + 失败不缓存）；`supported_actions_digest` 不变时直接复用。
+- 实现：按 Bot 对象会话身份、协议、Adapter、`bot_id` 和可见实现/版本提示缓存探测结果，TTL 300 秒、LRU 上限 256；模式对齐 `member_cache`（单飞 + 失败不缓存），`supported_actions_digest` 不变时直接复用。新 Bot 对象会话立即隔离，无法从本地提前看到的服务端版本变化由 TTL 收敛。
+- 安全加固：缓存不保存事件、用户、群、消息、权限或 generation；这些仍按请求重新冻结。二阶段确认使用 `force_refresh` 丢弃普通命中并重新探测，刷新失败后旧成功记录不可继续使用。
 - 风险：低。验收：连续两条消息第二次探测不再发起 API 调用；适配器重连/版本变化时失效（含 `bot_id` 键 + TTL 兜底已覆盖）。
 
 ## P5：v12 合成事件字段白名单化
@@ -79,8 +80,8 @@ lastmod: 2026-09-06T00:00:00+00:00
 | 批次 | 内容 | 风险 | 前置 |
 | --- | --- | --- | --- |
 | P0（已完成） | 分类 prompt 延迟构建；目录缓存单条上限 256KB→1MiB；file:// 图片读盘移入 `to_thread` | 低 | 无 |
-| 批次一 | P4 协议探测会话级缓存 | 低 | 无 |
-| 批次二 | P1 缓存键重构（陷阱警示见上） | 中 | 批次一先行可减少键中探测字段 |
+| 批次一（已完成） | P4 协议探测会话级缓存 | 低 | 无 |
+| 批次二（下一批） | P1 缓存键重构（陷阱警示见上） | 中 | P4 已完成 |
 | 批次三 | P3 描述注册期缓存 → P2 双算抽验 | 低→中 | P1 落地后收益叠加 |
 | 观察项 | P5 | 中 | 仅在指标证明瓶颈后 |
 
@@ -93,3 +94,17 @@ lastmod: 2026-09-06T00:00:00+00:00
 | 分类 prompt 命中路径白拼 | `_build_prompt` 移入无缓存分支与 `build_record` 回调，命中路径（含 single-flight waiter）零拼接 | `categorize.py` |
 | 目录缓存单条上限 256KB | 默认 `max_catalog_bytes` 262,144 → 1,048,576（覆盖 96K 全 CJK 目录 ≈288KB 的 3.6 倍余量；测试均用显式值不受影响） | `tool_catalog_cache.py` |
 | `file://` 图片同步读盘阻塞事件循环 | 新增 `_read_local_image_base64`（`asyncio.to_thread` 读盘+编码），`_extract_send_data` 转 async（唯一调用方已 await） | `event_simulator.py` |
+
+## P4 已收口记录（2026-09-07）
+
+| 边界 | 结果 |
+| --- | --- |
+| 连续与并发请求 | 同一 Bot 会话、协议、实现提示下只构建一个探测；后续消息只重建自己的 `ProtocolCapabilitySnapshot` |
+| 取消与失败 | 等待者取消由 `asyncio.shield` 隔离；探测异常、超时、非法响应和被取消 task 均不发布缓存 |
+| 身份与失效 | key 绑定对象会话、协议、Adapter、Bot ID、实现/版本提示；TTL 300 秒，最多 256 条，弱引用防止缓存延长 Bot 生命周期 |
+| 确认安全 | `ProtocolBroker.confirm()` 强制 refresh；失败先淘汰旧成功，保持危险动作执行前能力复核 |
+| 兼容性 | 不增加配置、运行依赖、数据库 migration、Redis key 或后台任务；v11/NapCat/v12 对外快照结构不变 |
+
+实现文件为 `protocol_context.py` 与 `protocol_broker.py`，判例位于 `test_protocol_context.py` 并复用 `test_protocol_broker.py` 的确认重探测断言。协议定向为 25 passed，协议/目录缓存/runtime reload 联合回归为 136 passed；Python 3.10/3.11/3.12/3.13 普通全量各 `3172 passed, 1 skipped`，mandatory root sandbox 为 `41 passed` 且 JUnit `failures=0 / errors=0 / skipped=0`。Ruff、CI 指定格式、Pyright、文档 11 JSON/8 TOML/10 Python 片段、162 个本地 Markdown 链接、13 项运行依赖/10 项开发依赖、244 动作/244 策略/3 wrapper 和环境依赖检查均通过。
+
+fresh wheel/sdist 的 SHA-256 分别为 `75fb0887eaa263fcea7d4e70d462c39a8215e083c3eb3fe55840a841bb49239b` / `03ad263f47f4698a45882443ceb87cbc436ca978f8ef75d110ea8972ae85410c`，Twine 与制品内容检查通过；Python 3.10/3.12 × wheel/sdist 四组均在仓库外从 site-packages 加载 0.26.6，并验证 v11/v12、38/31/175 动作清单和 runtime generation 1。实现提交、远端 push `release-gate` 及最终精确 SHA 将在下一条证据记录追加；未安装或重启七七、未连接真实 Bot/模型/数据库/Redis、未发送 QQ 动作、未发布 PyPI。

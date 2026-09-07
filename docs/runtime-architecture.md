@@ -151,7 +151,7 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 
 菜单字段会清理展示标签与控制字符，拒绝错误类型，并限制每插件功能数、每功能触发数、字段长度和总字符数；PicMenu 隐藏功能既不进入普通用户分类目录，也不会在插件命中后的普通用户详细 Schema 中展开。它们与 plugin info、ToolSpec、`command_start` 和目录摘要一起固化到同代不可变快照；分类和 Schema 缓存共同防止空目录/完整目录、不同 generation、场景或权限交叉复用。兼容 `command` Schema 禁止额外字段，字符串长度为 1～1024；说明列出当前 generation 的首选及其他真实命令前缀，不要求模型猜 `<命令前缀>`。真实事件/定时功能只作发现提示，不能由合成 command 伪造。菜单可见性只是前置过滤，执行端仍必须复核真实权限。
 
-协议工具在请求进入 Agent generation 后另外建立一次不可变能力快照。v11 调用 `get_version_info`，只有 `app_name=NapCat.Onebot` 才增加 NapCat 扩展；v12 调用 `get_supported_actions`，只取 Bot 声明支持与包内标准清单的交集。探测失败只让当前请求看不到协议工具，不会中止普通聊天。
+协议工具在请求进入 Agent generation 后另外建立一次不可变能力快照。v11 会话缓存未命中时调用 `get_version_info`，只有 `app_name=NapCat.Onebot` 才增加 NapCat 扩展；v12 未命中时调用 `get_supported_actions`，只取 Bot 声明支持与包内标准清单的交集。成功探测按 Bot 会话保存 300 秒并对并发 miss 做 single-flight，失败不缓存；缓存只复用实现/版本/支持动作，每个请求的用户、场景、消息和 generation 仍单独冻结。探测失败只让当前请求看不到协议工具，不会中止普通聊天。二阶段确认会绕过普通缓存强制刷新，保持副作用执行前复核。
 
 协议短目录还会按普通用户/`SUPERUSER`、群聊/私聊、当前用户、当前群、当前消息和回复消息过滤。若用户原话命中已加载业务插件的规范化菜单触发词，默认先保留业务插件并抑制同意图协议动作。选中协议动作后才展开严格 Schema；handler 已在构造时固定 API 名，模型不能传入另一个 action。缓存身份还包含协议、实现/版本、支持动作摘要、Adapter、Bot、用户、消息和 runtime generation，禁止跨 Bot 或跨协议复用。完整规则见 [OneBot / NapCat 协议工具](./protocol-tools.md)。
 

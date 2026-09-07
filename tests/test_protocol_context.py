@@ -104,6 +104,13 @@ def protocol_config(monkeypatch: pytest.MonkeyPatch):
     return values
 
 
+@pytest.fixture(autouse=True)
+def clear_protocol_probe_cache():
+    module._protocol_probe_cache.clear()
+    yield
+    module._protocol_probe_cache.clear()
+
+
 @pytest.mark.asyncio
 async def test_protocol_tools_are_disabled_by_default_without_probing(
     protocol_config,
@@ -230,6 +237,239 @@ async def test_v12_supported_actions_are_filtered_and_probe_failure_is_local(
     assert timed_out_snapshot.enabled is False
     assert timed_out_snapshot.reason == "probe_failed:TimeoutError"
     assert slow.calls == [("get_supported_actions", {})]
+
+
+@pytest.mark.asyncio
+async def test_protocol_probe_is_cached_per_bot_session_and_singleflight(
+    protocol_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = _Bot(
+        protocol="OneBot V12",
+        supported_actions=["get_self_info", "get_group_info"],
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_call = bot.call_api
+
+    async def delayed_call(api: str, **data):
+        started.set()
+        await release.wait()
+        return await original_call(api, **data)
+
+    monkeypatch.setattr(bot, "call_api", delayed_call)
+    first = asyncio.create_task(
+        probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-1"),
+            generation=3,
+            is_superuser=False,
+        )
+    )
+    await started.wait()
+    second = asyncio.create_task(
+        probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-2"),
+            generation=4,
+            is_superuser=True,
+        )
+    )
+    release.set()
+    first_snapshot, second_snapshot = await asyncio.gather(first, second)
+
+    assert bot.calls == [("get_supported_actions", {})]
+    assert first_snapshot.supported_actions_digest == second_snapshot.supported_actions_digest
+    assert first_snapshot.message_id == "message-1"
+    assert second_snapshot.message_id == "message-2"
+    assert first_snapshot.runtime_generation == 3
+    assert second_snapshot.runtime_generation == 4
+    assert first_snapshot.is_superuser is False
+    assert second_snapshot.is_superuser is True
+
+    cached = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-3"),
+        generation=5,
+        is_superuser=False,
+    )
+    assert cached.message_id == "message-3"
+    assert bot.calls == [("get_supported_actions", {})]
+
+
+@pytest.mark.asyncio
+async def test_protocol_probe_waiter_cancellation_does_not_cancel_shared_probe(
+    protocol_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = _Bot(protocol="OneBot V12", supported_actions=["get_self_info"])
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_call = bot.call_api
+
+    async def delayed_call(api: str, **data):
+        started.set()
+        await release.wait()
+        return await original_call(api, **data)
+
+    monkeypatch.setattr(bot, "call_api", delayed_call)
+    cancelled_waiter = asyncio.create_task(
+        probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-1"),
+            generation=3,
+            is_superuser=False,
+        )
+    )
+    await started.wait()
+    surviving_waiter = asyncio.create_task(
+        probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-2"),
+            generation=3,
+            is_superuser=False,
+        )
+    )
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+    release.set()
+
+    assert (await surviving_waiter).enabled is True
+    assert bot.calls == [("get_supported_actions", {})]
+
+
+@pytest.mark.asyncio
+async def test_protocol_probe_failure_is_not_cached_and_ttl_expires(
+    protocol_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [10.0]
+    cache = module._ProtocolProbeCache(ttl_seconds=5, clock=lambda: now[0])
+    monkeypatch.setattr(module, "_protocol_probe_cache", cache)
+    bot = _Bot(protocol="OneBot V12", supported_actions=["get_self_info"], failure=RuntimeError("transient"))
+
+    failed = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-1"),
+        generation=3,
+        is_superuser=False,
+    )
+    assert failed.enabled is False
+    bot.failure = None
+    recovered = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-2"),
+        generation=3,
+        is_superuser=False,
+    )
+    assert recovered.enabled is True
+    assert bot.calls == [
+        ("get_supported_actions", {}),
+        ("get_supported_actions", {}),
+    ]
+
+    now[0] = 14.9
+    assert (
+        await probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-3"),
+            generation=3,
+            is_superuser=False,
+        )
+    ).enabled
+    assert len(bot.calls) == 2
+
+    now[0] = 15.0
+    assert (
+        await probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-4"),
+            generation=3,
+            is_superuser=False,
+        )
+    ).enabled
+    assert len(bot.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_protocol_probe_forced_refresh_bypasses_and_evicts_cached_success(
+    protocol_config,
+) -> None:
+    bot = _Bot(protocol="OneBot V12", supported_actions=["get_self_info"])
+    assert (
+        await probe_protocol_capabilities(
+            bot,
+            _event(message_id="message-1"),
+            generation=3,
+            is_superuser=True,
+        )
+    ).enabled
+
+    bot.failure = RuntimeError("refresh failed")
+    refreshed = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-2"),
+        generation=3,
+        is_superuser=True,
+        force_refresh=True,
+    )
+    assert refreshed.enabled is False
+    assert refreshed.reason == "probe_failed:RuntimeError"
+
+    bot.failure = None
+    bot.supported_actions = []
+    recovered = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-3"),
+        generation=3,
+        is_superuser=True,
+    )
+    assert recovered.enabled is True
+    assert recovered.supported_actions == frozenset()
+    assert bot.calls == [
+        ("get_supported_actions", {}),
+        ("get_supported_actions", {}),
+        ("get_supported_actions", {}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_protocol_probe_reconnect_and_version_hint_do_not_reuse_stale_session(
+    protocol_config,
+) -> None:
+    first_bot = _Bot(protocol="OneBot V11", self_id="same-bot", app_version="4.18.19")
+    first = await probe_protocol_capabilities(
+        first_bot,
+        _event(message_id="message-1"),
+        generation=3,
+        is_superuser=False,
+    )
+    assert first.implementation_version == "4.18.19"
+
+    reconnected_bot = _Bot(protocol="OneBot V11", self_id="same-bot", app_version="4.18.20")
+    reconnected = await probe_protocol_capabilities(
+        reconnected_bot,
+        _event(message_id="message-2"),
+        generation=3,
+        is_superuser=False,
+    )
+    assert reconnected.implementation_version == "4.18.20"
+    assert first_bot.calls == [("get_version_info", {})]
+    assert reconnected_bot.calls == [("get_version_info", {})]
+
+    reconnected_bot.app_version = "4.18.21"
+    changed = await probe_protocol_capabilities(
+        reconnected_bot,
+        _event(message_id="message-3"),
+        generation=3,
+        is_superuser=False,
+    )
+    assert changed.implementation_version == "4.18.21"
+    assert reconnected_bot.calls == [
+        ("get_version_info", {}),
+        ("get_version_info", {}),
+    ]
 
 
 @pytest.mark.asyncio

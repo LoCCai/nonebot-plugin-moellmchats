@@ -1,7 +1,7 @@
 ---
 title: 00-roadmap-overview
 date: 2026-08-19T14:55:10+08:00
-lastmod: 2026-09-06T00:00:00+00:00
+lastmod: 2026-09-07T00:00:00+00:00
 ---
 
 # 00-roadmap-overview
@@ -36,7 +36,7 @@ lastmod: 2026-09-06T00:00:00+00:00
 | 新编号 | 内容 | 旧编号 | 状态 |
 | --- | --- | --- | --- |
 | 15 | K-09 后续待修复与设计清单 | 11 | 活跃：spool/usage 幂等键/Redis admission/MCP 依赖契约等 |
-| 16 | 平台 API 与插件接入链路优化计划书 | 16 | P0 三项已收口；P1 缓存键重构（最高价值）与 P2～P5 待实施 |
+| 16 | 平台 API 与插件接入链路优化计划书 | 16 | P0、P4 已收口；P1 缓存键重构为下一批，P2/P3 待实施，P5 仅观察 |
 
 > 完成度复核（2026-08-24）：Plan 1 / Milestone A～C 与后续安全、架构、数据库、缓存、并行、平台接线均已按依赖顺序完成；I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭。I-09 已完成隔离最终矩阵，且本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁也已关闭；Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成。本次远端证据回填提交定义为最终文档 HEAD，只有其自身精确双 `release-gate` 通过后才判定 I-09 与开发态总目标最终闭环，不再为记录该自指门禁另起文档提交。生产迁移、真实 PostgreSQL/Redis/模型、发布和部署均未观察；D-09 因缺少真实发布周期 parity 观察继续锁定。详见 [Plan 2 / Plan 3 完成度审计](./05-plan2-plan3-completion-audit.md)。
 
@@ -63,6 +63,8 @@ lastmod: 2026-09-06T00:00:00+00:00
 > K-12 网页路由、表情与安全正文提取（2026-09-01）：新增 [0.26.6 实施状态](./12-url-routing-emotion-webpage-20260901.md)，按自动媒体传播所有权 → 表情候选/发送复核 → 固定公网只读 GET → 七七净化后离线浏览器提取 → 版本与门禁推进。当前仅有本地源码和定向证据，尚未提交、推送、安装或重启；0.26.5 `e704092…` 继续是最后一个已验证恢复点。
 
 > K-13 指令投递与工具作用域真实性（2026-09-01）：新增 [0.26.6 实施状态](./13-tool-schema-command-recovery-20260901.md)，按完整可显示指令 → 请求级 Tool Schema 强制许可 → 同插件菜单发现恢复 → command 难度下限 → PicStatus/QWeb 入口同步推进。现场数据库错调已确认是旧执行器接受本轮 Schema 外全局插件，不是常驻列表过多。四版本、静态、sandbox、制品、包外加载、PicStatus 和七七目录本地门禁均已通过；尚未提交、推送、安装、重启或导入 CMS，0.26.5 `e704092…` 仍是最后一个已验证恢复点。
+
+> 平台优化 P4（2026-09-07）：在分支整合最终基线 `ee99c7d…` 上实现 Bot 会话级协议能力探测缓存。成功结果固定 300 秒 TTL、256 会话 LRU 并合并同会话并发 miss；失败不缓存，等待者取消不取消共享探测，重连及可见实现/版本变化隔离。二阶段确认仍强制刷新且刷新失败清除旧成功记录。定向、完整矩阵、制品与远端门禁状态以 [16 号计划书](./16-platform-api-and-catalog-optimization-plan.md) 的收口记录为准；未操作七七或生产。
 
 > I-01 本地门禁（2026-08-23）：规划审计基线 HEAD `56a038406d13d167de433271487af9b972d6402a` 的 push `32637481777` / PR `32637485121` 均 11/11 success、`non_success=[]`、各恰好一个成功 `release-gate`，四方 HEAD 一致且 PR #2 为 `OPEN / MERGEABLE / CLEAN`。在此前提下，实现提交 `4a643e062b83055722351df12d402e518dc51b51` 新增纯 stdlib、深度不可变且无 transport/credential 字段的 `ModelCapability / ModelLimits / ModelCost / ModelDescriptor / ModelAvailability`；能力、limits、精确 `NUMERIC(24,12)` Decimal 成本、availability 与 generation 均有界，identity/capability/full descriptor 三类 canonical SHA-256 分离。四版本定向各 `98 passed`、相关联合各 `492 passed`、普通全量及 Python 3.10 最低依赖全量各 `2528 passed, 1 skipped`，Sandbox `40 passed, 0 skipped`；Ruff/Pyright、fresh 制品/同哈希重建和 Python 3.10/3.12 × wheel/sdist 四组包外 11 表/8 revision/离线 DDL/reload/descriptor/零真实 I/O smoke 均通过。精确 HEAD 双 run 待完成，I-02 继续锁定；未读取现有模型配置或凭据，未改变 `ModelSelector`，未发模型请求，未迁移、未连接真实服务、未部署。
 

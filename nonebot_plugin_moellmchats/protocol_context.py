@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 import json
 import re
+import time
 from types import MappingProxyType
 from typing import Any
+import weakref
 
 from nonebot.log import logger
 
@@ -18,6 +21,8 @@ from .onebot_facade import NormalizedOneBotEvent, adapter_identity, onebot_proto
 from .protocol_registry import protocol_registry
 
 _PROBE_TIMEOUT_SECONDS = 3.0
+_PROBE_CACHE_TTL_SECONDS = 300.0
+_PROBE_CACHE_MAX_ENTRIES = 256
 
 
 def _digest_strings(values: frozenset[str]) -> str:
@@ -45,6 +50,208 @@ async def _call_probe_api(bot: Any, action: str) -> Any:
     return await asyncio.wait_for(
         bot.call_api(action),
         timeout=_PROBE_TIMEOUT_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
+class _ProtocolProbeResult:
+    protocol: str
+    implementation: str
+    implementation_version: str
+    onebot_version: str
+    supported_actions: frozenset[str]
+    supported_actions_digest: str
+
+
+@dataclass(frozen=True)
+class _ProtocolProbeCacheKey:
+    session_identity: int
+    protocol: str
+    adapter_id: str
+    bot_id: str
+    implementation_hint: str
+    implementation_version_hint: str
+
+
+@dataclass(frozen=True)
+class _ProtocolProbeCacheEntry:
+    owner: weakref.ReferenceType[Any]
+    expires_at: float
+    result: _ProtocolProbeResult
+
+
+class _ProtocolProbeCache:
+    """Bounded, Bot-session-local TTL cache with cancellation-safe single-flight."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _PROBE_CACHE_TTL_SECONDS,
+        max_entries: int = _PROBE_CACHE_MAX_ENTRIES,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if ttl_seconds <= 0 or max_entries <= 0:
+            raise ValueError("协议探测缓存边界必须为正数")
+        self._ttl_seconds = float(ttl_seconds)
+        self._max_entries = int(max_entries)
+        self._clock = clock
+        self._entries: OrderedDict[_ProtocolProbeCacheKey, _ProtocolProbeCacheEntry] = OrderedDict()
+        self._inflight: dict[
+            tuple[int, _ProtocolProbeCacheKey],
+            tuple[int, weakref.ReferenceType[Any], asyncio.Task[_ProtocolProbeResult]],
+        ] = {}
+        self._epoch = 0
+
+    async def resolve(
+        self,
+        bot: Any,
+        key: _ProtocolProbeCacheKey,
+        builder: Callable[[], Coroutine[Any, Any, _ProtocolProbeResult]],
+        *,
+        force_refresh: bool = False,
+    ) -> _ProtocolProbeResult:
+        try:
+            owner = weakref.ref(bot)
+        except TypeError:
+            # Real NoneBot Bot objects are weak-referenceable. An unusual
+            # adapter object must still work, but is not retained globally.
+            return await builder()
+
+        if force_refresh:
+            self._discard_entry(key, bot)
+        else:
+            cached = self._lookup(key, bot)
+            if cached is not None:
+                return cached
+
+        loop = asyncio.get_running_loop()
+        flight_key = (id(loop), key)
+        flight = self._inflight.get(flight_key)
+        if flight is None or flight[0] != self._epoch or flight[1]() is not bot:
+            epoch = self._epoch
+            task = asyncio.create_task(builder())
+            self._inflight[flight_key] = (epoch, owner, task)
+            task.add_done_callback(
+                lambda finished, cache_key=key, pending_key=flight_key: self._finish_flight(
+                    cache_key,
+                    pending_key,
+                    finished,
+                )
+            )
+        else:
+            task = flight[2]
+        return await asyncio.shield(task)
+
+    def _lookup(self, key: _ProtocolProbeCacheKey, bot: Any) -> _ProtocolProbeResult | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        if entry.owner() is not bot or self._clock() >= entry.expires_at:
+            self._entries.pop(key, None)
+            return None
+        self._entries.move_to_end(key)
+        return entry.result
+
+    def _discard_entry(self, key: _ProtocolProbeCacheKey, bot: Any) -> None:
+        entry = self._entries.get(key)
+        if entry is not None and entry.owner() is bot:
+            self._entries.pop(key, None)
+
+    def _finish_flight(
+        self,
+        cache_key: _ProtocolProbeCacheKey,
+        flight_key: tuple[int, _ProtocolProbeCacheKey],
+        task: asyncio.Task[_ProtocolProbeResult],
+    ) -> None:
+        flight = self._inflight.get(flight_key)
+        if flight is not None and flight[2] is task:
+            self._inflight.pop(flight_key, None)
+        try:
+            result = task.result()
+        except (asyncio.CancelledError, Exception):
+            # Reading the exception here also prevents an abandoned, shielded
+            # probe from producing an unhandled-task warning. Failures are
+            # deliberately not cached.
+            return
+        if flight is None or flight[2] is not task or flight[0] != self._epoch or flight[1]() is None:
+            return
+        self._entries[cache_key] = _ProtocolProbeCacheEntry(
+            owner=flight[1],
+            expires_at=self._clock() + self._ttl_seconds,
+            result=result,
+        )
+        self._entries.move_to_end(cache_key)
+        self._prune()
+
+    def _prune(self) -> None:
+        now = self._clock()
+        stale = [key for key, entry in self._entries.items() if entry.owner() is None or now >= entry.expires_at]
+        for key in stale:
+            self._entries.pop(key, None)
+        while len(self._entries) > self._max_entries:
+            self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        """Invalidate cached successes without cancelling active read-only probes."""
+
+        self._epoch += 1
+        self._entries.clear()
+
+
+_protocol_probe_cache = _ProtocolProbeCache()
+
+
+def _probe_cache_key(
+    bot: Any,
+    normalized: NormalizedOneBotEvent,
+    *,
+    protocol: str,
+) -> _ProtocolProbeCacheKey:
+    if protocol == "onebot_v11":
+        implementation_hint = str(getattr(bot, "app_name", "") or getattr(bot, "impl", "") or "").strip()
+        implementation_version_hint = str(getattr(bot, "app_version", "") or getattr(bot, "version", "") or "").strip()
+    else:
+        implementation_hint = str(getattr(bot, "impl", "") or getattr(bot, "app_name", "") or "").strip()
+        implementation_version_hint = str(getattr(bot, "version", "") or getattr(bot, "app_version", "") or "").strip()
+    return _ProtocolProbeCacheKey(
+        session_identity=id(bot),
+        protocol=protocol,
+        adapter_id=adapter_identity(bot),
+        bot_id=normalized.bot_id,
+        implementation_hint=implementation_hint,
+        implementation_version_hint=implementation_version_hint,
+    )
+
+
+async def _probe_protocol_session(bot: Any, *, protocol: str) -> _ProtocolProbeResult:
+    if protocol == "onebot_v11":
+        version_info = _mapping(await _call_probe_api(bot, "get_version_info"))
+        if not version_info:
+            raise ValueError("empty get_version_info")
+        app_name = str(version_info.get("app_name") or "").strip()
+        implementation_version = str(version_info.get("app_version") or version_info.get("version") or "").strip()
+        onebot_version_value = str(version_info.get("protocol_version") or "11").strip()
+        is_napcat = app_name == "NapCat.Onebot"
+        implementation = "napcat" if is_napcat else (app_name or "generic")
+        supported_actions = protocol_registry.napcat_actions if is_napcat else protocol_registry.standard_v11_actions
+    else:
+        raw_actions = await _call_probe_api(bot, "get_supported_actions")
+        if not isinstance(raw_actions, (list, tuple, set, frozenset)) or not all(
+            isinstance(item, str) and item for item in raw_actions
+        ):
+            raise ValueError("get_supported_actions returned invalid data")
+        supported_actions = frozenset(raw_actions) & protocol_registry.v12_actions
+        implementation = str(getattr(bot, "impl", "") or "generic")
+        implementation_version = str(getattr(bot, "version", "") or "")
+        onebot_version_value = "12"
+    supported = frozenset(supported_actions)
+    return _ProtocolProbeResult(
+        protocol=protocol,
+        implementation=implementation,
+        implementation_version=implementation_version,
+        onebot_version=onebot_version_value,
+        supported_actions=supported,
+        supported_actions_digest=_digest_strings(supported),
     )
 
 
@@ -194,8 +401,15 @@ async def probe_protocol_capabilities(
     *,
     generation: int,
     is_superuser: bool,
+    force_refresh: bool = False,
 ) -> ProtocolCapabilitySnapshot:
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0 or type(is_superuser) is not bool:
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 0
+        or type(is_superuser) is not bool
+        or type(force_refresh) is not bool
+    ):
         raise ValueError("协议探测 generation/actor 非法")
     if not config_parser.get_config("protocol_tools_enabled", False):
         return ProtocolCapabilitySnapshot.disabled(
@@ -216,41 +430,30 @@ async def probe_protocol_capabilities(
         )
     try:
         normalized = NormalizedOneBotEvent.capture(bot, event)
-        if protocol == "onebot_v11":
-            version_info = _mapping(await _call_probe_api(bot, "get_version_info"))
-            if not version_info:
-                raise ValueError("empty get_version_info")
-            app_name = str(version_info.get("app_name") or "").strip()
-            implementation_version = str(version_info.get("app_version") or version_info.get("version") or "").strip()
-            onebot_version_value = str(version_info.get("protocol_version") or "11").strip()
-            is_napcat = app_name == "NapCat.Onebot"
-            implementation = "napcat" if is_napcat else (app_name or "generic")
-            if is_napcat:
-                supported = set(protocol_registry.napcat_actions)
-                if not config_parser.get_config(
-                    "protocol_tools_napcat_extensions_enabled",
-                    True,
-                ):
-                    supported &= set(protocol_registry.standard_v11_actions)
-            else:
-                supported = set(protocol_registry.standard_v11_actions)
-        else:
-            raw_actions = await _call_probe_api(bot, "get_supported_actions")
-            if not isinstance(raw_actions, (list, tuple, set, frozenset)) or not all(
-                isinstance(item, str) and item for item in raw_actions
-            ):
-                raise ValueError("get_supported_actions returned invalid data")
-            supported = set(raw_actions) & set(protocol_registry.v12_actions)
-            implementation = str(getattr(bot, "impl", "") or "generic")
-            implementation_version = str(getattr(bot, "version", "") or "")
-            onebot_version_value = "12"
-        supported_actions = frozenset(supported)
-        support_digest = _digest_strings(supported_actions)
+        probe = await _protocol_probe_cache.resolve(
+            bot,
+            _probe_cache_key(bot, normalized, protocol=protocol),
+            lambda: _probe_protocol_session(bot, protocol=protocol),
+            force_refresh=force_refresh,
+        )
+        supported_actions = probe.supported_actions
+        if (
+            protocol == "onebot_v11"
+            and probe.implementation == "napcat"
+            and not config_parser.get_config(
+                "protocol_tools_napcat_extensions_enabled",
+                True,
+            )
+        ):
+            supported_actions = supported_actions & protocol_registry.standard_v11_actions
+        support_digest = (
+            probe.supported_actions_digest if supported_actions == probe.supported_actions else _digest_strings(supported_actions)
+        )
         adapter_id = adapter_identity(bot)
         cache_digest = _snapshot_cache_digest(
             protocol=protocol,
-            implementation=implementation,
-            implementation_version=implementation_version,
+            implementation=probe.implementation,
+            implementation_version=probe.implementation_version,
             support_digest=support_digest,
             adapter_id=adapter_id,
             bot_id=normalized.bot_id,
@@ -269,9 +472,9 @@ async def probe_protocol_capabilities(
             enabled=True,
             reason="ok",
             protocol=protocol,
-            implementation=implementation,
-            implementation_version=implementation_version,
-            onebot_version=onebot_version_value,
+            implementation=probe.implementation,
+            implementation_version=probe.implementation_version,
+            onebot_version=probe.onebot_version,
             supported_actions=supported_actions,
             supported_actions_digest=support_digest,
             adapter_id=adapter_id,

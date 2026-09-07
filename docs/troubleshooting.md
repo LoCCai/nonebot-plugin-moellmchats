@@ -144,6 +144,12 @@ PostgreSQL transaction 与 spool writer 会让同一个 rollback/close 子任务
 
 只有两类可恢复的响应问题会进行最多一次有限重试：首次 HTTP 400 会移除 `json_object` 模式后再试一次；非超时的 JSON/结构解析错误会再试一次。400 响应正文不会读取，其他异常日志只记录尝试次数和安全异常类型，不记录服务商正文、请求参数或凭据。若要定位供应商兼容性，应结合状态码、异常类型和服务商侧 request ID 排查，不要临时把原始响应正文写入群聊或普通日志。
 
+## 为什么不是每条消息都出现协议能力探测 API
+
+成功的 v11 `get_version_info` / v12 `get_supported_actions` 会按当前 Bot 会话缓存 300 秒；连续消息和并发请求复用实现、版本与支持动作，属于预期行为，不代表跳过用户、场景或权限检查。探测失败不会缓存，下一请求会重试；新 Bot 会话或可见实现/版本变化也会使用新记录。
+
+需要二阶段确认的动作在确认执行前始终强制刷新。若这次刷新失败，旧成功记录会被移除，动作拒绝执行；不要为了“恢复确认”放宽为使用旧缓存。普通请求最多可能在 TTL 内看到已经下线的动作，但真正调用仍由 Adapter 校验，副作用不确定时仍按 `result_unknown` 处理且不会自动重试。
+
 ## Custom File 报 `safe_request` 或 network allowlist 错误
 
 先确认工具源码没有导入 `aiohttp/httpx/requests/urllib/socket`，并且 `TOOLS_REGISTRY.capabilities.network` 使用了明确主机列表，例如 `{"allow": ["api.example"]}`。`safe_request` 由 worker 注入，源码不要从插件包导入它，也不能把 `_network_allow`、resolver 或 connector 当作模型参数。
