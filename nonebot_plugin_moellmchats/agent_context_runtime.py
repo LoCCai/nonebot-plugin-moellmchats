@@ -15,8 +15,8 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast, runtime_checkable
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nonebot.log import logger
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import full_metrics as _full_metrics
 from . import platform_metrics as _platform_metrics

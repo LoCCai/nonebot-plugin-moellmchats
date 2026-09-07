@@ -456,7 +456,7 @@ async def _read_chunked_body(
     trailer_bytes = 0
     while True:
         line = await _readline(reader, limit=256, deadline=deadline)
-        token = line.rstrip(b"\r\n").split(b";", 1)[0].strip()
+        token = line.rstrip(b"\r\n").split(b";", 1)[0]
         # 严格十六进制：int(token,16) 会接受 "+5"/" 5"/"1_0" 等非规范形式，
         # 与其余分帧解析的严格策略不一致
         if not token or any(

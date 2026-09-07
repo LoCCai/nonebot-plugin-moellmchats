@@ -456,9 +456,7 @@ class ToolSnapshot:
     generated_state_revision: int = 0
     generated_state_digest: str = ""
     generated_active: Mapping[str, str] = field(default_factory=dict)
-    intent_owners: Mapping[str, tuple[tuple[str, bool], ...]] = field(
-        default_factory=dict
-    )
+    intent_owners: Mapping[str, tuple[tuple[str, bool], ...]] = field(default_factory=dict)
     directory_entry_count: int = 0
     directory_digest: str = ""
     picmenu_plugin_count: int = 0
@@ -490,9 +488,7 @@ class ToolSnapshot:
                 )
             ):
                 raise ValueError("ToolSnapshot.intent_owners 内容非法")
-            normalized_owners[intent] = tuple(
-                sorted((str(owner[0]), bool(owner[1])) for owner in owners)
-            )
+            normalized_owners[intent] = tuple(sorted((str(owner[0]), bool(owner[1])) for owner in owners))
         if not normalized_owners:
             normalized_owners = dict(build_intent_owner_index(self.plugin_info))
         object.__setattr__(
@@ -2195,10 +2191,7 @@ TOOLS_REGISTRY = [
         """Backward-compatible detached projection for legacy callers/tests."""
 
         snapshot = ToolManager.capture_picmenu_projection(loaded_plugins)
-        return {
-            plugin_id: mutable_value(info)
-            for plugin_id, info in snapshot.plugins.items()
-        }
+        return {plugin_id: mutable_value(info) for plugin_id, info in snapshot.plugins.items()}
 
     def build_plugin_info(
         self,
@@ -2595,16 +2588,22 @@ TOOLS_REGISTRY = [
             commit=False,
         )
 
+        previous_mcp_names = set(getattr(self, "mcp_tool_names", set()))
+        owned_previous_mcp_names = set()
+        for name in previous_mcp_names:
+            existing_schema = self.custom_tools.get(name)
+            if isinstance(existing_schema, Mapping) and existing_schema.get("source") == "mcp":
+                owned_previous_mcp_names.add(name)
         conflicts = [
             name
-            for name, schema in mcp_tools.items()
-            if not self.is_tool_blacklisted(name) and name in self.custom_tools
+            for name in mcp_tools
+            if not self.is_tool_blacklisted(name) and name in self.custom_tools and name not in owned_previous_mcp_names
         ]
         if conflicts:
             raise ValueError(f"MCP 工具名与现有工具冲突: {conflicts[0]}")
 
         # 校验全部通过：先弹旧 MCP 工具，再原子提交 manager 状态并装入
-        for name in list(getattr(self, "mcp_tool_names", set())):
+        for name in owned_previous_mcp_names:
             self.custom_tools.pop(name, None)
         self.mcp_tool_names = set()
         mcp_manager.commit_discovery(candidate_servers, mcp_mapping)

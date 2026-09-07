@@ -226,15 +226,19 @@ def _emotion_directory_is_link(path: Path) -> bool:
     junction 会被当作合法表情分组发布。
     """
 
-    if path.is_symlink():
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+    except (OSError, ValueError):
+        # Missing, inaccessible, or malformed paths are unsafe.  Callers use
+        # this helper as the first gate before traversing an emotion directory.
+        return True
+    if stat.S_ISLNK(path_stat.st_mode):
         return True
     if os.name != "nt":
         return False
-    try:
-        attributes = os.stat(path, follow_symlinks=False).st_file_attributes
-    except OSError:
-        return True
-    return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    attributes = getattr(path_stat, "st_file_attributes", 0)
+    reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_point)
 
 
 def _emotion_image_paths(directory: Path) -> tuple[Path, ...]:

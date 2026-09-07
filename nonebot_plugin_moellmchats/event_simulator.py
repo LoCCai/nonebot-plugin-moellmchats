@@ -312,9 +312,7 @@ async def _confirm_outgoing_api(
             context["api_read_failed"] += 1
             # 只读失败进入待恢复队列：仅当同一 Matcher 内后续有成功的
             # 只读调用时才计为已恢复（见成功分支）
-            context["api_read_pending_recovery"] = (
-                context.get("api_read_pending_recovery", 0) + 1
-            )
+            context["api_read_pending_recovery"] = context.get("api_read_pending_recovery", 0) + 1
         else:
             # Mutating and unclassified APIs stay fail closed.  Only a known
             # read-only lookup may be treated as recovered by later verified

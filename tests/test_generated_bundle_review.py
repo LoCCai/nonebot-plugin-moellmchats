@@ -15,20 +15,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import uuid
 
+from nonebot.exception import ActionFailed
 import pytest
-from nonebot.adapters.onebot.v11.exception import ActionFailed
-
-import nonebot_plugin_moellmchats.chat_runtime as chat_runtime
-import nonebot_plugin_moellmchats.event_simulator as simulator_module
-from nonebot_plugin_moellmchats.agent_context_runtime import RuntimeResourceHost
-from nonebot_plugin_moellmchats.agent_runtime import AgentRunState
-from nonebot_plugin_moellmchats.cooldowns import CooldownClaim, CooldownLease
-from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
-from nonebot_plugin_moellmchats.network_safety import SafeHttpError, _read_chunked_body
-
 from test_chat_runtime import (
     FakeMatcher,
     _config,
@@ -36,8 +28,25 @@ from test_chat_runtime import (
     _runtime_event,
 )
 
+from nonebot_plugin_moellmchats.agent_context_runtime import RuntimeResourceHost
+from nonebot_plugin_moellmchats.agent_runtime import AgentRunState
+import nonebot_plugin_moellmchats.chat_runtime as chat_runtime
+from nonebot_plugin_moellmchats.cooldowns import CooldownClaim, CooldownLease
+import nonebot_plugin_moellmchats.event_simulator as simulator_module
+from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
+from nonebot_plugin_moellmchats.network_safety import SafeHttpError, _read_chunked_body
+from nonebot_plugin_moellmchats.runtime_snapshot import runtime_snapshots
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent snapshot publication in one regression from leaking to another."""
+
+    monkeypatch.setattr(runtime_snapshots, "_current", runtime_snapshots.current())
+
 
 # ---------- 1. 脱敏正则 ----------
+
 
 @pytest.mark.parametrize(
     "raw",
@@ -62,11 +71,13 @@ def test_progress_preface_keeps_plain_text_usable() -> None:
 
 # ---------- 2. 进度状态键 ----------
 
+
 def test_tool_progress_status_keys_distinct_without_call_id() -> None:
     holder = object().__new__(LlmToolsMixin)
     first = {"function": {"name": "web_search"}, "arguments": "{}"}
     second = {"function": {"name": "web_search"}, "arguments": "{}"}
-    assert not (first.get("id") or second.get("id"))
+    assert first.get("id") is None
+    assert second.get("id") is None
 
     holder._set_tool_progress_status(first, "sent")
     holder._set_tool_progress_status(second, "timed_out")
@@ -84,6 +95,7 @@ def test_tool_progress_status_key_uses_id_when_present() -> None:
 
 
 # ---------- 3. api_read_recovered 派生 ----------
+
 
 def test_read_failures_are_not_recovered_by_unrelated_verified_effect() -> None:
     # 变更型 API 成功 + 只读查询失败且从未重试成功：
@@ -112,18 +124,20 @@ async def test_read_failure_recovered_only_by_later_read_success() -> None:
     failed_read: dict = {}
     fallback_read: dict = {}
     try:
-        await simulator_module._capture_outgoing_api(
-            object(), "get_group_member_info", failed_read
-        )
+        await simulator_module._capture_outgoing_api(object(), "get_group_member_info", failed_read)
         await simulator_module._confirm_outgoing_api(
-            object(), ActionFailed("OneBot V11", "failed"),
-            "get_group_member_info", failed_read, None,
+            object(),
+            ActionFailed("OneBot V11", "failed"),
+            "get_group_member_info",
+            failed_read,
+            None,
         )
-        await simulator_module._capture_outgoing_api(
-            object(), "get_stranger_info", fallback_read
-        )
+        await simulator_module._capture_outgoing_api(object(), "get_stranger_info", fallback_read)
         await simulator_module._confirm_outgoing_api(
-            object(), None, "get_stranger_info", fallback_read,
+            object(),
+            None,
+            "get_stranger_info",
+            fallback_read,
             {"nickname": "fallback"},
         )
         result = simulator_module._dispatch_result(context, started_monotonic=0)
@@ -136,6 +150,7 @@ async def test_read_failure_recovered_only_by_later_read_success() -> None:
 
 
 # ---------- 4. chunk size 严格解析 ----------
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", [b"+5", b" 5", b"1_0", b""])
@@ -241,6 +256,7 @@ async def test_double_cancellation_still_releases_cooldown_lease(
 
 # ---------- 6. 合成事件守卫存在性（静态核对） ----------
 
+
 def test_superuser_config_handlers_reject_synthetic_events() -> None:
     import nonebot_plugin_moellmchats as plugin_root
 
@@ -258,6 +274,7 @@ def test_superuser_config_handlers_reject_synthetic_events() -> None:
 
 # ---------- 7. f3bb850 合并后的判例（tool_call_id 原样 / 拒绝记账 / junction） ----------
 
+
 @pytest.mark.asyncio
 async def test_schema_reject_preserves_raw_call_id_and_counts_usage() -> None:
     from test_llm_tools import Harness, _agent_request_runtime, _call
@@ -265,9 +282,7 @@ async def test_schema_reject_preserves_raw_call_id_and_counts_usage() -> None:
     harness = Harness({})
     harness.agent_runtime = await _agent_request_runtime()
     harness._active_llm_tool_names = frozenset()  # 任何名字都越界
-    messages = await harness._execute_tools(
-        [_call(7, "ghost_tool", '{"a": 1}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(7, "ghost_tool", '{"a": 1}')], "", [], "")
 
     # tool_call_id 必须与其余 tool 消息写入一致：原样保留（不做 str 强转）
     assert messages[-1]["tool_call_id"] == "7"
@@ -397,21 +412,17 @@ def test_mcp_wrapper_signature_has_no_overridable_named_params() -> None:
     wrapper = manager._make_mcp_wrapper({}, "t")
     parameters = inspect.signature(wrapper).parameters
     assert list(parameters) == ["kwargs"]
-    assert all(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters.values()
-    )
+    assert all(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
 
 
 @pytest.mark.asyncio
 async def test_load_mcp_tools_does_not_commit_on_conflict(monkeypatch) -> None:
     # 半提交回归：撞名 raise 时旧工具已弹、新工具未装、mapping 已换，
     # 一次撞名即让所有 MCP 工具静默消失。两段式必须先校验后提交。
-    from nonebot_plugin_moellmchats import tool_manager as tm_module
-    from nonebot_plugin_moellmchats.mcp_manager import McpManager
+    tm_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
 
     manager = object.__new__(tm_module.ToolManager)
-    manager.custom_tools = {"existing_tool": {"source": "registered"}}
+    manager.custom_tools = {"mcp__srv__existing_tool": {"source": "registered"}}
     manager.mcp_tool_names = set()
     manager.is_tool_blacklisted = lambda name: False
 
@@ -431,9 +442,7 @@ async def test_load_mcp_tools_does_not_commit_on_conflict(monkeypatch) -> None:
     def fake_commit(servers, new_mapping):
         committed.append((servers, new_mapping))
 
-    monkeypatch.setattr(
-        tm_module.mcp_manager, "load_config_candidate", lambda: candidate
-    )
+    monkeypatch.setattr(tm_module.mcp_manager, "load_config_candidate", lambda: candidate)
     monkeypatch.setattr(tm_module.mcp_manager, "discover_tools", fake_discover)
     monkeypatch.setattr(tm_module.mcp_manager, "commit_discovery", fake_commit)
 
@@ -442,8 +451,110 @@ async def test_load_mcp_tools_does_not_commit_on_conflict(monkeypatch) -> None:
 
     # 冲突时不得提交 manager 状态，也不得弹掉现有工具
     assert committed == []
-    assert manager.custom_tools == {"existing_tool": {"source": "registered"}}
+    assert manager.custom_tools == {"mcp__srv__existing_tool": {"source": "registered"}}
     assert manager.mcp_tool_names == set()
+
+
+@pytest.mark.asyncio
+async def test_load_mcp_tools_allows_replacing_previous_mcp_tool(monkeypatch) -> None:
+    tm_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+
+    manager = object.__new__(tm_module.ToolManager)
+    old_schema = {"source": "mcp", "description": "old"}
+    manager.custom_tools = {"mcp__srv__lookup": old_schema}
+    manager.mcp_tool_names = {"mcp__srv__lookup"}
+    manager.is_tool_blacklisted = lambda name: False
+
+    candidate = {"srv": {"enabled": True}}
+    new_schema = {"name": "mcp__srv__lookup", "description": "new"}
+    discovered = {"mcp__srv__lookup": new_schema}
+    mapping = {"mcp__srv__lookup": {"server": "srv", "tool": "lookup"}}
+
+    async def fake_discover(*, servers, commit):
+        assert commit is False
+        assert servers is candidate
+        return discovered, mapping
+
+    committed: list[object] = []
+    monkeypatch.setattr(tm_module.mcp_manager, "load_config_candidate", lambda: candidate)
+    monkeypatch.setattr(tm_module.mcp_manager, "discover_tools", fake_discover)
+    monkeypatch.setattr(
+        tm_module.mcp_manager,
+        "commit_discovery",
+        lambda servers, new_mapping: committed.append((servers, new_mapping)),
+    )
+
+    assert await manager.load_mcp_tools() == 1
+    assert committed == [(candidate, mapping)]
+    assert manager.mcp_tool_names == {"mcp__srv__lookup"}
+    assert manager.custom_tools["mcp__srv__lookup"] is new_schema
+    assert new_schema["source"] == "mcp"
+
+
+@pytest.mark.asyncio
+async def test_load_mcp_tools_rejects_stale_mcp_ownership(monkeypatch) -> None:
+    tm_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+
+    manager = object.__new__(tm_module.ToolManager)
+    existing = {"source": "registered"}
+    manager.custom_tools = {"mcp__srv__lookup": existing}
+    # A stale bookkeeping entry must not authorize overwriting a non-MCP tool.
+    manager.mcp_tool_names = {"mcp__srv__lookup"}
+    manager.is_tool_blacklisted = lambda name: False
+
+    candidate = {"srv": {"enabled": True}}
+    discovered = {"mcp__srv__lookup": {"name": "mcp__srv__lookup"}}
+    mapping = {"mcp__srv__lookup": {"server": "srv", "tool": "lookup"}}
+
+    async def fake_discover(*, servers, commit):
+        assert commit is False
+        assert servers is candidate
+        return discovered, mapping
+
+    committed: list[object] = []
+    monkeypatch.setattr(tm_module.mcp_manager, "load_config_candidate", lambda: candidate)
+    monkeypatch.setattr(tm_module.mcp_manager, "discover_tools", fake_discover)
+    monkeypatch.setattr(
+        tm_module.mcp_manager,
+        "commit_discovery",
+        lambda servers, new_mapping: committed.append((servers, new_mapping)),
+    )
+
+    with pytest.raises(ValueError, match="冲突"):
+        await manager.load_mcp_tools()
+
+    assert committed == []
+    assert manager.custom_tools == {"mcp__srv__lookup": existing}
+    assert manager.mcp_tool_names == {"mcp__srv__lookup"}
+
+
+@pytest.mark.asyncio
+async def test_load_mcp_tools_preserves_stale_non_mcp_entry(monkeypatch) -> None:
+    tm_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+
+    manager = object.__new__(tm_module.ToolManager)
+    existing = {"source": "registered"}
+    manager.custom_tools = {"mcp__old__lookup": existing}
+    manager.mcp_tool_names = {"mcp__old__lookup"}
+    manager.is_tool_blacklisted = lambda name: False
+
+    candidate = {"new": {"enabled": True}}
+    new_schema = {"name": "mcp__new__lookup"}
+    discovered = {"mcp__new__lookup": new_schema}
+    mapping = {"mcp__new__lookup": {"server": "new", "tool": "lookup"}}
+
+    async def fake_discover(*, servers, commit):
+        assert commit is False
+        return discovered, mapping
+
+    monkeypatch.setattr(tm_module.mcp_manager, "load_config_candidate", lambda: candidate)
+    monkeypatch.setattr(tm_module.mcp_manager, "discover_tools", fake_discover)
+    monkeypatch.setattr(tm_module.mcp_manager, "commit_discovery", lambda *_args: None)
+
+    assert await manager.load_mcp_tools() == 1
+    assert manager.custom_tools["mcp__old__lookup"] is existing
+    assert manager.custom_tools["mcp__new__lookup"] is new_schema
+    assert manager.mcp_tool_names == {"mcp__new__lookup"}
 
 
 def test_cancel_request_by_arg_rejects_unicode_digits() -> None:

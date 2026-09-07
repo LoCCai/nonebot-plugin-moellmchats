@@ -372,7 +372,7 @@ async def test_schema_consumer_miss_publish_hit_and_detached_materialize(
 
 
 @pytest.mark.asyncio
-async def test_schema_consumer_rejects_identity_generation_and_backend_drift(
+async def test_schema_consumer_rejects_drift_and_falls_back_on_backend_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _configure_runtime(monkeypatch)
@@ -394,8 +394,12 @@ async def test_schema_consumer_rejects_identity_generation_and_backend_drift(
 
     state["resident_plugins"] = []
     timeout = _PayloadHarness(snapshot, _TimeoutCache())
-    with pytest.raises(ToolSchemaCacheUnavailableError, match="lookup"):
-        await timeout._prepare_tool_schema_record()
+    await timeout._prepare_tool_schema_record()
+    assert timeout._tool_schema_record is None
+    data, stream = timeout._build_payload(_messages())
+    assert data["tools"][0]["function"]["name"] == "alpha"
+    assert stream is False
+    assert snapshot.legacy_schema_calls == 1
 
 
 @pytest.mark.asyncio
@@ -921,8 +925,12 @@ async def test_cache_publish_timeouts_are_normalized_without_bypass(
     ).get_category() == ("1", False, [])
 
     schema = _PayloadHarness(snapshot, _PublishTimeoutCache())
-    with pytest.raises(ToolSchemaCacheUnavailableError, match="publish"):
-        await schema._prepare_tool_schema_record()
+    await schema._prepare_tool_schema_record()
+    assert schema._tool_schema_record is None
+    data, stream = schema._build_payload(_messages())
+    assert data["tools"][0]["function"]["name"] == "alpha"
+    assert stream is False
+    assert snapshot.legacy_schema_calls == 1
 
     session = _FakeSession([_model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)

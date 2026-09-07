@@ -18,8 +18,8 @@ from .agent_context_runtime import (
     runtime_resource_host,
 )
 from .agent_runtime import AgentRunState, DeadlineContext
-from .compat import TimeoutError
-from .compat import settle_awaitable, timeout as timeout_scope
+from .compat import TimeoutError, settle_awaitable
+from .compat import timeout as timeout_scope
 from .config import config_parser
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
 from .onebot_facade import (

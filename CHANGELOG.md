@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- 整合 `feat/llm-runtime-backpressure`、`fix/analysis-fixes` 的当前架构重放结果与 `fix/generated-bundles-review`：补齐合成事件配置守卫、进度脱敏、连续取消清理、只读 API 恢复证据、Schema 越界记账、分类/历史缓存竞态与容量降级、MCP 参数注入及半提交防护，以及平台目录链路 P0 优化。
+- 修复 MCP 工具热刷新把上一批自身工具误判为名称冲突的问题；只允许来源仍为 MCP 的旧条目被同名替换，陈旧归属记录或其他工具来源继续 fail closed。
+- 安全 HTTP 的 chunk size 不再接受前导空白等非规范形式；缺失、不可访问或 malformed 的表情目录在遍历前统一按不安全路径拒绝。
+- Tool Schema 缓存查询或发布失败的测试契约同步为直连不可变快照降级；移除并忽略误提交的 `.mimosa` / `.zcode` 本地会话状态。
+
 ## [0.26.6] - 2026-09-01
 
 - NoneBot 工具进度不再只显示命令首词；改为显示经过折叠、截断和敏感字段脱敏的完整可执行指令，例如 `正在投递插件：nonebot_plugin_picstatus_ng｜指令：/zt 拓扑 全部`，相邻查询不再全部刷成相同的 `zt`。

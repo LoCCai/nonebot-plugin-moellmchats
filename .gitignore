@@ -187,5 +187,8 @@ CLAUDE.md
 # codecompanion
 .codecompanion-plan/
 
-# Mimosa 钩子在 docs 内生成的运行状态，不入库
-docs/规划/.mimosa/
+# 本地审查器和编码代理的会话状态，不属于源码或规划证据
+.mimosa/
+**/.mimosa/
+.zcode/
+**/.zcode/
