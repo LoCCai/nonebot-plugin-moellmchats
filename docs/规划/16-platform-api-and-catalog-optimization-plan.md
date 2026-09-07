@@ -39,14 +39,14 @@ lastmod: 2026-09-07T00:00:00+00:00
 
 中。改动横跨 protocol_context、tool_catalog_cache、tool_schema_cache 与 tool_manager 四层键语义；需证明目录渲染对具体 message_id 无隐式依赖（已核对渲染输入清单，无）。
 
-## P2（本地门禁已完成，远端待关闭）：缓存 miss 构建的 legacy+provider 双算改为代级抽验
+## P2（实现门禁已完成，证据提交待自身门禁）：缓存 miss 构建的 legacy+provider 双算改为代级抽验
 
 - 位置：`tool_manager.py:1592-1616`（catalog）、`:802-853`（schema）、`:1513-1550`（legacy 直连路径）；parity 比较 `tool_providers.py:1873-1875`。
 - 现状：provider cutover 开启时仍完整渲染 legacy 视图并做全字符串比对，构建成本约翻倍。
 - 实现：provider 权威路径先生成目录或 Schema；每个 `ToolSnapshot` 以内部 `RLock` 分别维护 catalog/schema 最近一次成功 parity 的 UTC 日期。每代首次使用和 UTC 跨日首次使用才完整构建 legacy rollback view 并比较，当日后续 cache miss 或直连回退只构建 Provider 视图。抽验异常原样传播且不写成功日期；新 snapshot（即使 generation 数值相同）也持有独立状态。
 - 缓存陷阱：Tool Catalog/Schema Cache 是 generation-local 常驻 LRU、没有日 TTL。只在 record builder 检查日期会让跨日 cache hit 永远跳过复验，因此 context 捕获边界也执行一次到期检查；当日已验证时是 O(1) 日期判断，跨日则在 lookup 前 fail closed。record builder 和无缓存直连路径仍保留同一检查，防止绕过 capture。
 - parity 内容：catalog 比较最终完整字符串；Schema 同时比较依赖展开集合和最终模型 Schema。关闭 cutover、v3 Provider 集合不完整及 `tools_enabled=false` 的 Schema 不消耗抽验状态，legacy rollback 与旧 snapshot 语义保持不变。
-- 风险：中。首批红灯判例证明旧实现 6 类边界均失败；实现后 catalog/schema 首次与跨日、direct/record 共享、失败重验、new snapshot/generation 隔离、rollback/disabled 不消费状态以及 8 线程首次竞争均已转绿。四版本、沙箱与制品本地门禁已完成；精确提交和远端 `release-gate` 尚未发生，因此不能提前标记远端收口。
+- 风险：中。首批红灯判例证明旧实现 6 类边界均失败；实现后 catalog/schema 首次与跨日、direct/record 共享、失败重验、new snapshot/generation 隔离、rollback/disabled 不消费状态以及 8 线程首次竞争均已转绿。四版本、沙箱、制品及精确实现提交的远端 `release-gate` 已完成；本文所在证据提交仍须通过自身 push 门禁才最终闭环。
 
 ## P3（已完成）：兼容插件描述注册期缓存
 
@@ -87,7 +87,7 @@ lastmod: 2026-09-07T00:00:00+00:00
 | P0（已完成） | 分类 prompt 延迟构建；目录缓存单条上限 256KB→1MiB；file:// 图片读盘移入 `to_thread` | 低 | 无 |
 | 批次一（已完成） | P4 协议探测会话级缓存 | 低 | 无 |
 | 批次二（已完成） | P1 缓存键重构（陷阱已同步收口） | 中 | P4 已完成 |
-| 批次三（远端待关闭） | P3 描述注册期缓存（已完成）→ P2 双算抽验（本地门禁已完成） | 低→中 | P1 已完成 |
+| 批次三（证据门禁中） | P3 描述注册期缓存（已完成）→ P2 双算抽验（实现门禁已完成） | 低→中 | P1 已完成 |
 | 观察项 | P5 | 中 | 仅在指标证明瓶颈后 |
 
 每批次沿用既定流程：判例复现/验证 → 独立提交 → 判例回归测试 → 简单 py 测试（py_compile + AST 结构断言）→ 有依赖环境跑定向 pytest 后合并。
@@ -148,4 +148,6 @@ fresh wheel/sdist 的 SHA-256 分别为 `93756ca6364ed8ae3ccaf86e330c8966c367fc7
 
 Ruff、CI 指定格式与 Pyright、`compileall`、diff、文档 11 JSON/8 TOML/10 Python 片段、161 个本地 Markdown 链接、13 项运行依赖/10 项开发依赖、244 动作/244 策略/3 wrapper 和 68 包隔离环境依赖一致性检查均通过。fresh wheel/sdist SHA-256 分别为 `996249fb6a615b764b056fac4c82bdbe074a375d4e7a9f52697cc9f8a9f60c84` / `b2e91568cc28a7ba73a5ffe31e2d86514225e016cc16fc0bb8e12c0d2069191c`；Twine 与制品内容检查通过，Python 3.10/3.12 × wheel/sdist 四组均从 checkout 外加载 0.26.6，验证 v11/v12、38/31/175 动作和 runtime generation 1。
 
-精确实现提交、GitHub push run 及唯一成功 `release-gate` 尚待产生；远端只有唯一/default `feat/generated-tool-bundles` 且无活动 PR，因此当前没有可触发的 `pull_request` run，不能借用历史 PR 结果。本批未修改或重启七七，未连接真实 Bot、模型、PostgreSQL 或 Redis，未发送 QQ 动作，也未发布 PyPI。P5 继续只观察，没有实施。
+实现提交为 `d508101ee644c63568e93978abd7c092b3ba67d4`。push run [`34087358537`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/34087358537) 精确命中该 SHA，12 个 job 全部 `completed/success`、`non_success=[]`，且恰好一个 `release-gate`（job `101634014868`）成功。GitHub wheel/sdist SHA-256 分别为 `996249fb6a615b764b056fac4c82bdbe074a375d4e7a9f52697cc9f8a9f60c84` / `b2e91568cc28a7ba73a5ffe31e2d86514225e016cc16fc0bb8e12c0d2069191c`，与精确提交的本地重建一致；`BUILD-METADATA.json` 绑定 `LoCCai/nonebot-plugin-moellmchats`、该 SHA、该 run、0.26.6 与 `>=3.10,<4.0`。
+
+实现门禁核验时，本地 HEAD、remote-tracking 与 `ls-remote` 三方一致。远端仍只有唯一/default `feat/generated-tool-bundles` 且无活动 PR，因此没有可触发的 `pull_request` run，未借用历史 PR 结果。本文所在证据提交继续以自身 push run 的唯一成功 `release-gate` 作为最终闭环判据，不为记录自指 run 再追加第三个提交。本批未修改或重启七七，未连接真实 Bot、模型、PostgreSQL 或 Redis，未发送 QQ 动作，也未发布 PyPI。P5 继续只观察，没有实施。

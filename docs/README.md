@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前唯一/default 开发分支为 `feat/generated-tool-bundles`。0.26.6 K-12/K-13 与平台优化 P0、P4、P1、P3 已进入该分支并完成各自源码、制品和远端门禁；最近已验证的文档恢复点为 `aeaa13db5ed12af8d2d2d015ff2506d93091b0ee`。P2 的 Provider/legacy 代级与每日抽验已完成本地四版本、Sandbox、制品和包外加载门禁，精确提交与远端门禁待关闭。以上都是开发仓库证据，不代表 PyPI 已发布或七七已经安装/重载；运行态版本仍须按[安装验收](./installation.md)单独核对。
+> 当前唯一/default 开发分支为 `feat/generated-tool-bundles`。0.26.6 K-12/K-13 与平台优化 P0、P4、P1、P3 已进入该分支并完成各自源码、制品和远端门禁；P2 的 Provider/legacy 代级与每日抽验实现恢复点为 `d508101ee644c63568e93978abd7c092b3ba67d4`，其本地完整门禁与精确 push `release-gate` 已通过。证据提交仍须以自身 push 门禁完成最终闭环。以上都是开发仓库证据，不代表 PyPI 已发布或七七已经安装/重载；运行态版本仍须按[安装验收](./installation.md)单独核对。
 
 ---
 
@@ -45,7 +45,7 @@
 | 页面 | 内容 |
 |------|------|
 | [K-09 后续待修复与设计清单](./规划/15-pending-issues-backlog.md) | spool 诊断、usage 幂等键、热缓存、排空上限、Redis admission、MCP 依赖契约与结构问题 |
-| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | P0/P4/P1/P3 已收口；P2 已完成本地门禁、远端待关闭，P5 仅观察 |
+| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | P0/P4/P1/P3/P2 已完成实现门禁；P2 证据提交待自身 push 门禁，P5 仅观察 |
 
 ---
 
