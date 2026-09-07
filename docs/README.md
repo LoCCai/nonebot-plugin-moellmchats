@@ -2,7 +2,7 @@
 
 欢迎使用 **nonebot-plugin-moellmchats** 文档中心。这里汇集了插件所有配置项、高级功能与使用技巧的完整说明。
 
-> 当前唯一/default 开发分支为 `feat/generated-tool-bundles`。0.26.6 K-12/K-13 与平台优化 P0、P4、P1、P3、P2 已进入该分支并完成各自源码、制品和远端门禁；P2 的 Provider/legacy 代级与每日抽验实现恢复点为 `d508101ee644c63568e93978abd7c092b3ba67d4`，证据提交 `dc227f1…` 的精确 push `release-gate` 也已通过。P5 只补齐安全观测字段，尚未实施 v12 事件白名单。以上都是开发仓库证据，不代表 PyPI 已发布或七七已经安装/重载；运行态版本仍须按[安装验收](./installation.md)单独核对。
+> 当前唯一/default 开发分支为 `feat/generated-tool-bundles`。0.26.6 K-12/K-13 与平台优化 P0、P4、P1、P3、P2 已进入该分支并完成各自源码、制品和远端门禁。P5 只补齐安全观测字段，当前实现恢复点为 `1d18b0e467dd7f5a870cc6fb8f2bb69d07ea06d2`，其本地完整门禁、精确 push `release-gate` 与 GitHub 制品哈希核对均已通过；v12 事件白名单尚未实施。以上都是开发仓库证据，不代表 PyPI 已发布或七七已经安装/重载；运行态版本仍须按[安装验收](./installation.md)单独核对。
 
 ---
 
