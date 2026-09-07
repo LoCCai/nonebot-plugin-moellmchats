@@ -12,9 +12,12 @@
 - `matcher_checked`、`matcher_matched`、`matcher_failed`、`matcher_blocked`：确认规则是否检查、命中或异常；
 - `capture_success`、`api_success`、`api_failed`、`api_unknown`：确认 Adapter 是否真正回调成功；
 - `api_read_failed`、`api_read_recovered`、`api_unresolved_failed`、`api_unresolved_unknown`：区分已恢复的只读查询降级和仍未解决的失败；
-- `progress_status`、`status`、`retry_decision`、`duration_ms`：进度是否送达与执行是否成功是两件事，最终结果以后四项为准。
+- `progress_status`、`status`、`retry_decision`、`duration_ms`：进度是否送达与执行是否成功是两件事，最终结果以后四项为准；
+- `protocol`、`mode`、`event_build_us`：仅用于区分 v11/v12、targeted/full-bus，并观察合成事件构建耗时，不包含用户正文或工具参数。
 
 日志不会记录完整工具参数、原始 API 参数、Token、Cookie、Authorization、URL 查询或本地路径。如果排查必须看到业务参数，应在目标业务插件内增加经过审查的字段级日志，不要临时打开无差别 payload 日志。
+
+如果要判断是否值得把 v12 合成事件改成字段白名单，先在真实、具有代表性的运行窗口查看 `查看LLM状态` 中的 `投递模式` 累计值，再聚合同窗口“NoneBot 插件兼容调度完成”日志里的 `protocol=onebot_v12 mode=full event_build_us=... duration_ms=...`。只有 full-bus 确实高频，且事件构建持续占据整步耗时的显著部分，才进入 P5；单次慢调用、合成压测或 Matcher 本身很慢都不是改事件字段的依据。
 
 ## “今天谁发言最多”选错插件
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import re
 from types import SimpleNamespace
 import uuid
 
@@ -391,6 +392,53 @@ def test_v12_synthetic_event_preserves_protocol_and_string_identity() -> None:
         segment.type == "image" and segment.data["file_id"] == "file-1"
         for segment in fake.message
     )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_log_exposes_safe_p5_observation_fields(monkeypatch) -> None:
+    logs: list[str] = []
+    original_get_config = simulator_module.config_parser.get_config
+    monkeypatch.setattr(
+        simulator_module.config_parser,
+        "get_config",
+        lambda key, default=None: ["legacy_demo"]
+        if key == "legacy_full_event_plugins"
+        else original_get_config(key, default),
+    )
+
+    async def dispatch(_bot, _event) -> None:
+        return None
+
+    monkeypatch.setattr(simulator_module, "_dispatch_full_bus", dispatch)
+    monkeypatch.setattr(
+        simulator_module,
+        "logger",
+        SimpleNamespace(
+            info=lambda message: logs.append(str(message)),
+            error=lambda _message: None,
+        ),
+    )
+
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(),
+        _v12_event("observe"),
+        "private-command-value",
+        plugin_name="legacy_demo",
+    )
+
+    assert result.status is simulator_module.PluginDispatchStatus.NOT_MATCHED
+    assert len(logs) == 1
+    assert "protocol=onebot_v12" in logs[0]
+    assert "mode=full" in logs[0]
+    assert re.search(r"event_build_us=\d+", logs[0])
+    for sensitive_value in (
+        "private-command-value",
+        "actor-1",
+        "bot-v12",
+        "group-1",
+        "file-1",
+    ):
+        assert sensitive_value not in logs[0]
 
 
 @pytest.mark.asyncio

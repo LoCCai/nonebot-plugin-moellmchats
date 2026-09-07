@@ -684,7 +684,12 @@ class EventSimulator:
             )
         try:
             async with get_dispatch_controller().slot():
+                event_build_started_ns = time.perf_counter_ns()
                 fake_event, fake_id = _build_event(original_event, command_str, format_message_dict)
+                event_build_us = max(
+                    0,
+                    (time.perf_counter_ns() - event_build_started_ns) // 1_000,
+                )
                 capture_id = uuid.uuid4().hex
                 context = _empty_dispatch_context()
                 context.update(
@@ -698,6 +703,7 @@ class EventSimulator:
                 capture_token = _capture_key.set(capture_id)
                 event_token = _synthetic_plugin.set(plugin_name)
                 forced_status = None
+                mode = "unknown"
                 try:
                     # 配置读取/指标写入必须落在 try 内：若在此抛异常，
                     # 下方 finally 仍会清理 _captures 与两个 contextvar，
@@ -733,6 +739,8 @@ class EventSimulator:
                 logger.info(
                     "NoneBot 插件兼容调度完成: "
                     f"plugin={plugin_name} command_digest={command_digest[:12]} "
+                    f"protocol={context['protocol']} mode={mode} "
+                    f"event_build_us={event_build_us} "
                     f"status={result.status.value} "
                     f"matcher_checked={result.matcher_checked} "
                     f"matcher_matched={result.matcher_matched} "
