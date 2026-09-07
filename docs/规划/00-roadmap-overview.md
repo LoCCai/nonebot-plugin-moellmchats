@@ -36,7 +36,7 @@ lastmod: 2026-09-07T00:00:00+00:00
 | 新编号 | 内容 | 旧编号 | 状态 |
 | --- | --- | --- | --- |
 | 15 | K-09 后续待修复与设计清单 | 11 | 活跃：spool/usage 幂等键/Redis admission/MCP 依赖契约等 |
-| 16 | 平台 API 与插件接入链路优化计划书 | 16 | P0、P4、P1 已收口；P3 本地完成、远端门禁待关闭；P2 后继锁定，P5 仅观察 |
+| 16 | 平台 API 与插件接入链路优化计划书 | 16 | P0、P4、P1、P3 已收口；下一批 P2，P5 仅观察 |
 
 > 完成度复核（2026-08-24）：Plan 1 / Milestone A～C 与后续安全、架构、数据库、缓存、并行、平台接线均已按依赖顺序完成；I-08 最终文档 HEAD `5f711ffe25b5bd29ccd65278fae30e6d1b4777b9` 的精确 push/PR 双门禁已关闭。I-09 已完成隔离最终矩阵，且本地证据文档 HEAD `c26cd484d37556647d59ea313d9571bbc6b433c4` 的精确 push/PR 双门禁也已关闭；Plan 2 / Plan 3 的 Primitive 与 Runtime integration 两层开发态验收据此完成。本次远端证据回填提交定义为最终文档 HEAD，只有其自身精确双 `release-gate` 通过后才判定 I-09 与开发态总目标最终闭环，不再为记录该自指门禁另起文档提交。生产迁移、真实 PostgreSQL/Redis/模型、发布和部署均未观察；D-09 因缺少真实发布周期 parity 观察继续锁定。详见 [Plan 2 / Plan 3 完成度审计](./05-plan2-plan3-completion-audit.md)。
 

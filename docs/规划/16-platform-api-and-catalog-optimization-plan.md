@@ -46,13 +46,14 @@ lastmod: 2026-09-07T00:00:00+00:00
 - 方案：provider 权威代跳过 legacy 全量渲染；parity 降级为「每 generation 首次构建时校验一次 + 按天抽验」，结果缓存在 snapshot。禁止完全删除（防回退闸门）。
 - 风险：中。验收：代级校验命中漂移时仍 fail-closed（reload 期失败而非聊天期）。
 
-## P3（本地已完成，远端门禁待关闭）：兼容插件描述注册期缓存
+## P3（已完成）：兼容插件描述注册期缓存
 
 - 位置：`tool_manager.py:2875-2879`（legacy `build_tool_schema`）、`:2804-2811`（provider 版）。
 - 现状：选中+resident 插件的完整菜单描述（每插件 ≤28,000 字符）每请求重新渲染，注册期明明算过。
 - 实现：`build_nonebot_plugin_candidate` 在 generation 注册期生成 frozen `CompatibilityDescriptionViews(user, superuser)` 并存入保留字段；无 hidden 功能时 `superuser` 直接复用 `user` 字符串，有 hidden 功能时才生成第二份。`ToolSpec.description` 固定为普通用户视图，legacy/provider 两条请求期 Schema 路径只按调用者选择缓存，不再重建完整描述。
 - 安全边界：调用方不能在原始 `plugin_info` 伪造缓存字段；Provider parity 在 generation 发布期按冻结 `command_start` 重新生成期望双视图，并同时校验缓存类型、内容、共享关系与 `ToolSpec`。缓存缺失、类型不符、说明或前缀漂移均 fail closed。无菜单插件也统一执行 28,000 字符上限。
-- 本地验收：描述/Provider/Schema/缓存定向为 `240 passed`，runtime/provider/cache/LLM payload 联合为 `428 passed`；Python 3.10/3.11/3.12/3.13 普通全量各 `3186 passed, 1 skipped`，mandatory root sandbox 为 `41 passed` 且 JUnit `failures=0 / errors=0 / skipped=0`。Ruff、CI 指定格式、Pyright、文档链接/示例、依赖、协议资源和环境依赖检查均通过。fresh wheel/sdist、Twine 与制品内容检查通过；Python 3.10/3.12 × wheel/sdist 四组均在 checkout 外加载 0.26.6，验证 v11/v12、38/31/175 动作和 runtime generation 1。精确提交、制品哈希及远端门禁仍待本批后续绑定。
+- 本地验收：描述/Provider/Schema/缓存定向为 `240 passed`，runtime/provider/cache/LLM payload 联合为 `428 passed`；Python 3.10/3.11/3.12/3.13 普通全量各 `3186 passed, 1 skipped`，mandatory root sandbox 为 `41 passed` 且 JUnit `failures=0 / errors=0 / skipped=0`。Ruff、CI 指定格式、Pyright、文档链接/示例、依赖、协议资源和环境依赖检查均通过。fresh wheel/sdist、Twine 与制品内容检查通过；Python 3.10/3.12 × wheel/sdist 四组均在 checkout 外加载 0.26.6，验证 v11/v12、38/31/175 动作和 runtime generation 1。
+- 远端验收：实现提交 `915fc343289be35518dc0f5009fd4c3bc6258bab` 的 push run [`34084950241`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/34084950241) 精确命中该 SHA，12 个 job 全部 `completed/success`，且恰好一个 `release-gate`（job `101627235176`）成功。GitHub wheel/sdist SHA-256 分别为 `a6f3e55be84723279841053a653a292adcaaf0723eb6c6b4b72b03aef1626901` / `993b757d0174088cb11323d22d59d0aa123a46a10b6d892124a9e7d833807303`，与最终本地候选逐字一致；`BUILD-METADATA.json` 绑定同一 repository、SHA、run 和 0.26.6。远端当前只有唯一/default `feat/generated-tool-bundles` 且无活动 PR，因此本批没有可触发的 `pull_request` run，未借用历史 PR 结果。本文所在证据提交继续以自身 push run 的唯一成功 `release-gate` 作为最终闭环判据，不为记录自指 run 再追加第三个提交。
 - 风险：低。
 
 ## P4（已完成）：协议能力探测会话级缓存
@@ -84,7 +85,7 @@ lastmod: 2026-09-07T00:00:00+00:00
 | P0（已完成） | 分类 prompt 延迟构建；目录缓存单条上限 256KB→1MiB；file:// 图片读盘移入 `to_thread` | 低 | 无 |
 | 批次一（已完成） | P4 协议探测会话级缓存 | 低 | 无 |
 | 批次二（已完成） | P1 缓存键重构（陷阱已同步收口） | 中 | P4 已完成 |
-| 批次三（进行中） | P3 描述注册期缓存（本地完成、远端待验）→ P2 双算抽验（锁定） | 低→中 | P1 已完成 |
+| 批次三（进行中） | P3 描述注册期缓存（已完成）→ P2 双算抽验（下一批） | 低→中 | P1 已完成 |
 | 观察项 | P5 | 中 | 仅在指标证明瓶颈后 |
 
 每批次沿用既定流程：判例复现/验证 → 独立提交 → 判例回归测试 → 简单 py 测试（py_compile + AST 结构断言）→ 有依赖环境跑定向 pytest 后合并。
