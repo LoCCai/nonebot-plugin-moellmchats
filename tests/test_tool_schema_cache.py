@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import FrozenInstanceError, replace
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -47,6 +48,8 @@ from nonebot_plugin_moellmchats.tool_schema_cache import (
     resolve_tool_schema,
 )
 
+tool_manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+
 
 async def _handler(value: str = "ok") -> str:
     return value
@@ -61,6 +64,7 @@ def _context(
     tools_enabled: bool = True,
     search_enabled: bool = False,
     blacklist_patterns: tuple[str, ...] = (),
+    suppressed_protocol_tools: set[str] | None = None,
 ) -> ToolSchemaRenderContext:
     return ToolSchemaRenderContext.capture(
         generation=generation,
@@ -70,6 +74,7 @@ def _context(
         tools_enabled=tools_enabled,
         search_enabled=search_enabled,
         blacklist_patterns=blacklist_patterns,
+        suppressed_protocol_tools=(set() if suppressed_protocol_tools is None else suppressed_protocol_tools),
     )
 
 
@@ -216,9 +221,27 @@ def test_context_canonicalizes_toolset_and_hides_raw_inputs_from_safe_key() -> N
     assert context.blacklist_patterns == ("alpha", "mcp__private__*")
     assert re.fullmatch(r"[0-9a-f]{64}", context.selected_plugins_digest)
     assert re.fullmatch(r"[0-9a-f]{64}", context.blacklist_digest)
+    assert context.business_conflict_digest == hashlib.sha256(b"[]").hexdigest()
     assert private_tool not in repr(context)
     assert "private" not in context.cache_key.safe_cache_key
     assert re.fullmatch(r"schema:42:[0-9a-f]{64}", context.cache_key.safe_cache_key)
+
+
+def test_context_canonicalizes_business_conflicts_without_key_disclosure() -> None:
+    context = _context(
+        suppressed_protocol_tools={
+            "onebot_v11__send_like",
+            "qq__like_me",
+        }
+    )
+
+    assert context.suppressed_protocol_tools == (
+        "onebot_v11__send_like",
+        "qq__like_me",
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", context.business_conflict_digest)
+    assert "send_like" not in repr(context)
+    assert "send_like" not in context.cache_key.safe_cache_key
 
 
 def test_cache_key_separates_every_dynamic_schema_input() -> None:
@@ -231,9 +254,10 @@ def test_cache_key_separates_every_dynamic_schema_input() -> None:
         replace(base, search_enabled=True),
         replace(base, selected_plugins=("beta",)),
         replace(base, blacklist_patterns=("alpha",)),
+        replace(base, suppressed_protocol_tools=("qq__like_me",)),
     )
 
-    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 8
+    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 9
 
 
 def test_context_blacklist_matches_runtime_semantics() -> None:
@@ -267,6 +291,8 @@ def test_context_blacklist_matches_runtime_semantics() -> None:
         ({"selected_plugins": (" alpha",)}, ValueError, "安全工具名"),
         ({"selected_plugins": ("bad\x00name",)}, ValueError, "安全工具名"),
         ({"blacklist_patterns": ["alpha"]}, TypeError, "元组"),
+        ({"suppressed_protocol_tools": ["qq__like_me"]}, TypeError, "元组"),
+        ({"suppressed_protocol_tools": ("bad\x00name",)}, ValueError, "工具名"),
     ],
 )
 def test_context_rejects_incomplete_or_unsafe_identity(
@@ -282,6 +308,7 @@ def test_context_rejects_incomplete_or_unsafe_identity(
         "search_enabled": False,
         "selected_plugins": ("alpha",),
         "blacklist_patterns": (),
+        "suppressed_protocol_tools": (),
     }
     values.update(changes)
     with pytest.raises(error, match=match):
@@ -334,6 +361,7 @@ def test_context_rejects_excessive_selected_tool_count() -> None:
         ({"search_enabled": 0}, TypeError, "search_enabled"),
         ({"blacklist_digest": "bad"}, ValueError, "SHA-256"),
         ({"selected_plugins_digest": "bad"}, ValueError, "SHA-256"),
+        ({"business_conflict_digest": "bad"}, ValueError, "SHA-256"),
     ],
 )
 def test_cache_key_rejects_invalid_fields(
@@ -349,6 +377,7 @@ def test_cache_key_rejects_invalid_fields(
         "search_enabled": False,
         "blacklist_digest": "a" * 64,
         "selected_plugins_digest": "b" * 64,
+        "business_conflict_digest": "c" * 64,
     }
     values.update(changes)
     with pytest.raises(error, match=match):
@@ -808,6 +837,31 @@ def test_snapshot_captures_policy_once_and_build_does_not_read_globals(
         "dependency_tool",
         "root_tool",
     ]
+
+
+def test_explicit_context_freezes_business_conflicts_for_both_renderers(
+    monkeypatch,
+) -> None:
+    snapshot = _tool_snapshot()
+    context = _context(
+        selected_plugins={"qq__like_me"},
+        provider_cutover=True,
+        suppressed_protocol_tools={"qq__like_me"},
+    )
+    monkeypatch.setattr(
+        tool_manager_module,
+        "protocol_tool_available",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        tool_manager_module,
+        "business_conflicting_protocol_tools",
+        lambda *_args, **_kwargs: pytest.fail("显式 context 不应重新读取正文或业务优先配置"),
+    )
+
+    record = snapshot.build_llm_payload_schema_record(context)
+
+    assert record.tool_names == ()
 
 
 def test_snapshot_schema_record_matches_legacy_and_provider_views(monkeypatch) -> None:

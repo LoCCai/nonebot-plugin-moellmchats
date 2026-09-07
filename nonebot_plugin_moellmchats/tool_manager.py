@@ -26,7 +26,7 @@ from .nonebot_plugin_tools import build_nonebot_plugin_candidate
 from .protocol_context import (
     available_protocol_tool_names,
     business_conflicting_protocol_tools,
-    current_protocol_cache_digest,
+    current_protocol_snapshot,
     protocol_tool_available,
 )
 from .runtime_snapshot import (
@@ -773,6 +773,16 @@ class ToolSnapshot:
             )
         if type(provider_cutover) is not bool:
             raise ValueError("llm_payload Provider cutover 开关必须是布尔值")
+        protocol_snapshot = current_protocol_snapshot()
+        protocol_scope_digest = "0" * 64 if protocol_snapshot is None else protocol_snapshot.cache_digest
+        suppressed_protocol_tools = (
+            business_conflicting_protocol_tools(
+                self.plugin_info,
+                snapshot=protocol_snapshot,
+            )
+            if tools_enabled
+            else frozenset()
+        )
         return ToolSchemaRenderContext.capture(
             generation=self.generation,
             selected_plugins=plugin_names,
@@ -781,7 +791,8 @@ class ToolSnapshot:
             tools_enabled=tools_enabled,
             search_enabled=search_enabled,
             blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
-            protocol_scope_digest=current_protocol_cache_digest(),
+            protocol_scope_digest=protocol_scope_digest,
+            suppressed_protocol_tools=suppressed_protocol_tools,
         )
 
     def build_llm_payload_schema_record(
@@ -1564,15 +1575,27 @@ class ToolSnapshot:
             )
         if type(provider_cutover) is not bool:
             raise ValueError("categorize Provider cutover 开关必须是布尔值")
+        tools_enabled = model_selector.get_use_tools()
+        protocol_snapshot = current_protocol_snapshot()
+        protocol_scope_digest = "0" * 64 if protocol_snapshot is None else protocol_snapshot.cache_digest
+        suppressed_protocol_tools = (
+            business_conflicting_protocol_tools(
+                self.plugin_info,
+                snapshot=protocol_snapshot,
+            )
+            if tools_enabled
+            else frozenset()
+        )
         return ToolCatalogRenderContext.capture(
             generation=self.generation,
             is_superuser=is_superuser,
             provider_cutover=provider_cutover,
-            tools_enabled=model_selector.get_use_tools(),
+            tools_enabled=tools_enabled,
             web_search_enabled=model_selector.get_web_search(),
             blacklist_patterns=tuple(model_selector.get_tool_blacklist() or ()),
-            protocol_scope_digest=current_protocol_cache_digest(),
+            protocol_scope_digest=protocol_scope_digest,
             directory_digest=self.directory_digest,
+            suppressed_protocol_tools=suppressed_protocol_tools,
         )
 
     def build_brief_catalog_record(
@@ -2307,6 +2330,7 @@ TOOLS_REGISTRY = [
             tools_enabled = model_selector.get_use_tools()
             web_search_enabled = model_selector.get_web_search()
             is_blacklisted = tool_manager.is_tool_blacklisted
+            suppressed_protocol_tools = business_conflicting_protocol_tools(plugin_info)
         else:
             if not isinstance(render_context, ToolCatalogRenderContext):
                 raise TypeError("render_context 必须是 ToolCatalogRenderContext")
@@ -2315,6 +2339,7 @@ TOOLS_REGISTRY = [
             tools_enabled = render_context.tools_enabled
             web_search_enabled = render_context.web_search_enabled
             is_blacklisted = render_context.is_blacklisted
+            suppressed_protocol_tools = frozenset(render_context.suppressed_protocol_tools)
 
         if tools_enabled:
             # 1. NoneBot 原生插件
@@ -2345,7 +2370,7 @@ TOOLS_REGISTRY = [
             protocol_names = available_protocol_tool_names(
                 is_superuser=is_superuser,
             )
-            protocol_names -= business_conflicting_protocol_tools(plugin_info)
+            protocol_names -= suppressed_protocol_tools
             for spec in builtin_protocol_specs():
                 if spec.name not in protocol_names or is_blacklisted(spec.name):
                     continue
@@ -2383,6 +2408,7 @@ TOOLS_REGISTRY = [
             tools_enabled = model_selector.get_use_tools()
             web_search_enabled = model_selector.get_web_search()
             is_blacklisted = tool_manager.is_tool_blacklisted
+            suppressed_protocol_tools = business_conflicting_protocol_tools(plugin_info)
         else:
             if not isinstance(render_context, ToolCatalogRenderContext):
                 raise TypeError("render_context 必须是 ToolCatalogRenderContext")
@@ -2393,6 +2419,7 @@ TOOLS_REGISTRY = [
             tools_enabled = render_context.tools_enabled
             web_search_enabled = render_context.web_search_enabled
             is_blacklisted = render_context.is_blacklisted
+            suppressed_protocol_tools = frozenset(render_context.suppressed_protocol_tools)
         catalog: list[str] = []
 
         if tools_enabled:
@@ -2439,7 +2466,7 @@ TOOLS_REGISTRY = [
             protocol_names = available_protocol_tool_names(
                 is_superuser=is_superuser,
             )
-            protocol_names -= business_conflicting_protocol_tools(plugin_info)
+            protocol_names -= suppressed_protocol_tools
             for spec in builtin_protocol_specs():
                 if spec.name not in protocol_names or is_blacklisted(spec.name):
                     continue
@@ -2740,6 +2767,7 @@ TOOLS_REGISTRY = [
             raise TypeError("llm_payload feature/actor 标志必须是布尔值")
         if render_context is None:
             is_blacklisted = tool_manager.is_tool_blacklisted
+            suppressed_protocol_tools = business_conflicting_protocol_tools(plugin_info)
         else:
             if not isinstance(render_context, ToolSchemaRenderContext):
                 raise TypeError("render_context 必须是 ToolSchemaRenderContext")
@@ -2748,6 +2776,7 @@ TOOLS_REGISTRY = [
             if render_context.search_enabled is not search_enabled or render_context.is_superuser is not is_superuser:
                 raise ValueError("tool schema render_context 与 Provider 标志不一致")
             is_blacklisted = render_context.is_blacklisted
+            suppressed_protocol_tools = frozenset(render_context.suppressed_protocol_tools)
 
         tools: list[dict[str, Any]] = []
         for name in plugin_names:
@@ -2767,10 +2796,13 @@ TOOLS_REGISTRY = [
                 protocol_spec = builtin_protocol_spec(name)
                 if protocol_spec is None:
                     raise ProviderConsumerParityError(f"llm_payload 未知 builtin payload 工具: {name}")
-                if not protocol_tool_available(
-                    name,
-                    is_superuser=is_superuser,
-                ) or name in business_conflicting_protocol_tools(plugin_info):
+                if (
+                    not protocol_tool_available(
+                        name,
+                        is_superuser=is_superuser,
+                    )
+                    or name in suppressed_protocol_tools
+                ):
                     continue
             elif name not in custom_tools:
                 raise ProviderConsumerParityError(f"llm_payload Tool rollback identity 缺失: {name}")
@@ -2850,12 +2882,14 @@ TOOLS_REGISTRY = [
 
         if render_context is None:
             is_blacklisted = tool_manager.is_tool_blacklisted
+            suppressed_protocol_tools = business_conflicting_protocol_tools(plugin_info)
         else:
             if not isinstance(render_context, ToolSchemaRenderContext):
                 raise TypeError("render_context 必须是 ToolSchemaRenderContext")
             if render_context.is_superuser is not is_superuser:
                 raise ValueError("tool schema render_context permission 不一致")
             is_blacklisted = render_context.is_blacklisted
+            suppressed_protocol_tools = frozenset(render_context.suppressed_protocol_tools)
 
         for name in plugin_names:
             if is_blacklisted(name):
@@ -2928,7 +2962,7 @@ TOOLS_REGISTRY = [
                     is_superuser=is_superuser,
                 ):
                     continue
-                if name in business_conflicting_protocol_tools(plugin_info):
+                if name in suppressed_protocol_tools:
                     continue
                 tools.append(
                     {

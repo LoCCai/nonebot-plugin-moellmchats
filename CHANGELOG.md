@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 目录与 Tool Schema 缓存不再把具体 `message_id` / `reply_message_id` 纳入协议作用域摘要；同一 Bot、调用者、会话与权限下的连续消息可以复用缓存，同时仍以“当前消息/回复是否存在”隔离可执行动作。业务优先抑制集合在 render context 捕获时一次性冻结，并以 canonical SHA-256 加入两层缓存键，避免提速后复用到未摘除冲突协议工具的目录或 Schema。
 - 协议能力探测增加 300 秒、256 会话上限的 Bot 会话级 LRU/single-flight 缓存：连续请求复用成功的 v11 `get_version_info` 或 v12 `get_supported_actions`，失败不缓存，等待者取消不取消共享只读探测；缓存严格绑定 Bot 会话、Adapter、协议、Bot ID 与可见的实现/版本提示。危险动作二阶段确认仍强制重新探测，缓存不会替代执行前复核。
 - 整合 `feat/llm-runtime-backpressure`、`fix/analysis-fixes` 的当前架构重放结果与 `fix/generated-bundles-review`：补齐合成事件配置守卫、进度脱敏、连续取消清理、只读 API 恢复证据、Schema 越界记账、分类/历史缓存竞态与容量降级、MCP 参数注入及半提交防护，以及平台目录链路 P0 优化。
 - 修复 MCP 工具热刷新把上一批自身工具误判为名称冲突的问题；只允许来源仍为 MCP 的旧条目被同名替换，陈旧归属记录或其他工具来源继续 fail closed。

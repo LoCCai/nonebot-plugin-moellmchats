@@ -531,8 +531,8 @@ def test_protocol_cache_digest_isolated_by_every_runtime_identity() -> None:
         "group_id": "group-1",
         "guild_id": None,
         "channel_id": None,
-        "message_id": "message-1",
-        "reply_message_id": "reply-1",
+        "has_message_id": True,
+        "has_reply_message_id": True,
         "generation": 9,
         "enabled": True,
     }
@@ -550,8 +550,8 @@ def test_protocol_cache_digest_isolated_by_every_runtime_identity() -> None:
         "group_id": "group-2",
         "guild_id": "guild-1",
         "channel_id": "channel-1",
-        "message_id": "message-2",
-        "reply_message_id": "reply-2",
+        "has_message_id": False,
+        "has_reply_message_id": False,
         "generation": 10,
         "enabled": False,
     }
@@ -560,6 +560,36 @@ def test_protocol_cache_digest_isolated_by_every_runtime_identity() -> None:
         candidate[field] = value
         digests.add(_snapshot_cache_digest(**candidate))
     assert len(digests) == len(changes) + 1
+
+
+@pytest.mark.asyncio
+async def test_protocol_cache_digest_ignores_concrete_message_identifiers(
+    protocol_config,
+) -> None:
+    bot = _Bot(protocol="OneBot V11")
+    first = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-1", reply_message_id="reply-1"),
+        generation=9,
+        is_superuser=False,
+    )
+    second = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-2", reply_message_id="reply-2"),
+        generation=9,
+        is_superuser=False,
+    )
+    without_reply = await probe_protocol_capabilities(
+        bot,
+        _event(message_id="message-3", reply_message_id=None),
+        generation=9,
+        is_superuser=False,
+    )
+
+    assert first.message_id != second.message_id
+    assert first.reply_message_id != second.reply_message_id
+    assert first.cache_digest == second.cache_digest
+    assert without_reply.cache_digest != first.cache_digest
 
 
 @pytest.mark.asyncio

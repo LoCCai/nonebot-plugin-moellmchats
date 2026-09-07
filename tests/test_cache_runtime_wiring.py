@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+from nonebot.adapters.onebot.v11 import Message
 import pytest
 
 import nonebot_plugin_moellmchats.categorize as categorize_module
@@ -14,15 +15,19 @@ from nonebot_plugin_moellmchats.classification_cache import (
 )
 from nonebot_plugin_moellmchats.llm_payload import LlmPayloadMixin
 from nonebot_plugin_moellmchats.model_selector import model_selector
+import nonebot_plugin_moellmchats.protocol_context as protocol_context_module
+from nonebot_plugin_moellmchats.protocol_context import protocol_request_scope
 from nonebot_plugin_moellmchats.tool_catalog_cache import (
     MemoryToolCatalogCache,
     ToolCatalogCacheUnavailableError,
+    resolve_tool_catalog,
 )
 from nonebot_plugin_moellmchats.tool_discovery import with_menu_discovery
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
 from nonebot_plugin_moellmchats.tool_schema_cache import (
     MemoryToolSchemaCache,
     ToolSchemaCacheUnavailableError,
+    resolve_tool_schema,
 )
 
 
@@ -44,6 +49,73 @@ def _snapshot(generation: int = 42) -> ToolSnapshot:
         custom_tools={},
         tool_dependencies={},
         mcp_tool_names=set(),
+    )
+
+
+def _business_protocol_snapshot(generation: int = 42) -> ToolSnapshot:
+    return ToolSnapshot(
+        generation=generation,
+        plugin_info={
+            "qi_group_admin": with_menu_discovery(
+                {
+                    "name": "群管理",
+                    "description": "群管理功能",
+                    "usage": "/点赞",
+                },
+                [
+                    {
+                        "func": "点赞",
+                        "trigger_method": "直接消息",
+                        "trigger_condition": "给我点赞",
+                        "brief_des": "给当前用户点赞",
+                    }
+                ],
+            )
+        },
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
+
+
+class _ProtocolAdapter:
+    @staticmethod
+    def get_name() -> str:
+        return "OneBot V11"
+
+
+class _ProtocolBot:
+    def __init__(self) -> None:
+        self.adapter = _ProtocolAdapter()
+        self.self_id = "bot-1"
+        self.app_name = "Lagrange.OneBot"
+        self.app_version = "1.0.0"
+        self.calls: list[str] = []
+
+    async def call_api(self, api: str, **_data: Any) -> dict[str, str]:
+        self.calls.append(api)
+        if api != "get_version_info":
+            raise AssertionError(f"unexpected protocol probe: {api}")
+        return {
+            "app_name": self.app_name,
+            "app_version": self.app_version,
+            "protocol_version": "11",
+        }
+
+
+def _protocol_event(text: str, message_id: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        time=1_725_000_000,
+        user_id=123,
+        group_id=456,
+        message_id=message_id,
+        message=Message(text),
+        sender=SimpleNamespace(
+            user_id=123,
+            card="测试用户",
+            nickname="测试用户",
+        ),
+        reply=None,
     )
 
 
@@ -323,6 +395,86 @@ async def test_catalog_consumer_miss_publish_hit_builds_once(
     assert first == second == ("1", False, ["alpha"])
     assert snapshot.catalog_builds == 1
     assert session.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_protocol_catalog_and_schema_cache_share_messages_but_isolate_business_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _configure_runtime(monkeypatch)
+    state.update(
+        {
+            "protocol_tools_enabled": True,
+            "protocol_tools_napcat_extensions_enabled": True,
+            "protocol_tools_business_first": True,
+        }
+    )
+    protocol_context_module._protocol_probe_cache.clear()
+    snapshot = _CountingSnapshot(_business_protocol_snapshot())
+    catalog_cache = MemoryToolCatalogCache()
+    schema_cache = MemoryToolSchemaCache()
+    bot = _ProtocolBot()
+
+    async def resolve_for(text: str, message_id: int):
+        async with protocol_request_scope(
+            bot,
+            _protocol_event(text, message_id),
+            generation=snapshot.generation,
+            is_superuser=False,
+        ):
+            catalog_context = snapshot.capture_brief_catalog_context(
+                is_superuser=False,
+                provider_cutover=False,
+            )
+            catalog_record = await resolve_tool_catalog(
+                catalog_cache,
+                catalog_context.cache_key,
+                lambda: snapshot.build_brief_catalog_record(catalog_context),
+            )
+            schema_context = snapshot.capture_llm_payload_schema_context(
+                {"qq__like_me"},
+                tools_enabled=True,
+                search_enabled=False,
+                is_superuser=False,
+                provider_cutover=False,
+            )
+            schema_record = await resolve_tool_schema(
+                schema_cache,
+                schema_context.cache_key,
+                lambda: snapshot.build_llm_payload_schema_record(schema_context),
+            )
+        return catalog_context, catalog_record, schema_context, schema_record
+
+    first = await resolve_for("普通消息一", 1001)
+    second = await resolve_for("普通消息二", 1002)
+
+    assert first[0].cache_key == second[0].cache_key
+    assert first[2].cache_key == second[2].cache_key
+    assert snapshot.catalog_builds == 1
+    assert snapshot.schema_builds == 1
+    assert "- qq__like_me |" in second[1].catalog
+    assert second[3].tool_names == ("qq__like_me",)
+
+    conflicted = await resolve_for("请给我点赞", 1003)
+
+    assert conflicted[0].cache_key != first[0].cache_key
+    assert conflicted[2].cache_key != first[2].cache_key
+    assert snapshot.catalog_builds == 2
+    assert snapshot.schema_builds == 2
+    assert "- qq__like_me |" not in conflicted[1].catalog
+    assert conflicted[3].tool_names == ()
+
+    state["protocol_tools_business_first"] = False
+    business_first_disabled = await resolve_for("请给我点赞", 1004)
+
+    assert business_first_disabled[0].cache_key == first[0].cache_key
+    assert business_first_disabled[2].cache_key == first[2].cache_key
+    assert snapshot.catalog_builds == 2
+    assert snapshot.schema_builds == 2
+    assert "- qq__like_me |" in business_first_disabled[1].catalog
+    assert business_first_disabled[3].tool_names == ("qq__like_me",)
+    assert bot.calls == ["get_version_info"]
+    protocol_context_module._protocol_probe_cache.clear()
 
 
 @pytest.mark.asyncio

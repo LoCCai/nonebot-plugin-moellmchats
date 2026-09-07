@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import FrozenInstanceError, replace
 import hashlib
+import importlib
 import os
 import re
 from typing import Any
@@ -44,6 +45,8 @@ from nonebot_plugin_moellmchats.tool_providers import (
     registered_tool_provider,
 )
 
+tool_manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
+
 
 async def _handler(value: str = "ok") -> str:
     return value
@@ -57,6 +60,7 @@ def _context(
     tools_enabled: bool = True,
     web_search_enabled: bool = False,
     blacklist_patterns: tuple[str, ...] = (),
+    suppressed_protocol_tools: set[str] | None = None,
 ) -> ToolCatalogRenderContext:
     return ToolCatalogRenderContext.capture(
         generation=generation,
@@ -65,6 +69,7 @@ def _context(
         tools_enabled=tools_enabled,
         web_search_enabled=web_search_enabled,
         blacklist_patterns=blacklist_patterns,
+        suppressed_protocol_tools=(set() if suppressed_protocol_tools is None else suppressed_protocol_tools),
     )
 
 
@@ -176,9 +181,28 @@ def test_context_canonicalizes_blacklist_and_keeps_raw_patterns_out_of_keys() ->
 
     assert context.blacklist_patterns == ("mcp__private__*", "user_tool")
     assert re.fullmatch(r"[0-9a-f]{64}", context.blacklist_digest)
+    assert context.business_conflict_digest == hashlib.sha256(b"[]").hexdigest()
     assert secret_pattern not in repr(context)
     assert "private" not in context.cache_key.safe_cache_key
     assert context.cache_key.safe_cache_key.startswith("catalog:user:42:")
+
+
+def test_context_canonicalizes_business_conflicts_without_key_disclosure() -> None:
+    context = _context(
+        suppressed_protocol_tools={
+            "onebot_v11__send_like",
+            "qq__like_me",
+            "qq__like_me",
+        }
+    )
+
+    assert context.suppressed_protocol_tools == (
+        "onebot_v11__send_like",
+        "qq__like_me",
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", context.business_conflict_digest)
+    assert "send_like" not in repr(context)
+    assert "send_like" not in context.cache_key.safe_cache_key
 
 
 def test_cache_key_separates_every_dynamic_render_input() -> None:
@@ -190,9 +214,10 @@ def test_cache_key_separates_every_dynamic_render_input() -> None:
         replace(base, tools_enabled=False),
         replace(base, web_search_enabled=True),
         replace(base, blacklist_patterns=("user_tool",)),
+        replace(base, suppressed_protocol_tools=("qq__like_me",)),
     )
 
-    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 7
+    assert len({base.cache_key, *(item.cache_key for item in variants)}) == 8
 
 
 def test_blacklist_semantics_match_exact_wildcard_and_service_filters() -> None:
@@ -225,6 +250,8 @@ def test_blacklist_semantics_match_exact_wildcard_and_service_filters() -> None:
         ({"blacklist_patterns": (object(),)}, TypeError, "字符串"),
         ({"blacklist_patterns": ("bad\x00name",)}, ValueError, "非法"),
         ({"blacklist_patterns": ("x" * 513,)}, ValueError, "过长"),
+        ({"suppressed_protocol_tools": ["qq__like_me"]}, TypeError, "元组"),
+        ({"suppressed_protocol_tools": ("bad\x00name",)}, ValueError, "工具名"),
     ],
 )
 def test_context_rejects_incomplete_or_unsafe_identity(
@@ -239,6 +266,7 @@ def test_context_rejects_incomplete_or_unsafe_identity(
         "tools_enabled": True,
         "web_search_enabled": False,
         "blacklist_patterns": (),
+        "suppressed_protocol_tools": (),
     }
     values.update(changes)
     with pytest.raises(error, match=match):
@@ -259,6 +287,7 @@ def test_context_rejects_excessive_blacklist_count() -> None:
         ({"tools_enabled": 1}, TypeError, "tools_enabled"),
         ({"web_search_enabled": 0}, TypeError, "web_search_enabled"),
         ({"blacklist_digest": "not-a-digest"}, ValueError, "SHA-256"),
+        ({"business_conflict_digest": "not-a-digest"}, ValueError, "SHA-256"),
     ],
 )
 def test_cache_key_rejects_invalid_fields(
@@ -273,6 +302,7 @@ def test_cache_key_rejects_invalid_fields(
         "tools_enabled": True,
         "web_search_enabled": False,
         "blacklist_digest": "a" * 64,
+        "business_conflict_digest": "b" * 64,
     }
     values.update(changes)
     with pytest.raises(error, match=match):
@@ -614,6 +644,30 @@ def test_explicit_context_renders_without_reading_mutable_global_policy(
     assert record.catalog == "当前工具调用与联网功能均已关闭，无需返回任何插件。"
     assert "user_tool" not in record.catalog
     assert "admin_tool" not in record.catalog
+
+
+def test_explicit_context_freezes_business_conflicts_for_both_renderers(
+    monkeypatch,
+) -> None:
+    snapshot = _tool_snapshot()
+    context = _context(
+        provider_cutover=True,
+        suppressed_protocol_tools={"qq__like_me"},
+    )
+    monkeypatch.setattr(
+        tool_manager_module,
+        "available_protocol_tool_names",
+        lambda **_kwargs: frozenset({"qq__like_me"}),
+    )
+    monkeypatch.setattr(
+        tool_manager_module,
+        "business_conflicting_protocol_tools",
+        lambda *_args, **_kwargs: pytest.fail("显式 context 不应重新读取正文或业务优先配置"),
+    )
+
+    record = snapshot.build_brief_catalog_record(context)
+
+    assert "qq__like_me" not in record.catalog
 
 
 def test_explicit_context_filters_permission_and_feature_flags() -> None:

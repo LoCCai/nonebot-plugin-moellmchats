@@ -153,7 +153,7 @@ NoneBot 兼容插件的发现来源优先级为：显式 `custom_plugin_info.jso
 
 协议工具在请求进入 Agent generation 后另外建立一次不可变能力快照。v11 会话缓存未命中时调用 `get_version_info`，只有 `app_name=NapCat.Onebot` 才增加 NapCat 扩展；v12 未命中时调用 `get_supported_actions`，只取 Bot 声明支持与包内标准清单的交集。成功探测按 Bot 会话保存 300 秒并对并发 miss 做 single-flight，失败不缓存；缓存只复用实现/版本/支持动作，每个请求的用户、场景、消息和 generation 仍单独冻结。探测失败只让当前请求看不到协议工具，不会中止普通聊天。二阶段确认会绕过普通缓存强制刷新，保持副作用执行前复核。
 
-协议短目录还会按普通用户/`SUPERUSER`、群聊/私聊、当前用户、当前群、当前消息和回复消息过滤。若用户原话命中已加载业务插件的规范化菜单触发词，默认先保留业务插件并抑制同意图协议动作。选中协议动作后才展开严格 Schema；handler 已在构造时固定 API 名，模型不能传入另一个 action。缓存身份还包含协议、实现/版本、支持动作摘要、Adapter、Bot、用户、消息和 runtime generation，禁止跨 Bot 或跨协议复用。完整规则见 [OneBot / NapCat 协议工具](./protocol-tools.md)。
+协议短目录还会按普通用户/`SUPERUSER`、群聊/私聊、当前用户、当前群、当前消息和回复消息过滤。若用户原话命中已加载业务插件的规范化菜单触发词，默认先保留业务插件并抑制同意图协议动作。选中协议动作后才展开严格 Schema；handler 已在构造时固定 API 名，模型不能传入另一个 action。缓存身份包含协议、实现/版本、支持动作摘要、Adapter、Bot、用户、场景、消息/回复可用性、runtime generation 和业务冲突集合摘要；具体消息 ID 不参与缓存身份，因而同作用域连续消息可以命中缓存，但不会跨 Bot、协议、权限或冲突策略复用。完整规则见 [OneBot / NapCat 协议工具](./protocol-tools.md)。
 
 ### 6. 工具执行、确认和闭环
 

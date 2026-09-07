@@ -10,9 +10,9 @@ lastmod: 2026-09-07T00:00:00+00:00
 
 ## 机制链路速览（实施前必读）
 
-外部插件功能的一生：加载期（reload generation）经 PicMenu 投影 → 菜单规范化（每插件 128 功能/48,000 字符）→ `ToolSpec` 注册（兼容描述截 28,000 字符）→ `ToolSnapshot` 冻结（intent 索引 + `directory_digest` + 6 provider parity）；每请求经业务意图 O(1) 直达（命中则免目录免分类模型）→ 目录缓存解析（键含 `protocol_scope_digest`）→ 分类（缓存 TTL 60s，single-flight）→ Schema 组装（同键结构）→ 合成事件投递（targeted/full-bus）→ API 证据状态机回传。协议动作表（244 项）为模块级单次构建；成员名/协议探测分别使用 600 秒与 300 秒单飞缓存。
+外部插件功能的一生：加载期（reload generation）经 PicMenu 投影 → 菜单规范化（每插件 128 功能/48,000 字符）→ `ToolSpec` 注册（兼容描述截 28,000 字符）→ `ToolSnapshot` 冻结（intent 索引 + `directory_digest` + 6 provider parity）；每请求经业务意图 O(1) 直达（命中则免目录免分类模型）→ 捕获协议作用域与业务冲突摘要 → 目录缓存解析 → 分类（缓存 TTL 60s，single-flight）→ Schema 组装（同一冲突身份）→ 合成事件投递（targeted/full-bus）→ API 证据状态机回传。协议动作表（244 项）为模块级单次构建；成员名/协议探测分别使用 600 秒与 300 秒单飞缓存。
 
-## P1（最高价值）：协议缓存键与目录内容因子同步重构
+## P1（已完成）：协议缓存键与目录内容因子同步重构
 
 ### 现状与问题
 
@@ -22,22 +22,22 @@ lastmod: 2026-09-07T00:00:00+00:00
 
 目录内容**确实依赖消息文本**：`business_conflicting_protocol_tools`（`protocol_context.py:458-500`）按消息命中的业务触发词摘除协议工具，而 `plain_text` 目前**不在** digest 里。当前不发生正确性事故仅仅因为「永不命中、每次重算」。**只剔除 message_id 会引入「应摘除的协议工具未摘除」漏洞**。
 
-### 实施方案（两步必须同一提交）
+### 已实施方案（两步同批落地）
 
-1. digest 入参剔除 `message_id`/`reply_message_id`。
-2. 键加入内容因子：`business_conflict_digest = sha256(sorted(suppressed_tools))`。计算入口在目录/Schema 渲染前（`plain_text` 为空或 `protocol_tools_business_first` 关闭时恒为空集，可快路径短路）；空集与空集共享键（绝大多数消息）。
-   - 备选（更简单但命中率低）：以 `plain_text.casefold()` 的 digest 作键因子——不同文本即使冲突集相同也各自成键，仅推荐作过渡。
-3. `probe_protocol_capabilities` 的快照字段保留 message_id（运行时寻址仍需要），仅摘要不再继承。
+1. `ProtocolCapabilitySnapshot` 继续保留具体 `message_id` / `reply_message_id` 供参数注入和执行寻址，但 `cache_digest` 只记录两者是否存在，不再记录具体值。存在性仍会改变协议工具可见范围，因此不能一并删除。
+2. `ToolCatalogCacheKey`、`ToolSchemaCacheKey` 及两类 render context 同步加入 `business_conflict_digest`。摘要输入是排序去重后的 `suppressed_protocol_tools`；空集合使用 canonical `[]` 的稳定 SHA-256。
+3. `ToolSnapshot` 在查缓存前从同一个不可变协议快照计算一次冲突集合，并把集合与摘要冻结进 render context。legacy/provider 的短目录及完整 Schema 四条渲染路径只消费冻结集合，不再读取实时正文或 `protocol_tools_business_first`。
+4. `safe_cache_key` 只包含摘要，不包含用户原文、具体消息 ID 或工具名；不同 Bot、协议、支持动作、调用者、权限、场景、会话、消息/回复可用性与 generation 的原隔离均保留。
 
 ### 验收
 
-- 新增判例：同会话两条不同 message_id、文本均无业务冲突 → 第二次目录缓存命中（`lookup_calls` 不增）；一条命中业务触发词 → 键变化且目录中对应协议工具被摘除；`protocol_tools_business_first=false` → 全部共享键。
-- 回归：现有 `test_tool_catalog_cache.py`、`test_cache_runtime_wiring.py`、`test_runtime_reload.py` 全绿。
-- 效果度量：`observe_cache`/目录缓存命中指标在群聊常驻流量下从 0% 升至 >90%。
+- 判例已覆盖：同一 Bot/用户/群内两条不同消息且均无冲突时，目录与 Schema 各只构建一次；命中“给我点赞”后键变化且 `qq__like_me` 被摘除；关闭 `protocol_tools_business_first` 后同一正文重新复用空冲突键。
+- 缓存键的每个新增动态字段均有隔离测试；冻结 context 后四条 renderer 不再读取实时业务冲突状态；具体正文、工具名和消息 ID 不进入安全缓存键。
+- `test_protocol_context.py`、目录/Schema cache、runtime wiring、runtime reload 及协议 Broker/Registry 联合回归已通过。生产命中率仍应通过 `observe_cache` 观察，本批遵守“不操作生产”边界，不以合成测试冒充线上 >90% 指标。
 
 ### 风险
 
-中。改动横跨 protocol_context/tool_catalog_cache/tool_manager 三文件键语义；需证明目录渲染对 message_id 无隐式依赖（已核对渲染输入清单，无）。
+中。改动横跨 protocol_context、tool_catalog_cache、tool_schema_cache 与 tool_manager 四层键语义；需证明目录渲染对具体 message_id 无隐式依赖（已核对渲染输入清单，无）。
 
 ## P2：缓存 miss 构建的 legacy+provider 双算改为代级抽验
 
@@ -81,8 +81,8 @@ lastmod: 2026-09-07T00:00:00+00:00
 | --- | --- | --- | --- |
 | P0（已完成） | 分类 prompt 延迟构建；目录缓存单条上限 256KB→1MiB；file:// 图片读盘移入 `to_thread` | 低 | 无 |
 | 批次一（已完成） | P4 协议探测会话级缓存 | 低 | 无 |
-| 批次二（下一批） | P1 缓存键重构（陷阱警示见上） | 中 | P4 已完成 |
-| 批次三 | P3 描述注册期缓存 → P2 双算抽验 | 低→中 | P1 落地后收益叠加 |
+| 批次二（已完成） | P1 缓存键重构（陷阱已同步收口） | 中 | P4 已完成 |
+| 批次三（下一批） | P3 描述注册期缓存 → P2 双算抽验 | 低→中 | P1 已完成 |
 | 观察项 | P5 | 中 | 仅在指标证明瓶颈后 |
 
 每批次沿用既定流程：判例复现/验证 → 独立提交 → 判例回归测试 → 简单 py 测试（py_compile + AST 结构断言）→ 有依赖环境跑定向 pytest 后合并。

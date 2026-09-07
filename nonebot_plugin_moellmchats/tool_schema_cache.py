@@ -12,7 +12,11 @@ import os
 import re
 from typing import Any, Protocol, runtime_checkable
 
-from .tool_catalog_cache import ToolCatalogPermission, ToolCatalogRenderContext
+from .tool_catalog_cache import (
+    _EMPTY_BUSINESS_CONFLICT_DIGEST,
+    ToolCatalogPermission,
+    ToolCatalogRenderContext,
+)
 
 _POSTGRES_BIGINT_MAX = (1 << 63) - 1
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -219,6 +223,7 @@ class ToolSchemaCacheKey:
     blacklist_digest: str
     selected_plugins_digest: str
     protocol_scope_digest: str = "0" * 64
+    business_conflict_digest: str = _EMPTY_BUSINESS_CONFLICT_DIGEST
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -235,6 +240,7 @@ class ToolSchemaCacheKey:
             "blacklist_digest",
             "selected_plugins_digest",
             "protocol_scope_digest",
+            "business_conflict_digest",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
@@ -244,6 +250,7 @@ class ToolSchemaCacheKey:
     def toolset_hash(self) -> str:
         payload = {
             "blacklist_digest": self.blacklist_digest,
+            "business_conflict_digest": self.business_conflict_digest,
             "permission": self.permission.value,
             "provider_cutover": self.provider_cutover,
             "protocol_scope_digest": self.protocol_scope_digest,
@@ -276,8 +283,13 @@ class ToolSchemaRenderContext:
     selected_plugins: tuple[str, ...] = field(repr=False)
     blacklist_patterns: tuple[str, ...] = field(repr=False)
     protocol_scope_digest: str = "0" * 64
+    suppressed_protocol_tools: tuple[str, ...] = field(
+        default=(),
+        repr=False,
+    )
     selected_plugins_digest: str = field(init=False)
     blacklist_digest: str = field(init=False)
+    business_conflict_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -303,11 +315,22 @@ class ToolSchemaRenderContext:
             web_search_enabled=self.search_enabled,
             blacklist_patterns=self.blacklist_patterns,
             protocol_scope_digest=self.protocol_scope_digest,
+            suppressed_protocol_tools=self.suppressed_protocol_tools,
         )
         object.__setattr__(self, "selected_plugins", selected)
         object.__setattr__(self, "selected_plugins_digest", selected_digest)
         object.__setattr__(self, "blacklist_patterns", policy.blacklist_patterns)
         object.__setattr__(self, "blacklist_digest", policy.blacklist_digest)
+        object.__setattr__(
+            self,
+            "suppressed_protocol_tools",
+            policy.suppressed_protocol_tools,
+        )
+        object.__setattr__(
+            self,
+            "business_conflict_digest",
+            policy.business_conflict_digest,
+        )
 
     @classmethod
     def capture(
@@ -321,9 +344,14 @@ class ToolSchemaRenderContext:
         search_enabled: bool,
         blacklist_patterns: tuple[str, ...],
         protocol_scope_digest: str = "0" * 64,
+        suppressed_protocol_tools: AbstractSet[str] = frozenset(),
     ) -> ToolSchemaRenderContext:
         if not isinstance(selected_plugins, AbstractSet) or not all(isinstance(name, str) for name in selected_plugins):
             raise TypeError("tool schema selected_plugins 必须是字符串集合")
+        if not isinstance(suppressed_protocol_tools, AbstractSet) or not all(
+            isinstance(name, str) for name in suppressed_protocol_tools
+        ):
+            raise TypeError("suppressed_protocol_tools 必须是字符串集合")
         return cls(
             generation=generation,
             permission=ToolCatalogPermission.from_superuser(is_superuser),
@@ -333,6 +361,7 @@ class ToolSchemaRenderContext:
             selected_plugins=tuple(selected_plugins),
             blacklist_patterns=blacklist_patterns,
             protocol_scope_digest=protocol_scope_digest,
+            suppressed_protocol_tools=tuple(suppressed_protocol_tools),
         )
 
     @property
@@ -350,6 +379,7 @@ class ToolSchemaRenderContext:
             blacklist_digest=self.blacklist_digest,
             selected_plugins_digest=self.selected_plugins_digest,
             protocol_scope_digest=self.protocol_scope_digest,
+            business_conflict_digest=self.business_conflict_digest,
         )
 
     def is_blacklisted(self, tool_name: str) -> bool:

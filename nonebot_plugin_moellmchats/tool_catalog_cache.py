@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
@@ -16,6 +17,9 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_BLACKLIST_PATTERNS = 4_096
 _MAX_BLACKLIST_PATTERN_CHARS = 512
 _MAX_BLACKLIST_PAYLOAD_BYTES = 1_048_576
+_MAX_SUPPRESSED_PROTOCOL_TOOLS = 4_096
+_MAX_PROTOCOL_TOOL_NAME_CHARS = 512
+_MAX_SUPPRESSED_PROTOCOL_PAYLOAD_BYTES = 1_048_576
 _MAX_CATALOG_BYTES = 16_777_216
 
 CatalogBuilder = Callable[[], "ToolCatalogRecord"]
@@ -97,6 +101,40 @@ def _canonical_blacklist(
     return ordered, hashlib.sha256(encoded).hexdigest()
 
 
+def _canonical_suppressed_protocol_tools(
+    names: tuple[str, ...],
+) -> tuple[tuple[str, ...], str]:
+    if not isinstance(names, tuple):
+        raise TypeError("suppressed_protocol_tools 必须是元组")
+    if len(names) > _MAX_SUPPRESSED_PROTOCOL_TOOLS:
+        raise ValueError("suppressed_protocol_tools 数量超过安全上限")
+
+    normalized: set[str] = set()
+    for name in names:
+        if (
+            not isinstance(name, str)
+            or not name
+            or name != name.strip()
+            or "\x00" in name
+            or len(name) > _MAX_PROTOCOL_TOOL_NAME_CHARS
+        ):
+            raise ValueError("suppressed_protocol_tools 必须包含非空安全工具名")
+        normalized.add(name)
+
+    ordered = tuple(sorted(normalized))
+    encoded = json.dumps(
+        ordered,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    if len(encoded) > _MAX_SUPPRESSED_PROTOCOL_PAYLOAD_BYTES:
+        raise ValueError("suppressed_protocol_tools payload 超过安全上限")
+    return ordered, hashlib.sha256(encoded).hexdigest()
+
+
+_EMPTY_BUSINESS_CONFLICT_DIGEST = _canonical_suppressed_protocol_tools(())[1]
+
+
 @dataclass(frozen=True)
 class ToolCatalogCacheKey:
     """The complete identity of one permission-filtered catalog rendering."""
@@ -109,6 +147,7 @@ class ToolCatalogCacheKey:
     blacklist_digest: str
     protocol_scope_digest: str = "0" * 64
     directory_digest: str = "0" * 64
+    business_conflict_digest: str = _EMPTY_BUSINESS_CONFLICT_DIGEST
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -127,11 +166,14 @@ class ToolCatalogCacheKey:
             raise ValueError("tool catalog protocol_scope_digest 必须是 SHA-256")
         if not isinstance(self.directory_digest, str) or not _SHA256_RE.fullmatch(self.directory_digest):
             raise ValueError("tool catalog directory_digest 必须是 SHA-256")
+        if not isinstance(self.business_conflict_digest, str) or not _SHA256_RE.fullmatch(self.business_conflict_digest):
+            raise ValueError("tool catalog business_conflict_digest 必须是 SHA-256")
 
     @property
     def policy_digest(self) -> str:
         payload = {
             "blacklist_digest": self.blacklist_digest,
+            "business_conflict_digest": self.business_conflict_digest,
             "directory_digest": self.directory_digest,
             "provider_cutover": self.provider_cutover,
             "protocol_scope_digest": self.protocol_scope_digest,
@@ -163,7 +205,12 @@ class ToolCatalogRenderContext:
     blacklist_patterns: tuple[str, ...] = field(repr=False)
     protocol_scope_digest: str = "0" * 64
     directory_digest: str = "0" * 64
+    suppressed_protocol_tools: tuple[str, ...] = field(
+        default=(),
+        repr=False,
+    )
     blacklist_digest: str = field(init=False)
+    business_conflict_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
         _validate_generation(self.generation)
@@ -181,8 +228,15 @@ class ToolCatalogRenderContext:
             raise ValueError("tool catalog protocol_scope_digest 必须是 SHA-256")
         if not isinstance(self.directory_digest, str) or not _SHA256_RE.fullmatch(self.directory_digest):
             raise ValueError("tool catalog directory_digest 必须是 SHA-256")
+        suppressed, conflict_digest = _canonical_suppressed_protocol_tools(self.suppressed_protocol_tools)
         object.__setattr__(self, "blacklist_patterns", patterns)
         object.__setattr__(self, "blacklist_digest", digest)
+        object.__setattr__(self, "suppressed_protocol_tools", suppressed)
+        object.__setattr__(
+            self,
+            "business_conflict_digest",
+            conflict_digest,
+        )
 
     @classmethod
     def capture(
@@ -196,7 +250,12 @@ class ToolCatalogRenderContext:
         blacklist_patterns: tuple[str, ...],
         protocol_scope_digest: str = "0" * 64,
         directory_digest: str = "0" * 64,
+        suppressed_protocol_tools: AbstractSet[str] = frozenset(),
     ) -> ToolCatalogRenderContext:
+        if not isinstance(suppressed_protocol_tools, AbstractSet) or not all(
+            isinstance(name, str) for name in suppressed_protocol_tools
+        ):
+            raise TypeError("suppressed_protocol_tools 必须是字符串集合")
         return cls(
             generation=generation,
             permission=ToolCatalogPermission.from_superuser(is_superuser),
@@ -206,6 +265,7 @@ class ToolCatalogRenderContext:
             blacklist_patterns=blacklist_patterns,
             protocol_scope_digest=protocol_scope_digest,
             directory_digest=directory_digest,
+            suppressed_protocol_tools=tuple(suppressed_protocol_tools),
         )
 
     @property
@@ -223,6 +283,7 @@ class ToolCatalogRenderContext:
             blacklist_digest=self.blacklist_digest,
             protocol_scope_digest=self.protocol_scope_digest,
             directory_digest=self.directory_digest,
+            business_conflict_digest=self.business_conflict_digest,
         )
 
     def is_blacklisted(self, tool_name: str) -> bool:

@@ -45,7 +45,7 @@
 | 页面 | 内容 |
 |------|------|
 | [K-09 后续待修复与设计清单](./规划/15-pending-issues-backlog.md) | spool 诊断、usage 幂等键、热缓存、排空上限、Redis admission、MCP 依赖契约与结构问题 |
-| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | P0/P4 已收口；下一批为目录/Schema 缓存键与业务冲突摘要同步重构（P1） |
+| [平台 API 与插件接入优化计划书](./规划/16-platform-api-and-catalog-optimization-plan.md) | P0/P4/P1 已收口；下一批按 P3 描述缓存 → P2 代级 parity 抽验推进 |
 
 ---
 
