@@ -110,3 +110,21 @@ lastmod: 2026-09-07T00:00:00+00:00
 fresh wheel/sdist 的 SHA-256 分别为 `75fb0887eaa263fcea7d4e70d462c39a8215e083c3eb3fe55840a841bb49239b` / `03ad263f47f4698a45882443ceb87cbc436ca978f8ef75d110ea8972ae85410c`，Twine 与制品内容检查通过；Python 3.10/3.12 × wheel/sdist 四组均在仓库外从 site-packages 加载 0.26.6，并验证 v11/v12、38/31/175 动作清单和 runtime generation 1。未安装或重启七七、未连接真实 Bot/模型/数据库/Redis、未发送 QQ 动作、未发布 PyPI。
 
 远端实现门禁已关闭：实现提交 `ecfb32cac1da0fb616a344744949a86bb3ce5de7` 的 push run [`34079965087`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/34079965087) 精确命中该 SHA，12 个 job 全部 `completed/success`，且恰好一个 `release-gate`（job `101613393303`）成功；本地 HEAD、tracking 与 `ls-remote` 当时三方一致。此前分支整合已按用户要求把 `feat/generated-tool-bundles` 设为唯一远端及默认分支，历史 PR #2～#5 均已合并且其 base 分支已删除，因此本批不存在可触发的活动 pull_request run；这不是用旧 PR 结果替代当前门禁。本文所在证据提交以其自身 push run 的唯一成功 `release-gate` 作为最终闭环判据，不再为记录该自指 run 追加第三个提交。
+
+## P1 已收口记录（2026-09-07）
+
+| 边界 | 结果 |
+| --- | --- |
+| 缓存复用 | 同一 Bot/用户/群、权限、generation 和消息/回复可用性下，具体消息 ID 与无冲突正文变化不再改变目录或 Schema 键 |
+| 正确性 | canonical 业务冲突集合摘要同步进入两层键；命中业务菜单时对应协议工具被摘除，关闭业务优先时复用空集合键 |
+| 冻结输入 | legacy/provider 的短目录与完整 Schema 四条路径只读取 context 内冻结的抑制集合，不回读实时正文或开关 |
+| 安全键 | `safe_cache_key` 不包含用户原文、具体消息 ID 或工具名；Bot、协议、权限、场景、消息/回复存在性及 generation 隔离保留 |
+| 兼容性 | 不增加配置、运行依赖、数据库 migration、Redis key 或后台任务；P4 的确认强制能力重探测语义不变 |
+
+实现提交为 `8521ad1b0de635ae47e70cc174fc3d4b5409927f`。协议/目录/Schema/runtime 定向联合回归为 `507 passed`；Python 3.10/3.11/3.12/3.13 最终源码树普通全量各 `3184 passed, 1 skipped`，mandatory root sandbox 为 `41 passed` 且 JUnit `failures=0 / errors=0 / skipped=0`。Ruff、CI 指定格式、Pyright、文档 11 JSON/8 TOML/10 Python 片段、162 个本地 Markdown 链接、13 项运行依赖/10 项开发依赖、244 动作/244 策略/3 wrapper、环境依赖及 diff 检查均通过。
+
+fresh wheel/sdist 的 SHA-256 分别为 `93756ca6364ed8ae3ccaf86e330c8966c367fc7635dc217d5a6495d3b64e031d` / `341f296dd58d2d3da1a91fb6939143a36ff31e628eaab2f1c452508516852c86`；本地与 GitHub artifact 的 `SHA256SUMS` 完全一致，Twine 与制品内容检查通过。Python 3.10/3.12 × wheel/sdist 四组均从 checkout 外加载 0.26.6，并验证 v11/v12、38/31/175 动作清单和 runtime generation 1。
+
+实现提交的 push run [`34082463497`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/34082463497) 精确命中该 SHA，12 个 job 全部 `completed/success`，且恰好一个 `release-gate`（job `101620379977`）成功；当时本地 HEAD、remote-tracking 与 `ls-remote` 三方一致。远端唯一/default 分支均为 `feat/generated-tool-bundles`，当前无活动 PR，因此没有可触发的 `pull_request` run；未借用历史 PR 结果。本文所在证据提交继续以自身 push run 的唯一成功 `release-gate` 作为最终闭环，不为记录自指 run 再追加提交。
+
+本批未安装或重启七七，未修改 `/app/qi-dev`，未连接真实 Bot、模型、PostgreSQL 或 Redis，未发送 QQ 动作，未发布 PyPI。生产目录缓存命中率仍留待后续获准观测，未以合成判例冒充线上指标。
