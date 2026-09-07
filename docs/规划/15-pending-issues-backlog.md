@@ -57,11 +57,12 @@ runtime resource、trusted runner pool 或 lifecycle port 的 close 卡死时，
 ## P3：性能和可维护性
 
 - ~~`UsageBatchQueue` / `AuditBatchQueue` 与旧 `is_repeat_ask_dict`~~ 2026-09-06 已核实 `is_repeat_ask_dict`（chat_runtime.py）全部 5 处引用均为写入、无任何读取方与测试引用，属只写死状态，已删除；`UsageBatchQueue`/`AuditBatchQueue` 仍待确认生产入口。
-- `tool_manager.py` 同时承担模板、目录、Provider、快照和重载职责，应在独立分支分解；双视图 parity 应尽量在 reload 时证明，不要在聊天请求中反复计算。
+- `tool_manager.py` 同时承担模板、目录、Provider、快照和重载职责，应在独立分支分解；~~双视图 parity 应尽量在 reload 时证明，不要在聊天请求中反复计算~~ 2026-09-07 已由 P2 按快照/UTC 天抽样收口（见 16 号），文件拆分仍待独立分支。
 - 同步可信 `ToolSpec` 与 runner workspace 扫描共用默认线程池，应评估独立有界 executor 或事件式监测。
 - ~~`get_emotion` 的同步 glob/读图可在分段发送路径阻塞 event loop~~ 2026-09-06 已在 `send_emotion_message` 中移入 `asyncio.to_thread`。
 - 非 root/Linux 的 Generated/Custom runner 仍 fail closed；如要支持无 root 或其他平台，必须重新证明 user namespace、UID 映射和 syscall 边界，不能降级为主进程执行。
 - `license = "GPL"` 本轮保持不变。发布前需由维护者明确选择 `GPL-3.0-only` 或 `GPL-3.0-or-later`，再修改 SPDX 表达式与发布元数据。
+- （2026-09-07 独立审计新增，R-1）P1 落地后四处 record 构建器（`build_brief_catalog`/`build_provider_brief_catalog`/`build_provider_llm_payload_schema`/`build_tool_schema`）仍重读全局 `business_conflicting_protocol_tools(plugin_info)` 而非复用 `render_context.suppressed_protocol_tools`。当前同步构建下正确；若未来构建被延迟（single-flight 合并、后台构建）到下一条消息，键 digest 与产物可能错位，且每次 miss 重复计算一次冲突匹配。修法：构建器从 context 取集合、删除全局重读。低优先，随下次触碰这些函数时顺手收口。详见 16 号「独立审计复核」。
 
 ## 建议顺序
 

@@ -93,6 +93,32 @@ lastmod: 2026-09-07T00:00:00+00:00
 
 每批次沿用既定流程：判例复现/验证 → 独立提交 → 判例回归测试 → 简单 py 测试（py_compile + AST 结构断言）→ 有依赖环境跑定向 pytest 后合并。
 
+## 独立审计复核（2026-09-07，实施者之外的第二方复核）
+
+> 范围：`ecfb32c`（P4）、`8521ad1`（P1）、`915fc34`（P3）、`d508101`（P2）、`1d18b0e`（P5 观测）五个实现提交，逐 diff 审阅 + 当前工作区符号级核对。总体结论：**五个批次全部按本计划书设计落地，P1 的正确性陷阱已正确闭环，未发现高危问题**。
+
+**P1 缓存键重构（重点复核项）**
+
+- digest 正确剔除 `message_id`/`reply_message_id`，替换为 `has_message_id`/`has_reply_message_id` 布尔值（保留"有/无消息 ID"的粗粒度信号，v11 下恒定不破坏命中率）。`protocol_context.py` 的 disabled/enabled 两处 snapshot 构造与 `_snapshot_cache_digest` 同步修改，无遗漏路径。
+- `business_conflict_digest` 按计划方案作为显式键因子加入 `ToolCatalogCacheKey` 与 `policy_digest`：`_canonical_suppressed_protocol_tools` 排序去重、有界校验（4,096 名/512 字符/1MiB payload）、空集固定 digest（绝大多数消息共享键）。
+- **正确性陷阱闭环验证**：`ToolSnapshot` 两个 capture（schema `:955`、catalog `:1767`）把 `business_conflicting_protocol_tools` 的结果放入 context；渲染路径（`build_brief_catalog` 的 `protocol_names -= suppressed_protocol_tools` 等）改为消费 `render_context.suppressed_protocol_tools`，不再直接读全局快照的 `plain_text`。键因子与渲染消费是同一份数据——"键相同 ⇒ 摘除集合相同 ⇒ 产物一致"成立。
+- schema 缓存同步处理（`ToolSchemaRenderContext` 同样携带摘除集合），catalog 与 schema 键共享同一冲突身份。
+- 测试直接覆盖陷阱场景：`test_protocol_catalog_and_schema_cache_share_messages_but_isolate_business_conflicts`（同消息共享键 + 业务冲突隔离）。
+
+**P4**：weakref 绑定 bot 实例生命周期（bot 销毁即失效）、TTL 300s、有界 256、取消安全单飞；键含 `(session_identity, protocol, adapter_id, bot_id, implementation/version_hint)`。符合设计。
+
+**P3**：`build_compatibility_description_views` 按 user/superuser 二态生成视图，注册期一次构建存入 `info[COMPAT_DESCRIPTION_VIEWS_KEY]`，请求期直接复用。符合设计。
+
+**P2**：snapshot 私有 `_ProviderConsumerParityState`，catalog/schema 各自按 UTC 天首次使用完整抽验，RLock 保护（verifier 纯同步、无 await 持锁），失败不记日期、新 snapshot 隔离重验。符合"抽验替代逐请求双算"设计且防回退闸门保留。
+
+**P5**：仅按计划做观测准备（`protocol`/`mode`/`event_build_us` 日志字段 + 脱敏判例），白名单未实施——与"观察项"定位一致。
+
+**新发现的残余隐患（本轮审计新增，实施者记录未含）**
+
+| 编号 | 问题 | 位置 | 研判 |
+| --- | --- | --- | --- |
+| R-1 | 四处 record 构建器重读全局业务冲突状态而非复用 context 已捕获的摘除集合 | `build_brief_catalog`（`tool_manager.py:2522`）、`build_provider_brief_catalog`（`:2600`）、`build_provider_llm_payload_schema`（`:2959`）、`build_tool_schema`（`:3074`） | 当前正确：构建在 capture 后同步发生，同请求内 `plain_text` 不变，键与产物一致。但存在两个问题：(1) 每次缓存 miss 重复计算一次 O(功能数×触发数) 的冲突匹配，浪费 capture 已算好的结果；(2) 若未来构建被延迟（single-flight 合并、后台构建）到下一条消息，全局 `plain_text` 变化会导致**键 digest 与构建产物错位**——键声明摘除集合 X、产物实际按 Y 构建。修法：四个构建器从 `render_context.suppressed_protocol_tools` 取集合，删除全局重读。低优先，建议随下次触碰这些函数时顺手收口（记入 15 号清单）。 |
+
 ## P0 已收口记录（本轮）
 
 | 项 | 修复 | 文件 |
