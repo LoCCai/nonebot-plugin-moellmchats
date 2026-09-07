@@ -333,6 +333,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
             "picmenu_plugin_count",
             "picmenu_feature_count",
             "picmenu_digest",
+            "_provider_consumer_parity",
         }
     provider_catalog = snapshot.provider_catalog
     assert provider_catalog is not None

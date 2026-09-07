@@ -1,11 +1,13 @@
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
 import re
 import sys
+from threading import RLock
 from typing import Any
 
 import nonebot
@@ -87,6 +89,38 @@ _PROVIDER_CONSUMER_IDS = frozenset(
 
 class ProviderConsumerParityError(RuntimeError):
     """A cut-over Provider view no longer matches its legacy rollback view."""
+
+
+def _provider_parity_utc_day() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+class _ProviderConsumerParityState:
+    """Snapshot-local successful parity samples for expensive renderers."""
+
+    _CONSUMERS = frozenset({"catalog", "schema"})
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._verified_days: dict[str, date] = {}
+
+    def verify(
+        self,
+        consumer: str,
+        verifier: Callable[[], None],
+    ) -> None:
+        if consumer not in self._CONSUMERS:
+            raise ValueError("Provider consumer parity 类型非法")
+        if not callable(verifier):
+            raise TypeError("Provider consumer parity verifier 必须可调用")
+        with self._lock:
+            current_day = _provider_parity_utc_day()
+            if not isinstance(current_day, date):
+                raise RuntimeError("Provider consumer parity UTC 日期非法")
+            if self._verified_days.get(consumer) == current_day:
+                return
+            verifier()
+            self._verified_days[consumer] = current_day
 
 
 class LlmToolExecutionRoute(str, Enum):
@@ -462,6 +496,12 @@ class ToolSnapshot:
     picmenu_plugin_count: int = 0
     picmenu_feature_count: int = 0
     picmenu_digest: str = ""
+    _provider_consumer_parity: _ProviderConsumerParityState = field(
+        default_factory=_ProviderConsumerParityState,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         for field_name in ("plugin_info", "custom_tools", "tool_dependencies"):
@@ -660,6 +700,136 @@ class ToolSnapshot:
                     queue.append(dependency)
         return expanded
 
+    def _complete_provider_catalog(
+        self,
+    ) -> ProviderCatalogSnapshot | None:
+        provider_catalog = self.provider_catalog
+        assert provider_catalog is not None
+        if (
+            provider_catalog.schema_version < 3
+            or not _PROVIDER_CONSUMER_IDS.issubset(
+                provider_catalog.registrations
+            )
+        ):
+            return None
+        return provider_catalog
+
+    def _assert_brief_catalog_legacy_parity(
+        self,
+        provider_view: str,
+        *,
+        is_superuser: bool,
+        render_context: ToolCatalogRenderContext | None = None,
+    ) -> None:
+        legacy_view = ToolManager.build_brief_catalog(
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            mcp_tool_names=self.mcp_tool_names,
+            is_superuser=is_superuser,
+            render_context=render_context,
+        )
+        if provider_view != legacy_view:
+            raise ProviderConsumerParityError(
+                "categorize Provider catalog 与 legacy rollback view 不一致"
+            )
+
+    def _assert_llm_payload_legacy_parity(
+        self,
+        provider_plugins: set[str],
+        provider_schema: list[dict[str, Any]],
+        *,
+        initial_plugins: set[str],
+        tools_enabled: bool,
+        search_enabled: bool,
+        is_superuser: bool,
+        render_context: ToolSchemaRenderContext | None = None,
+    ) -> None:
+        legacy_plugins = self.expand_dependencies(
+            initial_plugins,
+            render_context=render_context,
+        )
+        if provider_plugins != legacy_plugins:
+            raise ProviderConsumerParityError(
+                "llm_payload Provider 依赖视图与 legacy rollback view 不一致"
+            )
+        legacy_schema = ToolManager.build_llm_payload_schema(
+            plugin_names=sorted(legacy_plugins),
+            tools_enabled=tools_enabled,
+            search_enabled=search_enabled,
+            plugin_info=self.plugin_info,
+            custom_tools=self.custom_tools,
+            is_superuser=is_superuser,
+            render_context=render_context,
+        )
+        if provider_schema != legacy_schema:
+            raise ProviderConsumerParityError(
+                "llm_payload Provider schema 与 legacy rollback view 不一致"
+            )
+
+    def _sample_brief_catalog_context_parity(
+        self,
+        context: ToolCatalogRenderContext,
+    ) -> None:
+        provider_catalog = self._complete_provider_catalog()
+        if not context.provider_cutover or provider_catalog is None:
+            return
+
+        def verify() -> None:
+            provider_view = ToolManager.build_provider_brief_catalog(
+                provider_catalog=provider_catalog,
+                plugin_info=self.plugin_info,
+                custom_tools=self.custom_tools,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+            self._assert_brief_catalog_legacy_parity(
+                provider_view,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+
+        self._provider_consumer_parity.verify("catalog", verify)
+
+    def _sample_llm_payload_context_parity(
+        self,
+        context: ToolSchemaRenderContext,
+    ) -> None:
+        provider_catalog = self._complete_provider_catalog()
+        if (
+            not context.provider_cutover
+            or not context.tools_enabled
+            or provider_catalog is None
+        ):
+            return
+
+        def verify() -> None:
+            initial_plugins = set(context.selected_plugins)
+            provider_plugins = ToolManager.expand_provider_dependencies(
+                provider_catalog=provider_catalog,
+                plugin_names=initial_plugins,
+                render_context=context,
+            )
+            provider_schema = ToolManager.build_provider_llm_payload_schema(
+                provider_catalog=provider_catalog,
+                plugin_names=sorted(provider_plugins),
+                search_enabled=context.search_enabled,
+                plugin_info=self.plugin_info,
+                custom_tools=self.custom_tools,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+            self._assert_llm_payload_legacy_parity(
+                provider_plugins,
+                provider_schema,
+                initial_plugins=initial_plugins,
+                tools_enabled=context.tools_enabled,
+                search_enabled=context.search_enabled,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+
+        self._provider_consumer_parity.verify("schema", verify)
+
     def get_tool_schema(
         self,
         plugin_names: list,
@@ -696,16 +866,6 @@ class ToolSnapshot:
             if type(value) is not bool:
                 raise TypeError(f"llm_payload {field_name} 必须是布尔值")
 
-        initial_plugins = set(plugin_names)
-        legacy_plugins = self.expand_dependencies(initial_plugins)
-        legacy_schema = ToolManager.build_llm_payload_schema(
-            plugin_names=list(legacy_plugins),
-            tools_enabled=tools_enabled,
-            search_enabled=search_enabled,
-            plugin_info=self.plugin_info,
-            custom_tools=self.custom_tools,
-            is_superuser=is_superuser,
-        )
         if provider_cutover is None:
             from .config import config_parser
 
@@ -716,32 +876,48 @@ class ToolSnapshot:
         if type(provider_cutover) is not bool:
             raise ValueError("llm_payload Provider cutover 开关必须是布尔值")
 
-        provider_catalog = self.provider_catalog
-        assert provider_catalog is not None
+        initial_plugins = set(plugin_names)
+        provider_catalog = self._complete_provider_catalog()
         if (
             not provider_cutover
             or not tools_enabled
-            or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
+            or provider_catalog is None
         ):
+            legacy_plugins = self.expand_dependencies(initial_plugins)
+            legacy_schema = ToolManager.build_llm_payload_schema(
+                plugin_names=sorted(legacy_plugins),
+                tools_enabled=tools_enabled,
+                search_enabled=search_enabled,
+                plugin_info=self.plugin_info,
+                custom_tools=self.custom_tools,
+                is_superuser=is_superuser,
+            )
             return legacy_plugins, legacy_schema
 
         provider_plugins = ToolManager.expand_provider_dependencies(
             provider_catalog=provider_catalog,
             plugin_names=initial_plugins,
         )
-        if provider_plugins != legacy_plugins:
-            raise ProviderConsumerParityError("llm_payload Provider 依赖视图与 legacy rollback view 不一致")
         provider_schema = ToolManager.build_provider_llm_payload_schema(
             provider_catalog=provider_catalog,
-            plugin_names=list(legacy_plugins),
+            plugin_names=sorted(provider_plugins),
             search_enabled=search_enabled,
             plugin_info=self.plugin_info,
             custom_tools=self.custom_tools,
             is_superuser=is_superuser,
         )
-        if provider_schema != legacy_schema:
-            raise ProviderConsumerParityError("llm_payload Provider schema 与 legacy rollback view 不一致")
+
+        def verify() -> None:
+            self._assert_llm_payload_legacy_parity(
+                provider_plugins,
+                provider_schema,
+                initial_plugins=initial_plugins,
+                tools_enabled=tools_enabled,
+                search_enabled=search_enabled,
+                is_superuser=is_superuser,
+            )
+
+        self._provider_consumer_parity.verify("schema", verify)
         return provider_plugins, provider_schema
 
     def capture_llm_payload_schema_context(
@@ -783,7 +959,7 @@ class ToolSnapshot:
             if tools_enabled
             else frozenset()
         )
-        return ToolSchemaRenderContext.capture(
+        context = ToolSchemaRenderContext.capture(
             generation=self.generation,
             selected_plugins=plugin_names,
             is_superuser=is_superuser,
@@ -794,6 +970,8 @@ class ToolSnapshot:
             protocol_scope_digest=protocol_scope_digest,
             suppressed_protocol_tools=suppressed_protocol_tools,
         )
+        self._sample_llm_payload_context_parity(context)
+        return context
 
     def build_llm_payload_schema_record(
         self,
@@ -807,28 +985,25 @@ class ToolSnapshot:
             raise ValueError("tool schema context generation 与 ToolSnapshot 不一致")
 
         initial_plugins = set(context.selected_plugins)
-        legacy_plugins = self.expand_dependencies(
-            initial_plugins,
-            render_context=context,
-        )
-        ordered_plugins = sorted(legacy_plugins)
-        legacy_schema = ToolManager.build_llm_payload_schema(
-            plugin_names=ordered_plugins,
-            tools_enabled=context.tools_enabled,
-            search_enabled=context.search_enabled,
-            plugin_info=self.plugin_info,
-            custom_tools=self.custom_tools,
-            is_superuser=context.is_superuser,
-            render_context=context,
-        )
-        provider_catalog = self.provider_catalog
-        assert provider_catalog is not None
+        provider_catalog = self._complete_provider_catalog()
         if (
             not context.provider_cutover
             or not context.tools_enabled
-            or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
+            or provider_catalog is None
         ):
+            legacy_plugins = self.expand_dependencies(
+                initial_plugins,
+                render_context=context,
+            )
+            legacy_schema = ToolManager.build_llm_payload_schema(
+                plugin_names=sorted(legacy_plugins),
+                tools_enabled=context.tools_enabled,
+                search_enabled=context.search_enabled,
+                plugin_info=self.plugin_info,
+                custom_tools=self.custom_tools,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
             return ToolSchemaRecord.from_schema(
                 context.cache_key,
                 legacy_plugins,
@@ -840,19 +1015,28 @@ class ToolSnapshot:
             plugin_names=initial_plugins,
             render_context=context,
         )
-        if provider_plugins != legacy_plugins:
-            raise ProviderConsumerParityError("llm_payload Provider 依赖视图与 legacy rollback view 不一致")
         provider_schema = ToolManager.build_provider_llm_payload_schema(
             provider_catalog=provider_catalog,
-            plugin_names=ordered_plugins,
+            plugin_names=sorted(provider_plugins),
             search_enabled=context.search_enabled,
             plugin_info=self.plugin_info,
             custom_tools=self.custom_tools,
             is_superuser=context.is_superuser,
             render_context=context,
         )
-        if provider_schema != legacy_schema:
-            raise ProviderConsumerParityError("llm_payload Provider schema 与 legacy rollback view 不一致")
+
+        def verify() -> None:
+            self._assert_llm_payload_legacy_parity(
+                provider_plugins,
+                provider_schema,
+                initial_plugins=initial_plugins,
+                tools_enabled=context.tools_enabled,
+                search_enabled=context.search_enabled,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+
+        self._provider_consumer_parity.verify("schema", verify)
         return ToolSchemaRecord.from_schema(
             context.cache_key,
             provider_plugins,
@@ -1523,12 +1707,6 @@ class ToolSnapshot:
         is_superuser: bool = False,
         provider_cutover: bool | None = None,
     ) -> str:
-        legacy_catalog = ToolManager.build_brief_catalog(
-            plugin_info=self.plugin_info,
-            custom_tools=self.custom_tools,
-            mcp_tool_names=self.mcp_tool_names,
-            is_superuser=is_superuser,
-        )
         if provider_cutover is None:
             from .config import config_parser
 
@@ -1538,23 +1716,30 @@ class ToolSnapshot:
             )
         if type(provider_cutover) is not bool:
             raise ValueError("categorize Provider cutover 开关必须是布尔值")
-        provider_catalog = self.provider_catalog
-        assert provider_catalog is not None
-        if (
-            not provider_cutover
-            or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
-        ):
-            return legacy_catalog
-        catalog = ToolManager.build_provider_brief_catalog(
+
+        provider_catalog = self._complete_provider_catalog()
+        if not provider_cutover or provider_catalog is None:
+            return ToolManager.build_brief_catalog(
+                plugin_info=self.plugin_info,
+                custom_tools=self.custom_tools,
+                mcp_tool_names=self.mcp_tool_names,
+                is_superuser=is_superuser,
+            )
+        provider_view = ToolManager.build_provider_brief_catalog(
             provider_catalog=provider_catalog,
             plugin_info=self.plugin_info,
             custom_tools=self.custom_tools,
             is_superuser=is_superuser,
         )
-        if catalog != legacy_catalog:
-            raise ProviderConsumerParityError("categorize Provider catalog 与 legacy rollback view 不一致")
-        return catalog
+
+        def verify() -> None:
+            self._assert_brief_catalog_legacy_parity(
+                provider_view,
+                is_superuser=is_superuser,
+            )
+
+        self._provider_consumer_parity.verify("catalog", verify)
+        return provider_view
 
     def capture_brief_catalog_context(
         self,
@@ -1586,7 +1771,7 @@ class ToolSnapshot:
             if tools_enabled
             else frozenset()
         )
-        return ToolCatalogRenderContext.capture(
+        context = ToolCatalogRenderContext.capture(
             generation=self.generation,
             is_superuser=is_superuser,
             provider_cutover=provider_cutover,
@@ -1597,6 +1782,8 @@ class ToolSnapshot:
             directory_digest=self.directory_digest,
             suppressed_protocol_tools=suppressed_protocol_tools,
         )
+        self._sample_brief_catalog_context_parity(context)
+        return context
 
     def build_brief_catalog_record(
         self,
@@ -1608,31 +1795,33 @@ class ToolSnapshot:
             raise TypeError("context 必须是 ToolCatalogRenderContext")
         if context.generation != self.generation:
             raise ValueError("tool catalog context generation 与 ToolSnapshot 不一致")
-        legacy_catalog = ToolManager.build_brief_catalog(
-            plugin_info=self.plugin_info,
-            custom_tools=self.custom_tools,
-            mcp_tool_names=self.mcp_tool_names,
-            is_superuser=context.is_superuser,
-            render_context=context,
-        )
-        provider_catalog = self.provider_catalog
-        assert provider_catalog is not None
-        if (
-            not context.provider_cutover
-            or provider_catalog.schema_version < 3
-            or not _PROVIDER_CONSUMER_IDS.issubset(provider_catalog.registrations)
-        ):
-            return ToolCatalogRecord(context.cache_key, legacy_catalog)
-        catalog = ToolManager.build_provider_brief_catalog(
+        provider_catalog = self._complete_provider_catalog()
+        if not context.provider_cutover or provider_catalog is None:
+            legacy_view = ToolManager.build_brief_catalog(
+                plugin_info=self.plugin_info,
+                custom_tools=self.custom_tools,
+                mcp_tool_names=self.mcp_tool_names,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+            return ToolCatalogRecord(context.cache_key, legacy_view)
+        provider_view = ToolManager.build_provider_brief_catalog(
             provider_catalog=provider_catalog,
             plugin_info=self.plugin_info,
             custom_tools=self.custom_tools,
             is_superuser=context.is_superuser,
             render_context=context,
         )
-        if catalog != legacy_catalog:
-            raise ProviderConsumerParityError("categorize Provider catalog 与 legacy rollback view 不一致")
-        return ToolCatalogRecord(context.cache_key, catalog)
+
+        def verify() -> None:
+            self._assert_brief_catalog_legacy_parity(
+                provider_view,
+                is_superuser=context.is_superuser,
+                render_context=context,
+            )
+
+        self._provider_consumer_parity.verify("catalog", verify)
+        return ToolCatalogRecord(context.cache_key, provider_view)
 
     def get_brief_catalog_record(
         self,

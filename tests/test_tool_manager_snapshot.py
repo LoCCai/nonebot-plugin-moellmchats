@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import date
 import importlib
 import json
+from threading import Barrier, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -155,6 +158,37 @@ def _registered_catalog(
             _builtin_batch(generation),
             _nonebot_batch(generation),
         ),
+    )
+
+
+def _provider_consumer_parity_snapshot(
+    generation: int,
+) -> tuple[ToolSnapshot, ToolSpec]:
+    spec = ToolSpec(
+        name="provider_consumer_parity",
+        description="provider consumer parity",
+        parameters={"type": "object", "properties": {}},
+        handler=_handler,
+        policy=ToolPolicy.configured(),
+    )
+    return (
+        ToolSnapshot(
+            generation=generation,
+            plugin_info={},
+            custom_tools={
+                spec.name: {
+                    **spec.as_legacy_schema(),
+                    "source": "registered",
+                }
+            },
+            tool_dependencies={},
+            mcp_tool_names=set(),
+            provider_catalog=_registered_catalog(
+                (spec,),
+                generation=generation,
+            ),
+        ),
+        spec,
     )
 
 
@@ -1240,6 +1274,406 @@ def test_real_frozen_snapshot_filters_permissions_and_thaws_model_schema(
         ["value"]["type"]
         == "string"
     )
+
+
+def test_catalog_provider_parity_is_snapshot_local_and_sampled_daily(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    snapshot, spec = _provider_consumer_parity_snapshot(401)
+    current_day = [date(2026, 9, 7)]
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: current_day[0],
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    legacy_calls: list[object] = []
+    provider_calls: list[object] = []
+    original_legacy = ToolManager.build_brief_catalog
+    original_provider = ToolManager.build_provider_brief_catalog
+
+    def track_legacy(**kwargs):
+        legacy_calls.append(kwargs.get("render_context"))
+        return original_legacy(**kwargs)
+
+    def track_provider(**kwargs):
+        provider_calls.append(kwargs.get("render_context"))
+        return original_provider(**kwargs)
+
+    monkeypatch.setattr(ToolManager, "build_brief_catalog", track_legacy)
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_brief_catalog",
+        track_provider,
+    )
+
+    assert spec.name in snapshot.get_brief_catalog(provider_cutover=True)
+    context = snapshot.capture_brief_catalog_context(provider_cutover=True)
+    assert spec.name in snapshot.build_brief_catalog_record(context).catalog
+    assert len(legacy_calls) == 1
+    assert len(provider_calls) == 2
+
+    current_day[0] = date(2026, 9, 8)
+    next_day_context = snapshot.capture_brief_catalog_context(
+        provider_cutover=True
+    )
+    assert len(legacy_calls) == 2
+    assert len(provider_calls) == 3
+    assert spec.name in snapshot.build_brief_catalog_record(
+        next_day_context
+    ).catalog
+    assert len(legacy_calls) == 2
+    assert len(provider_calls) == 4
+
+
+def test_schema_provider_parity_is_shared_by_direct_and_record_paths(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    snapshot, spec = _provider_consumer_parity_snapshot(402)
+    current_day = [date(2026, 9, 7)]
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: current_day[0],
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    legacy_schema_calls: list[object] = []
+    legacy_dependency_calls: list[object] = []
+    provider_schema_calls: list[object] = []
+    original_legacy_schema = ToolManager.build_llm_payload_schema
+    original_provider_schema = ToolManager.build_provider_llm_payload_schema
+    original_expand = ToolSnapshot.expand_dependencies
+
+    def track_legacy_schema(*args, **kwargs):
+        legacy_schema_calls.append(kwargs.get("render_context"))
+        return original_legacy_schema(*args, **kwargs)
+
+    def track_provider_schema(**kwargs):
+        provider_schema_calls.append(kwargs.get("render_context"))
+        return original_provider_schema(**kwargs)
+
+    def track_legacy_dependencies(self, plugins, **kwargs):
+        if self is snapshot:
+            legacy_dependency_calls.append(kwargs.get("render_context"))
+        return original_expand(self, plugins, **kwargs)
+
+    monkeypatch.setattr(
+        ToolManager,
+        "build_llm_payload_schema",
+        track_legacy_schema,
+    )
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_llm_payload_schema",
+        track_provider_schema,
+    )
+    monkeypatch.setattr(
+        ToolSnapshot,
+        "expand_dependencies",
+        track_legacy_dependencies,
+    )
+
+    names, schema = snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+        provider_cutover=True,
+    )
+    assert names == {spec.name}
+    assert schema[0]["function"]["name"] == spec.name
+    context = snapshot.capture_llm_payload_schema_context(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+        provider_cutover=True,
+    )
+    assert snapshot.build_llm_payload_schema_record(context).tool_names == (
+        spec.name,
+    )
+    assert len(legacy_schema_calls) == 1
+    assert len(legacy_dependency_calls) == 1
+    assert len(provider_schema_calls) == 2
+
+    current_day[0] = date(2026, 9, 8)
+    next_day_context = snapshot.capture_llm_payload_schema_context(
+        {spec.name},
+        tools_enabled=True,
+        search_enabled=False,
+        provider_cutover=True,
+    )
+    assert len(legacy_schema_calls) == 2
+    assert len(legacy_dependency_calls) == 2
+    assert len(provider_schema_calls) == 3
+    assert snapshot.build_llm_payload_schema_record(
+        next_day_context
+    ).tool_names == (spec.name,)
+    assert len(legacy_schema_calls) == 2
+    assert len(legacy_dependency_calls) == 2
+    assert len(provider_schema_calls) == 4
+
+
+def test_provider_parity_failure_is_not_remembered_as_success(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    snapshot, spec = _provider_consumer_parity_snapshot(403)
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: date(2026, 9, 7),
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    drifted = [True]
+    legacy_calls = 0
+    original_legacy = ToolManager.build_brief_catalog
+    original_provider = ToolManager.build_provider_brief_catalog
+
+    def track_legacy(**kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return original_legacy(**kwargs)
+
+    def maybe_drift(**kwargs):
+        catalog = original_provider(**kwargs)
+        return "drifted provider catalog" if drifted[0] else catalog
+
+    monkeypatch.setattr(ToolManager, "build_brief_catalog", track_legacy)
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_brief_catalog",
+        maybe_drift,
+    )
+
+    with pytest.raises(ProviderConsumerParityError, match="rollback view"):
+        snapshot.get_brief_catalog(provider_cutover=True)
+    drifted[0] = False
+    assert spec.name in snapshot.get_brief_catalog(provider_cutover=True)
+    assert spec.name in snapshot.get_brief_catalog(provider_cutover=True)
+    assert legacy_calls == 2
+
+
+def test_schema_provider_parity_failure_is_retried_before_success(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    snapshot, spec = _provider_consumer_parity_snapshot(408)
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: date(2026, 9, 7),
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    drifted = [True]
+    legacy_calls = 0
+    original_legacy = ToolManager.build_llm_payload_schema
+    original_provider = ToolManager.build_provider_llm_payload_schema
+
+    def track_legacy(*args, **kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return original_legacy(*args, **kwargs)
+
+    def maybe_drift(**kwargs):
+        schema = original_provider(**kwargs)
+        return [] if drifted[0] else schema
+
+    monkeypatch.setattr(
+        ToolManager,
+        "build_llm_payload_schema",
+        track_legacy,
+    )
+    monkeypatch.setattr(
+        ToolManager,
+        "build_provider_llm_payload_schema",
+        maybe_drift,
+    )
+
+    with pytest.raises(ProviderConsumerParityError, match="schema"):
+        snapshot.get_llm_payload_tools(
+            {spec.name},
+            tools_enabled=True,
+            search_enabled=False,
+            provider_cutover=True,
+        )
+    drifted[0] = False
+    for _index in range(2):
+        names, schema = snapshot.get_llm_payload_tools(
+            {spec.name},
+            tools_enabled=True,
+            search_enabled=False,
+            provider_cutover=True,
+        )
+        assert names == {spec.name}
+        assert schema[0]["function"]["name"] == spec.name
+    assert legacy_calls == 2
+
+
+def test_provider_parity_state_is_not_shared_across_generations(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    first, spec = _provider_consumer_parity_snapshot(404)
+    second, _ = _provider_consumer_parity_snapshot(405)
+    same_generation_copy = replace(first)
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: date(2026, 9, 7),
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    legacy_calls = 0
+    original_legacy = ToolManager.build_brief_catalog
+
+    def track_legacy(**kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return original_legacy(**kwargs)
+
+    monkeypatch.setattr(ToolManager, "build_brief_catalog", track_legacy)
+
+    for snapshot in (
+        first,
+        second,
+        same_generation_copy,
+        first,
+        second,
+        same_generation_copy,
+    ):
+        assert spec.name in snapshot.get_brief_catalog(provider_cutover=True)
+    assert legacy_calls == 3
+
+
+def test_rollback_and_disabled_schema_do_not_consume_provider_parity(
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    snapshot, spec = _provider_consumer_parity_snapshot(406)
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: date(2026, 9, 7),
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    catalog_legacy_calls = 0
+    schema_legacy_calls = 0
+    original_catalog = ToolManager.build_brief_catalog
+    original_schema = ToolManager.build_llm_payload_schema
+
+    def track_catalog(**kwargs):
+        nonlocal catalog_legacy_calls
+        catalog_legacy_calls += 1
+        return original_catalog(**kwargs)
+
+    def track_schema(*args, **kwargs):
+        nonlocal schema_legacy_calls
+        schema_legacy_calls += 1
+        return original_schema(*args, **kwargs)
+
+    monkeypatch.setattr(ToolManager, "build_brief_catalog", track_catalog)
+    monkeypatch.setattr(ToolManager, "build_llm_payload_schema", track_schema)
+
+    assert spec.name in snapshot.get_brief_catalog(provider_cutover=False)
+    snapshot.capture_brief_catalog_context(provider_cutover=False)
+    assert spec.name in snapshot.get_brief_catalog(provider_cutover=True)
+    assert spec.name in snapshot.get_brief_catalog(provider_cutover=True)
+    assert catalog_legacy_calls == 2
+
+    _disabled_names, disabled_schema = snapshot.get_llm_payload_tools(
+        {spec.name},
+        tools_enabled=False,
+        search_enabled=False,
+        provider_cutover=True,
+    )
+    assert disabled_schema == []
+    snapshot.capture_llm_payload_schema_context(
+        {spec.name},
+        tools_enabled=False,
+        search_enabled=False,
+        provider_cutover=True,
+    )
+    for _index in range(2):
+        names, schema = snapshot.get_llm_payload_tools(
+            {spec.name},
+            tools_enabled=True,
+            search_enabled=False,
+            provider_cutover=True,
+        )
+        assert names == {spec.name}
+        assert schema[0]["function"]["name"] == spec.name
+    assert schema_legacy_calls == 2
+
+
+def test_provider_parity_sampling_is_thread_safe(monkeypatch) -> None:
+    manager_module = importlib.import_module(
+        "nonebot_plugin_moellmchats.tool_manager"
+    )
+    snapshot, spec = _provider_consumer_parity_snapshot(407)
+    monkeypatch.setattr(
+        manager_module,
+        "_provider_parity_utc_day",
+        lambda: date(2026, 9, 7),
+        raising=False,
+    )
+    monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(model_selector, "get_web_search", lambda: False)
+    monkeypatch.setattr(model_selector, "get_tool_blacklist", lambda: [])
+
+    workers = 8
+    ready = Barrier(workers)
+    counter_lock = Lock()
+    legacy_calls = 0
+    original_legacy = ToolManager.build_brief_catalog
+
+    def track_legacy(**kwargs):
+        nonlocal legacy_calls
+        with counter_lock:
+            legacy_calls += 1
+        return original_legacy(**kwargs)
+
+    def build_catalog(_index: int) -> str:
+        ready.wait(timeout=5)
+        return snapshot.get_brief_catalog(provider_cutover=True)
+
+    monkeypatch.setattr(ToolManager, "build_brief_catalog", track_legacy)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        catalogs = list(executor.map(build_catalog, range(workers)))
+
+    assert all(spec.name in catalog for catalog in catalogs)
+    assert legacy_calls == 1
 
 
 def test_categorize_provider_cutover_matches_legacy_and_filters_trust(

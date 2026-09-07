@@ -234,6 +234,8 @@ API 计数进一步区分已知只读失败、已恢复只读失败、未解决�
 
 generation、权限、模型 identity、策略或 key 漂移都会导致 miss/拒绝；timeout、解析回退和内容拦截不会被缓存。默认实现是进程内 Memory，不需要 Redis。
 
+Provider 权威模式仍保留 legacy rollback parity，但不会再为每个目录或 Schema cache miss 付出双份完整渲染成本。每个 `ToolSnapshot` 为 catalog、schema 各保存一个最近成功校验的 UTC 日期：每代首次使用及每天首次使用完整构建并比较 Provider/legacy，成功后当日其他构建只生成 Provider 视图；校验失败不更新时间，下一次仍须复验。首次抽验由 snapshot-local `RLock` 合并，不跨 generation 或 Bot 进程共享。由于 Tool Catalog/Schema Cache 在同代内没有日 TTL，context 捕获会在实际 cache lookup 之前执行到期检查，所以跨日缓存命中也不会跳过抽验。关闭 Provider cutover、缺少完整 v3 Provider Catalog，或 Schema 的 `tools_enabled=false` 时，仍直接使用 legacy 路径且不消耗 Provider 抽验状态。
+
 Classification Cache 的 single-flight 由 generation-local 缓存实例拥有，因此只合并同代、完整 key 相同的构建，不会跨 Bot、目录摘要、场景、权限或重载代际复用结果。
 
 每轮模型和工具步骤会产生低基数 metrics、payload-free structured log、Usage 和 Audit 记录。工具安全日志只保存 request/tool-call 摘要、generation、目录摘要、选择来源、插件、意图摘要、脱敏 command 形状及摘要、Matcher/API 计数、最终状态、耗时和重试决策；不记录完整工具/API 参数、Token、Cookie、URL 查询或本地路径。标准安装没有 PostgreSQL/local spool/platform API，因此这些高级持久化和管理挂载不会自动启用；现有内存 token 使用查询仍保持兼容。

@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- Provider 权威的短目录和完整 Tool Schema 不再在每次 cache miss/直连构建时都完整渲染 legacy rollback view。每个不可变 `ToolSnapshot` 分别记录 catalog/schema 最近一次成功 parity 的 UTC 日期：每代首次使用及跨日首次使用仍完整比较，随后只构建 Provider 视图；失败不会记为成功，并发首次抽验由 snapshot-local 锁合并。context 捕获会在缓存查询前检查跨日抽验，因此代内常驻缓存命中也不能绕过每日闸门；关闭 cutover、旧 Provider 快照及 `tools_enabled=false` 的 Schema 继续走原 legacy 语义。
 - NoneBot 兼容插件的完整说明改为在 runtime generation 注册期生成并冻结普通用户/超级用户两种视图；没有隐藏功能时两类调用者共享同一字符串。legacy 与 Provider 的请求期 Schema 渲染只选择缓存视图，不再按调用重复拼接至多 28,000 字的菜单说明；generation 发布期仍重新计算并校验缓存、`ToolSpec` 与冻结命令前缀的一致性，伪造或漂移继续 fail closed。
 - 目录与 Tool Schema 缓存不再把具体 `message_id` / `reply_message_id` 纳入协议作用域摘要；同一 Bot、调用者、会话与权限下的连续消息可以复用缓存，同时仍以“当前消息/回复是否存在”隔离可执行动作。业务优先抑制集合在 render context 捕获时一次性冻结，并以 canonical SHA-256 加入两层缓存键，避免提速后复用到未摘除冲突协议工具的目录或 Schema。
 - 协议能力探测增加 300 秒、256 会话上限的 Bot 会话级 LRU/single-flight 缓存：连续请求复用成功的 v11 `get_version_info` 或 v12 `get_supported_actions`，失败不缓存，等待者取消不取消共享只读探测；缓存严格绑定 Bot 会话、Adapter、协议、Bot ID 与可见的实现/版本提示。危险动作二阶段确认仍强制重新探测，缓存不会替代执行前复核。

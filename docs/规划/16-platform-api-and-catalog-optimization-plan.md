@@ -39,12 +39,14 @@ lastmod: 2026-09-07T00:00:00+00:00
 
 中。改动横跨 protocol_context、tool_catalog_cache、tool_schema_cache 与 tool_manager 四层键语义；需证明目录渲染对具体 message_id 无隐式依赖（已核对渲染输入清单，无）。
 
-## P2：缓存 miss 构建的 legacy+provider 双算改为代级抽验
+## P2（本地门禁已完成，远端待关闭）：缓存 miss 构建的 legacy+provider 双算改为代级抽验
 
 - 位置：`tool_manager.py:1592-1616`（catalog）、`:802-853`（schema）、`:1513-1550`（legacy 直连路径）；parity 比较 `tool_providers.py:1873-1875`。
 - 现状：provider cutover 开启时仍完整渲染 legacy 视图并做全字符串比对，构建成本约翻倍。
-- 方案：provider 权威代跳过 legacy 全量渲染；parity 降级为「每 generation 首次构建时校验一次 + 按天抽验」，结果缓存在 snapshot。禁止完全删除（防回退闸门）。
-- 风险：中。验收：代级校验命中漂移时仍 fail-closed（reload 期失败而非聊天期）。
+- 实现：provider 权威路径先生成目录或 Schema；每个 `ToolSnapshot` 以内部 `RLock` 分别维护 catalog/schema 最近一次成功 parity 的 UTC 日期。每代首次使用和 UTC 跨日首次使用才完整构建 legacy rollback view 并比较，当日后续 cache miss 或直连回退只构建 Provider 视图。抽验异常原样传播且不写成功日期；新 snapshot（即使 generation 数值相同）也持有独立状态。
+- 缓存陷阱：Tool Catalog/Schema Cache 是 generation-local 常驻 LRU、没有日 TTL。只在 record builder 检查日期会让跨日 cache hit 永远跳过复验，因此 context 捕获边界也执行一次到期检查；当日已验证时是 O(1) 日期判断，跨日则在 lookup 前 fail closed。record builder 和无缓存直连路径仍保留同一检查，防止绕过 capture。
+- parity 内容：catalog 比较最终完整字符串；Schema 同时比较依赖展开集合和最终模型 Schema。关闭 cutover、v3 Provider 集合不完整及 `tools_enabled=false` 的 Schema 不消耗抽验状态，legacy rollback 与旧 snapshot 语义保持不变。
+- 风险：中。首批红灯判例证明旧实现 6 类边界均失败；实现后 catalog/schema 首次与跨日、direct/record 共享、失败重验、new snapshot/generation 隔离、rollback/disabled 不消费状态以及 8 线程首次竞争均已转绿。四版本、沙箱与制品本地门禁已完成；精确提交和远端 `release-gate` 尚未发生，因此不能提前标记远端收口。
 
 ## P3（已完成）：兼容插件描述注册期缓存
 
@@ -85,7 +87,7 @@ lastmod: 2026-09-07T00:00:00+00:00
 | P0（已完成） | 分类 prompt 延迟构建；目录缓存单条上限 256KB→1MiB；file:// 图片读盘移入 `to_thread` | 低 | 无 |
 | 批次一（已完成） | P4 协议探测会话级缓存 | 低 | 无 |
 | 批次二（已完成） | P1 缓存键重构（陷阱已同步收口） | 中 | P4 已完成 |
-| 批次三（进行中） | P3 描述注册期缓存（已完成）→ P2 双算抽验（下一批） | 低→中 | P1 已完成 |
+| 批次三（远端待关闭） | P3 描述注册期缓存（已完成）→ P2 双算抽验（本地门禁已完成） | 低→中 | P1 已完成 |
 | 观察项 | P5 | 中 | 仅在指标证明瓶颈后 |
 
 每批次沿用既定流程：判例复现/验证 → 独立提交 → 判例回归测试 → 简单 py 测试（py_compile + AST 结构断言）→ 有依赖环境跑定向 pytest 后合并。
@@ -131,3 +133,19 @@ fresh wheel/sdist 的 SHA-256 分别为 `93756ca6364ed8ae3ccaf86e330c8966c367fc7
 实现提交的 push run [`34082463497`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/34082463497) 精确命中该 SHA，12 个 job 全部 `completed/success`，且恰好一个 `release-gate`（job `101620379977`）成功；当时本地 HEAD、remote-tracking 与 `ls-remote` 三方一致。远端唯一/default 分支均为 `feat/generated-tool-bundles`，当前无活动 PR，因此没有可触发的 `pull_request` run；未借用历史 PR 结果。本文所在证据提交继续以自身 push run 的唯一成功 `release-gate` 作为最终闭环，不为记录自指 run 再追加提交。
 
 本批未安装或重启七七，未修改 `/app/qi-dev`，未连接真实 Bot、模型、PostgreSQL 或 Redis，未发送 QQ 动作，未发布 PyPI。生产目录缓存命中率仍留待后续获准观测，未以合成判例冒充线上指标。
+
+## P2 本地收口记录（2026-09-07）
+
+| 边界 | 结果 |
+| --- | --- |
+| 抽验频率 | 同一 `ToolSnapshot` 的 catalog/schema 分别只在首次使用和 UTC 跨日首次使用完整构建 legacy；同日后续 Provider 构建不再双算 |
+| 缓存命中 | context 捕获在 cache lookup 前检查日期，代内常驻目录/Schema 缓存的跨日命中不能绕过每日抽验 |
+| 失败与并发 | parity 失败不记录成功日期；修复漂移后的下一次调用仍复验；8 线程首次竞争只执行一次 legacy 校验 |
+| 隔离与回退 | state 由 snapshot 私有且不参与公开 identity；新 snapshot/new generation 重新验证；关闭 cutover、旧 catalog 与 disabled Schema 保持 legacy |
+| 兼容性 | 不增加配置、运行依赖、数据库 migration、Redis key 或后台任务；P1 缓存身份、P3 描述缓存及六 Provider 注册期 parity 不变 |
+
+实现文件为 `tool_manager.py`，红灯与回归判例位于 `test_tool_manager_snapshot.py`，runtime 快照字段契约同步于 `test_runtime_reload.py`。7 个新增定向判例和目录/Schema/runtime/provider 联合 `500 passed`；Python 3.10/3.11/3.12/3.13 普通全量各 `3193 passed, 1 skipped`。mandatory root sandbox 为 `41 passed`，JUnit 为 `failures=0 / errors=0 / skipped=0`。
+
+Ruff、CI 指定格式与 Pyright、`compileall`、diff、文档 11 JSON/8 TOML/10 Python 片段、161 个本地 Markdown 链接、13 项运行依赖/10 项开发依赖、244 动作/244 策略/3 wrapper 和 68 包隔离环境依赖一致性检查均通过。fresh wheel/sdist SHA-256 分别为 `996249fb6a615b764b056fac4c82bdbe074a375d4e7a9f52697cc9f8a9f60c84` / `b2e91568cc28a7ba73a5ffe31e2d86514225e016cc16fc0bb8e12c0d2069191c`；Twine 与制品内容检查通过，Python 3.10/3.12 × wheel/sdist 四组均从 checkout 外加载 0.26.6，验证 v11/v12、38/31/175 动作和 runtime generation 1。
+
+精确实现提交、GitHub push run 及唯一成功 `release-gate` 尚待产生；远端只有唯一/default `feat/generated-tool-bundles` 且无活动 PR，因此当前没有可触发的 `pull_request` run，不能借用历史 PR 结果。本批未修改或重启七七，未连接真实 Bot、模型、PostgreSQL 或 Redis，未发送 QQ 动作，也未发布 PyPI。P5 继续只观察，没有实施。
