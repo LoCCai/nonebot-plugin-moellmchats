@@ -47,6 +47,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "llm_max_per_user": 2,
     "legacy_dispatch_max_pending": 16,
     "legacy_dispatch_timeout_seconds": 20,
+    "legacy_background_plugins": [],
+    "legacy_background_timeout_seconds": 300,
+    "legacy_background_grace_seconds": 5,
     "legacy_full_event_plugins": [],
     "member_cache_ttl_seconds": 600,
     "member_cache_max_entries": 4096,
@@ -114,6 +117,8 @@ _POSITIVE_INTEGER_FIELDS = {
     "llm_max_per_user",
     "legacy_dispatch_max_pending",
     "legacy_dispatch_timeout_seconds",
+    "legacy_background_timeout_seconds",
+    "legacy_background_grace_seconds",
     "member_cache_ttl_seconds",
     "member_cache_max_entries",
     "member_lookup_timeout_seconds",
@@ -211,6 +216,19 @@ class ConfigParser:
             isinstance(item, str) and item.strip() for item in full_event_plugins
         ):
             raise ValueError("config.json: legacy_full_event_plugins 必须是字符串数组")
+        background_plugins = candidate.get("legacy_background_plugins")
+        if not isinstance(background_plugins, list) or not all(
+            isinstance(item, str) and item.strip() for item in background_plugins
+        ):
+            raise ValueError("config.json: legacy_background_plugins 必须是字符串数组")
+        background_grace = candidate.get("legacy_background_grace_seconds")
+        background_timeout = candidate.get("legacy_background_timeout_seconds")
+        if not isinstance(background_grace, int) or isinstance(background_grace, bool) or background_grace <= 0:
+            raise ValueError("config.json: legacy_background_grace_seconds 必须是正整数")
+        if not isinstance(background_timeout, int) or isinstance(background_timeout, bool) or background_timeout <= background_grace:
+            raise ValueError(
+                "config.json: legacy_background_timeout_seconds 必须是正整数且大于 legacy_background_grace_seconds"
+            )
         for field in (
             "provider_catalog_categorize_enabled",
             "provider_catalog_llm_payload_enabled",

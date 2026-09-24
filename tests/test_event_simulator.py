@@ -729,3 +729,168 @@ async def test_dispatch_admission_rejection_is_typed(monkeypatch) -> None:
         object(), _event(102), "test", plugin_name="demo"
     )
     assert result.status is simulator_module.PluginDispatchStatus.ADMISSION_REJECTED
+
+
+def _background_config_router(monkeypatch: pytest.MonkeyPatch, **overrides):
+    original_get_config = simulator_module.config_parser.get_config
+
+    def get_config(key, default=None):
+        routing = {
+            "legacy_full_event_plugins": [],
+            "legacy_background_plugins": ["slow_report"],
+            "legacy_background_timeout_seconds": 30,
+            "legacy_background_grace_seconds": 30,
+        }
+        routing.update(overrides)
+        if key in routing:
+            return routing[key]
+        return original_get_config(key, default)
+
+    monkeypatch.setattr(simulator_module.config_parser, "get_config", get_config)
+
+
+def _use_local_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
+    monkeypatch.setattr(simulator_module, "get_dispatch_controller", lambda: gate)
+
+
+async def _drain_background_tasks(timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while simulator_module._captures or simulator_module._BACKGROUND_TASKS:
+        if asyncio.get_running_loop().time() > deadline:
+            break
+        await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_background_dispatch_returns_at_first_visible_effect(monkeypatch) -> None:
+    _use_local_gate(monkeypatch)
+    _background_config_router(monkeypatch)
+    finished = asyncio.Event()
+
+    async def dispatch(bot, event, plugin_name):
+        key = simulator_module._capture_key.get()
+        context = simulator_module._captures[key]
+        context["matcher_matched"] += 1
+        await asyncio.sleep(0.05)
+        data = {"message": Message("正在查询，预计 需要40S")}
+        await simulator_module._capture_outgoing_api(bot, "send_group_msg", data)
+        await simulator_module._confirm_outgoing_api(
+            bot, None, "send_group_msg", data, {"message_id": 9}
+        )
+        await asyncio.sleep(0.3)
+        finished.set()
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(), _event(201), "B话榜 本月", plugin_name="slow_report"
+    )
+
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    assert "正在查询，预计 需要40S" in result.text
+    assert "后台" in result.text
+    assert result.matcher_matched == 1
+    assert result.mutating_api_succeeded == 1
+    # 父协程在后台任务完成前就返回，不等待长任务跑完
+    assert not finished.is_set()
+    await _drain_background_tasks()
+    assert finished.is_set()
+    assert simulator_module._captures == {}
+    assert simulator_module._BACKGROUND_TASKS == set()
+
+
+@pytest.mark.asyncio
+async def test_background_dispatch_grace_expiry_still_reports_side_effect(monkeypatch) -> None:
+    _use_local_gate(monkeypatch)
+    original_get_config = simulator_module.config_parser.get_config
+    # 校验字段语义是整数秒；测试直接 monkeypatch 配置读取，用亚秒值加快用例
+    monkeypatch.setattr(
+        simulator_module.config_parser,
+        "get_config",
+        lambda key, default=None: ["slow_report"]
+        if key == "legacy_background_plugins"
+        else 0.3
+        if key == "legacy_background_grace_seconds"
+        else 30
+        if key == "legacy_background_timeout_seconds"
+        else []
+        if key == "legacy_full_event_plugins"
+        else original_get_config(key, default),
+    )
+
+    async def dispatch(bot, event, plugin_name):
+        key = simulator_module._capture_key.get()
+        simulator_module._captures[key]["matcher_matched"] += 1
+        await asyncio.sleep(1.0)
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    loop = asyncio.get_running_loop()
+    returned_at = loop.time()
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(), _event(202), "B话榜 本月", plugin_name="slow_report"
+    )
+    assert loop.time() - returned_at < 1.0
+    assert result.matcher_matched == 1
+    # grace 内没有可见输出：不能报失败，必须上报"已在后台执行"
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT
+    assert "后台" in result.text
+    await _drain_background_tasks()
+    assert simulator_module._captures == {}
+    assert simulator_module._BACKGROUND_TASKS == set()
+
+
+@pytest.mark.asyncio
+async def test_background_dispatch_timeout_counts_and_cleans(monkeypatch) -> None:
+    _use_local_gate(monkeypatch)
+    original_get_config = simulator_module.config_parser.get_config
+    monkeypatch.setattr(
+        simulator_module.config_parser,
+        "get_config",
+        lambda key, default=None: ["slow_report"]
+        if key == "legacy_background_plugins"
+        else 0.3
+        if key == "legacy_background_grace_seconds"
+        else 0.05
+        if key == "legacy_background_timeout_seconds"
+        else []
+        if key == "legacy_full_event_plugins"
+        else original_get_config(key, default),
+    )
+
+    async def dispatch(bot, event, plugin_name):
+        key = simulator_module._capture_key.get()
+        simulator_module._captures[key]["matcher_matched"] += 1
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    timeouts_before = simulator_module.runtime_metrics.dispatch_background_timeouts
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(), _event(203), "B话榜 本月", plugin_name="slow_report"
+    )
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT
+    await _drain_background_tasks()
+    assert simulator_module._captures == {}
+    assert (
+        simulator_module.runtime_metrics.dispatch_background_timeouts == timeouts_before + 1
+    )
+    assert simulator_module._BACKGROUND_TASKS == set()
+
+
+@pytest.mark.asyncio
+async def test_non_background_plugin_keeps_synchronous_path(monkeypatch) -> None:
+    _use_local_gate(monkeypatch)
+    _background_config_router(monkeypatch)
+    ran = asyncio.Event()
+
+    async def dispatch(bot, event, plugin_name):
+        ran.set()
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(), _event(204), "fast", plugin_name="fast_plugin"
+    )
+    assert ran.is_set()
+    assert result.status is simulator_module.PluginDispatchStatus.NOT_MATCHED
+    assert "后台" not in result.text
+    assert simulator_module._captures == {}

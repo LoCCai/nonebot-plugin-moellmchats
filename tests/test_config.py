@@ -66,3 +66,30 @@ def test_unknown_config_key_warns_and_is_preserved(tmp_path, monkeypatch) -> Non
     assert candidate["generated_tools_enabled"] is True
     assert candidate["generated_tools_enabledd"] is True
     assert any("generated_tools_enabledd" in message for message in records)
+
+
+def test_background_plugins_must_be_string_array() -> None:
+    with pytest.raises(ValueError, match="legacy_background_plugins"):
+        config_module.ConfigParser._validate(
+            _candidate(legacy_background_plugins=["slow_report", 3])
+        )
+    with pytest.raises(ValueError, match="legacy_background_plugins"):
+        config_module.ConfigParser._validate(_candidate(legacy_background_plugins="qi_post"))
+
+
+def test_background_timeout_must_exceed_grace() -> None:
+    with pytest.raises(ValueError, match="legacy_background_timeout_seconds"):
+        config_module.ConfigParser._validate(
+            _candidate(legacy_background_grace_seconds=5, legacy_background_timeout_seconds=5)
+        )
+    with pytest.raises(ValueError, match="legacy_background_timeout_seconds"):
+        config_module.ConfigParser._validate(
+            _candidate(legacy_background_grace_seconds=300, legacy_background_timeout_seconds=30)
+        )
+
+
+def test_background_defaults_pass_validation() -> None:
+    candidate = _candidate(legacy_background_plugins=["qi_post"])
+    config_module.ConfigParser._validate(candidate)
+    assert candidate["legacy_background_timeout_seconds"] == 300
+    assert candidate["legacy_background_grace_seconds"] == 5

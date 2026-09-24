@@ -40,20 +40,25 @@ _COMMAND_PARAMETERS = {
 
 _DISPATCH_FEEDBACK = {
     PluginDispatchStatus.PARTIAL_SUCCESS: (
-        "插件已产生部分可验证结果，但随后失败；不要再次调用同一工具。"
+        "插件已产生部分可验证结果，但后续步骤被中断，结果可能不完整；不要再次调用同一工具。"
+        "必须立即用一两句话向用户说明：任务未完整完成、缺失了哪部分，并建议稍后重试或改用原生命令。"
     ),
     PluginDispatchStatus.MATCHED_EMPTY: (
         "目标插件 Matcher 已命中，但没有产生可验证输出或副作用；"
-        "不要重复调用相同工具和参数。"
+        "不要重复调用相同工具和参数。请把这一情况如实告知用户。"
     ),
     PluginDispatchStatus.NOT_MATCHED: (
         "目标插件没有 Matcher 命中该 command；不要重复调用相同工具和参数。"
+        "请向用户说明该指令未生效，并建议直接使用对应插件的原生命令。"
     ),
     PluginDispatchStatus.FAILED: (
         "目标插件处理发生异常；不要重复调用相同工具和参数。"
+        "必须立即告知用户任务失败，并建议改用原生命令重试。"
     ),
     PluginDispatchStatus.TIMED_OUT: (
-        "目标插件处理超时；不要重复调用相同工具和参数。"
+        "目标插件处理超时，任务已被中断且没有完成；不要重复调用相同工具和参数。"
+        "必须立即用一两句话向用户说明：请求的任务因超时被中断、后续结果不会到达，"
+        "建议稍后重试或改用原生命令。"
     ),
     PluginDispatchStatus.ADMISSION_REJECTED: (
         "插件兼容执行队列已满，本次未执行。"
@@ -84,7 +89,9 @@ class PluginDispatchError(RuntimeError):
                 "插件已经确认产生并向用户显示以下结果；这部分执行成功，"
                 "不得描述为失败：\n"
                 + "\n".join(confirmed)
-                + "\n其后仍有未完成或不确定步骤；不要再次调用同一工具。"
+                + "\n其后仍有未完成或不确定步骤，最终结果可能不完整；不要再次调用同一工具。"
+                "必须向用户简短说明：结果可能不完整、缺失部分不会自动补发，"
+                "建议稍后用原生命令重新获取完整结果。"
             )
         super().__init__(feedback)
 

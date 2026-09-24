@@ -4,7 +4,7 @@ import asyncio
 import base64
 from contextlib import AsyncExitStack
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from enum import Enum
 import hashlib
 import re
@@ -624,6 +624,86 @@ def _empty_dispatch_context() -> dict[str, Any]:
     }
 
 
+def _snapshot_dispatch_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Copy counters/messages for an early-result report without touching the
+    live capture context: ``_dispatch_result`` mutates its input (flushes
+    ``pending_api`` into failures), which must not hit APIs still in flight
+    inside a background dispatch task."""
+    snapshot = _empty_dispatch_context()
+    snapshot.update(
+        {
+            key: value
+            for key, value in context.items()
+            if key not in {"messages", "pending_api"}
+        }
+    )
+    snapshot["messages"] = [dict(item) for item in context.get("messages", [])]
+    return snapshot
+
+
+# 后台任务强引用：防止分离任务被垃圾回收（asyncio 只持弱引用）
+_BACKGROUND_TASKS: set["asyncio.Task[None]"] = set()
+
+_BACKGROUND_NOTICE = (
+    "[系统提示] 该插件已转入后台执行：任务仍在运行，最终结果将由插件直接发送到会话中"
+    "（长报告类任务通常需要 40-120 秒），无需再次调用该工具，也无需重复请求。"
+    "请用一两句话告知用户任务已开始、结果稍后会直接发出。"
+)
+
+
+async def _run_background_dispatch(
+    bot: Bot,
+    fake_event: Any,
+    plugin_name: str,
+    mode: str,
+    capture_id: str,
+    command_digest: str,
+    timeout_seconds: float,
+) -> None:
+    """Owns the capture registry entry for a detached legacy dispatch.
+
+    Runs in a copied context (created while ``_capture_key`` was set), so the
+    API hooks fired by the plugin's late sends still account into the capture
+    context; pops the registry entry and logs completion when finished."""
+    started_monotonic = time.monotonic()
+    timed_out = False
+    try:
+        async with timeout_scope(timeout_seconds):
+            if mode == "full":
+                await _dispatch_full_bus(bot, fake_event)
+            else:
+                await _dispatch_targeted(bot, fake_event, plugin_name)
+    except TimeoutError:
+        timed_out = True
+        runtime_metrics.dispatch_timeouts += 1
+        runtime_metrics.dispatch_background_timeouts += 1
+        logger.warning(
+            "NoneBot 插件后台兼容调度超时: plugin=%s command_digest=%s timeout_seconds=%s",
+            plugin_name,
+            command_digest,
+            timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.error("NoneBot 插件后台兼容执行失败，异常详情已安全省略")
+    finally:
+        context = _captures.pop(capture_id, None) or _empty_dispatch_context()
+        result = _dispatch_result(context, started_monotonic=started_monotonic)
+        status = PluginDispatchStatus.TIMED_OUT if timed_out else result.status
+        logger.info(
+            "NoneBot 插件后台兼容调度完成: "
+            f"plugin={plugin_name} command_digest={command_digest[:12]} "
+            f"status={status.value} "
+            f"matcher_matched={result.matcher_matched} "
+            f"capture_success={result.successful_captures} "
+            f"api_success={result.api_succeeded} "
+            f"api_failed={result.api_failed} "
+            f"mutating_api_success={result.mutating_api_succeeded} "
+            f"duration_ms={result.duration_ms}"
+        )
+
+
 class EventSimulator:
     async def dispatch_event(
         self,
@@ -664,7 +744,83 @@ class EventSimulator:
                 mode = "full" if plugin_name in full_plugins else "targeted"
                 runtime_metrics.dispatch_modes[mode] += 1
                 forced_status = None
+                background_started = False
+                background_snapshot: dict[str, Any] | None = None
                 try:
+                    background_plugins = set(
+                        config_parser.get_config("legacy_background_plugins", []) or []
+                    )
+                    if plugin_name in background_plugins:
+                        # 后台模式：长任务插件（如群报告生成）自行向会话投递
+                        # 结果，同步等待只会撞 legacy_dispatch_timeout_seconds
+                        # 并把任务掐死在半路。这里分离执行、只等首个可见副
+                        # 作用或 grace 超时即返回，捕获注册表条目转交后台任务
+                        runtime_metrics.dispatch_background_started += 1
+                        background_timeout = float(
+                            config_parser.get_config("legacy_background_timeout_seconds", 300)
+                        )
+                        grace_seconds = float(
+                            config_parser.get_config("legacy_background_grace_seconds", 5)
+                        )
+                        command_digest = hashlib.sha256(
+                            command_str.encode("utf-8")
+                        ).hexdigest()
+                        # create_task 复制当前 contextvar（capture 已置位），
+                        # 后台任务晚到的 API 调用仍记账到同一 capture 上下文
+                        background_task = asyncio.create_task(
+                            _run_background_dispatch(
+                                bot,
+                                fake_event,
+                                plugin_name,
+                                mode,
+                                capture_id,
+                                command_digest,
+                                background_timeout,
+                            )
+                        )
+                        _BACKGROUND_TASKS.add(background_task)
+                        background_task.add_done_callback(_BACKGROUND_TASKS.discard)
+                        background_started = True
+                        grace_deadline = time.monotonic() + grace_seconds
+                        while time.monotonic() < grace_deadline:
+                            if (
+                                context.get("mutating_api_succeeded", 0)
+                                or context.get("messages")
+                                or background_task.done()
+                            ):
+                                break
+                            await asyncio.sleep(0.1)
+                        background_snapshot = _snapshot_dispatch_context(context)
+                        early_result = _dispatch_result(
+                            background_snapshot,
+                            started_monotonic=started_monotonic,
+                        )
+                        if early_result.matcher_matched and not early_result.succeeded:
+                            # matcher 已命中且任务确在后台执行；grace 内尚未
+                            # 捕获到可见输出不算失败，按"已确认后台副作用"上报
+                            early_result = dataclass_replace(
+                                early_result,
+                                status=PluginDispatchStatus.MATCHED_SIDE_EFFECT,
+                            )
+                        early_result = dataclass_replace(
+                            early_result,
+                            text="\n".join(
+                                part
+                                for part in (early_result.text, _BACKGROUND_NOTICE)
+                                if part
+                            ),
+                        )
+                        logger.info(
+                            "NoneBot 插件兼容调度转入后台: "
+                            f"plugin={plugin_name} command_digest={command_digest[:12]} "
+                            f"mode={mode} grace_seconds={grace_seconds} "
+                            f"status={early_result.status.value} "
+                            f"matcher_matched={early_result.matcher_matched} "
+                            f"mutating_api_success={early_result.mutating_api_succeeded} "
+                            f"background_timeout_seconds={background_timeout} "
+                            f"duration_ms={early_result.duration_ms}"
+                        )
+                        return early_result
                     timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 20)
                     async with timeout_scope(timeout):
                         if mode == "full":
@@ -680,10 +836,15 @@ class EventSimulator:
                 finally:
                     _synthetic_plugin.reset(event_token)
                     _capture_key.reset(capture_token)
-                    context = _captures.pop(
-                        capture_id,
-                        _empty_dispatch_context(),
-                    )
+                    if background_started:
+                        # 注册表条目已转交后台任务清理；本地仅重置 contextvar
+                        context = background_snapshot or _empty_dispatch_context()
+                        context.setdefault("protocol", "onebot_v11")
+                    else:
+                        context = _captures.pop(
+                            capture_id,
+                            _empty_dispatch_context(),
+                        )
                 result = _dispatch_result(
                     context,
                     started_monotonic=started_monotonic,

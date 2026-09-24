@@ -16,6 +16,8 @@ class RuntimeMetrics:
     dispatch_pending: int = 0
     dispatch_rejected: int = 0
     dispatch_timeouts: int = 0
+    dispatch_background_started: int = 0
+    dispatch_background_timeouts: int = 0
     member_cache_hits: int = 0
     member_cache_misses: int = 0
     member_lookup_timeouts: int = 0
