@@ -157,6 +157,7 @@ async def execute_nonebot_plugin(
         command,
         source,
         plugin_name=plugin_name,
+        wait_for_result=True,
     )
     if not isinstance(dispatch, PluginDispatchResult):
         raise TypeError("NoneBot 兼容调度必须返回 PluginDispatchResult")

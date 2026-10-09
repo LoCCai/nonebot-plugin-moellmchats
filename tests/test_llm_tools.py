@@ -1786,7 +1786,8 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
     )
     calls = []
 
-    async def dispatch(bot, event, command, source, *, plugin_name):
+    async def dispatch(bot, event, command, source, *, plugin_name, wait_for_result):
+        assert wait_for_result is True
         calls.append((bot, event, command, source, plugin_name))
         return PluginDispatchResult(
             status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
@@ -1838,7 +1839,8 @@ async def test_bread_style_steps_continue_after_recovered_read_failure(
     )
     commands: list[str] = []
 
-    async def dispatch(_bot, _event, command, _source, *, plugin_name):
+    async def dispatch(_bot, _event, command, _source, *, plugin_name, wait_for_result):
+        assert wait_for_result is True
         assert plugin_name == "bread_shop"
         commands.append(command)
         recovered = command == "/抢面包"
@@ -1898,7 +1900,8 @@ async def test_plugin_failure_fingerprint_blocks_only_identical_retry(
     )
     commands: list[str] = []
 
-    async def dispatch(_bot, _event, command, _source, *, plugin_name):
+    async def dispatch(_bot, _event, command, _source, *, plugin_name, wait_for_result):
+        assert wait_for_result is True
         assert plugin_name == "plugin_demo"
         commands.append(command)
         return PluginDispatchResult(
@@ -2424,7 +2427,8 @@ async def test_provider_catalog_nonebot_execution_uses_canonical_handler(
         async def dispatch_event(self, *_args, **_kwargs):
             raise AssertionError("Provider path must not use llm_tools rollback bus")
 
-    async def canonical_dispatch(bot, event, command, source, *, plugin_name):
+    async def canonical_dispatch(bot, event, command, source, *, plugin_name, wait_for_result):
+        assert wait_for_result is True
         calls.append((bot, event, command, source, plugin_name))
         return PluginDispatchResult(
             status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
@@ -2721,7 +2725,9 @@ async def test_llm_tools_config_rollback_keeps_legacy_nonebot_adapter(
             source,
             *,
             plugin_name,
+            wait_for_result,
         ):
+            assert wait_for_result is True
             rollback_calls.append((command, plugin_name))
             return PluginDispatchResult(
                 status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,

@@ -96,7 +96,9 @@ async def test_nonebot_plugin_adapter_uses_bounded_event_simulator(
         source,
         *,
         plugin_name,
+        wait_for_result,
     ):
+        assert wait_for_result is True
         calls.append(
             (received_bot, received_event, command, source, plugin_name)
         )

@@ -164,6 +164,106 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch):
     assert chat.bot.sent == ["两步都完成了"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision_available", [True, False])
+async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vision_available):
+    from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+    from nonebot.adapters.onebot.v11.event import Sender
+
+    from nonebot_plugin_moellmchats import event_simulator as simulator
+    from nonebot_plugin_moellmchats.admission import AdmissionController
+
+    values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 1,
+              "tool_progress_messages_enabled": False, "legacy_background_plugins": ["qi_zmws"]}
+    monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
+    gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
+    monkeypatch.setattr(simulator, "get_dispatch_controller", lambda: gate)
+    finished = asyncio.Event()
+
+    async def dispatch(bot, event, plugin_name):
+        context = simulator._captures[simulator._capture_key.get()]
+        context["matcher_matched"] += 1
+        for index, message in enumerate((Message("正在查询"), Message("[CQ:image,file=base64://aW1hZ2U=]"))):
+            if index:
+                await asyncio.sleep(0.15)
+            data = {"message": message}
+            await simulator._capture_outgoing_api(bot, "send_group_msg", data)
+            await simulator._confirm_outgoing_api(bot, None, "send_group_msg", data, {"message_id": index + 1})
+        finished.set()
+
+    monkeypatch.setattr(simulator, "_dispatch_targeted", dispatch)
+    chat = object.__new__(MoeLlm)
+    chat.bot = _ScriptedBot([None])
+    chat.bot.self_id = "10000"
+    chat.bot.adapter = SimpleNamespace(get_name=lambda: "OneBot V11")
+    chat.event = GroupMessageEvent(time=1, self_id=10000, post_type="message", sub_type="normal",
+        user_id=123, message_type="group", group_id=456, message_id=200, message=Message("分析角色装备"),
+        original_message=Message("分析角色装备"), raw_message="分析角色装备", font=0,
+        sender=Sender(user_id=123, nickname="tester"))
+    chat.user_id = "123"
+    chat.agent_runtime = None
+    chat.is_objective = True
+    chat.emotion_flag = False
+    chat.is_superuser = True
+    chat.format_message_dict = {"text": ["分析角色装备"]}
+    chat.prompt, chat.dynamic_context = "system", ""
+    chat.model_info = {"model": "text-model", "url": "https://text.invalid", "key": "text-test-key", "stream": False}
+    chat.tool_snapshot = ToolSnapshot(generation=1, custom_tools={},
+        plugin_info={"qi_zmws": {"name": "造梦", "description": "查询资料"}},
+        tool_dependencies={}, mcp_tool_names=set())
+    chat._current_tool_usage = Counter()
+    chat._pending_vision_images = []
+    entity = SimpleNamespace(tool_messages=[], add_used_plugins=lambda value: None)
+    monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(messages_entity=entity,
+        pre_process=lambda message: "分析角色装备",
+        get_send_message_list=lambda **kwargs: [{"role": "user", "content": "分析角色装备"}]))
+    monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
+    vision = {"model": "vision-model", "url": "https://vision.invalid", "key": "vision-test-key",
+              "stream": False, "no_tools": True}
+    monkeypatch.setattr(module.model_selector, "get_model_for_capabilities", lambda *args: vision if vision_available else None)
+    monkeypatch.setattr(module, "get_session", object)
+
+    async def prepare(*args):
+        return None
+
+    chat._validate_runtime_model_config = prepare
+    chat._prepare_model_info = prepare
+    chat.prompt_handler = lambda: None
+    chat._build_payload = lambda history: ({"messages": history, "model": "text-model", "stream": False,
+                                           "tools": [{"type": "function"}]}, False)
+    chat._sanitize_tool_calls_for_history = lambda calls: calls
+    observations = []
+
+    async def model(session, url, headers, data, proxy, timeout):
+        observations.append(data["model"])
+        if len(observations) == 1:
+            return True, "", [{"id": "profile", "type": "function", "function": {
+                "name": "qi_zmws", "arguments": '{"command":"/造梦资料 123|4399|26"}'}}], ""
+        assert finished.is_set()
+        assert url == "https://vision.invalid"
+        assert headers["Authorization"] == "vision-test-key"
+        assert "tools" not in data
+        assert {"role": "user", "content": "分析角色装备"} in data["messages"]
+        image_messages = [message["content"] for message in data["messages"] if isinstance(message["content"], list)]
+        assert len(image_messages) == 1
+        assert image_messages[0][-1] == {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aW1hZ2U="}}
+        return True, "根据资料图，装备还可以继续强化。", None, ""
+
+    chat.none_stream_llm_chat = model
+    result = await chat.get_llm_chat()
+    assert finished.is_set()
+    assert simulator._captures == {}
+    assert simulator._BACKGROUND_TASKS == set()
+    if vision_available:
+        assert result is True
+        assert observations == ["text-model", "vision-model"]
+        assert chat.bot.sent == ["根据资料图，装备还可以继续强化。"]
+    else:
+        assert "未配置视觉模型" in result
+        assert observations == ["text-model"]
+        assert chat.bot.sent == []
+
+
 def _action_failed() -> ActionFailed:
     return ActionFailed(
         status="failed",

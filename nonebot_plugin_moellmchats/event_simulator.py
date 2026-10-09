@@ -713,6 +713,8 @@ class EventSimulator:
         command_str: str,
         format_message_dict: dict | None = None,
         plugin_name: str | None = None,
+        *,
+        wait_for_result: bool = False,
     ) -> PluginDispatchResult:
         started_monotonic = time.monotonic()
         if (
@@ -751,7 +753,11 @@ class EventSimulator:
                     background_plugins = set(
                         config_parser.get_config("legacy_background_plugins", []) or []
                     )
-                    if plugin_name in background_plugins:
+                    # Model tool observations must include the completed output.
+                    # A progress notice cannot stand in for the image the next
+                    # model round needs to inspect. Explicit delivery callers
+                    # may still opt into the detached compatibility path.
+                    if plugin_name in background_plugins and not wait_for_result:
                         # 后台模式：长任务插件（如群报告生成）自行向会话投递
                         # 结果，同步等待只会撞 legacy_dispatch_timeout_seconds
                         # 并把任务掐死在半路。这里分离执行、只等首个可见副

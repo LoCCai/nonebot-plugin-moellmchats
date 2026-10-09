@@ -1855,6 +1855,7 @@ class LlmToolsMixin:
                                 command,
                                 self.format_message_dict,
                                 plugin_name=func_name,
+                                wait_for_result=True,
                             )
                             if not isinstance(
                                 raw_dispatch_result,

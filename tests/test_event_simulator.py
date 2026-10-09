@@ -804,6 +804,67 @@ async def _drain_background_tasks(timeout: float = 5.0) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["targeted", "full"])
+async def test_model_dispatch_waits_past_progress_notice_for_final_image(monkeypatch, mode):
+    _use_local_gate(monkeypatch)
+    _background_config_router(monkeypatch,
+        legacy_full_event_plugins=["slow_report"] if mode == "full" else [])
+    finished = asyncio.Event()
+
+    async def dispatch(bot, event, *args):
+        key = simulator_module._capture_key.get()
+        context = simulator_module._captures[key]
+        context["matcher_matched"] += 1
+        for index, message in enumerate((Message("正在查询"), Message("[CQ:image,file=base64://aW1hZ2U=]"))):
+            if index:
+                await asyncio.sleep(0.15)
+            data = {"message": message}
+            await simulator_module._capture_outgoing_api(bot, "send_group_msg", data)
+            await simulator_module._confirm_outgoing_api(bot, None, "send_group_msg", data, {"message_id": index + 1})
+        finished.set()
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    monkeypatch.setattr(simulator_module, "_dispatch_full_bus", dispatch)
+    result = await simulator_module.event_simulator.dispatch_event(
+        object(), _event(200), "报告并分析", plugin_name="slow_report", wait_for_result=True,
+    )
+    assert finished.is_set()
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    assert result.images == ("data:image/jpeg;base64,aW1hZ2U=",)
+    assert result.successful_captures == 2
+    assert "后台" not in result.text
+    assert simulator_module._captures == {}
+    assert simulator_module._BACKGROUND_TASKS == set()
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_final_output_cancels_plugin_and_cleans_capture(monkeypatch):
+    _use_local_gate(monkeypatch)
+    _background_config_router(monkeypatch)
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def dispatch(bot, event, plugin_name):
+        simulator_module._captures[simulator_module._capture_key.get()]["matcher_matched"] += 1
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    task = asyncio.create_task(simulator_module.event_simulator.dispatch_event(
+        object(), _event(200), "报告并分析", plugin_name="slow_report", wait_for_result=True,
+    ))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set()
+    assert simulator_module._captures == {}
+    assert simulator_module._BACKGROUND_TASKS == set()
+
+
+@pytest.mark.asyncio
 async def test_background_dispatch_returns_at_first_visible_effect(monkeypatch) -> None:
     _use_local_gate(monkeypatch)
     _background_config_router(monkeypatch)

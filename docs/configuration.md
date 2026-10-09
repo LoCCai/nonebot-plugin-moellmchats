@@ -141,6 +141,7 @@ LOCALSTORE_USE_CWD=true
 | `cd_seconds` | `120` | 用户成功占用对话后进入的冷却时间；排队前检查；允许 `0`～`86400`，`0` 表示关闭 | 可由超管执行 `设置LLM冷却 <秒数>` 热修改 |
 | `legacy_dispatch_max_pending` | `16` | 完整 NoneBot 事件总线兼容投递的等待上限 | 只有遗留插件确有需要时调整 |
 | `legacy_dispatch_timeout_seconds` | `180` | 兼容投递单次超时；同时受工具及请求剩余时间约束 | 遗留 Matcher 较慢时按需调整 |
+| `legacy_background_plugins` | `[]` | 显式后台投递可使用的插件名单；LLM 原生工具仍等待最终输出，以保留图片分析 | 不把“正在查询”当成最终答案 |
 | `legacy_full_event_plugins` | `[]` | 必须走完整事件总线的插件包名数组；其他插件只定向执行 Matcher | 仅解决已确认的前处理器依赖 |
 | `member_cache_ttl_seconds` | `600` | QQ 群成员信息缓存多久 | 群名片频繁变化时降低 |
 | `member_cache_max_entries` | `4096` | 群成员缓存最大条目数 | 超大群/多群实例才需增加 |
