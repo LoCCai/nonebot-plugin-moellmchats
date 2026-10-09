@@ -273,7 +273,7 @@ async def execute_custom_tool(
     timeout = (
         spec.timeout_seconds
         if spec is not None and spec.timeout_seconds
-        else config_parser.get_config("tool_timeout_seconds", 30)
+        else config_parser.get_config("tool_timeout_seconds", 180)
     )
     try:
         async with timeout_scope(timeout):

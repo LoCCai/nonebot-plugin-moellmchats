@@ -141,7 +141,7 @@ def _call(identifier: int, name: str, arguments: str = "{}") -> dict:
     }
 
 
-async def _agent_request_runtime() -> AgentRequestRuntime:
+async def _agent_request_runtime(*, executing: bool = True) -> AgentRequestRuntime:
     snapshot = RuntimeSnapshot(
         generation=1,
         config={},
@@ -165,8 +165,9 @@ async def _agent_request_runtime() -> AgentRequestRuntime:
         request_id=1,
         deadline=DeadlineContext.from_timeout(30),
     )
-    await runtime.advance(AgentRunState.PLANNING, model="model")
-    await runtime.advance(AgentRunState.EXECUTING)
+    if executing:
+        await runtime.advance(AgentRunState.PLANNING, model="model")
+        await runtime.advance(AgentRunState.EXECUTING)
     return runtime
 
 
@@ -280,14 +281,19 @@ def _parallel_graph(*tool_names: str) -> ToolGraph:
 
 
 @pytest.mark.asyncio
-async def test_only_one_tool_executes_each_round() -> None:
+async def test_multiple_tools_execute_in_order_without_parallel_side_effects() -> None:
     calls = Counter()
+    order = []
 
     async def first():
+        order.append("first:start")
+        await asyncio.sleep(0)
+        order.append("first:end")
         calls["first"] += 1
         return "first"
 
     async def second():
+        order.append("second")
         calls["second"] += 1
         return "second"
 
@@ -300,8 +306,35 @@ async def test_only_one_tool_executes_each_round() -> None:
     messages = await harness._execute_tools(
         [_call(1, "first"), _call(2, "second")], "", [], ""
     )
-    assert calls == {"first": 1}
-    assert "已跳过" in messages[-1]["content"]
+    assert calls == {"first": 1, "second": 1}
+    assert order == ["first:start", "first:end", "second"]
+    assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_configured_round_call_limit_keeps_every_tool_observation(monkeypatch) -> None:
+    monkeypatch.setattr(config_parser, "get_config",
+        lambda key, default=None: 1 if key == "max_tool_calls_per_round" else default)
+    calls = []
+
+    async def tool():
+        calls.append("executed")
+        return "ok"
+
+    harness = Harness({"first": {"func": tool}, "second": {"func": tool}})
+    messages = await harness._execute_tools([_call(1, "first"), _call(2, "second")], "", [], "")
+    assert calls == ["executed"]
+    observations = [message for message in messages if message["role"] == "tool"]
+    assert len(observations) == 2
+    assert "已跳过" in observations[-1]["content"]
+
+
+def test_default_tool_timeout_is_180_and_respects_remaining_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(config_parser, "get_config", lambda key, default=None: default)
+    harness = Harness({})
+    assert harness._tool_timeout_seconds() == 180
+    harness.agent_runtime = SimpleNamespace(deadline=SimpleNamespace(remaining=lambda: 72.5))
+    assert harness._tool_timeout_seconds() == 72.5
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1184,10 @@ async def test_parallel_caller_cancellation_propagates_after_full_drain() -> Non
 
 
 @pytest.mark.asyncio
-async def test_real_tool_path_records_completed_rejected_and_round_limit_calls() -> None:
+async def test_real_tool_path_records_completed_rejected_and_round_limit_calls(monkeypatch) -> None:
+    original_get_config = config_parser.get_config
+    monkeypatch.setattr(config_parser, "get_config",
+        lambda key, default=None: 1 if key == "max_tool_calls_per_round" else original_get_config(key, default))
     async def tool() -> str:
         return "ok"
 
@@ -1696,6 +1732,34 @@ async def test_web_search_legacy_branch_uses_canonical_builtin_handler(
     assert calls == [("latest", harness.tool_snapshot, True)]
     assert harness.bot.sent == ["正在调用搜索工具：web_search"]
     assert "external observation" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_nonebot_plugin_legacy_branch_preserves_background_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {"qi_zmws": {"description": "造梦资料", "usage": "/造梦资料"}}
+    )
+    notice = "任务仍在后台运行，资料将稍后发送，无需再次调用。"
+
+    async def dispatch(*_args, **_kwargs):
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_SIDE_EFFECT,
+            text=notice,
+            matcher_matched=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    messages = await harness._execute_tools(
+        [_call(1, "qi_zmws", '{"command":"/造梦资料 我的 完整"}')],
+        "", [], "",
+    )
+    assert notice in messages[-1]["content"]
+    assert "副作用动作" not in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -2530,6 +2594,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     assert harness.sent == []
     assert len(harness.bot.sent) == 1
     assert "确认执行" in harness.bot.sent[0]
+    assert harness._waiting_confirmation is True
     await pending_action_store.clear()
 
 
@@ -2618,6 +2683,7 @@ async def test_protocol_confirmation_remains_visible_when_progress_is_off(
     runtime = harness.agent_runtime
     assert runtime is not None
     assert runtime.tool_calls[-1].status is ToolCallStatus.WAITING_CONFIRMATION
+    assert harness._waiting_confirmation is True
     await pending_action_store.clear()
 
 

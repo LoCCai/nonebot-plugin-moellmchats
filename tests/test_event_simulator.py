@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import uuid
 
-from nonebot import on_fullmatch
+from nonebot import on_fullmatch, on_regex
 from nonebot.adapters.onebot.v11 import Bot as V11Bot
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
@@ -26,10 +26,51 @@ from nonebot.adapters.onebot.v12 import (
 )
 from nonebot.exception import ActionFailed, NetworkError
 from nonebot.internal.matcher import matchers
+from nonebot.params import RegexDict
 import pytest
 
 from nonebot_plugin_moellmchats import event_simulator as simulator_module
 from nonebot_plugin_moellmchats.admission import AdmissionController
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("command", "role"), [
+    ("/群老婆", "老婆"), ("/抽群友", "群友"), ("抽一个", "群友"), ("抽一个老婆", "老婆"),
+])
+async def test_regex_arguments_survive_real_ai_dispatch(monkeypatch, command, role):
+    # A portable third party matcher exercises RegexDict injection without
+    # depending on a particular production checkout or its current internals.
+    matcher = on_regex(r"^(?:/群(?P<role>老婆)|/抽(?P<generic>群友)|抽一个(?P<suffix>老婆)?)$", priority=7, block=True)
+    drawn = []
+
+    @matcher.handle()
+    async def draw(event: GroupMessageEvent, groups: dict = RegexDict()):
+        selected = groups.get("role") or groups.get("suffix") or "群友"
+        drawn.append((event.user_id, event.group_id, selected, False))
+        await matcher.finish("已抽到测试群友")
+    monkeypatch.setattr(simulator_module, "get_plugin",
+        lambda name: SimpleNamespace(matcher={matcher}) if name == "qi_random_role" else None)
+
+    class Adapter:
+        @staticmethod
+        def get_name():
+            return "OneBot V11"
+
+        async def _call_api(self, bot, api, **data):
+            return {"message_id": 12345}
+
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V11Bot(Adapter(), "10000"), _event(100), command, plugin_name="qi_random_role",
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+    assert drawn == [(123, 456, role, False)]
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    assert result.matcher_matched == 1
+    assert "已抽到测试群友" in result.text
 
 
 def _event(message_id: int, text: str = "original") -> GroupMessageEvent:

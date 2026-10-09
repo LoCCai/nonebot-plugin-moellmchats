@@ -355,127 +355,73 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         )
 
 
-confirm_action_matcher = on_command(
-    "确认执行",
-    priority=0,
-    block=True,
-)
+# Confirmation must work with bare text and @Bot, independently of
+# command_start. Keep it outside the model so it cannot generate a new action.
+from .confirmation_input import confirmation_requested, parse_confirmation
+
+confirm_action_matcher = on_message(rule=confirmation_requested, priority=-1, block=True)
+cancel_action_matcher = confirm_action_matcher
+
+
+async def _run_confirmation_code(action_name: str, code: str, bot: Bot, event: MessageEvent) -> str:
+    snapshot = runtime_snapshots.current()
+    if snapshot is None:
+        raise PendingActionError("LLM 运行快照尚未就绪，操作已拒绝")
+    from .onebot_facade import event_user_id
+    from .protocol_broker import ProtocolExecutionError, protocol_broker, protocol_pending_actions
+
+    cancel = action_name == "取消执行"
+    try:
+        if await protocol_pending_actions.contains(code):
+            if cancel:
+                await protocol_pending_actions.cancel(code, bot=bot, event=event)
+                return "已取消该待确认协议操作。"
+            invocation = await protocol_broker.confirm(
+                code, bot=bot, event=event, generation=snapshot.generation,
+                is_superuser=event_user_id(event) in {
+                    str(value) for value in getattr(getattr(bot, "config", None), "superusers", set())
+                },
+            )
+            return f"已确认并执行协议工具 {invocation.tool_name}：\n{render_tool_result(invocation.result) or '执行成功'}"
+        async with runtime_resource_host.lease(snapshot) as coordinator:
+            if cancel:
+                action_store = coordinator.resources.pending_action_store or pending_action_store
+                await action_store.cancel(code, bot=bot, event=event)
+                return "已取消该待确认操作。"
+            action, result = await execute_pending_action(
+                code, bot=bot, event=event, runtime_snapshot=snapshot,
+                store=coordinator.resources.pending_action_store,
+            )
+        result_text = result.text or "执行成功"
+        if result.images:
+            result_text += f"\n[工具还返回了 {len(result.images)} 张图片；确认通道不会直接转发工具提供的文件或 URL。]"
+        return f"已确认并执行工具 {action.tool_name}：\n{result_text}"
+    except (PendingActionError, ProtocolExecutionError):
+        raise
+    except Exception as error:
+        raise PendingActionError(f"确认服务执行失败 ({type(error).__name__})，请检查任务列表后再操作") from None
 
 
 @confirm_action_matcher.handle()
-async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+async def _(bot: Bot, event: MessageEvent):
     from .event_simulator import is_synthetic_event
 
     if is_synthetic_event():
         return
-    parts = args.extract_plain_text().strip().split()
-    if len(parts) != 1:
-        await confirm_action_matcher.finish("格式：确认执行 <6位确认码>")
     try:
-        snapshot = runtime_snapshots.current()
-        if snapshot is None:
-            raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
-        from .onebot_facade import event_user_id
-        from .protocol_broker import (
-            ProtocolExecutionError,
-            protocol_broker,
-            protocol_pending_actions,
-        )
+        action_name, codes = parse_confirmation(event.get_plaintext())
+    except ValueError as error:
+        await confirm_action_matcher.finish(str(error))
+    from .protocol_broker import ProtocolExecutionError
 
-        if await protocol_pending_actions.contains(parts[0]):
-            try:
-                invocation = await protocol_broker.confirm(
-                    parts[0],
-                    bot=bot,
-                    event=event,
-                    generation=snapshot.generation,
-                    is_superuser=event_user_id(event)
-                    in {
-                        str(value)
-                        for value in getattr(
-                            getattr(bot, "config", None),
-                            "superusers",
-                            set(),
-                        )
-                    },
-                )
-            except ProtocolExecutionError as error:
-                await confirm_action_matcher.finish(f"确认失败：{error}")
-            result_text = render_tool_result(invocation.result) or "执行成功"
-            await confirm_action_matcher.send(f"已确认并执行协议工具 {invocation.tool_name}：\n{result_text}")
-            await confirm_action_matcher.finish()
+    results = []
+    for code in codes:
         try:
-            async with runtime_resource_host.lease(snapshot) as coordinator:
-                action, result = await execute_pending_action(
-                    parts[0],
-                    bot=bot,
-                    event=event,
-                    runtime_snapshot=snapshot,
-                    store=coordinator.resources.pending_action_store,
-                )
-        except PendingActionError:
-            raise
-        except Exception as error:
-            raise PendingActionError(f"确认存储不可用，危险操作已拒绝 ({type(error).__name__})") from None
-    except PendingActionError as error:
-        await confirm_action_matcher.finish(f"确认失败：{error}")
-
-    result_text = result.text or "执行成功"
-    images = result.images
-    if images:
-        result_text += f"\n[工具还返回了 {len(images)} 张图片；危险操作确认通道不会直接转发工具提供的文件或 URL。]"
-    await confirm_action_matcher.send(f"已确认并执行工具 {action.tool_name}：\n{result_text}")
-    await confirm_action_matcher.finish()
-
-
-cancel_action_matcher = on_command(
-    "取消执行",
-    priority=0,
-    block=True,
-)
-
-
-@cancel_action_matcher.handle()
-async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
-    from .event_simulator import is_synthetic_event
-
-    if is_synthetic_event():
-        return
-    parts = args.extract_plain_text().strip().split()
-    if len(parts) != 1:
-        await cancel_action_matcher.finish("格式：取消执行 <6位确认码>")
-    try:
-        snapshot = runtime_snapshots.current()
-        if snapshot is None:
-            raise PendingActionError("LLM 运行快照尚未就绪，危险操作已拒绝")
-        from .protocol_broker import (
-            ProtocolExecutionError,
-            protocol_pending_actions,
-        )
-
-        if await protocol_pending_actions.contains(parts[0]):
-            try:
-                await protocol_pending_actions.cancel(
-                    parts[0],
-                    bot=bot,
-                    event=event,
-                )
-            except ProtocolExecutionError as error:
-                await cancel_action_matcher.finish(f"取消失败：{error}")
-            await cancel_action_matcher.finish("已取消该待确认协议操作。")
-        try:
-            async with runtime_resource_host.lease(snapshot) as coordinator:
-                action_store = coordinator.resources.pending_action_store
-                if action_store is None:
-                    action_store = pending_action_store
-                await action_store.cancel(parts[0], bot=bot, event=event)
-        except PendingActionError:
-            raise
-        except Exception as error:
-            raise PendingActionError(f"确认存储不可用，危险操作已拒绝 ({type(error).__name__})") from None
-    except PendingActionError as error:
-        await cancel_action_matcher.finish(f"取消失败：{error}")
-    await cancel_action_matcher.finish("已取消该待确认操作。")
+            result = await _run_confirmation_code(action_name, code, bot, event)
+        except (PendingActionError, ProtocolExecutionError) as error:
+            result = f"{action_name}失败：{error}"
+        results.append(f"{code}：{result}")
+    await confirm_action_matcher.finish("\n\n".join(results))
 
 
 set_use_tools_matcher = on_command(

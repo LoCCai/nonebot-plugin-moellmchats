@@ -47,6 +47,21 @@ def test_default_config_passes_validation() -> None:
     config_module.ConfigParser._validate(_candidate())
 
 
+def test_slow_plugin_defaults_and_multiple_tool_rounds() -> None:
+    assert DEFAULT_CONFIG["request_timeout_seconds"] == 180
+    assert DEFAULT_CONFIG["tool_timeout_seconds"] == 180
+    assert DEFAULT_CONFIG["legacy_dispatch_timeout_seconds"] == 180
+    assert DEFAULT_CONFIG["max_tool_rounds"] == 6
+    assert DEFAULT_CONFIG["max_agent_steps"] == 6
+    assert DEFAULT_CONFIG["max_tool_calls_per_round"] == 4
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "4"])
+def test_tool_call_limit_must_be_a_positive_integer(value) -> None:
+    with pytest.raises(ValueError, match="max_tool_calls_per_round"):
+        config_module.ConfigParser._validate(_candidate(max_tool_calls_per_round=value))
+
+
 def test_unknown_config_key_warns_and_is_preserved(tmp_path, monkeypatch) -> None:
     records: list[str] = []
 

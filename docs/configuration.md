@@ -122,13 +122,14 @@ LOCALSTORE_USE_CWD=true
 | --- | ---: | --- | --- |
 | `max_retry_times` | `3` | 一次模型步骤总尝试数，包含第一次；重试前等待 4 秒、8 秒 | 不稳定 API 可保留；总预算较小时降低 |
 | `max_tool_rounds` | `6` | 兼容工具闭环轮数上限 | 多步骤任务确有需要时调整 |
+| `max_tool_calls_per_round` | `4` | 同一轮按顺序执行的工具数量上限；超过上限的调用返回跳过记录，允许下一轮继续 | 按实际任务复杂度调整 |
 | `max_agent_steps` | `6` | Agent 工具步骤上限；实际与 `max_tool_rounds` 取较小值 | 通常与上项保持一致 |
 | `max_repeated_tool_calls` | `2` | 同一任务内同一工具使用同一组规范化参数最多调用几次 | 防止模型原样循环；不同实质参数仍受总工具轮次与 Agent 步数限制 |
 | `max_tool_result_chars` | `6000` | 没有独立 `result_limit` 时，工具文本最多交给模型多少字符 | 控制上下文与数据暴露面 |
 | `max_tool_images` | `4` | 一轮工具结果最多交给视觉模型多少张图 | 视觉模型能力明确时再增加 |
 | `request_timeout_seconds` | `180` | 整个任务的单一墙钟预算，包含排队、分类、模型、工具和收尾 | 慢模型可增加，但队列会占更久 |
 | `classification_timeout_seconds` | `20` | 单次分类请求超时 | 分类服务慢且可靠时小幅增加 |
-| `tool_timeout_seconds` | `30` | 未在 ToolSpec 中单独声明时的可信工具超时 | 只读慢查询可按需调整 |
+| `tool_timeout_seconds` | `180` | 未在 ToolSpec 中单独声明时的可信工具超时；同时受请求剩余时间约束 | 慢查询可按需调整 |
 
 ### 冷却、准入、兼容投递与成员缓存
 
@@ -139,7 +140,7 @@ LOCALSTORE_USE_CWD=true
 | `llm_max_per_user` | `2` | 单用户总槽位；默认表现为 1 个活动 + 1 个等待 | 防止单用户占满队列 |
 | `cd_seconds` | `120` | 用户成功占用对话后进入的冷却时间；排队前检查；允许 `0`～`86400`，`0` 表示关闭 | 可由超管执行 `设置LLM冷却 <秒数>` 热修改 |
 | `legacy_dispatch_max_pending` | `16` | 完整 NoneBot 事件总线兼容投递的等待上限 | 只有遗留插件确有需要时调整 |
-| `legacy_dispatch_timeout_seconds` | `20` | 兼容投递单次超时 | 遗留 Matcher 较慢时谨慎增加 |
+| `legacy_dispatch_timeout_seconds` | `180` | 兼容投递单次超时；同时受工具及请求剩余时间约束 | 遗留 Matcher 较慢时按需调整 |
 | `legacy_full_event_plugins` | `[]` | 必须走完整事件总线的插件包名数组；其他插件只定向执行 Matcher | 仅解决已确认的前处理器依赖 |
 | `member_cache_ttl_seconds` | `600` | QQ 群成员信息缓存多久 | 群名片频繁变化时降低 |
 | `member_cache_max_entries` | `4096` | 群成员缓存最大条目数 | 超大群/多群实例才需增加 |

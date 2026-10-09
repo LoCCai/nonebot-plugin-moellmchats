@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
+from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11.exception import (
     ActionFailed,
@@ -11,6 +13,155 @@ import pytest
 
 from nonebot_plugin_moellmchats import moe_llm as module
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
+from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("objective", [False, True])
+async def test_pending_confirmation_releases_request_without_followup_model(monkeypatch, objective):
+    from unittest.mock import Mock
+
+    from test_llm_tools import _agent_request_runtime
+
+    from nonebot_plugin_moellmchats.agent_runtime import AgentRunState, ToolCallStatus
+    from nonebot_plugin_moellmchats.pending_actions import pending_action_store
+    from nonebot_plugin_moellmchats.tool_contracts import ToolEffect, ToolSpec
+
+    await pending_action_store.clear()
+    values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 3, "tool_progress_messages_enabled": False}
+    monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
+    executed = []
+
+    async def mutate():
+        executed.append(True)
+        return "updated"
+
+    spec = ToolSpec(
+        name="update_schedule", description="update schedule",
+        parameters={"type": "object", "properties": {}}, handler=mutate, effect=ToolEffect.MUTATING,
+    )
+    chat = object.__new__(MoeLlm)
+    chat.bot = _ScriptedBot([None])
+    chat.bot.self_id = "10000"
+    chat.bot.adapter = SimpleNamespace(get_name=lambda: "OneBot V11")
+    chat.event = SimpleNamespace(user_id=1, group_id=456)
+    chat.user_id = "1"
+    chat.agent_runtime = await _agent_request_runtime(executing=False)
+    chat.is_objective = objective
+    chat.emotion_flag = False
+    chat.is_superuser = True
+    chat.format_message_dict = {"text": ["给定时任务加一个预测"]}
+    chat.prompt, chat.dynamic_context = "system", ""
+    chat.model_info = {"model": "fake", "url": "https://model.invalid", "key": "test-only-key", "stream": False}
+    chat.tool_snapshot = ToolSnapshot(
+        generation=1, custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
+        plugin_info={}, tool_dependencies={}, mcp_tool_names=set(),
+    )
+    chat._current_tool_usage = Counter()
+    chat._pending_vision_images = []
+    entity = SimpleNamespace(tool_messages=[], add_used_plugins=lambda value: None)
+    messages = SimpleNamespace(messages_entity=entity, pre_process=lambda message: "加一个预测",
+        get_send_message_list=lambda **kwargs: [], post_process=Mock())
+    monkeypatch.setattr(module, "MessagesHandler", lambda user: messages)
+    monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(module, "get_session", object)
+
+    async def prepare(*args):
+        return None
+
+    chat._validate_runtime_model_config = prepare
+    chat._prepare_model_info = prepare
+    chat.prompt_handler = lambda: None
+    chat._build_payload = lambda history: ({"messages": history, "stream": False, "tools": [{"type": "function"}]}, False)
+    chat._sanitize_tool_calls_for_history = lambda calls: calls
+    model_calls = []
+
+    async def model(*args):
+        model_calls.append(True)
+        assert len(model_calls) == 1, "等待确认后不应继续模型请求或网络重试"
+        return True, "", [{"id": "update", "type": "function", "function": {"name": spec.name, "arguments": "{}"}}], ""
+
+    chat.none_stream_llm_chat = model
+    try:
+        assert await chat.get_llm_chat() is True
+        assert len(model_calls) == 1
+        assert executed == []
+        assert len(chat.bot.sent) == 1
+        assert "确认执行" in chat.bot.sent[0]
+        assert await pending_action_store.size() == 1
+        assert chat.agent_runtime.run.state is AgentRunState.COMPLETED
+        assert chat.agent_runtime.tool_calls[-1].status is ToolCallStatus.WAITING_CONFIRMATION
+        if objective:
+            messages.post_process.assert_not_called()
+        else:
+            assert "尚未执行" in messages.post_process.call_args.kwargs["assistant_msg"]
+            assert messages.post_process.call_args.kwargs["tool_messages"]
+    finally:
+        await pending_action_store.clear()
+
+
+@pytest.mark.asyncio
+async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch):
+    values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 1, "tool_progress_messages_enabled": False}
+    monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
+    executed, observations = [], []
+
+    async def first():
+        executed.append("first")
+        return "first-result"
+
+    async def second():
+        executed.append("second")
+        return "second-result"
+
+    chat = object.__new__(MoeLlm)
+    chat.bot = _ScriptedBot([None])
+    chat.event = object()
+    chat.user_id = "10001"
+    chat.agent_runtime = None
+    chat.is_objective = True
+    chat.emotion_flag = False
+    chat.is_superuser = False
+    chat.format_message_dict = {"text": ["做两个步骤"]}
+    chat.prompt, chat.dynamic_context = "system", ""
+    chat.model_info = {"model": "fake", "url": "https://model.invalid", "key": "test-only-key", "stream": False}
+    chat.tool_snapshot = ToolSnapshot(
+        generation=1, custom_tools={"first": {"func": first}, "second": {"func": second}},
+        plugin_info={}, tool_dependencies={}, mcp_tool_names=set(),
+    )
+    chat._current_tool_usage = Counter()
+    chat._pending_vision_images = []
+    entity = SimpleNamespace(tool_messages=[], add_used_plugins=lambda value: None)
+    monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(
+        messages_entity=entity, pre_process=lambda message: "做两个步骤", get_send_message_list=lambda **kwargs: [],
+    ))
+    monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(module, "get_session", object)
+
+    async def prepare(*args):
+        return None
+
+    chat._validate_runtime_model_config = prepare
+    chat._prepare_model_info = prepare
+    chat.prompt_handler = lambda: None
+    chat._build_payload = lambda messages: ({"messages": messages, "stream": False, "tools": [{"type": "function"}]}, False)
+    chat._sanitize_tool_calls_for_history = lambda calls: calls
+
+    async def model(session, url, headers, data, proxy, timeout):
+        assert timeout.total == 180
+        observations.append([message["content"] for message in data["messages"] if message["role"] == "tool"])
+        if len(observations) <= 2:
+            name = "first" if len(observations) == 1 else "second"
+            return True, "", [{"id": name, "type": "function", "function": {"name": name, "arguments": "{}"}}], ""
+        return True, "两步都完成了", None, ""
+
+    chat.none_stream_llm_chat = model
+    assert await chat.get_llm_chat() is True
+    assert executed == ["first", "second"]
+    assert len(observations) == 3
+    assert "first-result" in observations[1][0]
+    assert "second-result" in observations[2][1]
+    assert chat.bot.sent == ["两步都完成了"]
 
 
 def _action_failed() -> ActionFailed:

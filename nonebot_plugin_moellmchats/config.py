@@ -29,13 +29,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_context_sessions": 1_000,
     "max_retry_times": 3,
     "max_tool_rounds": 6,
+    "max_tool_calls_per_round": 4,
     "max_agent_steps": 6,
     "max_repeated_tool_calls": 2,
     "max_tool_result_chars": 6_000,
     "max_tool_images": 4,
     "request_timeout_seconds": 180,
     "classification_timeout_seconds": 20,
-    "tool_timeout_seconds": 30,
+    "tool_timeout_seconds": 180,
     "pending_action_ttl_seconds": 120,
     "pending_action_max_entries": 256,
     "pending_action_max_argument_bytes": 16_384,
@@ -46,7 +47,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "llm_max_pending": 32,
     "llm_max_per_user": 2,
     "legacy_dispatch_max_pending": 16,
-    "legacy_dispatch_timeout_seconds": 20,
+    "legacy_dispatch_timeout_seconds": 180,
     "legacy_background_plugins": [],
     "legacy_background_timeout_seconds": 300,
     "legacy_background_grace_seconds": 5,
@@ -99,6 +100,7 @@ _POSITIVE_INTEGER_FIELDS = {
     "max_context_sessions",
     "max_retry_times",
     "max_tool_rounds",
+    "max_tool_calls_per_round",
     "max_agent_steps",
     "max_repeated_tool_calls",
     "max_tool_result_chars",
@@ -225,7 +227,11 @@ class ConfigParser:
         background_timeout = candidate.get("legacy_background_timeout_seconds")
         if not isinstance(background_grace, int) or isinstance(background_grace, bool) or background_grace <= 0:
             raise ValueError("config.json: legacy_background_grace_seconds 必须是正整数")
-        if not isinstance(background_timeout, int) or isinstance(background_timeout, bool) or background_timeout <= background_grace:
+        if (
+            not isinstance(background_timeout, int)
+            or isinstance(background_timeout, bool)
+            or background_timeout <= background_grace
+        ):
             raise ValueError(
                 "config.json: legacy_background_timeout_seconds 必须是正整数且大于 legacy_background_grace_seconds"
             )

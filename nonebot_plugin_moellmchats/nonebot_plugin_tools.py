@@ -168,7 +168,7 @@ async def execute_nonebot_plugin(
         )
     if dispatch.status is PluginDispatchStatus.MATCHED_SIDE_EFFECT:
         return ToolResult(
-            text="插件已成功执行一次由 Bot API 确认的副作用动作。",
+            text=dispatch.text or "插件已成功执行一次由 Bot API 确认的副作用动作。",
             metadata={"plugin_dispatch": _dispatch_metadata(dispatch)},
         )
     raise PluginDispatchError(dispatch)

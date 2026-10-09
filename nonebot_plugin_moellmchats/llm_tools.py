@@ -611,14 +611,14 @@ class LlmToolsMixin:
             return None
 
     def _tool_timeout_seconds(self) -> float:
-        configured = config_parser.get_config("tool_timeout_seconds", 30)
+        configured = config_parser.get_config("tool_timeout_seconds", 180)
         if (
             not isinstance(configured, (int, float))
             or isinstance(configured, bool)
             or not math.isfinite(configured)
             or configured <= 0
         ):
-            configured = 30.0
+            configured = 180.0
         timeout = float(configured)
         runtime = getattr(self, "agent_runtime", None)
         if runtime is not None:
@@ -1194,7 +1194,18 @@ class LlmToolsMixin:
         if parallel_result is not None:
             return parallel_result
 
-        max_tool_calls_per_round = 1
+        max_tool_calls_per_round = config_parser.get_config("max_tool_calls_per_round", 4)
+        if (
+            not isinstance(max_tool_calls_per_round, int)
+            or isinstance(max_tool_calls_per_round, bool)
+            or max_tool_calls_per_round <= 0
+        ):
+            max_tool_calls_per_round = 4
+        runtime = getattr(self, "agent_runtime", None)
+        if runtime is not None and runtime.coordinator.resources.parallel_tool_graph is not None:
+            # A rejected explicit graph batch must retain its existing
+            # one-call fallback, including conflicts and confirmation gates.
+            max_tool_calls_per_round = 1
         executable_tool_calls = tool_calls[:max_tool_calls_per_round]
         skipped_tool_calls = tool_calls[max_tool_calls_per_round:]
         if skipped_tool_calls:
@@ -1535,6 +1546,7 @@ class LlmToolsMixin:
                         max_chars=(protocol_spec.result_limit if protocol_spec.result_limit is not None else result_limit),
                     )
                     if invocation.status is ProtocolInvocationStatus.WAITING_CONFIRMATION:
+                        self._waiting_confirmation = True
                         await self.bot.send(self.event, invocation.result.text)
                         tool_result = f"{rendered}\n[系统提示]：确认指令已直接发送给用户；不得代替用户确认或声称动作已经完成。"
                         send_message_list.append(
@@ -1703,6 +1715,7 @@ class LlmToolsMixin:
                                 f"{confirmation}\n[系统提示]：确认指令已直接发送给用户，不得代替用户确认或声称操作已经完成。"
                             )
                             pending_status = ToolCallStatus.WAITING_CONFIRMATION
+                            self._waiting_confirmation = True
                             pending_error = None
                             confirmation_id = action.nonce
                         send_message_list.append(
@@ -1856,7 +1869,7 @@ class LlmToolsMixin:
                             plugin_result = ToolResult(
                                 text=(
                                     dispatch_result.text
-                                    if dispatch_result.status
+                                    if dispatch_result.text or dispatch_result.status
                                     is PluginDispatchStatus.MATCHED_WITH_OUTPUT
                                     else "插件已成功执行一次由 Bot API 确认的副作用动作。"
                                 ),

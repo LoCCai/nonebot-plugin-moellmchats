@@ -4,7 +4,8 @@ import asyncio
 import base64
 from contextlib import AsyncExitStack
 from contextvars import ContextVar
-from dataclasses import dataclass, replace as dataclass_replace
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from enum import Enum
 import hashlib
 import re
@@ -821,7 +822,7 @@ class EventSimulator:
                             f"duration_ms={early_result.duration_ms}"
                         )
                         return early_result
-                    timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 20)
+                    timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 180)
                     async with timeout_scope(timeout):
                         if mode == "full":
                             await _dispatch_full_bus(bot, fake_event)

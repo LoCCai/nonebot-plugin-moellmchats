@@ -410,6 +410,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         max_retry_times = config_parser.get_config("max_retry_times") or 3
 
         session = get_session()
+        self._waiting_confirmation = False
         # 修改：增加上限至 max_tool_rounds + 1，以容纳最后一次强制总结
         for tool_round in range(max_tool_rounds + 1):
             result_text = ""
@@ -499,6 +500,20 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             # 3. 执行工具调用（非总结轮次才执行）
             if tool_calls and tool_round < max_tool_rounds:
                 send_message_list = await self._execute_tools(tool_calls, result_text, send_message_list, reasoning_content)
+
+                if self._waiting_confirmation:
+                    # The nonce notice is already delivered. Another model
+                    # request can stall while the user confirms independently,
+                    # occupying admission and planning against stale state.
+                    pending_text = "操作尚未执行；确认提示已发送，等待用户确认。"
+                    if not self.is_objective:
+                        tool_history = self.messages_handler.messages_entity.tool_messages or None
+                        self.messages_handler.post_process(assistant_msg=pending_text, tool_messages=tool_history)
+                        if self.agent_runtime is not None:
+                            await self.agent_runtime.persist_assistant_message(pending_text, tool_messages=tool_history)
+                    if self.agent_runtime is not None:
+                        await self.agent_runtime.finish_success()
+                    return True
 
                 # 若插件返回了图片，自动切换至视觉模型并注入图片消息
                 if self._pending_vision_images:

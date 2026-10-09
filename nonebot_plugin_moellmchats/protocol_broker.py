@@ -834,7 +834,7 @@ class ProtocolBroker:
         # claims on failure as a conservative abuse-control choice; only an
         # uncertain side effect additionally installs a no-retry tombstone.
         rate_claim = await self.limiter.claim(snapshot, prepared)
-        timeout_value = config_parser.get_config("tool_timeout_seconds", 30)
+        timeout_value = config_parser.get_config("tool_timeout_seconds", 180)
         if not isinstance(timeout_value, (int, float)) or isinstance(timeout_value, bool) or timeout_value <= 0:
             raise ProtocolExecutionError("协议工具超时配置非法")
         inner_timeout = max(0.1, float(timeout_value) - 0.1)

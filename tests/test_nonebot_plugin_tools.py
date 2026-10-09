@@ -230,6 +230,30 @@ def test_nonebot_plugin_schema_keeps_generation_frozen_command_prefixes(
 
 
 @pytest.mark.asyncio
+async def test_nonebot_plugin_adapter_preserves_background_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _legacy, specs = build_nonebot_plugin_candidate(
+        {"qi_zmws": {"description": "造梦资料"}}
+    )
+    notice = "任务仍在后台运行，资料将稍后发送，无需再次调用。"
+
+    async def dispatch(*_args, **_kwargs):
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_SIDE_EFFECT,
+            text=notice,
+            matcher_matched=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    result = await specs[0].handler(
+        "/造梦资料 我的 完整", _bot=object(), _event=object()
+    )
+    assert result.text == notice
+    assert "副作用动作" not in result.text
+
+
+@pytest.mark.asyncio
 async def test_nonebot_plugin_adapter_accepts_only_verified_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
