@@ -170,7 +170,7 @@ class LlmPayloadMixin:
 
         if mentions:
             mention_desc = "，".join(
-                f"#{i+1} {m.get('name', '未知用户')}" for i, m in enumerate(mentions)
+                f"[at:{i+1}]={m.get('name', '未知用户')}" for i, m in enumerate(mentions)
             )
             parts.append(f"当前消息额外提到的人：{mention_desc}。")
 
@@ -192,6 +192,12 @@ class LlmPayloadMixin:
                 "当前消息里有 @ 的人时从 [at:1]、[at:2] ... 开始。"
             )
 
+        parts.append(
+            "生成插件 command 时，@目标的身份占位符是参数，不是显示昵称。"
+            "必须保留其原始顺序，不附加昵称；用户写出的玩家UID原样保留。"
+            "例如战力对比 @某人 UID，应生成 /战力对比 [at:1] UID，"
+            "不能写成昵称加UID，也不能只剩UID，否则会对比错误的玩家。"
+        )
         return "".join(parts)
 
     def _build_payload(self, send_message_list: list) -> tuple[dict, bool]:

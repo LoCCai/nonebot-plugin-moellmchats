@@ -304,7 +304,9 @@ async def format_message(event, bot) -> dict:
             if qq != bot_self_id(bot, event):
                 name = await get_member_name(group_id, qq, bot) if group_id is not None else qq
                 mentions.append({"qq": qq, "name": name})
-                text_message.append(name)
+                # Keep the identity token at the original position. A name
+                # alone makes a mentioned account look like literal text.
+                text_message.append(f"{name}[at:{len(mentions)}]")
         elif msgseg.type == "image":
             text_message.append("[图片]")
             if url := msgseg.data.get("url"):

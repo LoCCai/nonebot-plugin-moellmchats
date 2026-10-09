@@ -9,6 +9,16 @@ class PayloadHarness(LlmPayloadMixin):
     pass
 
 
+def test_tool_hint_distinguishes_mentions_from_literal_player_uids() -> None:
+    harness = PayloadHarness()
+    harness.format_message_dict = {"mentions": [{"qq": "1969334055", "name": "♻️"}]}
+    hint = harness._build_tool_mention_hint()
+    assert "[at:1]=♻️" in hint
+    assert "/战力对比 [at:1] UID" in hint
+    assert "不能只剩UID" in hint
+    assert "1969334055" not in hint
+
+
 def test_payload_delegates_tool_view_to_generation_snapshot(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
     schema = [

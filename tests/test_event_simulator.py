@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import uuid
 
-from nonebot import on_fullmatch, on_regex
+from nonebot import on_command, on_fullmatch, on_regex
 from nonebot.adapters.onebot.v11 import Bot as V11Bot
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
@@ -26,11 +26,74 @@ from nonebot.adapters.onebot.v12 import (
 )
 from nonebot.exception import ActionFailed, NetworkError
 from nonebot.internal.matcher import matchers
-from nonebot.params import RegexDict
+from nonebot.params import CommandArg, RegexDict
 import pytest
 
 from nonebot_plugin_moellmchats import event_simulator as simulator_module
 from nonebot_plugin_moellmchats.admission import AdmissionController
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("command", "expected"), [
+    ("/战力对比 ♻️ 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+    ("/战力对比 1470907075|4399|1 @♻️", [("uid", "1470907075|4399|1"), ("at", "1969334055")]),
+    ("/战力对比 [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+    ("/战力对比 ♻️[at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+    ("/战力对比 ♻️ [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+    ("/战力对比 [at:2] [at:1] 完整", [("at", "234"), ("at", "1969334055")]),
+])
+async def test_comparison_mentions_survive_llm_dispatch_and_commandarg_injection(monkeypatch, command, expected):
+    matcher = on_command("战力对比", priority=7, block=True)
+    received = []
+
+    @matcher.handle()
+    async def compare(event: GroupMessageEvent, args: Message = CommandArg()):
+        players = []
+        for segment in args:
+            if segment.type == "at":
+                players.append(("at", segment.data["qq"]))
+            elif segment.type == "text":
+                players.extend(("uid", token) for token in segment.data["text"].split() if token != "完整")
+        received.append((event.user_id, players))
+        await matcher.finish("对比结果")
+
+    monkeypatch.setattr(simulator_module, "get_plugin",
+        lambda name: SimpleNamespace(matcher={matcher}) if name == "qi_zmws" else None)
+
+    class Adapter:
+        @staticmethod
+        def get_name():
+            return "OneBot V11"
+
+        async def _call_api(self, bot, api, **data):
+            return {"message_id": 12345}
+
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V11Bot(Adapter(), "10000"), _event(100), command,
+            {"mentions": [{"qq": "1969334055", "name": "♻️"}, {"qq": "234", "name": "另一人"}]},
+            plugin_name="qi_zmws", wait_for_result=True,
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+    assert received == [(123, expected)]
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+
+
+def test_comparison_name_fallback_never_guesses_identity_or_changes_unrelated_commands():
+    source = {"mentions": [{"qq": "111", "name": "♻️"}, {"qq": "222", "name": "♻️"}]}
+    with pytest.raises(ValueError, match="同名"):
+        simulator_module._build_fake_message("/战力对比 ♻️ 1470907075|4399|1", source)
+    message = simulator_module._build_fake_message("/战力对比 [at:2] 1470907075|4399|1", source)
+    assert [seg.data["qq"] for seg in message if seg.type == "at"] == ["222"]
+    for command in ["/天气 ♻️", "/战力对比 ♻️ 1470907075|4399|1"]:
+        message = simulator_module._build_fake_message(command, {})
+        assert message.extract_plain_text() == command
+        assert not any(seg.type == "at" for seg in message)
+    command = "/战力对比 1470907075|4399|1 234|4399|1"
+    assert simulator_module._build_fake_message(command, source).extract_plain_text() == command
 
 
 @pytest.mark.asyncio

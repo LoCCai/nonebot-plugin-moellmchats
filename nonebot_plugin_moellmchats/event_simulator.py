@@ -320,6 +320,40 @@ async def _observe_synthetic_matcher_exception(exception: Exception | None) -> N
         context["matcher_failed"] += 1
 
 
+def _restore_comparison_mentions(command: str, source: dict) -> str:
+    """Recover comparison operands only from unambiguous current mentions.
+
+    Models can still copy a display name despite the identity-token contract.
+    Limit this compatibility fallback to player comparison arguments; ordinary
+    command text, explicit UIDs and names absent from this request stay literal.
+    """
+    parts = re.fullmatch(r"(\S+)(\s+)([\s\S]*)", command)
+    if not parts:
+        return command
+    head, separator, arguments = parts.groups()
+    if head.lstrip("/!！") not in {"战力对比", "造梦战力对比"}:
+        return command
+    names: dict[str, dict[str, int]] = {}
+    for index, target in enumerate(source.get("mentions") or [], 1):
+        name = str(target.get("name") or "").strip()
+        qq = str(target.get("qq") or "")
+        if not name or not qq or name.isdigit() or "|" in name or name in {"完整", "刷新"}:
+            continue
+        names.setdefault(name, {}).setdefault(qq, index)
+    # Match whole names, longest first, including display names with spaces.
+    for name, identities in sorted(names.items(), key=lambda pair: -len(pair[0])):
+        pattern = r"(?<!\S)@?" + re.escape(name)
+        if len(identities) != 1:
+            if re.search(pattern + r"(?=\s|$)", arguments):
+                raise ValueError("被 @ 用户存在同名，无法确定对比目标；请直接发送 /战力对比 @用户 UID，或使用两个完整 UID")
+            continue
+        index = next(iter(identities.values()))
+        # A copied label alongside its identity token is one operand.
+        arguments = re.sub(pattern + rf"\s*(?=\[at:{index}\])", "", arguments)
+        arguments = re.sub(pattern + r"(?=\s|$)", f"[at:{index}]", arguments)
+    return head + separator + arguments
+
+
 def _build_fake_message(
     command: str,
     source: dict | None = None,
@@ -327,6 +361,7 @@ def _build_fake_message(
     protocol: str = "onebot_v11",
 ) -> Any:
     source = source or {}
+    command = _restore_comparison_mentions(command, source)
     mentions = source.get("mentions") or []
     reply_user = source.get("reply_user") or {}
     message_class = _message_class(protocol)

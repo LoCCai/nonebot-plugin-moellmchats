@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from nonebot.adapters.onebot.v11 import Message
+from nonebot.adapters.onebot.v11 import Message, MessageSegment
 import pytest
 
 from nonebot_plugin_moellmchats.utils import format_context_message, format_message
@@ -59,3 +59,26 @@ async def test_format_message_strips_only_standalone_wake_word(
 ) -> None:
     result = await format_message(_WakeEvent(raw), None)
     assert result["text"] == expected
+
+
+@pytest.mark.asyncio
+async def test_user_mentions_keep_identity_tokens_in_original_position(monkeypatch) -> None:
+    from nonebot_plugin_moellmchats import utils
+
+    event = _WakeEvent("")
+    message = Message([
+        MessageSegment.at(42), MessageSegment.text(" 战力对比"),
+        MessageSegment.at(1969334055), MessageSegment.text(" 1470907075|4399|1 "),
+        MessageSegment.at(234),
+    ])
+    event.get_message = lambda: message
+    monkeypatch.setattr(utils, "get_member_name", None)
+    result = await format_message(event, SimpleNamespace(self_id="42"))
+    # Private messages use QQ as their label and skip member lookup. The bot
+    # wake-up mention must not consume one of the user's argument indices.
+    assert result["mentions"] == [
+        {"qq": "1969334055", "name": "1969334055"}, {"qq": "234", "name": "234"},
+    ]
+    assert result["text"] == [
+        " 战力对比", "1969334055[at:1]", " 1470907075|4399|1 ", "234[at:2]",
+    ]
