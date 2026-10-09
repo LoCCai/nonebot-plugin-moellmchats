@@ -81,6 +81,12 @@ _SEND_ACTIONS = {
     "send_message",
 }
 _AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all)\]")
+_MENTION_QUERY_COMMANDS = frozenset({
+    "战力对比", "造梦战力对比", "造梦资料", "造梦详情", "造梦面板",
+    "造梦战力分析", "造梦面板分析", "造梦在线", "造梦实时",
+    "造梦改名", "造梦轨迹", "造梦改名轨迹", "蟠桃趋势", "造梦蟠桃趋势",
+    "造梦升满", "造梦升满材料", "造梦充值", "造梦VIP", "造梦vip",
+})
 
 
 class PluginDispatchStatus(str, Enum):
@@ -320,18 +326,18 @@ async def _observe_synthetic_matcher_exception(exception: Exception | None) -> N
         context["matcher_failed"] += 1
 
 
-def _restore_comparison_mentions(command: str, source: dict) -> str:
-    """Recover comparison operands only from unambiguous current mentions.
+def _restore_query_mentions(command: str, source: dict) -> str:
+    """Recover supported player query operands from current mentions.
 
     Models can still copy a display name despite the identity-token contract.
-    Limit this compatibility fallback to player comparison arguments; ordinary
+    Limit this compatibility fallback to known player query arguments; ordinary
     command text, explicit UIDs and names absent from this request stay literal.
     """
     parts = re.fullmatch(r"(\S+)(\s+)([\s\S]*)", command)
     if not parts:
         return command
     head, separator, arguments = parts.groups()
-    if head.lstrip("/!！") not in {"战力对比", "造梦战力对比"}:
+    if head.lstrip("/!！") not in _MENTION_QUERY_COMMANDS:
         return command
     names: dict[str, dict[str, int]] = {}
     for index, target in enumerate(source.get("mentions") or [], 1):
@@ -345,7 +351,7 @@ def _restore_comparison_mentions(command: str, source: dict) -> str:
         pattern = r"(?<!\S)@?" + re.escape(name)
         if len(identities) != 1:
             if re.search(pattern + r"(?=\s|$)", arguments):
-                raise ValueError("被 @ 用户存在同名，无法确定对比目标；请直接发送 /战力对比 @用户 UID，或使用两个完整 UID")
+                raise ValueError("被 @ 用户存在同名，无法确定查询目标；请直接发送带 / 的指令与真实 @，或使用完整 UID")
             continue
         index = next(iter(identities.values()))
         # A copied label alongside its identity token is one operand.
@@ -361,7 +367,7 @@ def _build_fake_message(
     protocol: str = "onebot_v11",
 ) -> Any:
     source = source or {}
-    command = _restore_comparison_mentions(command, source)
+    command = _restore_query_mentions(command, source)
     mentions = source.get("mentions") or []
     reply_user = source.get("reply_user") or {}
     message_class = _message_class(protocol)
@@ -375,9 +381,13 @@ def _build_fake_message(
         if token.startswith("at:"):
             index = int(match.group(2))
             target = reply_user if index == 0 else (mentions[index - 1] if 0 < index <= len(mentions) else {})
-            if qq := target.get("qq"):
-                result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
+            qq = target.get("qq")
+            if not qq:
+                raise ValueError("提及对象未保留有效身份，已停止执行，请根据本次消息重新生成指令")
+            result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
         elif token == "at_all":
+            if not mentions:
+                raise ValueError("本次消息没有有效提及对象，已停止执行")
             for target in mentions:
                 if qq := target.get("qq"):
                     result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))

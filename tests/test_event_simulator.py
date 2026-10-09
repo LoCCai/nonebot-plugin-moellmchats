@@ -96,6 +96,66 @@ def test_comparison_name_fallback_never_guesses_identity_or_changes_unrelated_co
     assert simulator_module._build_fake_message(command, source).extract_plain_text() == command
 
 
+@pytest.mark.parametrize(("command", "remaining"), [
+    ("/造梦资料 ♻️ 完整 时装", "/造梦资料  完整 时装"),
+    ("/造梦详情 ♻️ 角色2", "/造梦详情  角色2"),
+    ("/造梦面板 ♻️", "/造梦面板 "),
+    ("/造梦战力分析 ♻️ 完整 横图", "/造梦战力分析  完整 横图"),
+    ("/造梦在线 ♻️", "/造梦在线 "),
+    ("/造梦改名 ♻️", "/造梦改名 "),
+    ("/蟠桃趋势 ♻️ 24h 嫦娥", "/蟠桃趋势  24h 嫦娥"),
+    ("/造梦蟠桃趋势 ♻️[at:1] 48h", "/造梦蟠桃趋势  48h"),
+    ("/造梦升满 ♻️ 装备 完整", "/造梦升满  装备 完整"),
+    ("/造梦充值 ♻️", "/造梦充值 "),
+])
+def test_other_player_queries_restore_mention_and_preserve_system_options(command, remaining):
+    message = simulator_module._build_fake_message(command,
+        {"mentions": [{"qq": "1969334055", "name": "♻️"}]})
+    assert [seg.data["qq"] for seg in message if seg.type == "at"] == ["1969334055"]
+    assert message.extract_plain_text() == remaining
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command_name", ["用户分析", "头像"])
+async def test_other_plugins_receive_real_mention_through_the_same_dispatch_bus(monkeypatch, command_name):
+    matcher = on_command(command_name, priority=7, block=True)
+    received = []
+
+    @matcher.handle()
+    async def query(event: GroupMessageEvent, args: Message = CommandArg()):
+        received.append((event.user_id, [seg.data["qq"] for seg in args if seg.type == "at"]))
+        await matcher.finish("目标用户查询结果")
+
+    monkeypatch.setattr(simulator_module, "get_plugin", lambda name: SimpleNamespace(matcher={matcher}))
+
+    class Adapter:
+        @staticmethod
+        def get_name():
+            return "OneBot V11"
+
+        async def _call_api(self, bot, api, **data):
+            return {"message_id": 12345}
+
+    try:
+        result = await simulator_module.event_simulator.dispatch_event(
+            V11Bot(Adapter(), "10000"), _event(100), f"/{command_name} [at:1]",
+            {"mentions": [{"qq": "1969334055", "name": "♻️"}]},
+            plugin_name="other-plugin", wait_for_result=True,
+        )
+    finally:
+        for priority_matchers in matchers.values():
+            if matcher in priority_matchers:
+                priority_matchers.remove(matcher)
+    assert received == [(123, ["1969334055"])]
+    assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+
+
+@pytest.mark.parametrize("command", ["/造梦资料 [at:99]", "/造梦在线 [at:0]", "/用户分析 [at_all]"])
+def test_missing_mention_identity_stops_before_falling_back_to_invoker(command):
+    with pytest.raises(ValueError, match="停止执行"):
+        simulator_module._build_event(_event(100), command, {})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("command", "role"), [
     ("/群老婆", "老婆"), ("/抽群友", "群友"), ("抽一个", "群友"), ("抽一个老婆", "老婆"),
