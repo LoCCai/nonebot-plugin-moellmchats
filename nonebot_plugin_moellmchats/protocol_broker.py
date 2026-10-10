@@ -30,6 +30,7 @@ from .protocol_context import (
     ProtocolRequestBinding,
     current_protocol_binding,
     probe_protocol_capabilities,
+    protocol_action_available,
     protocol_tool_available,
 )
 from .protocol_registry import (
@@ -537,13 +538,7 @@ def _profiled_parameters(
 
 
 def _action_protocol_available(snapshot: ProtocolCapabilitySnapshot, protocol: str, action: str) -> bool:
-    if action not in snapshot.supported_actions:
-        return False
-    if protocol == "onebot_v12":
-        return snapshot.protocol == "onebot_v12"
-    if protocol == "onebot_v11":
-        return snapshot.protocol == "onebot_v11"
-    return protocol == "napcat_v11" and snapshot.protocol == "onebot_v11" and snapshot.implementation == "napcat"
+    return protocol_action_available(snapshot, protocol, action)
 
 
 def _prepare_action(
@@ -636,7 +631,7 @@ def _prepare_wrapper(
         action = "set_msg_emoji_like"
         parameters = {
             "message_id": coerce_action_identifier(snapshot.message_id, snapshot.protocol or "onebot_v11"),
-            "emoji_id": arguments["emoji_id"],
+            "emoji_id": str(arguments["emoji_id"]),
             "set": True,
         }
         api_protocol = "napcat_v11"

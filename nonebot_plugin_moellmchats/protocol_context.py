@@ -18,6 +18,7 @@ from .onebot_facade import NormalizedOneBotEvent, adapter_identity, onebot_proto
 from .protocol_registry import protocol_registry
 
 _PROBE_TIMEOUT_SECONDS = 3.0
+_SNOWLUMA_COMPATIBLE_ACTIONS = frozenset({"set_msg_emoji_like"})
 
 
 def _digest_strings(values: frozenset[str]) -> str:
@@ -224,7 +225,8 @@ async def probe_protocol_capabilities(
             implementation_version = str(version_info.get("app_version") or version_info.get("version") or "").strip()
             onebot_version_value = str(version_info.get("protocol_version") or "11").strip()
             is_napcat = app_name == "NapCat.Onebot"
-            implementation = "napcat" if is_napcat else (app_name or "generic")
+            is_snowluma = app_name == "SnowLuma"
+            implementation = "napcat" if is_napcat else ("snowluma" if is_snowluma else (app_name or "generic"))
             if is_napcat:
                 supported = set(protocol_registry.napcat_actions)
                 if not config_parser.get_config(
@@ -234,6 +236,8 @@ async def probe_protocol_capabilities(
                     supported &= set(protocol_registry.standard_v11_actions)
             else:
                 supported = set(protocol_registry.standard_v11_actions)
+                if is_snowluma:
+                    supported.update(_SNOWLUMA_COMPATIBLE_ACTIONS)
         else:
             raw_actions = await _call_probe_api(bot, "get_supported_actions")
             if not isinstance(raw_actions, (list, tuple, set, frozenset)) or not all(
@@ -356,22 +360,26 @@ async def protocol_request_scope(
         _ACTIVE_PROTOCOL_SNAPSHOT.reset(token)
 
 
-def _action_available(
+def protocol_action_available(
     snapshot: ProtocolCapabilitySnapshot,
     protocol: str,
     action: str,
 ) -> bool:
+    """Share discovery and execution checks for verified implementation actions."""
     if not snapshot.enabled or action not in snapshot.supported_actions:
         return False
     if protocol == "onebot_v12":
         return snapshot.protocol == "onebot_v12"
     if protocol == "onebot_v11":
         return snapshot.protocol == "onebot_v11"
+    if protocol != "napcat_v11" or snapshot.protocol != "onebot_v11":
+        return False
+    if snapshot.implementation == "napcat":
+        return bool(config_parser.get_config("protocol_tools_napcat_extensions_enabled", True))
     return (
-        protocol == "napcat_v11"
-        and snapshot.protocol == "onebot_v11"
-        and snapshot.implementation == "napcat"
-        and config_parser.get_config("protocol_tools_napcat_extensions_enabled", True)
+        snapshot.implementation == "snowluma"
+        and snapshot.scene == "group"
+        and action in _SNOWLUMA_COMPATIBLE_ACTIONS
     )
 
 
@@ -391,7 +399,9 @@ def protocol_tool_available(
             return False
         if wrapper.scope == "current_message" and selected.message_id is None:
             return False
-        return any(_action_available(selected, protocol, action) for protocol in wrapper.protocols for action in wrapper.actions)
+        return any(
+            protocol_action_available(selected, protocol, action) for protocol in wrapper.protocols for action in wrapper.actions
+        )
     action = protocol_registry.action_for_tool(tool_name)
     if action is None:
         return False
@@ -409,7 +419,7 @@ def protocol_tool_available(
             return False
         if source == "event.reply_message_id" and selected.reply_message_id is None:
             return False
-    return _action_available(selected, action.protocol, action.action)
+    return protocol_action_available(selected, action.protocol, action.action)
 
 
 def available_protocol_tool_names(
@@ -523,6 +533,7 @@ __all__ = [
     "current_protocol_cache_digest",
     "current_protocol_snapshot",
     "probe_protocol_capabilities",
+    "protocol_action_available",
     "protocol_request_scope",
     "protocol_tool_available",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11 import Message
@@ -174,6 +175,58 @@ async def test_generic_v11_and_exact_napcat_detection(protocol_config) -> None:
         is_superuser=False,
     )
     assert standard_only.supported_actions == (protocol_registry.napcat_actions & protocol_registry.standard_v11_actions)
+
+
+@pytest.mark.asyncio
+async def test_snowluma_exposes_only_verified_group_reaction_extension(protocol_config) -> None:
+    bot = _Bot(protocol="OneBot V11", app_name="SnowLuma", app_version="1.14.19-node")
+    snapshot = await probe_protocol_capabilities(bot, _event(), generation=2, is_superuser=False)
+
+    assert snapshot.enabled
+    assert snapshot.implementation == "snowluma"
+    assert snapshot.implementation_version == "1.14.19-node"
+    assert snapshot.supported_actions == protocol_registry.standard_v11_actions | {"set_msg_emoji_like"}
+    assert bot.calls == [("get_version_info", {})]
+    user_names = available_protocol_tool_names(snapshot=snapshot)
+    assert "qq__react_current_message" in user_names
+    assert "qq__like_me" in user_names
+    assert "qq__poke_current" not in user_names
+    assert not any(name.startswith("napcat_v11__") for name in user_names)
+    admin_names = available_protocol_tool_names(snapshot=snapshot, is_superuser=True)
+    assert "napcat_v11__set_msg_emoji_like" in admin_names
+    assert "napcat_v11__get_group_msg_history" not in admin_names
+    assert "napcat_v11__set_online_status" not in admin_names
+
+    forged = replace(snapshot, supported_actions=protocol_registry.napcat_actions)
+    forged_names = available_protocol_tool_names(snapshot=forged, is_superuser=True)
+    assert "qq__poke_current" not in forged_names
+    assert "napcat_v11__get_group_msg_history" not in forged_names
+
+
+@pytest.mark.asyncio
+async def test_snowluma_private_reactions_and_near_miss_implementations_stay_unavailable(protocol_config) -> None:
+    private = await probe_protocol_capabilities(
+        _Bot(protocol="OneBot V11", app_name="SnowLuma"), _event(group_id=None), generation=2, is_superuser=True
+    )
+    names = available_protocol_tool_names(snapshot=private)
+    assert "qq__react_current_message" not in names
+    assert "napcat_v11__set_msg_emoji_like" not in names
+    assert "qq__like_me" in names
+
+    near_miss = await probe_protocol_capabilities(
+        _Bot(protocol="OneBot V11", app_name="SnowLuma.dev"), _event(), generation=2, is_superuser=True
+    )
+    assert near_miss.supported_actions == protocol_registry.standard_v11_actions
+    assert "qq__react_current_message" not in available_protocol_tool_names(snapshot=near_miss)
+
+
+@pytest.mark.asyncio
+async def test_napcat_extension_switch_does_not_disable_verified_snowluma_reaction(protocol_config) -> None:
+    protocol_config["protocol_tools_napcat_extensions_enabled"] = False
+    snapshot = await probe_protocol_capabilities(
+        _Bot(protocol="OneBot V11", app_name="SnowLuma"), _event(), generation=2, is_superuser=False
+    )
+    assert "qq__react_current_message" in available_protocol_tool_names(snapshot=snapshot)
 
 
 @pytest.mark.asyncio

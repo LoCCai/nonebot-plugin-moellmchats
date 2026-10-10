@@ -142,7 +142,7 @@ def _wrapper_schema(policy: ProtocolWrapperPolicy) -> dict[str, Any]:
                         {"type": "integer"},
                         {"type": "string"},
                     ],
-                    "description": "NapCat 表情 ID",
+                    "description": "QQ 表情 ID（NapCat / SnowLuma）",
                 }
             },
             "required": ["emoji_id"],

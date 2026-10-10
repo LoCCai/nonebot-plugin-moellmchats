@@ -146,6 +146,59 @@ async def test_like_wrapper_injects_current_actor_and_calls_send_like_once(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("app_name", ["SnowLuma", "NapCat.Onebot"])
+@pytest.mark.parametrize("emoji_id", [38, "10060"])
+@pytest.mark.parametrize("message_id", [789, -950661342])
+async def test_group_reaction_uses_current_message_and_string_emoji_id(
+    protocol_config, app_name, emoji_id, message_id
+) -> None:
+    bot = _Bot(app_name=app_name)
+    broker = _broker()
+    async with protocol_request_scope(bot, _event(message_id=message_id), generation=1, is_superuser=False):
+        with pytest.raises(ProtocolExecutionError, match="参数错误"):
+            await broker.invoke("qq__react_current_message", {"emoji_id": emoji_id, "message_id": 999})
+        result = await broker.invoke("qq__react_current_message", {"emoji_id": emoji_id})
+
+    assert result.status is ProtocolInvocationStatus.COMPLETED
+    assert bot.calls == [
+        ("get_version_info", {}),
+        ("set_msg_emoji_like", {"message_id": message_id, "emoji_id": str(emoji_id), "set": True}),
+    ]
+    assert len(broker.audits()) == 1
+
+
+@pytest.mark.asyncio
+async def test_snowluma_reaction_private_or_unverified_extension_does_not_call_api(protocol_config) -> None:
+    bot = _Bot(app_name="SnowLuma")
+    broker = _broker()
+    async with protocol_request_scope(bot, _event(group_id=None), generation=1, is_superuser=True):
+        with pytest.raises(ProtocolExecutionError, match="能力快照"):
+            await broker.invoke("qq__react_current_message", {"emoji_id": 38})
+    async with protocol_request_scope(bot, _event(), generation=1, is_superuser=False):
+        with pytest.raises(ProtocolExecutionError, match="能力快照"):
+            await broker.invoke("qq__poke_current", {})
+
+    assert bot.calls == [("get_version_info", {}), ("get_version_info", {})]
+    assert broker.audits() == ()
+
+
+@pytest.mark.asyncio
+async def test_snowluma_reaction_respects_low_risk_confirmation_configuration(protocol_config) -> None:
+    protocol_config["protocol_tools_low_risk_direct_enabled"] = False
+    bot = _Bot(app_name="SnowLuma")
+    event = _event()
+    broker = _broker()
+    async with protocol_request_scope(bot, event, generation=1, is_superuser=False):
+        waiting = await broker.invoke("qq__react_current_message", {"emoji_id": 38})
+
+    assert waiting.status is ProtocolInvocationStatus.WAITING_CONFIRMATION
+    assert bot.calls == [("get_version_info", {})]
+    completed = await broker.confirm(waiting.confirmation_nonce, bot=bot, event=event, generation=1, is_superuser=False)
+    assert completed.status is ProtocolInvocationStatus.COMPLETED
+    assert bot.calls[-1] == ("set_msg_emoji_like", {"message_id": 789, "emoji_id": "38", "set": True})
+
+
+@pytest.mark.asyncio
 async def test_current_group_and_user_read_targets_cannot_be_overridden(
     protocol_config,
 ) -> None:
