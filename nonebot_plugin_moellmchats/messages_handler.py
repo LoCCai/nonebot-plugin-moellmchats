@@ -140,7 +140,7 @@ class MessagesHandler:
     def pre_process(self, format_message_dict: dict) -> str:
         # 提取图片列表
         self.current_images = format_message_dict.get("images", [])
-        reply_text = (format_message_dict.get("reply") or "").strip()
+        reply_text = (format_message_dict.get("reply") or "").replace("\x00", "").strip()
         reply_user = format_message_dict.get("reply_user") or {}
         current_user = format_message_dict.get("current_user") or {}
         quote_is_previous_assistant = False
@@ -173,6 +173,9 @@ class MessagesHandler:
                 f"[引用消息: {reply_name}说「{reply_text}」；"
                 f"当前提问者是{current_name}，请回复当前提问者]\n{plain}"
             )
+        # QQ text, mention labels and synthetic poke messages may contain NUL.
+        # Normalize the complete prompt for both the model and durable history.
+        plain = plain.replace("\x00", "")
         self.new_user_msg = {"role": "user", "content": plain}  # 最新的问题
         self.messages_entity.add_user_msg(
             self.new_user_msg

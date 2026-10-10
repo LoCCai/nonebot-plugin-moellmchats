@@ -1419,6 +1419,9 @@ class AgentRequestRuntime:
         return self.prompt_context
 
     async def persist_user_message(self, text: str) -> AgentPromptContext:
+        # Other callers can bypass MessagesHandler; memory retrieval and history
+        # must receive the same full text without PostgreSQL's forbidden NUL.
+        text = text.replace("\x00", "")
         requested_at = _as_utc(self._wall_clock())
         long_term_memory = await self.coordinator.retrieve_long_term_memory(
             self.identity,

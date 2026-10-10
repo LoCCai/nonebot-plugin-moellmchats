@@ -452,6 +452,104 @@ async def test_default_host_memory_request_has_zero_database_or_redis_io(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("formatted", "expected"),
+    [
+        ({"text": ["接着\x00发\n🙂"]}, "接着发\n🙂"),
+        ({"text": ["战力对比 ", "曦丶白洋\x00[at:1]", " 1470907075|4399|1"]}, "战力对比 曦丶白洋[at:1] 1470907075|4399|1"),
+        (
+            {
+                "text": ["接着\x00发"],
+                "reply": " 原\x00文\n🙂 ",
+                "reply_user": {"name": "被\x00引用者"},
+                "current_user": {"name": "白\x00洋"},
+            },
+            "[引用消息: 被引用者说「原文\n🙂」；当前提问者是白洋，请回复当前提问者]\n接着发",
+        ),
+        ({"text": ["(曦丶白洋\x00戳了一下你)"], "current_user": {"qq": "10001", "name": "曦丶白洋\x00"}}, "(曦丶白洋戳了一下你)"),
+    ],
+    ids=["ordinary", "mention", "quote", "poke"],
+)
+async def test_llm_ingress_persists_and_prompts_with_clean_user_text(
+    monkeypatch: pytest.MonkeyPatch,
+    formatted: dict,
+    expected: str,
+) -> None:
+    messages_dict.clear()
+    resources = RuntimeResourceBuilder().build(_snapshot())
+    coordinator = AgentGenerationCoordinator(resources)
+    runtime = await AgentRequestRuntime.begin(
+        coordinator,
+        _identity(),
+        request_id=1,
+        deadline=DeadlineContext.from_timeout(30),
+        wall_clock=lambda: _NOW.timestamp(),
+    )
+    records: list[MessageRecord] = []
+    memory_texts: list[str] = []
+    original_append = coordinator.append_message
+    original_retrieve = coordinator.retrieve_long_term_memory
+
+    async def capture_message(message: MessageRecord):
+        records.append(message)
+        return await original_append(message)
+
+    async def capture_memory(identity, **kwargs):
+        memory_texts.append(kwargs["text"])
+        return await original_retrieve(identity, **kwargs)
+
+    monkeypatch.setattr(coordinator, "append_message", capture_message)
+    monkeypatch.setattr(coordinator, "retrieve_long_term_memory", capture_memory)
+    chat = object.__new__(moe_llm_module.MoeLlm)
+    chat.user_id = "10001"
+    chat.agent_runtime = runtime
+    chat.format_message_dict = formatted
+
+    async def stop_before_model():
+        return "test:preprocessing-complete"
+
+    monkeypatch.setattr(chat, "_validate_runtime_model_config", stop_before_model)
+    assert await chat.get_llm_chat() == "test:preprocessing-complete"
+    assert len(records) == 1
+    assert records[0].role == "user"
+    assert records[0].content == expected
+    assert memory_texts == [expected]
+    assert chat.messages_handler.get_send_message_list()[-1] == {"role": "user", "content": expected}
+    messages_dict.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["  原文\n🙂\t" * 1500 + "\x00结束  ", "\x00\x00", ""])
+async def test_direct_user_persistence_removes_nul_without_truncating_or_stripping(
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+) -> None:
+    coordinator = AgentGenerationCoordinator(RuntimeResourceBuilder().build(_snapshot()))
+    runtime = await AgentRequestRuntime.begin(
+        coordinator,
+        _identity(),
+        request_id=1,
+        deadline=DeadlineContext.from_timeout(30),
+        wall_clock=lambda: _NOW.timestamp(),
+    )
+    records: list[MessageRecord] = []
+    memory_texts: list[str] = []
+
+    async def capture_message(message: MessageRecord):
+        records.append(message)
+
+    async def capture_memory(identity, **kwargs):
+        memory_texts.append(kwargs["text"])
+        return None
+
+    monkeypatch.setattr(coordinator, "append_message", capture_message)
+    monkeypatch.setattr(coordinator, "retrieve_long_term_memory", capture_memory)
+    await runtime.persist_user_message(text)
+    assert records[0].content == text.replace("\x00", "")
+    assert memory_texts == [records[0].content]
+
+
+@pytest.mark.asyncio
 async def test_agent_lifecycle_emits_payload_free_logs_and_fixed_metrics() -> None:
     class Sink:
         def __init__(self) -> None:

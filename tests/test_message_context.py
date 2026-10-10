@@ -82,3 +82,27 @@ async def test_user_mentions_keep_identity_tokens_in_original_position(monkeypat
     assert result["text"] == [
         " 战力对比", "1969334055[at:1]", " 1470907075|4399|1 ", "234[at:2]",
     ]
+
+
+def test_nul_in_quote_does_not_duplicate_previous_assistant_message() -> None:
+    from nonebot_plugin_moellmchats.messages_handler import MessagesHandler, messages_dict
+
+    messages_dict.clear()
+    try:
+        previous = MessagesHandler("10001")
+        previous.pre_process({"text": ["你好"]})
+        previous.post_process("上次回复🙂")
+        current = MessagesHandler("10001")
+        assert (
+            current.pre_process(
+                {
+                    "text": ["接着发"],
+                    "reply": "上次\x00回复🙂",
+                    "reply_user": {"name": "七七"},
+                    "current_user": {"name": "白洋"},
+                }
+            )
+            == "接着发"
+        )
+    finally:
+        messages_dict.clear()
