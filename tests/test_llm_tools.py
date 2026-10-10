@@ -1938,6 +1938,106 @@ async def test_plugin_failure_fingerprint_blocks_only_identical_retry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [False, True])
+async def test_completed_image_command_blocks_equivalent_replays_and_keeps_vision(
+    monkeypatch: pytest.MonkeyPatch, provider: bool,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, specs = build_nonebot_plugin_candidate(
+        {"qi_zmws": {"description": "peach boards", "usage": "/造梦排行 蟠桃\n/蟠桃趋势"}}
+    )
+    calls: list[str] = []
+
+    async def dispatch(_bot, _event, command, _source, *, plugin_name, wait_for_result):
+        assert wait_for_result is True
+        calls.append(command)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            images=("private-image-reference",),
+            matcher_matched=1, successful_captures=1, api_succeeded=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    monkeypatch.setattr(module, "configured_command_prefixes", lambda: ("", "/", "!"))
+    snapshot = ToolSnapshot(
+        generation=2, plugin_info=legacy, custom_tools={}, tool_dependencies={}, mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(2, nonebot_plugins=specs) if provider else None,
+    )
+    harness = Harness({}, snapshot=snapshot)
+    first = await harness._execute_tools(
+        [_call(1, "qi_zmws", '{"command":"/造梦排行 蟠桃"}')], "", [], "",
+    )
+    for index, command in enumerate(("/造梦排行 蟠桃", "造梦排行   蟠桃", "!造梦排行 蟠桃"), start=2):
+        repeated = await harness._execute_tools(
+            [_call(index, "qi_zmws", json.dumps({"command": command}, ensure_ascii=False))], "", [], "",
+        )
+        assert "已执行成功" in repeated[-1]["content"]
+    assert calls == ["/造梦排行 蟠桃"]
+    assert "已确认发送图片 1 张" in first[-1]["content"]
+    assert "private-image-reference" not in first[-1]["content"]
+    assert harness._pending_vision_images == ["private-image-reference"]
+    await harness._execute_tools([_call(5, "qi_zmws", '{"command":"/蟠桃趋势"}')], "", [], "")
+    assert calls == ["/造梦排行 蟠桃", "/蟠桃趋势"]
+    fresh = Harness({}, snapshot=snapshot)
+    await fresh._execute_tools([_call(6, "qi_zmws", '{"command":"/造梦排行 蟠桃"}')], "", [], "")
+    assert len(calls) == 3  # A new user request can deliberately query again.
+
+
+@pytest.mark.asyncio
+async def test_slow_native_image_waits_for_result_and_duplicate_batch_sends_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    legacy, _specs = build_nonebot_plugin_candidate(
+        {"qi_zmws": {"description": "peach", "usage": "/造梦排行 蟠桃"}}
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def dispatch(*_args, **kwargs):
+        nonlocal calls
+        assert kwargs["wait_for_result"] is True
+        calls += 1
+        entered.set()
+        await release.wait()
+        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+                                    images=("completed-image",), successful_captures=1)
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    task = asyncio.create_task(harness._execute_tools([
+        _call(1, "qi_zmws", '{"command":"/造梦排行 蟠桃"}'),
+        _call(2, "qi_zmws", '{"command":"/造梦排行 蟠桃"}'),
+    ], "", [], ""))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        assert not task.done()
+        assert calls == 1
+        release.set()
+        messages = await asyncio.wait_for(task, timeout=1)
+        assert calls == 1
+        assert "已确认发送图片 1 张" in messages[-2]["content"]
+        assert "已执行成功" in messages[-1]["content"]
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+def test_native_command_fingerprint_preserves_argument_whitespace():
+    harness = Harness({})
+    view = SimpleNamespace(route=LlmToolExecutionRoute.NONEBOT_PLUGIN)
+    assert harness._execution_arguments_digest({"command": '/demo "a  b"'}, view) != (
+        harness._execution_arguments_digest({"command": '/demo "a b"'}, view)
+    )
+    custom = SimpleNamespace(route=LlmToolExecutionRoute.CUSTOM_TOOL)
+    args = {"command": "/demo   data"}
+    assert harness._execution_arguments_digest(args, custom) == harness._canonical_arguments_digest(args)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status",
     [

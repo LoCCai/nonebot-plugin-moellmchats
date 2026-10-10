@@ -480,6 +480,11 @@ class LlmToolsMixin:
             return "该工具本任务已有结果不确定或部分成功记录，禁止再次调用。"
         prior = attempts.get(fingerprint)
         if prior in {
+            PluginDispatchStatus.MATCHED_WITH_OUTPUT.value,
+            PluginDispatchStatus.MATCHED_SIDE_EFFECT.value,
+        }:
+            return "相同插件指令已执行成功，结果已向用户发送，禁止重复投递；请基于已有结果完成回答，图片分析使用已返回的图片。"
+        if prior in {
             PluginDispatchStatus.NOT_MATCHED.value,
             PluginDispatchStatus.MATCHED_EMPTY.value,
             PluginDispatchStatus.FAILED.value,
@@ -487,6 +492,25 @@ class LlmToolsMixin:
         }:
             return "相同工具和参数此前已失败或无结果，禁止原样重复；请选择不同工具或实质不同参数。"
         return None
+
+    def _execution_arguments_digest(
+        self, arguments: Mapping[str, Any], view: LlmToolExecutionView | None,
+    ) -> str:
+        """Equivalent native command prefixes share one per-request attempt.
+
+        Preserve argument contents (including quoted whitespace); custom tools
+        retain their exact arguments and existing polling/repeat policy.
+        """
+        canonical = dict(arguments)
+        command = canonical.get("command")
+        if view is not None and view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN and isinstance(command, str):
+            command = command.strip()
+            for prefix in sorted(configured_command_prefixes(), key=len, reverse=True):
+                if prefix and command.startswith(prefix):
+                    command = command[len(prefix):]
+                    break
+            canonical["command"] = re.sub(r"^(\S+)\s+", r"\1 ", command)
+        return self._canonical_arguments_digest(canonical)
 
     def _log_tool_execution(
         self,
@@ -1299,7 +1323,7 @@ class LlmToolsMixin:
             fingerprint = (
                 int(getattr(self.tool_snapshot, "generation", 0)),
                 func_name,
-                arguments_digest,
+                self._execution_arguments_digest(args, tool_view),
             )
             if retry_rejection := self._retry_rejection(fingerprint):
                 send_message_list.append(
@@ -1950,6 +1974,8 @@ class LlmToolsMixin:
                         visible_plugin_result
                     )
                     if rendered_plugin_result:
+                        if plugin_images:
+                            rendered_plugin_result += f"\nBot 已确认发送图片 {len(plugin_images)} 张；出图已完成。"
                         tool_result = f"插件执行返回结果：\n{rendered_plugin_result}{_PLUGIN_SYSTEM_HINT}"
                     else:
                         trace_status = ToolCallStatus.FAILED
@@ -1987,6 +2013,8 @@ class LlmToolsMixin:
                     PluginDispatchStatus.MATCHED_EMPTY.value,
                     PluginDispatchStatus.FAILED.value,
                     PluginDispatchStatus.TIMED_OUT.value,
+                    PluginDispatchStatus.MATCHED_WITH_OUTPUT.value,
+                    PluginDispatchStatus.MATCHED_SIDE_EFFECT.value,
                 }
                 else "allow"
             )
