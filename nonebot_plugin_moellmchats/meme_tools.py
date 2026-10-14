@@ -121,13 +121,18 @@ async def _meme_request(
             ) as response:
                 # Bound the read itself: the 20MiB delivery guard only runs
                 # after the bytes are already in memory.
-                body = await response.content.read(_MEME_MAX_RESPONSE_BYTES + 1)
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(65_536):
+                    body.extend(chunk)
+                    if len(body) > _MEME_MAX_RESPONSE_BYTES:
+                        raise RenderToolError("meme 后端响应超出大小上限，已放弃本次生成。")
     except asyncio.CancelledError:
+        raise
+    except RenderToolError:
         raise
     except Exception as error:
         raise RenderToolError("meme 后端暂时无法访问，请稍后再试。") from error
-    if len(body) > _MEME_MAX_RESPONSE_BYTES:
-        raise RenderToolError("meme 后端响应超出大小上限，已放弃本次生成。")
+    body = bytes(body)
     content_type = response.headers.get("content-type", "").split(";", 1)[0]
     if "json" in content_type:
         try:
@@ -150,11 +155,11 @@ async def _download_public_image(url: str) -> bytes:
         async with aiohttp.ClientSession(
             timeout=timeout,
             auto_decompress=False,
-            allow_redirects=False,
         ) as session:
             for _ in range(_MAX_REDIRECTS + 1):
                 async with session.get(
                     current,
+                    allow_redirects=False,
                     headers={
                         "accept": "image/*",
                         "user-agent": "Mozilla/5.0 (compatible; MoEllmChats-MemeTool/1.0)",

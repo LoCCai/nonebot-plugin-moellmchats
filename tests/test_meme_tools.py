@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -355,6 +357,7 @@ class _FakeSession:
         self.requested: list[str] = []
 
     def __call__(self, *args: Any, **kwargs: Any) -> "_FakeSession":
+        assert "allow_redirects" not in kwargs
         return self
 
     async def __aenter__(self) -> Any:
@@ -364,6 +367,7 @@ class _FakeSession:
         return None
 
     def get(self, url: str, **kwargs: Any) -> Any:
+        assert kwargs["allow_redirects"] is False
         self.requested.append(url)
 
         class _Ctx:
@@ -486,6 +490,10 @@ class _FakeStream:
             return self._data[:size]
         return self._data
 
+    async def iter_chunked(self, size: int) -> Any:
+        for offset in range(0, len(self._data), size):
+            yield self._data[offset:offset + size]
+
 
 class _AsyncCM:
     def __init__(self, value: Any) -> None:
@@ -546,6 +554,68 @@ async def test_meme_request_parses_json_response(
     status, payload = await module._meme_request("GET", "/memes/petpet/info")
     assert status == 200
     assert payload == {"params": {"min_images": 1}}
+
+
+@asynccontextmanager
+async def _http_test_server(handler: Any) -> Any:
+    from aiohttp import web
+
+    app = web.Application()
+    app.router.add_get("/image/test", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    try:
+        await site.start()
+        port = runner.addresses[0][1]
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_meme_request_reads_complete_chunked_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aiohttp import web
+
+    body = bytes(range(256)) * 1024
+
+    async def stream(request: Any) -> Any:
+        response = web.StreamResponse(headers={"Content-Type": "application/octet-stream"})
+        await response.prepare(request)
+        for offset in range(0, len(body), 32_768):
+            await response.write(body[offset:offset + 32_768])
+            await asyncio.sleep(0.01)
+        await response.write_eof()
+        return response
+
+    async with _http_test_server(stream) as base:
+        _configure_base(monkeypatch, base)
+        status, payload = await module._meme_request("GET", "/image/test")
+    assert status == 200
+    assert payload == body
+
+
+@pytest.mark.asyncio
+async def test_image_downloader_real_session_checks_redirect_before_following(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aiohttp import web
+
+    blocked = "http://192.168.0.9/evil.png"
+    validated: list[str] = []
+
+    async def validate(url: str) -> None:
+        validated.append(url)
+        if url == blocked:
+            raise RenderToolError("图片地址未通过公网安全检查")
+
+    async def redirect(request: Any) -> Any:
+        return web.Response(status=302, headers={"Location": blocked})
+
+    monkeypatch.setattr(module, "ensure_public_tool_url", validate)
+    async with _http_test_server(redirect) as base:
+        url = base + "/image/test"
+        with pytest.raises(RenderToolError, match="公网安全检查"):
+            await _download_public_image(url)
+    assert validated == [url, blocked]
 
 
 def test_meme_tool_spec_shape() -> None:
