@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import builtins
 from importlib.util import find_spec
 import io
 import os
+import runpy
 import sys
 from typing import Any
 
@@ -258,6 +260,35 @@ def test_standalone_mode_has_no_host_admission() -> None:
     # package, so the soft imports must have degraded to None.
     assert module.admitted_browser_call is None
     assert module._host_compress_image is None
+
+
+def test_render_module_import_does_not_initialize_host_game_plugin(monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_game_plugin_import(name, *args, **kwargs):
+        if name.startswith("src.plugins.qi_zmws"):
+            raise AssertionError("host game plugin must not initialize during LLM import")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_game_plugin_import)
+    namespace = runpy.run_path(module.__file__, run_name="nonebot_plugin_moellmchats._render_import_probe")
+    assert namespace["_host_compress_image"] is None
+
+
+def test_large_image_reuses_host_guard_loaded_after_llm_import(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = []
+
+    def compress(payload):
+        captured.append(len(payload))
+        return b"compressed"
+
+    monkeypatch.setattr(module, "_host_compress_image", None)
+    monkeypatch.setitem(sys.modules, "src.plugins.qi_zmws.image_encode", SimpleNamespace(compress_image=compress))
+    payload = b"x" * (module._IMAGE_DEGRADE_BYTES + 1)
+    assert guarded_image_bytes(payload) == b"compressed"
+    assert captured == [len(payload)]
 
 
 @pytest.mark.asyncio

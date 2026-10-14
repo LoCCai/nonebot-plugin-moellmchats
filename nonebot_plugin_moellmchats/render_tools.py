@@ -45,6 +45,7 @@ import os
 import re
 import shutil
 import socket
+import sys
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -75,17 +76,10 @@ except ModuleNotFoundError as error:  # pragma: no cover - host-only module
     BrowserQueueFull = BrowserTaskTimeout = None  # type: ignore[assignment]
     admitted_browser_call = None
 
-try:  # Qiqi host image guard; standalone falls back to the Pillow loop below.
-    from src.plugins.qi_zmws.image_encode import compress_image as _host_compress_image
-except ModuleNotFoundError as error:  # pragma: no cover - host-only module
-    if error.name not in {
-        "src",
-        "src.plugins",
-        "src.plugins.qi_zmws",
-        "src.plugins.qi_zmws.image_encode",
-    }:
-        raise
-    _host_compress_image = None
+# Importing a host plugin's child module also initializes its package, which
+# can require this plugin before its public ToolSpec exports are available.
+# Reuse an already-loaded compressor only when an image actually needs it.
+_host_compress_image = None
 
 try:
     from nonebot.adapters.onebot.v11 import MessageSegment
@@ -447,7 +441,12 @@ def guarded_image_bytes(payload: bytes) -> bytes:
     data = bytes(payload)
     if len(data) <= _IMAGE_DEGRADE_BYTES:
         return data
-    compressor = _host_compress_image or _standalone_compress_image
+    host_guard = sys.modules.get("src.plugins.qi_zmws.image_encode")
+    compressor = (
+        _host_compress_image
+        or getattr(host_guard, "compress_image", None)
+        or _standalone_compress_image
+    )
     try:
         compressed = compressor(data)
     except Exception as error:
