@@ -412,6 +412,7 @@ def register_meme_tools() -> tuple[str, ...]:
     except ValueError:
         logger.debug("LLM 表情包工具已注册，跳过：generate_meme")
         return ()
+    logger.info("LLM 表情包工具已注册：generate_meme")
     return ("generate_meme",)
 
 

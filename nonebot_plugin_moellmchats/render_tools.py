@@ -882,6 +882,8 @@ def register_render_tools(
             logger.debug("LLM 渲染工具已注册，跳过：{}", spec.name)
             continue
         registered.append(spec.name)
+    if registered:
+        logger.info("LLM 渲染工具已注册：{}", ", ".join(registered))
     return tuple(registered)
 
 
