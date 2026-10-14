@@ -26,7 +26,12 @@ require("nonebot_plugin_localstore")
 _model_refresh_task: asyncio.Task | None = None
 _runner_preflight_task: asyncio.Task | None = None
 
+# Optional render/meme tools register themselves only when their runtime
+# dependencies and configuration are present; both modules stay importable
+# without the optional extras installed.
+from . import meme_tools as _meme_tools  # noqa: F401
 from . import moe_llm as llm
+from . import render_tools as _render_tools  # noqa: F401
 from .agent_context_runtime import runtime_resource_host
 from .chat_runtime import (
     acknowledge_mention,

@@ -33,6 +33,24 @@ class MentionAckConfig(BaseModel):
 mention_ack_config = get_plugin_config(MentionAckConfig)
 
 
+class RenderToolsConfig(BaseModel):
+    """Browser render / meme tools are configured by NoneBot, not config.json.
+
+    An empty meme base disables the meme tool, and a missing browser simply
+    leaves the render tools unregistered: the plugin keeps working without
+    the optional extras installed.
+    """
+
+    moellm_render_enabled: bool = True
+    moellm_render_browser_executable: str = ""
+    moellm_render_browser_endpoint: str = ""
+    moellm_render_default_width: int = Field(default=800, ge=320, le=1_600)
+    moellm_meme_api_base: str = ""
+
+
+render_tools_config = get_plugin_config(RenderToolsConfig)
+
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "max_group_history": 10,
     "max_user_history": 8,
