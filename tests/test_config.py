@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from pydantic import ValidationError
 import pytest
 
 from nonebot_plugin_moellmchats import config as config_module
@@ -27,6 +28,17 @@ _BOOLEAN_FIELDS = (
     "tool_progress_messages_enabled",
     "tool_progress_model_preface_enabled",
 )
+
+
+def test_nonebot_mention_config_parses_env_values() -> None:
+    disabled = config_module.MentionAckConfig(
+        moellm_mention_ack_enabled="false", moellm_mention_ack_emoji_id="282",
+    )
+    assert disabled.moellm_mention_ack_enabled is False
+    assert disabled.moellm_mention_ack_emoji_id == 282
+    assert config_module.MentionAckConfig().moellm_mention_ack_enabled is True
+    with pytest.raises(ValidationError):
+        config_module.MentionAckConfig(moellm_mention_ack_emoji_id=-1)
 
 
 def _candidate(**overrides) -> dict:

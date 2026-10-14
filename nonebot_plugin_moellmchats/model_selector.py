@@ -382,7 +382,9 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                             f"从服务商 {provider} 获取模型失败，HTTP状态码: {resp.status}"
                         )
             except Exception as e:
-                logger.warning(f"请求服务商 {provider} 的 /models 接口异常: {e}")
+                from .diagnostics import exception_metadata
+
+                logger.warning("服务商模型列表请求异常 provider={} details={}", provider, exception_metadata(e))
             return provider, None
 
         results = await asyncio.gather(

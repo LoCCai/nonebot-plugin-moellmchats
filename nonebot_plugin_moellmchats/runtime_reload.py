@@ -334,6 +334,11 @@ class RuntimeReloader:
             load_emotions_candidate, config_candidate
         )
         custom_tools, dependencies = custom_tool_pair
+        # Plugin metadata and PicMenu dependencies are part of this candidate,
+        # just like registered tools. Keep both runtime projections in sync.
+        for spec in nonebot_plugin_specs:
+            if spec.dependencies:
+                dependencies.setdefault(spec.name, set()).update(spec.dependencies)
         builtin_tool_provider.validate_legacy_parity(
             builtin_discovery,
             builtin_specs,

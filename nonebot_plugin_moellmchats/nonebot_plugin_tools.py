@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import replace
+import io
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 import nonebot
@@ -14,7 +19,15 @@ from .event_simulator import (
     PluginDispatchStatus,
     event_simulator,
 )
-from .tool_contracts import ToolEffect, ToolResult, ToolSpec
+from .tool_contracts import (
+    TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,
+    TOOL_RESULT_MAX_IMAGES,
+    TOOL_RESULT_MAX_PAYLOAD_BYTES,
+    TOOL_RESULT_MAX_TEXT_CHARS,
+    ToolEffect,
+    ToolResult,
+    ToolSpec,
+)
 from .tool_discovery import (
     COMPAT_COMMAND_PREFIXES_KEY,
     build_compatibility_description,
@@ -30,6 +43,8 @@ _COMMAND_PARAMETERS = {
                 "生成可以直接触发该插件的机器人指令字符串。"
                 "原消息中的 @ 对象必须保留为 [at:1]、[at:2] 等身份占位符，"
                 "不要改成昵称、QQ号，也不要省略；显式输入的玩家 UID 保持原样，按原顺序排列。"
+                "[at:N]仅限当前消息；查询历史玩家时使用本轮提供的[history_at:...]映射，"
+                "没有身份映射就请用户补充真实@或UID，不能复用旧[at:N]或猜身份。"
             ),
             "minLength": 1,
             "maxLength": 1024,
@@ -41,6 +56,11 @@ _COMMAND_PARAMETERS = {
 
 
 _DISPATCH_FEEDBACK = {
+    PluginDispatchStatus.INPUT_REQUIRED: (
+        "查询对象的身份尚未确认，本次尚未执行插件或游戏查询，不能描述为插件、接口或游戏故障。"
+        "不要原样重复调用；若本轮提供了正确的[at:N]或[history_at:...]映射，可用该映射重新生成查询指令。"
+        "没有可用映射时，请用户补充目标的真实@或完整玩家UID；不能猜测或替换为当前提问者。"
+    ),
     PluginDispatchStatus.PARTIAL_SUCCESS: (
         "插件已产生部分可验证结果，但后续步骤被中断，结果可能不完整；不要再次调用同一工具。"
         "必须立即用一两句话向用户说明：任务未完整完成、缺失了哪部分，并建议稍后重试或改用原生命令。"
@@ -138,6 +158,28 @@ def _legacy_dependencies(info: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _normalize_dispatch_text(text: str) -> tuple[str, dict[str, int | bool]]:
+    """Normalize an adapter receipt while retaining its confirmed execution."""
+
+    nul_removed = text.count("\x00")
+    surrogate_replaced = sum(0xD800 <= ord(char) <= 0xDFFF for char in text)
+    normalized = text.replace("\x00", "").encode("utf-8", errors="replace").decode("utf-8")
+    truncated = len(normalized) > TOOL_RESULT_MAX_TEXT_CHARS
+    if truncated:
+        marker = "\n...[工具结果已截断]"
+        normalized = normalized[: TOOL_RESULT_MAX_TEXT_CHARS - len(marker)] + marker
+    changes: dict[str, int | bool] = {}
+    if nul_removed or surrogate_replaced or truncated:
+        changes = {
+            "original_chars": len(text),
+            "normalized_chars": len(normalized),
+            "nul_removed": nul_removed,
+            "surrogate_replaced": surrogate_replaced,
+            "truncated": truncated,
+        }
+    return normalized, changes
+
+
 async def execute_nonebot_plugin(
     command: str,
     *,
@@ -163,16 +205,105 @@ async def execute_nonebot_plugin(
     )
     if not isinstance(dispatch, PluginDispatchResult):
         raise TypeError("NoneBot 兼容调度必须返回 PluginDispatchResult")
+    return await plugin_dispatch_tool_result(dispatch, plugin_name=plugin_name)
+
+
+def _image_preview(reference: str, maximum: int) -> str | None:
+    """Make an optional vision preview; the image already sent to QQ is untouched."""
+    if not reference.startswith("data:image/") or ";base64," not in reference:
+        return None
+    try:
+        # Pillow is optional for this plugin. A missing decoder must not undo a
+        # confirmed send, and an unexpectedly huge receipt need not be decoded.
+        if len(reference) > 32 * 1_024 * 1_024:
+            return None
+        from PIL import Image
+
+        payload = base64.b64decode(reference.split(";base64,", 1)[1], validate=True)
+        with Image.open(io.BytesIO(payload)) as original:
+            if original.width * original.height > 48_000_000:
+                return None
+            preview = original.convert("RGB")
+        preview.thumbnail((2560, 8192))
+        for quality in (85, 65, 45):
+            output = io.BytesIO()
+            preview.save(output, format="JPEG", quality=quality)
+            result = "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+            if len(result) <= maximum:
+                return result
+            preview.thumbnail((max(1, preview.width // 2), max(1, preview.height // 2)))
+    except Exception:
+        # Only a preview is lost, never the confirmed external action.
+        return None
+    return None
+
+
+def _normalize_dispatch_images(references: tuple[str, ...]) -> tuple[tuple[str, ...], dict[str, int]]:
+    images: list[str] = []
+    resized = omitted = 0
+    # Reserve ample room for bounded text, dispatch counters and JSON syntax.
+    remaining = TOOL_RESULT_MAX_PAYLOAD_BYTES - 1_024 * 1_024
+    for reference in references:
+        if len(images) >= TOOL_RESULT_MAX_IMAGES:
+            omitted += 1
+            continue
+        maximum = min(TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS, remaining)
+        if len(reference) > maximum:
+            reference = _image_preview(reference, maximum)
+            if reference is None:
+                omitted += 1
+                continue
+            resized += 1
+        try:
+            # Keep the strict contract for all ordinary tool results. Adapt
+            # legacy plugin receipts here, after the send has been confirmed.
+            ToolResult(images=(reference,))
+            size = len(json.dumps(reference, ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError, UnicodeError):
+            omitted += 1
+            continue
+        if size > remaining:
+            omitted += 1
+            continue
+        images.append(reference)
+        remaining -= size
+    changes = ({"confirmed_images": len(references), "preview_images": len(images),
+                "resized": resized, "omitted": omitted} if resized or omitted else {})
+    return tuple(images), changes
+
+
+async def plugin_dispatch_tool_result(
+    dispatch: PluginDispatchResult, *, plugin_name: str,
+) -> ToolResult:
+    """Use one receipt boundary for provider and legacy NoneBot tools."""
+    text, normalization = _normalize_dispatch_text(dispatch.text)
+    if normalization:
+        dispatch = replace(dispatch, text=text)
+        nonebot.logger.warning(
+            "兼容插件回执文本已规范化 plugin={} details={}", plugin_name, normalization
+        )
+    metadata: dict[str, Any] = {"plugin_dispatch": _dispatch_metadata(dispatch)}
+    if normalization:
+        metadata["output_text_normalization"] = normalization
     if dispatch.status is PluginDispatchStatus.MATCHED_WITH_OUTPUT:
+        images, image_normalization = await asyncio.to_thread(_normalize_dispatch_images, dispatch.images)
+        if image_normalization:
+            metadata["output_image_normalization"] = image_normalization
+            note = (f"\n已确认向用户发送图片 {len(dispatch.images)} 张；"
+                    "当前仅提供可用预览，图片发送已成功，不要重复调用。")
+            text, _ = _normalize_dispatch_text(text[:TOOL_RESULT_MAX_TEXT_CHARS - len(note)] + note)
+            nonebot.logger.warning(
+                "兼容插件图片回执已规范化 plugin={} details={}", plugin_name, image_normalization
+            )
         return ToolResult(
-            text=dispatch.text,
-            images=dispatch.images,
-            metadata={"plugin_dispatch": _dispatch_metadata(dispatch)},
+            text=text,
+            images=images,
+            metadata=metadata,
         )
     if dispatch.status is PluginDispatchStatus.MATCHED_SIDE_EFFECT:
         return ToolResult(
             text=dispatch.text or "插件已成功执行一次由 Bot API 确认的副作用动作。",
-            metadata={"plugin_dispatch": _dispatch_metadata(dispatch)},
+            metadata=metadata,
         )
     raise PluginDispatchError(dispatch)
 

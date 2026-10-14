@@ -82,7 +82,7 @@ class LlmPayloadMixin:
                 runtime.coordinator.resources if runtime is not None else None
             )
             category = Categorize(
-                plain,
+                getattr(self.messages_handler, "classification_text", lambda text: text)(plain),
                 self.tool_snapshot,
                 is_superuser=self.is_superuser,
                 tool_catalog_cache=(
@@ -162,7 +162,7 @@ class LlmPayloadMixin:
         return None
 
     def _build_tool_mention_hint(self) -> str:
-        """仅在本轮工具调用时，为模型补充 @ 占位符规则。"""
+        """Distinguish current mentions from verified historical query targets."""
         mentions = self.format_message_dict.get("mentions") or []
         reply_user = self.format_message_dict.get("reply_user") or {}
 
@@ -177,8 +177,17 @@ class LlmPayloadMixin:
         if reply_user and reply_user.get("name"):
             parts.append(f"当前用户引用的群友：{reply_user['name']}，占位符为[at:0]。")
 
-        if not parts:
-            return ""
+        history_mentions = self.format_message_dict.get("history_mentions") or {}
+        if history_mentions:
+            history_desc = "，".join(
+                f"[history_at:{token}]={json.dumps(target.get('name') or '群友', ensure_ascii=False)}"
+                for token, target in history_mentions.items()
+            )
+            parts.append(f"同一用户在本群近期真实提及的查询对象：{history_desc}。")
+            parts.append(
+                "追问之前玩家时按以上历史映射使用[history_at:...]，仅限玩家资料、对比和战斗测算查询；"
+                "历史昵称只是标签，不可当UID。不能用于@通知、屏蔽配置、绑定或管理等操作。"
+            )
 
         if reply_user and reply_user.get("name"):
             parts.append(
@@ -193,6 +202,8 @@ class LlmPayloadMixin:
             )
 
         parts.append(
+            "[at:N]只对应当前消息，禁止直接复用历史消息或旧工具调用中的[at:N]。"
+            "缺少可信身份映射时请用户补充真实@或完整玩家UID，不能猜身份或换成提问者。"
             "生成插件 command 时，@目标的身份占位符是参数，不是显示昵称。"
             "必须保留其原始顺序，不附加昵称；用户写出的玩家UID原样保留。"
             "例如战力对比 @某人 UID，应生成 /战力对比 [at:1] UID，"
@@ -326,6 +337,10 @@ class LlmPayloadMixin:
         def repl(match):
             token = match.group(0)
 
+            if token.startswith("[history_at:"):
+                target = (self.format_message_dict.get("history_mentions") or {}).get(match.group(2), {})
+                return "@" + (target.get("name") or "历史查询对象")
+
             if token.startswith("[at:"):
                 try:
                     idx = int(match.group(1))
@@ -350,7 +365,7 @@ class LlmPayloadMixin:
 
             return token
 
-        return re.sub(r"\[at:(\d+)\]|\[at_all\]", repl, text)
+        return re.sub(r"\[at:(\d+)\]|\[at_all\]|\[history_at:([a-f0-9]{32})\]", repl, text)
 
     def _sanitize_tool_calls_for_history(self, tool_calls: list) -> list:
         """仅清洗 tool_calls 里的临时占位符，保留其余有意义参数。"""

@@ -6,8 +6,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from nonebot import get_plugin_config
 from nonebot.log import logger
 import nonebot_plugin_localstore as store
+from pydantic import BaseModel, Field
 import ujson as json
 
 from .private_files import (
@@ -19,6 +21,16 @@ from .private_files import (
 
 config_path: Path = store.get_plugin_config_dir()
 MAX_CD_SECONDS = 86_400
+
+
+class MentionAckConfig(BaseModel):
+    """Mention feedback is configured by NoneBot, independently of config.json."""
+
+    moellm_mention_ack_enabled: bool = True
+    moellm_mention_ack_emoji_id: int = Field(default=282, ge=0, le=2_147_483_647)
+
+
+mention_ack_config = get_plugin_config(MentionAckConfig)
 
 
 DEFAULT_CONFIG: dict[str, Any] = {

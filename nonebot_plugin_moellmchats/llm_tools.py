@@ -25,6 +25,7 @@ from .event_simulator import (
 from .nonebot_plugin_tools import (
     PluginDispatchError,
     configured_command_prefixes,
+    plugin_dispatch_tool_result,
 )
 from .parallel_execution import (
     ReadOnlyParallelExecutionError,
@@ -65,8 +66,12 @@ from .trusted_runner_pool import (
 from .utils import parse_emotion
 
 _PROGRESS_SEND_TIMEOUT_SECONDS = 1.0
+_PROGRESS_DELIVERY_TIMEOUT_SECONDS = 17.0
+_PROGRESS_RECALL_TIMEOUT_SECONDS = 5.0
+_PROGRESS_RECALL_DELAY_SECONDS = 21.0
 _PROGRESS_PREFACE_MAX_CHARS = 160
 _PROGRESS_FEATURE_MAX_CHARS = 64
+_pending_progress_tasks: set[asyncio.Task[None]] = set()
 
 if TYPE_CHECKING:
     from .agent_context_runtime import AgentRequestRuntime
@@ -399,6 +404,12 @@ class LlmToolsMixin:
         if not self._progress_messages_enabled():
             self._set_tool_progress_status(call, "disabled")
             return
+        if getattr(self, "_tool_progress_attempted", False):
+            self._set_tool_progress_status(call, "suppressed")
+            return
+        # Claim before awaiting: all tools and model rounds share one request.
+        # An uncertain acknowledgement must never cause another notice.
+        self._tool_progress_attempted = True
         model_preface = ""
         if include_model_preface and self._progress_model_preface_enabled():
             model_preface = self._safe_progress_preface(result_text)
@@ -408,11 +419,48 @@ class LlmToolsMixin:
             confirmation_required=confirmation_required,
             model_preface=model_preface,
         )
+        task = asyncio.create_task(
+            self._deliver_tool_progress(call=call, view=view, message=message),
+            name="llm_tool_progress",
+        )
+        self._track_progress_task(task)
+        # Keep consuming a slow receipt without delaying actual tool execution.
+        done, _ = await asyncio.wait({task}, timeout=_PROGRESS_SEND_TIMEOUT_SECONDS)
+        if done:
+            await task
+        else:
+            self._set_tool_progress_status(call, "pending")
+
+    @staticmethod
+    def _track_progress_task(task: asyncio.Task[None]) -> None:
+        _pending_progress_tasks.add(task)
+        task.add_done_callback(_pending_progress_tasks.discard)
+
+    async def _deliver_tool_progress(
+        self,
+        *,
+        call: Mapping[str, Any],
+        view: LlmToolExecutionView,
+        message: str,
+    ) -> None:
         status = "sent"
         error_type = ""
         try:
-            async with timeout_scope(_PROGRESS_SEND_TIMEOUT_SECONDS):
-                await self.bot.send(self.event, message)
+            async with timeout_scope(_PROGRESS_DELIVERY_TIMEOUT_SECONDS):
+                receipt = await self.bot.send(self.event, message)
+            message_id = receipt.get("message_id") if isinstance(receipt, Mapping) else None
+            # SnowLuma uses signed message IDs. Reject booleans and malformed
+            # receipts; only retract a confirmed message sent by this request.
+            if isinstance(message_id, str) and re.fullmatch(r"-?\d+", message_id):
+                message_id = int(message_id)
+            if isinstance(message_id, int) and not isinstance(message_id, bool) and message_id:
+                self._tool_progress_message_id = message_id
+                if getattr(self, "_tool_progress_finished", False):
+                    await self._recall_tool_progress()
+                else:
+                    timer = asyncio.create_task(self._expire_tool_progress(), name="llm_tool_progress_recall")
+                    self._tool_progress_recall_timer = timer
+                    self._track_progress_task(timer)
         except asyncio.CancelledError:
             self._set_tool_progress_status(call, "cancelled")
             self._audit_tool_progress(
@@ -435,6 +483,40 @@ class LlmToolsMixin:
             status=status,
             error_type=error_type,
         )
+
+    async def _expire_tool_progress(self) -> None:
+        await asyncio.sleep(_PROGRESS_RECALL_DELAY_SECONDS)
+        await self._recall_tool_progress()
+
+    async def _recall_tool_progress(self) -> None:
+        message_id = getattr(self, "_tool_progress_message_id", None)
+        if message_id is None:
+            return
+        # Clear before awaiting so completion and the timer cannot both recall.
+        self._tool_progress_message_id = None
+        try:
+            try:
+                from src.utils.onebot_recall import recall_message
+            except ModuleNotFoundError as error:
+                if error.name not in {"src", "src.utils", "src.utils.onebot_recall"}:
+                    raise
+                # Standalone plugin deployments have no Qiqi utils package.
+                async def recall_message(bot: Any, **params: Any) -> None:
+                    await bot.delete_msg(**params)
+            async with timeout_scope(_PROGRESS_RECALL_TIMEOUT_SECONDS):
+                await recall_message(self.bot, message_id=message_id)
+        except Exception as error:
+            # Recall is best effort; never replace an answer or retry an
+            # uncertain OneBot action. Do not log message contents or secrets.
+            logger.warning("LLM 工具进度撤回未确认，不重试：{}", type(error).__name__)
+
+    async def _finish_tool_progress(self) -> None:
+        self._tool_progress_finished = True
+        timer = getattr(self, "_tool_progress_recall_timer", None)
+        if timer is not None and getattr(self, "_tool_progress_message_id", None) is not None:
+            # Cancel only a sleeping timer, never an already-started recall.
+            timer.cancel()
+        await self._recall_tool_progress()
 
     def _tool_attempt_state(
         self,
@@ -489,6 +571,7 @@ class LlmToolsMixin:
             PluginDispatchStatus.MATCHED_EMPTY.value,
             PluginDispatchStatus.FAILED.value,
             PluginDispatchStatus.TIMED_OUT.value,
+            PluginDispatchStatus.INPUT_REQUIRED.value,
         }:
             return "相同工具和参数此前已失败或无结果，禁止原样重复；请选择不同工具或实质不同参数。"
         return None
@@ -586,7 +669,7 @@ class LlmToolsMixin:
             return ToolCallStatus.COMPLETED
         if status is PluginDispatchStatus.TIMED_OUT:
             return ToolCallStatus.TIMED_OUT
-        if status is PluginDispatchStatus.ADMISSION_REJECTED:
+        if status in {PluginDispatchStatus.ADMISSION_REJECTED, PluginDispatchStatus.INPUT_REQUIRED}:
             return ToolCallStatus.REJECTED
         return ToolCallStatus.FAILED
 
@@ -1891,14 +1974,8 @@ class LlmToolsMixin:
                             dispatch_result = raw_dispatch_result
                             if not dispatch_result.succeeded:
                                 raise PluginDispatchError(dispatch_result)
-                            plugin_result = ToolResult(
-                                text=(
-                                    dispatch_result.text
-                                    if dispatch_result.text or dispatch_result.status
-                                    is PluginDispatchStatus.MATCHED_WITH_OUTPUT
-                                    else "插件已成功执行一次由 Bot API 确认的副作用动作。"
-                                ),
-                                images=dispatch_result.images,
+                            plugin_result = await plugin_dispatch_tool_result(
+                                dispatch_result, plugin_name=func_name,
                             )
                 except asyncio.CancelledError:
                     await self._record_agent_tool_outcome(
@@ -1936,8 +2013,9 @@ class LlmToolsMixin:
                         fingerprint,
                         dispatch_result.status.value,
                     )
-                except Exception:
-                    logger.error("NoneBot 插件工具执行失败，异常详情已安全省略")
+                except Exception as exc:
+                    from .diagnostics import exception_metadata
+                    logger.error("NoneBot 插件工具执行失败: plugin={} details={}", func_name, exception_metadata(exc))
                     trace_status = ToolCallStatus.FAILED
                     trace_error_type = "ToolExecutionError"
                     plugin_result = None

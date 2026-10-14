@@ -250,6 +250,27 @@ def test_loaded_plugin_menu_is_automatic_but_custom_info_remains_authoritative(
     }
 
 
+def test_plugin_tool_dependencies_survive_both_discovery_sources(monkeypatch) -> None:
+    plugin = SimpleNamespace(
+        name="qi_zmws", metadata=SimpleNamespace(name="造梦", description="资料", usage="问答",
+            extra={"tool_dependencies": ["zmws_knowledge_search", "zmws_knowledge_read",
+                                         "zmws_knowledge_read", None, "../invalid"]}),
+    )
+    monkeypatch.setattr(nonebot.plugin, "get_loaded_plugins", lambda: [plugin])
+    manager = object.__new__(ToolManager)
+    monkeypatch.setattr(manager, "_load_custom_plugin_info", lambda: {})
+    empty = PicMenuProjectionSnapshot.empty()
+    metadata_info = manager.build_plugin_info(picmenu_projection=empty)["qi_zmws"]
+    assert metadata_info["tool_dependencies"] == ["zmws_knowledge_search", "zmws_knowledge_read"]
+    projection = PicMenuProjectionSnapshot.from_infos({"qi_zmws": {"name": "造梦资料", "menu_data": _like_menu()}})
+    picmenu_info = manager.build_plugin_info(picmenu_projection=projection)["qi_zmws"]
+    assert picmenu_info["tool_dependencies"] == metadata_info["tool_dependencies"]
+    candidate, _ = build_nonebot_plugin_candidate({"qi_zmws": picmenu_info})
+    assert candidate["qi_zmws"]["tool_dependencies"] == metadata_info["tool_dependencies"]
+    monkeypatch.setattr(manager, "_load_custom_plugin_info", lambda: {"qi_zmws": {"name": "自定义"}})
+    assert "tool_dependencies" not in manager.build_plugin_info(picmenu_projection=projection)["qi_zmws"]
+
+
 def test_custom_info_can_explicitly_supply_menu_data() -> None:
     info = with_menu_discovery(
         {
@@ -407,6 +428,25 @@ def test_business_intent_aliases_are_exact_normalized_and_fail_closed() -> None:
         is_superuser=True,
         is_blacklisted=lambda _name: False,
     ).status == "ambiguous"
+
+
+def test_exact_native_command_name_is_owned_without_short_business_aliases():
+    info = with_menu_discovery({"name": "群管理"}, [{
+        "func": "点赞与禅定", "trigger_method": "命令", "trigger_condition": "群成员",
+        "brief_des": "自我禁言", "pmn_llm_intents": ["我想禅定"],
+        "pmn_triggers": [
+            {"type": "command", "value": "<命令前缀>禅定"},
+            {"type": "command", "value": "<命令前缀>馋定"},
+            {"type": "command", "value": "<命令前缀>禅定 [分钟]"},
+            {"type": "event", "value": "入群"},
+        ],
+    }])
+    owners = build_intent_owner_index({"qi_group_admin": info})
+    for plain in ("禅定", "馋定", "我想禅定"):
+        assert resolve_business_intent(plain, owners=owners, loaded_plugins={"qi_group_admin": info},
+                                       is_superuser=False, is_blacklisted=lambda name: False).owner == "qi_group_admin"
+    assert "入群" not in owners
+    assert "禅定分钟" not in owners
 
 
 def test_hidden_intent_owner_requires_superuser_visibility() -> None:

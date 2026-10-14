@@ -467,10 +467,19 @@ def build_intent_owner_index(
     def add_features(plugin_id: str, features: tuple[Mapping[str, Any], ...]) -> None:
         for feature in features:
             raw_intents = feature.get("llm_intents")
-            if not isinstance(raw_intents, (list, tuple)):
-                continue
+            intents = list(raw_intents) if isinstance(raw_intents, (list, tuple)) else []
+            # Native names such as 禅定 are shorter than business-intent aliases.
+            # Only a complete declared command can own the exact utterance;
+            # parameter descriptions and passive triggers never become aliases.
+            if feature.get("invocable") is True:
+                for trigger in feature.get("triggers", ()):
+                    if trigger.get("type") != "command":
+                        continue
+                    command = trigger.get("value", "").removeprefix("<命令前缀>").removeprefix("/").strip()
+                    if command and all(char.isalnum() or char in "_-" for char in command):
+                        intents.append(command)
             hidden = feature.get("hidden") is True
-            for raw_intent in raw_intents:
+            for raw_intent in intents:
                 normalized = normalize_llm_intent(raw_intent)
                 if not normalized:
                     continue

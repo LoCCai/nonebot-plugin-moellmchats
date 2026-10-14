@@ -59,8 +59,8 @@ async def test_pending_confirmation_releases_request_without_followup_model(monk
     )
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
-    entity = SimpleNamespace(tool_messages=[], add_used_plugins=lambda value: None)
-    messages = SimpleNamespace(messages_entity=entity, pre_process=lambda message: "加一个预测",
+    entity = SimpleNamespace(tool_messages=[], mention_context=None, add_used_plugins=lambda value: None)
+    messages = SimpleNamespace(messages_entity=entity, pre_process=lambda message, **kwargs: "加一个预测",
         get_send_message_list=lambda **kwargs: [], post_process=Mock())
     monkeypatch.setattr(module, "MessagesHandler", lambda user: messages)
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
@@ -131,9 +131,9 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch):
     )
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
-    entity = SimpleNamespace(tool_messages=[], add_used_plugins=lambda value: None)
+    entity = SimpleNamespace(tool_messages=[], mention_context=None, add_used_plugins=lambda value: None)
     monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(
-        messages_entity=entity, pre_process=lambda message: "做两个步骤", get_send_message_list=lambda **kwargs: [],
+        messages_entity=entity, pre_process=lambda message, **kwargs: "做两个步骤", get_send_message_list=lambda **kwargs: [],
     ))
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
     monkeypatch.setattr(module, "get_session", object)
@@ -213,9 +213,9 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
         tool_dependencies={}, mcp_tool_names=set())
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
-    entity = SimpleNamespace(tool_messages=[], add_used_plugins=lambda value: None)
+    entity = SimpleNamespace(tool_messages=[], mention_context=None, add_used_plugins=lambda value: None)
     monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(messages_entity=entity,
-        pre_process=lambda message: "分析角色装备",
+        pre_process=lambda message, **kwargs: "分析角色装备",
         get_send_message_list=lambda **kwargs: [{"role": "user", "content": "分析角色装备"}]))
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
     vision = {"model": "vision-model", "url": "https://vision.invalid", "key": "vision-test-key",

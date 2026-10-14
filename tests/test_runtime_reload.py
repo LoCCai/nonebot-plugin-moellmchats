@@ -175,8 +175,10 @@ def test_tool_manager_forwards_generation_to_both_artifact_loaders(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_dependencies", [False, True])
 async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     monkeypatch: pytest.MonkeyPatch,
+    metadata_dependencies: bool,
 ) -> None:
     reload_module = importlib.import_module("nonebot_plugin_moellmchats.runtime_reload")
     manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
@@ -233,6 +235,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
                 "name": "Runtime Plugin",
                 "description": "runtime plugin shadow",
                 "usage": "/runtime",
+                **({"tool_dependencies": [registered.name]} if metadata_dependencies else {}),
             }
         },
     )
@@ -369,6 +372,9 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert plugin_record.spec.effect is ToolEffect.MUTATING
     assert plugin_record.spec.permission == "user"
     assert plugin_entry["source"] == "nonebot_plugin"
+    if metadata_dependencies:
+        assert snapshot.tool_dependencies[plugin_name] == {registered.name}
+        assert registered.name in snapshot.expand_dependencies({plugin_name})
     assert provider_catalog.trust_policy_for(plugin_name).boundary is (
         ToolExecutionBoundary.BOUNDED_EVENT
     )

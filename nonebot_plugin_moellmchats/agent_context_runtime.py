@@ -1418,7 +1418,9 @@ class AgentRequestRuntime:
         )
         return self.prompt_context
 
-    async def persist_user_message(self, text: str) -> AgentPromptContext:
+    async def persist_user_message(
+        self, text: str, *, mention_context: dict | None = None,
+    ) -> AgentPromptContext:
         # Other callers can bypass MessagesHandler; memory retrieval and history
         # must receive the same full text without PostgreSQL's forbidden NUL.
         text = text.replace("\x00", "")
@@ -1441,7 +1443,7 @@ class AgentRequestRuntime:
             role="user",
             sender_id=self.user.user_id,
             content=text,
-            structured_content=None,
+            structured_content=(None if mention_context is None else {"mention_context": _safe_json_copy(mention_context)}),
             created_at=requested_at,
         )
         await self.coordinator.append_message(user_message)

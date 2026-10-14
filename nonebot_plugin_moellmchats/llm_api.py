@@ -231,11 +231,21 @@ class LlmApiMixin:
         buffer = []
         assistant_result = []  # 后处理助手回复
         punctuation_buffer = ""  # 存标点
-        is_second_send = False  # 不是第一次发送
-        current_content = ""  # 最近一次已发出的分段内容
         reasoning_buffer = []  # 思考内容
         is_thinking = False  # 状态机：是否在思考中
-        tag_buffer = ""  # 用于精准匹配标签切片
+        tag_buffer = ""  # 未确定是否为思考标签的字符，不提前发送
+        thought_tags = ("<thought>", "<think>", "</thought>", "</think>")
+
+        async def send_text(text: str) -> None:
+            if not text.strip():
+                return
+            # max_segments limits sentence fragmentation, not answer length.
+            # Long remaining text still needs bounded OneBot message sizes.
+            for start in range(0, len(text), 1200):
+                part = text[start : start + 1200]
+                if assistant_result:
+                    await asyncio.sleep(min(2.0, 0.5 + len(part) / 1200))
+                assistant_result.append(await self.send_emotion_message(part))
 
         async with session.post(
             url, headers=headers, json=data, proxy=proxy, timeout=timeout
@@ -246,12 +256,16 @@ class LlmApiMixin:
             # 确保响应是成功的
             if resp.status == 200:
                 # 异步迭代响应内容
-                MAX_SEGMENTS = self.model_info.get("max_segments", 5)
+                try:
+                    max_segments = max(1, int(self.model_info.get("max_segments", 5)))
+                except (TypeError, ValueError, OverflowError):
+                    max_segments = 5
                 current_segment = 0
-                jump_out = False  # 判断是否跳出循环
                 async for line in resp.content:
-                    if not line or jump_out or self._is_sse_done(line):
+                    if self._is_sse_done(line):
                         break  # 结束标记，退出循环
+                    if not line:
+                        continue
 
                     json_data = self._decode_sse_payload(line)
                     if json_data is None:
@@ -276,100 +290,41 @@ class LlmApiMixin:
 
                     if content:
                         for char in content:
-                            tag_buffer += char
-                            if len(tag_buffer) > 15:
-                                tag_buffer = tag_buffer[-15:]
-
-                            # 拦截思考开始
-                            if not is_thinking and (
-                                tag_buffer.endswith("<thought>")
-                                or tag_buffer.endswith("<think>")
-                            ):
-                                is_thinking = True
-                                # 思考标签的字符已经漏进 buffer 了，给它揪出来删掉
-                                tag_len = 9 if tag_buffer.endswith("<thought>") else 7
-                                for _ in range(
-                                    tag_len - 1
-                                ):  # -1是因为当前char还没加进去
-                                    if punctuation_buffer:
-                                        punctuation_buffer = punctuation_buffer[:-1]
-                                    elif buffer:
-                                        buffer.pop()
-                                continue
-
-                            # 拦截思考结束
-                            if is_thinking and (
-                                tag_buffer.endswith("</thought>")
-                                or tag_buffer.endswith("</think>")
-                            ):
-                                is_thinking = False
-                                continue
-
-                            # 如果处于思考状态，直接跳过当前字符，不加入 buffer
+                            if tag_buffer or char == "<":
+                                tag_buffer += char
+                                if tag_buffer in thought_tags:
+                                    is_thinking = not tag_buffer.startswith("</")
+                                    tag_buffer = ""
+                                    continue
+                                if any(tag.startswith(tag_buffer) for tag in thought_tags):
+                                    continue
+                                visible = tag_buffer
+                                tag_buffer = ""
+                            else:
+                                visible = char
                             if is_thinking:
                                 continue
-
-                            # 如果是换行且前面刚好结束思考，忽略这个孤儿换行
-                            if char == "\n" and tag_buffer.endswith(">"):
-                                continue
-                            if is_segment and self.temperament != "ai助手":  # 分段
-                                if char in ["。", "？", "！", "—", "\n"]:
-                                    punctuation_buffer += char
-                                else:
+                            for visible_char in visible:
+                                if (is_segment and self.temperament != "ai助手"
+                                        and current_segment < max_segments - 1):
+                                    if visible_char in ["。", "？", "！", "—", "\n"]:
+                                        punctuation_buffer += visible_char
+                                        continue
                                     if punctuation_buffer:
-                                        # 发送累积的标点内容
-                                        current_content = (
-                                            "".join(buffer) + punctuation_buffer
-                                        ).strip()
-                                        if current_content.strip():
-                                            if current_segment >= MAX_SEGMENTS:
-                                                TOO_LANG = "太长了，不发了"
-                                                buffer = [TOO_LANG]
-                                                jump_out = True
-                                                break
-                                            if (
-                                                is_second_send
-                                            ):  # 第二次开始，会等几秒再发送
-                                                await asyncio.sleep(
-                                                    2 + len(current_content) / 3
-                                                )
-                                            else:
-                                                is_second_send = True
-                                            # 处理表情包和发送
-                                            current_content = (
-                                                await self.send_emotion_message(
-                                                    current_content
-                                                )
-                                            )
+                                        part = "".join(buffer) + punctuation_buffer
+                                        if part.strip():
+                                            await send_text(part)
                                             current_segment += 1
-                                            assistant_result.append(current_content)
                                         buffer = []
                                         punctuation_buffer = ""
-                                    buffer.append(char)
-                            else:
-                                # 注意这里是 append(char) 不是 append(content)
-                                buffer.append(char)
+                                buffer.append(visible_char)
 
-                # 最后的的句子或者没分段
-                if jump_out:
-                    result = "".join(buffer)
-                else:
-                    result = "".join(buffer) + punctuation_buffer
-
-                if is_second_send:
-                    await asyncio.sleep(2 + len(current_content) / 3)
-                else:
-                    is_second_send = True
-
-                if result := result.strip():
-                    result = await self.send_emotion_message(result)
-                    return (
-                        True,
-                        "".join(assistant_result) + result,
-                        None,
-                        "".join(reasoning_buffer),
-                    )
-                elif is_second_send:
+                # Reserve the last segment for the complete remaining answer.
+                remaining = "".join(buffer) + punctuation_buffer
+                if not is_thinking:
+                    remaining += tag_buffer
+                await send_text(remaining)
+                if assistant_result:
                     return (
                         True,
                         "".join(assistant_result),

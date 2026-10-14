@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import FrozenInstanceError
+import io
+import random
 
 import pytest
 
@@ -13,11 +16,80 @@ from nonebot_plugin_moellmchats.nonebot_plugin_tools import (
     PluginDispatchError,
     build_nonebot_plugin_candidate,
 )
-from nonebot_plugin_moellmchats.tool_contracts import ToolEffect, ToolResult
+from nonebot_plugin_moellmchats.tool_contracts import TOOL_RESULT_MAX_TEXT_CHARS, ToolEffect, ToolResult
 from nonebot_plugin_moellmchats.tool_discovery import (
     COMPAT_COMMAND_PREFIXES_KEY,
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolManager, tool_manager
+
+
+@pytest.mark.asyncio
+async def test_oversized_png_receipt_becomes_valid_preview_without_redispatch(monkeypatch):
+    from nonebot_plugin_moellmchats.tool_contracts import TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS
+
+    image_module = pytest.importorskip("PIL.Image")
+    image = image_module.frombytes("RGB", (1100, 1100), random.Random(7).randbytes(1100 * 1100 * 3))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    original = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+    assert len(original) > TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS
+    with pytest.raises(ValueError, match=r"ToolResult\.images"):
+        ToolResult(images=(original,))
+    calls = []
+
+    async def dispatch(*args, **kwargs):
+        calls.append(kwargs)
+        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="[图片]", images=(original,), matcher_matched=1,
+            successful_captures=1, api_succeeded=1)
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    result = await module.execute_nonebot_plugin("/造梦排行 蟠桃", plugin_name="qi_zmws", bot=object(), event=object())
+    assert len(calls) == 1
+    assert result.metadata["plugin_dispatch"]["status"] == "matched_with_output"
+    assert result.metadata["output_image_normalization"]["resized"] == 1
+    assert "已确认向用户发送图片 1 张" in result.text
+    assert len(result.images[0]) < TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS
+    with image_module.open(io.BytesIO(base64.b64decode(result.images[0].split(",", 1)[1]))) as decoded:
+        assert decoded.size == (1100, 1100)
+
+
+@pytest.mark.asyncio
+async def test_missing_preview_decoder_preserves_confirmed_image_success(monkeypatch):
+    from nonebot_plugin_moellmchats.tool_contracts import TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS
+
+    monkeypatch.setattr(module, "_image_preview", lambda *args: None)
+    dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+        text="[图片]", images=("data:image/png;base64," + "A" * TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,),
+        matcher_matched=1, successful_captures=1, api_succeeded=1)
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="qi_zmws")
+    assert result.images == ()
+    assert result.metadata["plugin_dispatch"]["status"] == "matched_with_output"
+    assert result.metadata["output_image_normalization"]["omitted"] == 1
+    assert "图片发送已成功，不要重复调用" in result.text
+
+
+@pytest.mark.asyncio
+async def test_multiple_image_receipts_obey_total_payload_bound():
+    from nonebot_plugin_moellmchats.tool_contracts import TOOL_RESULT_MAX_PAYLOAD_BYTES
+
+    reference = "https://example.org/" + "a" * 3_999_980
+    dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+        text="图片已发出", images=(reference,) * 6, successful_captures=6, api_succeeded=6)
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="qi_zmws")
+    assert result.metadata["output_image_normalization"]["confirmed_images"] == 6
+    assert result.metadata["output_image_normalization"]["omitted"] > 0
+    assert len(result.canonical_json().encode("utf-8")) < TOOL_RESULT_MAX_PAYLOAD_BYTES
+
+
+@pytest.mark.asyncio
+async def test_unsafe_preview_reference_does_not_undo_confirmed_send():
+    dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+        text="[图片]", images=("https://example.org/\x00x", "https://example.org/valid.png"),
+        successful_captures=1, api_succeeded=1)
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="qi_zmws")
+    assert result.images == ("https://example.org/valid.png",)
+    assert result.metadata["output_image_normalization"]["omitted"] == 1
 
 
 def test_nonebot_plugin_candidate_is_detached_canonical_and_conservative() -> None:
@@ -159,6 +231,71 @@ async def test_nonebot_plugin_adapter_uses_bounded_event_simulator(
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [PluginDispatchStatus.MATCHED_WITH_OUTPUT, PluginDispatchStatus.MATCHED_SIDE_EFFECT],
+)
+@pytest.mark.parametrize(
+    ("text", "normalized", "changed_field"),
+    [
+        ("造梦\x00面板🙂", "造梦面板🙂", "nul_removed"),
+        ("A\ud800B", "A?B", "surrogate_replaced"),
+        ("甲" * (TOOL_RESULT_MAX_TEXT_CHARS + 80), None, "truncated"),
+    ],
+)
+async def test_plugin_receipt_normalization_retains_success_without_redispatch(
+    monkeypatch, status, text, normalized, changed_field,
+):
+    calls = []
+
+    async def dispatch(*args, **kwargs):
+        calls.append(kwargs)
+        return PluginDispatchResult(
+            status=status, text=text, images=("image:one",), matcher_matched=1,
+            successful_captures=1, api_succeeded=1, mutating_api_succeeded=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    result = await module.execute_nonebot_plugin("/demo", plugin_name="plugin_demo", bot=object(), event=object())
+    assert len(calls) == 1
+    assert result.metadata["plugin_dispatch"]["status"] == status.value
+    assert result.metadata["plugin_dispatch"]["api_succeeded"] == 1
+    assert result.metadata["output_text_normalization"][changed_field]
+    if normalized is not None:
+        assert result.text == normalized
+    else:
+        assert len(result.text) == TOOL_RESULT_MAX_TEXT_CHARS
+        assert result.text.endswith("...[工具结果已截断]")
+    assert "\x00" not in result.text
+    result.text.encode("utf-8")
+    if status is PluginDispatchStatus.MATCHED_WITH_OUTPUT:
+        assert result.images == ("image:one",)
+
+
+@pytest.mark.asyncio
+async def test_normalized_partial_receipt_still_blocks_retry(monkeypatch):
+    calls = []
+
+    async def dispatch(*args, **kwargs):
+        calls.append(kwargs)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.PARTIAL_SUCCESS, text="已完成\x00第一步",
+            matcher_matched=1, api_succeeded=1, api_unknown=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    with pytest.raises(PluginDispatchError) as captured:
+        await module.execute_nonebot_plugin("/demo", plugin_name="plugin_demo", bot=object(), event=object())
+    assert len(calls) == 1
+    assert captured.value.result.status is PluginDispatchStatus.PARTIAL_SUCCESS
+    assert captured.value.result.text == "已完成第一步"
+    assert "不要再次调用" in str(captured.value)
+    assert "\x00" not in str(captured.value)
+    with pytest.raises(ValueError, match=r"ToolResult\.text"):
+        ToolResult(text="仍需拒绝\x00非法工具结果")
+
+
 def test_nonebot_plugin_legacy_schema_uses_canonical_spec_without_cutover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -192,6 +329,8 @@ def test_nonebot_plugin_legacy_schema_uses_canonical_spec_without_cutover(
                         "生成可以直接触发该插件的机器人指令字符串。"
                         "原消息中的 @ 对象必须保留为 [at:1]、[at:2] 等身份占位符，"
                         "不要改成昵称、QQ号，也不要省略；显式输入的玩家 UID 保持原样，按原顺序排列。"
+                        "[at:N]仅限当前消息；查询历史玩家时使用本轮提供的[history_at:...]映射，"
+                        "没有身份映射就请用户补充真实@或UID，不能复用旧[at:N]或猜身份。"
                     ),
                     "minLength": 1,
                     "maxLength": 1024,

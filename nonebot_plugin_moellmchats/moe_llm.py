@@ -22,6 +22,7 @@ from .llm_api import LlmApiMixin
 from .llm_payload import LlmPayloadMixin
 from .llm_state import context_dict, token_usage_history
 from .llm_tools import LlmToolsMixin
+from .mention_context import mention_scope
 from .messages_handler import MessagesHandler
 from .model_capabilities import ModelCapability
 from .model_selector import model_selector
@@ -204,10 +205,18 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
     async def _send_retry_notice(self, retry_times: int) -> None:
         try:
             async with timeout_scope(_PROGRESS_NOTICE_TIMEOUT_SECONDS):
-                await self.bot.send(
-                    self.event,
-                    f"api又卡了呐！第 {retry_times + 1} 次尝试，请勿多次发送~",
-                )
+                message = f"api又卡了呐！第 {retry_times + 1} 次尝试，请勿多次发送~"
+                try:
+                    from src.utils.message_fx import send_with_auto_recall
+                except ModuleNotFoundError as error:
+                    if error.name not in {"src", "src.utils", "src.utils.message_fx"}:
+                        raise
+                    # Standalone installations do not include Qiqi's utility.
+                    await self.bot.send(self.event, message)
+                else:
+                    await send_with_auto_recall(
+                        self.bot, self.event, message, delay=10, raise_on_error=True
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -296,6 +305,12 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         return result
 
     async def get_llm_chat(self) -> str | bool:
+        try:
+            return await self._get_llm_chat()
+        finally:
+            await self._finish_tool_progress()
+
+    async def _get_llm_chat(self) -> str | bool:
         self.messages_handler = MessagesHandler(self.user_id)
         if self.agent_runtime is not None:
             history_exchanges = config_parser.get_config("max_user_history", 8)
@@ -306,9 +321,13 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             )
             if self.agent_runtime.persistent:
                 self.messages_handler.bind_committed_history(committed.history)
-        plain = self.messages_handler.pre_process(self.format_message_dict)
+        plain = self.messages_handler.pre_process(
+            self.format_message_dict, scope=mention_scope(getattr(self, "event", None)),
+        )
         if self.agent_runtime is not None:
-            await self.agent_runtime.persist_user_message(plain)
+            await self.agent_runtime.persist_user_message(
+                plain, mention_context=self.messages_handler.messages_entity.mention_context,
+            )
         if validate_error := await self._validate_runtime_model_config():
             return validate_error
 
@@ -569,6 +588,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 result_text = ""
 
             result_text_sent = False
+            delivery_error = None
             has_tool_messages = bool(self.messages_handler.messages_entity.tool_messages)
             if has_tool_messages and not (result_text or "").strip():
 
@@ -583,16 +603,20 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 result_text = await self._call_tool_summary_safely(summary_operation)
                 if self.agent_runtime is not None:
                     await self.agent_runtime.flush_usage()
-                if result_text:
+                if not result_text:
+                    result_text = self._build_empty_tool_summary_fallback()
+                try:
                     result_text = await self.send_emotion_message(result_text)
                     result_text_sent = True
-                else:
-                    result_text = self._build_empty_tool_summary_fallback()
-                    result_text = await self.send_emotion_message(result_text)
+                except (ActionFailed, NetworkError, ApiNotAvailable) as error:
+                    delivery_error = error
                     result_text_sent = True
 
             if not result_text_sent and not current_stream_flag and result_text:
-                result_text = await self.send_emotion_message(str(result_text))
+                try:
+                    result_text = await self.send_emotion_message(str(result_text))
+                except (ActionFailed, NetworkError, ApiNotAvailable) as error:
+                    delivery_error = error
 
             # 统一并完整保存上下文，用户说"继续"时大模型能够回想起历史工具调用记录
             if not self.is_objective:
@@ -606,6 +630,12 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         str(result_text or ""),
                         tool_messages=tool_history,
                     )
+
+            if delivery_error is not None:
+                # Keep the generated answer and completed tool history even
+                # when delivery is rejected or its result remains unknown.
+                # chat_runtime records failure and releases the request.
+                raise delivery_error
 
             if self.agent_runtime is not None:
                 await self.agent_runtime.finish_success()

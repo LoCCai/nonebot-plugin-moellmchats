@@ -1,10 +1,11 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 import time
 
 from nonebot.adapters import Bot
 from nonebot.adapters import Event as MessageEvent
+from nonebot.exception import ActionFailed, ApiNotAvailable, NetworkError
 from nonebot.log import logger
 
 from . import full_metrics as _full_metrics
@@ -20,9 +21,13 @@ from .agent_context_runtime import (
 from .agent_runtime import AgentRunState, DeadlineContext
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
-from .config import config_parser
+from .config import config_parser, mention_ack_config
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
+from .delivery_errors import reply_delivery_failure
 from .onebot_facade import (
+    bot_self_id,
+    event_message,
+    event_message_id,
     event_scene,
     event_sender_name,
     event_time_seconds,
@@ -39,6 +44,38 @@ cd = BoundedValueStore(lambda: 0)
 default_cooldown_store = MemoryCooldownStore(cd)
 is_repeat_ask_dict = BoundedValueStore(lambda: False)
 _CANCEL_NOTICE_TIMEOUT_SECONDS = 1.0
+_MENTION_ACK_TIMEOUT_SECONDS = 1.0
+
+
+async def acknowledge_mention(bot: Bot, event: MessageEvent) -> None:
+    """Acknowledge a real group mention without delaying or failing the chat."""
+    if not mention_ack_config.moellm_mention_ack_enabled:
+        return
+    if event_scene(event) != "group" or onebot_protocol(bot, event) != "onebot_v11":
+        return
+    message_id = event_message_id(event)
+    self_id = bot_self_id(bot, event)
+    if message_id is None or not self_id:
+        return
+    # OneBot removes the leading @Bot before matcher handlers run.
+    message = getattr(event, "original_message", None)
+    if message is None:
+        message = event_message(event)
+    if not any(
+        getattr(segment, "type", "") == "at"
+        and isinstance(data := getattr(segment, "data", None), Mapping)
+        and str(data.get("qq", "")) == self_id
+        for segment in message
+    ):
+        return
+    try:
+        async with timeout_scope(_MENTION_ACK_TIMEOUT_SECONDS):
+            await bot.call_api(
+                "set_msg_emoji_like", message_id=int(message_id),
+                emoji_id=str(mention_ack_config.moellm_mention_ack_emoji_id), set=True,
+            )
+    except Exception as error:
+        logger.debug("LLM @反馈未完成，继续处理对话：error_type={}", type(error).__name__)
 
 
 async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
@@ -53,8 +90,7 @@ async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
         bot_config = getattr(bot, "config", None)
         return bool(
             config_parser.get_config("private_chat_enabled")
-            and event_user_id(event)
-            in {str(value) for value in getattr(bot_config, "superusers", set())}
+            and event_user_id(event) in {str(value) for value in getattr(bot_config, "superusers", set())}
         )
     return False
 
@@ -131,9 +167,7 @@ async def handle_llm(
         "user_id",
         getattr(sender, "user_id", normalized_user_id),
     )
-    user_id: int | str = (
-        raw_user_id if isinstance(raw_user_id, (int, str)) else normalized_user_id
-    )
+    user_id: int | str = raw_user_id if isinstance(raw_user_id, (int, str)) else normalized_user_id
     cooldown_seconds = int(config_parser.get_config("cd_seconds", 120) or 0)
     deadline = DeadlineContext.from_timeout(config_parser.get_config("request_timeout_seconds", 180))
     selected_host = runtime_resource_host if resource_host is None else resource_host
@@ -190,6 +224,13 @@ async def handle_llm(
                     state = AgentRunState.TIMED_OUT if deadline.remaining() <= 0 else AgentRunState.CANCELLED
                     await agent_request.finish_exception(state, error)
                 raise
+            except (ActionFailed, NetworkError, ApiNotAvailable) as error:
+                if not agent_request.run.is_terminal:
+                    await agent_request.finish_exception(AgentRunState.FAILED, error)
+                # QQ may have accepted the message before its ack timed out.
+                # End this request, release its leases, and never send it again
+                # or start another model/tool turn merely to obtain an ack.
+                logger.warning("OneBot 回复投递结束，未自动重发：{}", reply_delivery_failure(error))
             except Exception as error:
                 if not agent_request.run.is_terminal:
                     await agent_request.finish_exception(
@@ -202,9 +243,7 @@ async def handle_llm(
 
     async def execute_agent(coordinator: AgentGenerationCoordinator) -> None:
         bot_config = getattr(bot, "config", None)
-        is_superuser = normalized_user_id in {
-            str(value) for value in getattr(bot_config, "superusers", set())
-        }
+        is_superuser = normalized_user_id in {str(value) for value in getattr(bot_config, "superusers", set())}
         async with protocol_request_scope(
             bot,
             event,

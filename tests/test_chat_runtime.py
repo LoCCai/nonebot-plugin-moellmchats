@@ -4,7 +4,10 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Hashable
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11.exception import ActionFailed, ApiNotAvailable, NetworkError
 import pytest
 
 from nonebot_plugin_moellmchats import chat_runtime
@@ -77,6 +80,79 @@ async def test_cancel_notice_preserves_repeated_cancellation() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await chat_runtime._send_cancel_notice(CancelMatcher())
+
+
+def _mention_event(message: Message) -> GroupMessageEvent:
+    return GroupMessageEvent(
+        time=1_000, self_id=123, post_type="message", message_type="group",
+        sub_type="normal", user_id=42, group_id=456, message_id=-835204486,
+        message=message, raw_message=str(message), font=0, sender={"user_id": 42},
+    )
+
+
+@pytest.mark.asyncio
+async def test_mention_ack_uses_original_message_after_adapter_strips_at() -> None:
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
+    event = _mention_event(Message([MessageSegment.at(123), MessageSegment.text("问题")]))
+    event.message = Message("问题")
+
+    await chat_runtime.acknowledge_mention(bot, event)
+
+    bot.call_api.assert_awaited_once_with(
+        "set_msg_emoji_like", message_id=-835204486, emoji_id="282", set=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", [
+    Message("@小天才七七(运行中) 问题"),
+    Message([MessageSegment.at(789), MessageSegment.text("问题")]),
+    Message([MessageSegment.at("all"), MessageSegment.text("问题")]),
+])
+async def test_mention_ack_does_not_react_to_text_or_other_targets(message: Message) -> None:
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
+
+    await chat_runtime.acknowledge_mention(bot, _mention_event(message))
+
+    bot.call_api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mention_ack_timeout_does_not_block_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def slow_api(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock(side_effect=slow_api))
+    event = _mention_event(Message(MessageSegment.at(123)))
+    monkeypatch.setattr(chat_runtime, "_MENTION_ACK_TIMEOUT_SECONDS", 0.01)
+
+    await asyncio.wait_for(chat_runtime.acknowledge_mention(bot, event), timeout=0.2)
+
+    bot.call_api.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mention_ack_can_be_disabled_with_nonebot_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
+    event = _mention_event(Message(MessageSegment.at(123)))
+    monkeypatch.setattr(chat_runtime.mention_ack_config, "moellm_mention_ack_enabled", False)
+
+    await chat_runtime.acknowledge_mention(bot, event)
+
+    bot.call_api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mention_ack_uses_configured_emoji(monkeypatch: pytest.MonkeyPatch) -> None:
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
+    event = _mention_event(Message(MessageSegment.at(123)))
+    monkeypatch.setattr(chat_runtime.mention_ack_config, "moellm_mention_ack_emoji_id", 76)
+
+    await chat_runtime.acknowledge_mention(bot, event)
+
+    bot.call_api.assert_awaited_once_with(
+        "set_msg_emoji_like", message_id=-835204486, emoji_id="76", set=True,
+    )
 
 
 def _event(*, user_id: int = 42, timestamp: int = 1_000):
@@ -455,6 +531,50 @@ async def test_chat_exception_records_failed_terminal_and_releases_cooldown(
     assert captured[0].run.error_message is not None
     assert "private model failure" not in captured[0].run.error_message
     assert chat_runtime.cd[42] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ActionFailed(
+            status="failed", retcode=100, data=None, wording="send group message failed: send ack 1473 timed out after 5000 ms"
+        ),
+        NetworkError("WebSocket connection closed"),
+        ApiNotAvailable(),
+        ActionFailed(status="failed", retcode=100, data=None, wording="bot is muted"),
+    ],
+)
+async def test_reply_delivery_error_ends_request_once_without_matcher_failure_or_retry(monkeypatch, failure):
+    chat_runtime.reset_all_runtime_state()
+    _config(monkeypatch, cooldown=120, timeout=30)
+    _publish_snapshot()
+    host = RuntimeResourceHost()
+    captured = []
+    calls = []
+
+    class Chat:
+        def __init__(self, _bot, _event, _message, *, temperament, agent_runtime):
+            del temperament
+            captured.append(agent_runtime)
+
+        async def get_llm_chat(self):
+            calls.append(True)
+            await captured[-1].advance(AgentRunState.PLANNING, model="model")
+            await captured[-1].advance(AgentRunState.EXECUTING)
+            raise failure
+
+    monkeypatch.setattr(chat_runtime.llm, "MoeLlm", Chat)
+    monkeypatch.setattr(chat_runtime.temperament_manager, "get_temperament", lambda _user_id: "测试性格")
+    matcher = FakeMatcher()
+    try:
+        await chat_runtime.handle_llm(object(), _runtime_event(), matcher, {"text": ["hello"]}, resource_host=host)
+    finally:
+        await host.close()
+    assert calls == [True]
+    assert captured[0].run.state is AgentRunState.FAILED
+    assert chat_runtime.cd[42] == 0
+    assert matcher.messages == []
 
 
 @pytest.mark.asyncio

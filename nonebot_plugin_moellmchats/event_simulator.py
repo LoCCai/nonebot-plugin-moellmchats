@@ -64,6 +64,7 @@ from nonebot.rule import TrieRule
 from .admission import AdmissionRejected, get_dispatch_controller
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .mention_context import mention_scope
 from .onebot_facade import onebot_protocol
 from .protocol_registry import protocol_registry
 from .runtime_metrics import runtime_metrics
@@ -80,13 +81,19 @@ _SEND_ACTIONS = {
     "send_private_msg",
     "send_message",
 }
-_AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all)\]")
+_AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all|history_at:([a-f0-9]{32}))\]")
 _MENTION_QUERY_COMMANDS = frozenset({
     "战力对比", "造梦战力对比", "造梦资料", "造梦详情", "造梦面板",
     "造梦战力分析", "造梦面板分析", "造梦在线", "造梦实时",
     "造梦改名", "造梦轨迹", "造梦改名轨迹", "蟠桃趋势", "造梦蟠桃趋势",
     "造梦升满", "造梦升满材料", "造梦充值", "造梦VIP", "造梦vip",
+    "六维计算", "六纬计算", "六维计算器", "造梦六维", "对战演绎",
+    "pvp", "PVP", "PvP", "造梦对战", "pve", "PVE", "PvE", "造梦PVE", "造梦打怪",
 })
+
+
+class MentionIdentityRequired(ValueError):
+    """An input identity cannot be resolved; no Matcher has executed."""
 
 
 class PluginDispatchStatus(str, Enum):
@@ -99,6 +106,7 @@ class PluginDispatchStatus(str, Enum):
     TIMED_OUT = "timed_out"
     ADMISSION_REJECTED = "admission_rejected"
     RESULT_UNKNOWN = "result_unknown"
+    INPUT_REQUIRED = "input_required"
 
 
 @dataclass(frozen=True)
@@ -351,7 +359,9 @@ def _restore_query_mentions(command: str, source: dict) -> str:
         pattern = r"(?<!\S)@?" + re.escape(name)
         if len(identities) != 1:
             if re.search(pattern + r"(?=\s|$)", arguments):
-                raise ValueError("被 @ 用户存在同名，无法确定查询目标；请直接发送带 / 的指令与真实 @，或使用完整 UID")
+                raise MentionIdentityRequired(
+                    "被 @ 用户存在同名，无法确定查询目标；请直接发送带 / 的指令与真实 @，或使用完整 UID"
+                )
             continue
         index = next(iter(identities.values()))
         # A copied label alongside its identity token is one operand.
@@ -378,16 +388,24 @@ def _build_fake_message(
         if match.start() > last:
             result.append(segment_class.text(command[last : match.start()]))
         token = match.group(1)
-        if token.startswith("at:"):
+        if token.startswith("history_at:"):
+            head = command.split()[0].lstrip("/!！")
+            target = (source.get("history_mentions") or {}).get(match.group(3), {})
+            scope = source.get("mention_scope")
+            if head not in _MENTION_QUERY_COMMANDS or not scope or target.get("scope") != scope or not target.get("qq"):
+                raise MentionIdentityRequired("历史查询对象身份不可用或指令不支持历史目标，已停止执行")
+            qq = target["qq"]
+            result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
+        elif token.startswith("at:"):
             index = int(match.group(2))
             target = reply_user if index == 0 else (mentions[index - 1] if 0 < index <= len(mentions) else {})
             qq = target.get("qq")
             if not qq:
-                raise ValueError("提及对象未保留有效身份，已停止执行，请根据本次消息重新生成指令")
+                raise MentionIdentityRequired("提及对象未保留有效身份，已停止执行，请根据本次消息重新生成指令")
             result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
         elif token == "at_all":
             if not mentions:
-                raise ValueError("本次消息没有有效提及对象，已停止执行")
+                raise MentionIdentityRequired("本次消息没有有效提及对象，已停止执行")
             for target in mentions:
                 if qq := target.get("qq"):
                     result.append(segment_class.mention(str(qq)) if protocol == "onebot_v12" else segment_class.at(int(qq)))
@@ -398,6 +416,8 @@ def _build_fake_message(
 
 
 def _build_event(original: Any, command: str, source: dict | None) -> tuple[Any, int | str]:
+    if "[history_at:" in command and (source or {}).get("mention_scope") != mention_scope(original):
+        raise MentionIdentityRequired("历史查询目标与当前用户或群不符，已停止执行")
     protocol = (
         "onebot_v12"
         if isinstance(
@@ -774,6 +794,8 @@ class EventSimulator:
                 forced_status=PluginDispatchStatus.FAILED,
             )
         try:
+            if "[history_at:" in command_str and plugin_name != "qi_zmws":
+                raise MentionIdentityRequired("此插件不支持历史玩家查询目标，已停止执行")
             async with get_dispatch_controller().slot():
                 fake_event, fake_id = _build_event(original_event, command_str, format_message_dict)
                 capture_id = uuid.uuid4().hex
@@ -919,14 +941,22 @@ class EventSimulator:
                     f"duration_ms={result.duration_ms}"
                 )
                 return result
+        except MentionIdentityRequired:
+            logger.info("NoneBot 插件指令需要确认查询目标身份: plugin={}", plugin_name)
+            return _dispatch_result(
+                _empty_dispatch_context(),
+                started_monotonic=started_monotonic,
+                forced_status=PluginDispatchStatus.INPUT_REQUIRED,
+            )
         except AdmissionRejected:
             return _dispatch_result(
                 _empty_dispatch_context(),
                 started_monotonic=started_monotonic,
                 forced_status=PluginDispatchStatus.ADMISSION_REJECTED,
             )
-        except Exception:
-            logger.error("NoneBot 插件兼容调度构造失败，异常详情已安全省略")
+        except Exception as exc:
+            from .diagnostics import exception_metadata
+            logger.error("NoneBot 插件兼容调度构造失败: plugin={} details={}", plugin_name, exception_metadata(exc))
             return _dispatch_result(
                 _empty_dispatch_context(),
                 started_monotonic=started_monotonic,

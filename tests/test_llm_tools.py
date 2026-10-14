@@ -398,7 +398,6 @@ async def test_explicit_trusted_read_only_graph_uses_real_parallel_path() -> Non
         assert entered == {"first", "second"}
         assert harness.bot.sent == [
             "正在调用注册工具：second",
-            "正在调用注册工具：first",
         ]
         assert [message["tool_call_id"] for message in messages[1:]] == [
             "1",
@@ -1381,7 +1380,7 @@ async def test_repeated_tool_limit_prevents_third_execution() -> None:
         messages = await harness._execute_tools([_call(index, "tool")], "", [], "")
     assert executions == 2
     assert "重复调用上限" in messages[-1]["content"]
-    assert len(harness.bot.sent) == 2
+    assert len(harness.bot.sent) == 1
 
 
 @pytest.mark.asyncio
@@ -2374,7 +2373,8 @@ async def test_progress_send_timeout_does_not_block_tool_execution(
     )
     harness = Harness({"query_once": spec.as_legacy_schema()})
     harness.bot.send = blocked_send
-    monkeypatch.setattr(module, "_PROGRESS_SEND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(module, "_PROGRESS_SEND_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(module, "_PROGRESS_DELIVERY_TIMEOUT_SECONDS", 0.01)
 
     messages = await asyncio.wait_for(
         harness._execute_tools(
@@ -2866,3 +2866,27 @@ async def test_llm_tools_config_rollback_keeps_legacy_nonebot_adapter(
 
     assert rollback_calls == [("/rollback", "rollback_plugin")]
     assert "rollback output" in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_plugin_oversized_image_receipt_reports_success(monkeypatch):
+    from nonebot_plugin_moellmchats import llm_tools as module
+    from nonebot_plugin_moellmchats import nonebot_plugin_tools as receipt_module
+    from nonebot_plugin_moellmchats.tool_contracts import TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS
+
+    legacy, _ = build_nonebot_plugin_candidate({"qi_zmws": {"description": "造梦", "usage": "/造梦排行"}})
+    calls = []
+
+    async def dispatch(*args, **kwargs):
+        calls.append(kwargs)
+        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="[图片]", images=("data:image/png;base64," + "A" * TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,),
+            matcher_matched=1, successful_captures=1, api_succeeded=1)
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    monkeypatch.setattr(receipt_module, "_image_preview", lambda *args: None)
+    harness = Harness({}, plugins=legacy)
+    messages = await harness._execute_tools([_call(1, "qi_zmws", '{"command":"/造梦排行 蟠桃"}')], "", [], "")
+    assert len(calls) == 1
+    assert "已确认向用户发送图片 1 张" in messages[-1]["content"]
+    assert "函数执行出错" not in messages[-1]["content"]

@@ -29,6 +29,7 @@ _runner_preflight_task: asyncio.Task | None = None
 from . import moe_llm as llm
 from .agent_context_runtime import runtime_resource_host
 from .chat_runtime import (
+    acknowledge_mention,
     cd,
     chat_rule,
     handle_llm,
@@ -317,6 +318,7 @@ llm_matcher = on_message(
 async def _(bot: Bot, event: MessageEvent):
     from .onebot_facade import event_plain_text, make_text_message, onebot_protocol
 
+    await acknowledge_mention(bot, event)
     if event_plain_text(event).strip():
         format_message_dict = await format_message(event, bot)
     else:

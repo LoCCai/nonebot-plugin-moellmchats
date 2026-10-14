@@ -2259,6 +2259,17 @@ TOOLS_REGISTRY = [
                     raw_menu,
                 )
 
+            if info and plugin.name not in custom_info:
+                extra = getattr(getattr(plugin, "metadata", None), "extra", None)
+                raw_dependencies = extra.get("tool_dependencies") if isinstance(extra, Mapping) else None
+                if isinstance(raw_dependencies, (list, tuple)):
+                    dependencies = list(dict.fromkeys(
+                        name for name in raw_dependencies[:64]
+                        if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+                    ))
+                    if dependencies:
+                        info["tool_dependencies"] = dependencies
+
             if info:
                 plugin_info[plugin.name] = info
         return plugin_info

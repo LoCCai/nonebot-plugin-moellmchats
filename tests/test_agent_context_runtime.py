@@ -456,7 +456,9 @@ async def test_default_host_memory_request_has_zero_database_or_redis_io(
     ("formatted", "expected"),
     [
         ({"text": ["接着\x00发\n🙂"]}, "接着发\n🙂"),
-        ({"text": ["战力对比 ", "曦丶白洋\x00[at:1]", " 1470907075|4399|1"]}, "战力对比 曦丶白洋[at:1] 1470907075|4399|1"),
+        ({"text": ["战力对比 ", "曦丶白洋\x00[at:1]", " 1470907075|4399|1"],
+          "mentions": [{"qq": "1911698701", "name": "曦丶白洋\x00"}]},
+         "战力对比 曦丶白洋[at:1] 1470907075|4399|1"),
         (
             {
                 "text": ["接着\x00发"],
@@ -501,6 +503,9 @@ async def test_llm_ingress_persists_and_prompts_with_clean_user_text(
     monkeypatch.setattr(coordinator, "append_message", capture_message)
     monkeypatch.setattr(coordinator, "retrieve_long_term_memory", capture_memory)
     chat = object.__new__(moe_llm_module.MoeLlm)
+    from test_event_simulator import _event
+
+    chat.event = _event(30001).model_copy(update={"user_id": 10001, "group_id": 20001})
     chat.user_id = "10001"
     chat.agent_runtime = runtime
     chat.format_message_dict = formatted
@@ -513,6 +518,13 @@ async def test_llm_ingress_persists_and_prompts_with_clean_user_text(
     assert len(records) == 1
     assert records[0].role == "user"
     assert records[0].content == expected
+    structured = messages_handler_module.mutable_history_json(records[0].structured_content)
+    metadata = structured["mention_context"]
+    assert metadata["scope"]["user"] == "10001"
+    assert metadata["scope"]["group"] == "20001"
+    if formatted.get("mentions"):
+        assert metadata["targets"][0]["qq"] == "1911698701"
+        assert metadata["targets"][0]["name"] == "曦丶白洋"
     assert memory_texts == [expected]
     assert chat.messages_handler.get_send_message_list()[-1] == {"role": "user", "content": expected}
     messages_dict.clear()
