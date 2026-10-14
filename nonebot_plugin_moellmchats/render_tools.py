@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 import io
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -754,12 +755,61 @@ async def screenshot_public_url(
 
 _NETWORK_POLICY = ToolPolicy.configured(ToolCapabilityV2(network_allow=("*",)))
 
+def render_theme_reference(card: str = "general") -> dict[str, Any]:
+    """Read the host's published theme without importing any game plugin."""
+    if card not in {"general", "zmws"}:
+        raise RenderToolError("主题类型应为 general 或 zmws。")
+    palette = {"background": "#f5f6fa", "surface": "#ffffff", "text": "#242841",
+               "muted": "#58627c", "accent": "#65429a", "border": "#d7d6e8"}
+    family, mode, source = "default", "day", "standalone"
+    try:
+        from src.utils import render_theme, report_theme
+    except ModuleNotFoundError as error:
+        if error.name not in {"src", "src.utils", "src.utils.render_theme", "src.utils.report_theme"}:
+            raise
+    else:
+        if card == "zmws":
+            context = render_theme.stylesheet_context("zmws/zmws.css")
+            family, mode = context["theme_family"], context.get("palette_mode", context["theme"])
+            selector = "light" if mode == "day" else "dark"
+            match = re.search(r':root\[data-theme=[\"\']' + selector + r'[\"\']\]\s*\{([^}]+)', context["theme_css"])
+            variables = dict(re.findall(r'--([\w-]+)\s*:\s*([^;{}]+)\s*;', match[1] if match else ""))
+            names = {"background": "background-color", "surface": "card-background-color", "text": "font-color-main", "muted": "font-color-sub", "accent": "accent-color", "border": "border-color"}
+            palette.update({key: variables[name].strip() for key, name in names.items() if name in variables})
+        else:
+            context = report_theme.post_theme_context()
+            family, mode = context["post_theme"], context["post_mode"]
+            palette = report_theme.graph_palette(context)
+        source = "host"
+    css = ":root{" + ";".join(f"--{key}:{value}" for key, value in palette.items()) + "}"
+    css += "body{margin:0;padding:24px;background:var(--background);color:var(--text);font-family:Arial,'Noto Sans CJK SC',sans-serif} .panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px}"
+    return {"theme": family, "mode": mode, "source": source, "palette": palette, "css": css,
+            "guidance": "这是当前主题参考，可自行调整 HTML、CSS 和布局。根据用户需要选择文字、图片或其他已授权工具；简短回复可直接用文字，表格和图表可选图片。"}
+
+
+async def get_render_theme(*, _tool_context: ToolContext, card: str = "general") -> ToolResult:
+    try:
+        reference = await asyncio.to_thread(render_theme_reference, card)
+    except Exception as error:
+        logger.warning("读取渲染主题失败：error_type={}", type(error).__name__)
+        return ToolResult(text="当前主题暂不可读，可以自行选择样式与回复形式。")
+    return ToolResult(text=json.dumps(reference, ensure_ascii=False))
+
+
+RENDER_THEME_TOOL = ToolSpec(
+    name="get_render_theme",
+    description="读取当前会话宿主的已发布主题、昼夜模式、配色与基础 CSS，供你自主设计 HTML。文字或图片由你按用户需求选择；主题是参考，可自由调整布局和样式。",
+    parameters={"type": "object", "properties": {"card": {"type": "string", "enum": ["general", "zmws"], "description": "通用卡或造梦游戏卡，默认 general。"}}, "additionalProperties": False},
+    handler=get_render_theme, effect=ToolEffect.READ_ONLY, permission="user", timeout_seconds=10, result_limit=4000,
+)
+
 RENDER_HTML_TOOL = ToolSpec(
     name="render_html",
     description=(
         "把完整的 HTML 字符串离线渲染成图片并发到当前会话。"
         "当你需要给用户展示排版内容（卡片、表格、样式化文本）时使用；"
         "HTML 必须自包含（内联 CSS，不引用外部资源），不会发起任何网络请求。"
+        "可先调用 get_render_theme 读取当前主题，自由编写与调整 CSS；简短内容也可直接文字回复。"
     ),
     parameters={
         "type": "object",
@@ -859,6 +909,7 @@ SCREENSHOT_URL_TOOL = ToolSpec(
 )
 
 RENDER_TOOL_SPECS: tuple[ToolSpec, ...] = (
+    RENDER_THEME_TOOL,
     RENDER_HTML_TOOL,
     RENDER_MARKDOWN_TOOL,
     SCREENSHOT_URL_TOOL,
