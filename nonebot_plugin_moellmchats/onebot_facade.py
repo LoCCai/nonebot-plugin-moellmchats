@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+import re
 from typing import Any
 
 
@@ -242,6 +243,35 @@ def make_text_message(protocol: str, text: str) -> Any:
     from nonebot.adapters.onebot.v11 import Message
 
     return Message(text)
+
+
+def make_mention_message(protocol: str, text: str, source: Mapping[str, Any]) -> Any:
+    """Build real mentions while treating every other model-generated CQ tag as text."""
+    pattern = re.compile(r"\[CQ:at,qq=([1-9][0-9]{0,11})\]|\[at:(\d+)\]")
+    if not pattern.search(text):
+        return text
+    if protocol == "onebot_v12":
+        from nonebot.adapters.onebot.v12 import Message, MessageSegment
+    else:
+        from nonebot.adapters.onebot.v11 import Message, MessageSegment
+    message = Message()
+    last = 0
+    for match in pattern.finditer(text):
+        message.append(MessageSegment.text(text[last:match.start()]))
+        qq = match.group(1)
+        if qq is None:
+            index = int(match.group(2))
+            mentions = source.get("mentions") or []
+            target = source.get("reply_user") or {} if index == 0 else (
+                mentions[index - 1] if 0 < index <= len(mentions) else {})
+            qq = str(target.get("qq") or "")
+        if qq and re.fullmatch(r"[1-9][0-9]{0,11}", qq):
+            message.append(MessageSegment.mention(qq) if protocol == "onebot_v12" else MessageSegment.at(int(qq)))
+        else:
+            message.append(MessageSegment.text("@提及对象"))
+        last = match.end()
+    message.append(MessageSegment.text(text[last:]))
+    return message
 
 
 def make_image_segment(protocol: str, reference: str) -> Any | None:

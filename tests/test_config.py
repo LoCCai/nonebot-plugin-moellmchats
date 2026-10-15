@@ -27,6 +27,8 @@ _BOOLEAN_FIELDS = (
     "protocol_tools_business_first",
     "tool_progress_messages_enabled",
     "tool_progress_model_preface_enabled",
+    "tool_batch_sequential_fallback",
+    "tool_image_vision_enabled",
 )
 
 
@@ -72,6 +74,12 @@ def test_slow_plugin_defaults_and_multiple_tool_rounds() -> None:
 def test_tool_call_limit_must_be_a_positive_integer(value) -> None:
     with pytest.raises(ValueError, match="max_tool_calls_per_round"):
         config_module.ConfigParser._validate(_candidate(max_tool_calls_per_round=value))
+
+
+@pytest.mark.parametrize("value", ["qi_zmws", [1], [""]])
+def test_image_vision_exclusions_require_tool_names(value):
+    with pytest.raises(ValueError, match="tool_image_vision_excluded_tools"):
+        config_module.ConfigParser._validate(_candidate(tool_image_vision_excluded_tools=value))
 
 
 def test_unknown_config_key_warns_and_is_preserved(tmp_path, monkeypatch) -> None:

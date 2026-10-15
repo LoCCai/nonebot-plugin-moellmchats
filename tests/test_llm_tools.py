@@ -312,6 +312,61 @@ async def test_multiple_tools_execute_in_order_without_parallel_side_effects() -
 
 
 @pytest.mark.asyncio
+async def test_enabled_sequential_fallback_executes_all_tools_without_parallel_eligibility(monkeypatch):
+    original_get = config_parser.get_config
+    monkeypatch.setattr(config_parser, "get_config", lambda key, default=None:
+        True if key == "tool_batch_sequential_fallback" else original_get(key, default))
+    order = []
+
+    async def first():
+        order.append("first")
+        return "first-result"
+
+    async def second():
+        order.append("second")
+        return "second-result"
+
+    specs = tuple(ToolSpec(name=name, description=name, handler=handler,
+        parameters={"type": "object", "properties": {}}) for name, handler in [("first", first), ("second", second)])
+    snapshot = _registered_tool_snapshot(41, specs)
+    runtime, resources = await _parallel_agent_request_runtime(
+        snapshot, _parallel_graph("first", "second"), runner_tools=("first",))
+    harness = Harness({}, snapshot=snapshot)
+    harness.agent_runtime = runtime
+    try:
+        messages = await harness._execute_tools([_call(1, "first"), _call(2, "second")], "", [], "")
+        assert order == ["first", "second"]
+        assert all(call.status is ToolCallStatus.COMPLETED for call in runtime.tool_calls)
+        assert len([m for m in messages if m["role"] == "tool"]) == 2
+        assert resources.trusted_runner.snapshot().completed == 0
+    finally:
+        await resources.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("enabled", "excluded", "metadata", "expected"), [
+    (False, [], {}, []), (True, ["picture"], {}, []),
+    (True, [], {"skip_image_vision": True}, []),
+    (True, [], {}, ["https://example.com/result.png"]),
+])
+async def test_tool_image_vision_policy_preserves_results(monkeypatch, enabled, excluded, metadata, expected):
+    original_get = config_parser.get_config
+    values = {"tool_image_vision_enabled": enabled, "tool_image_vision_excluded_tools": excluded}
+    monkeypatch.setattr(config_parser, "get_config", lambda key, default=None:
+                        values[key] if key in values else original_get(key, default))
+    result = ToolResult(text="已发送图片；战力12345", images=("https://example.com/result.png",), metadata=metadata)
+
+    async def picture():
+        return result
+
+    harness = Harness({"picture": {"func": picture}})
+    messages = await harness._execute_tools([_call(1, "picture")], "", [], "")
+    assert harness._pending_vision_images == expected
+    assert "战力12345" in messages[-1]["content"]
+    assert result.images == ("https://example.com/result.png",)
+
+
+@pytest.mark.asyncio
 async def test_configured_round_call_limit_keeps_every_tool_observation(monkeypatch) -> None:
     monkeypatch.setattr(config_parser, "get_config",
         lambda key, default=None: 1 if key == "max_tool_calls_per_round" else default)

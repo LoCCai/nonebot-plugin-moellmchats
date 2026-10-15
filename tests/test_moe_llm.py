@@ -101,13 +101,21 @@ async def test_pending_confirmation_releases_request_without_followup_model(monk
 
 
 @pytest.mark.asyncio
-async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch):
+@pytest.mark.parametrize("tool_image", [False, True])
+async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch, tool_image):
     values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 1, "tool_progress_messages_enabled": False}
+    if tool_image:
+        values["tool_image_vision_enabled"] = False
+        monkeypatch.setattr(module.model_selector, "get_model_for_capabilities",
+                            lambda *a, **k: pytest.fail("关闭工具识图后不应切换视觉模型"))
     monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
     executed, observations = [], []
 
     async def first():
         executed.append("first")
+        if tool_image:
+            from nonebot_plugin_moellmchats.tool_contracts import ToolResult
+            return ToolResult(text="first-result", images=("https://example.com/tool.png",))
         return "first-result"
 
     async def second():
@@ -411,6 +419,18 @@ async def test_emotion_failure_is_isolated_after_body_delivery(
 
     assert result == "正文"
     assert bot.sent == ["正文", "图片:微笑", "图片:挥手"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("emotion", [False, True])
+async def test_final_response_constructs_real_at_segment(monkeypatch, emotion):
+    bot = _ScriptedBot([None])
+    llm = _llm(bot)
+    llm.emotion_flag = emotion
+    llm.format_message_dict = {"mentions": [{"qq": "12002"}]}
+    monkeypatch.setattr(module, "parse_emotion", lambda content: (content, []))
+    await llm.send_emotion_message("你好[CQ:at,qq=12001] [at:1]")
+    assert [seg.data["qq"] for seg in bot.sent[0] if seg.type == "at"] == ["12001", "12002"]
 
 
 @pytest.mark.asyncio

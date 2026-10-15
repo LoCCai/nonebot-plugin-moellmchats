@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import uuid
 
@@ -25,8 +25,9 @@ from nonebot.adapters.onebot.v12 import (
     MessageSegment as V12MessageSegment,
 )
 from nonebot.exception import ActionFailed, NetworkError
-from nonebot.internal.matcher import matchers
-from nonebot.params import CommandArg, RegexDict
+from nonebot.internal.matcher import MatcherSource, matchers
+from nonebot.params import ArgPlainText, CommandArg, RegexDict
+from nonebot.typing import T_State  # noqa: TC002 - NoneBot resolves handler annotations at runtime.
 import pytest
 
 from nonebot_plugin_moellmchats import event_simulator as simulator_module
@@ -38,6 +39,7 @@ from nonebot_plugin_moellmchats.admission import AdmissionController
     ("/战力对比 ♻️ 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
     ("/战力对比 1470907075|4399|1 @♻️", [("uid", "1470907075|4399|1"), ("at", "1969334055")]),
     ("/战力对比 [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+    ("/战力对比 [CQ:at,qq=1969334055] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
     ("/战力对比 ♻️[at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
     ("/战力对比 ♻️ [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
     ("/战力对比 [at:2] [at:1] 完整", [("at", "234"), ("at", "1969334055")]),
@@ -253,6 +255,86 @@ async def test_targeted_dispatch_only_checks_selected_plugin(monkeypatch) -> Non
     monkeypatch.setattr(simulator_module, "_observe_and_run_matcher", check)
     await simulator_module._dispatch_targeted(object(), _event(1), "selected")
     assert checked == selected
+
+
+@pytest.mark.asyncio
+async def test_targeted_dispatch_resumes_confirmation_only_in_original_session(monkeypatch):
+    matcher = on_command("test_binding", priority=20, block=True)
+    matcher._source = MatcherSource(plugin_id="binding-test")
+    saved = []
+    foreign = on_fullmatch("确认", temp=True, priority=0, block=True)
+    foreign._source = MatcherSource(plugin_id="other-plugin")
+
+    @foreign.handle()
+    async def wrong_plugin():
+        pytest.fail("定向投递不应运行其他插件的临时会话")
+
+    @matcher.handle()
+    async def start(state: T_State, args: Message = CommandArg()):
+        state["candidate"] = args.extract_plain_text().strip()
+        await matcher.send("请回复确认或取消")
+
+    @matcher.got("confirmation")
+    async def confirm(event: GroupMessageEvent, state: T_State,
+                      answer: str = ArgPlainText("confirmation")):
+        if answer.strip() == "取消":
+            await matcher.finish("已取消")
+        if answer.strip() != "确认":
+            await matcher.reject("请回复确认或取消")
+        saved.append((event.user_id, event.group_id, state["candidate"]))
+        await matcher.finish("绑定成功")
+
+    monkeypatch.setattr(simulator_module, "get_plugin", lambda name:
+        SimpleNamespace(id_="binding-test", matcher={matcher}))
+
+    class Adapter:
+        config = SimpleNamespace(session_expire_timeout=timedelta(minutes=2))
+
+        @staticmethod
+        def get_name():
+            return "OneBot V11"
+
+        async def _call_api(self, bot, api, **data):
+            return {"message_id": 12345}
+
+    async def dispatch(event, command):
+        return await simulator_module.event_simulator.dispatch_event(
+            V11Bot(Adapter(), "10000"), event, command,
+            plugin_name="binding-test", wait_for_result=True,
+        )
+
+    try:
+        preview = await dispatch(_event(1), "/test_binding 123|4399|1")
+        assert preview.succeeded
+        assert not saved
+        assert not (await dispatch(_event(1, "确认"), "确认")).succeeded
+        assert not (await dispatch(_event(2, "随便聊聊"), "确认")).succeeded
+        wrong_user = _event(2, "确认").model_copy(update={"user_id": 999})
+        wrong_group = _event(3, "确认").model_copy(update={"group_id": 999})
+        assert not (await dispatch(wrong_user, "确认")).succeeded
+        assert not (await dispatch(wrong_group, "确认")).succeeded
+        retry = await dispatch(_event(4, "继续"), "继续")
+        assert retry.succeeded
+        assert "请回复确认" in retry.text
+        assert not saved
+        result = await dispatch(_event(5, "确认"), "确认")
+        assert result.succeeded
+        assert saved == [(123, 456, "123|4399|1")]
+        assert not (await dispatch(_event(6, "确认"), "确认")).succeeded
+        assert (await dispatch(_event(7), "/test_binding 234|4399|1")).succeeded
+        assert (await dispatch(_event(8, "取消"), "取消")).succeeded
+        assert saved == [(123, 456, "123|4399|1")]
+        assert (await dispatch(_event(9), "/test_binding 345|4399|1")).succeeded
+        for pending in list(matchers[0]):
+            if getattr(getattr(pending, "_source", None), "plugin_id", None) == "binding-test":
+                pending.expire_time = datetime.now() - timedelta(seconds=1)
+        assert not (await dispatch(_event(10, "确认"), "确认")).succeeded
+        assert saved == [(123, 456, "123|4399|1")]
+    finally:
+        for priority_matchers in matchers.values():
+            priority_matchers[:] = [m for m in priority_matchers
+                if m is not foreign and
+                getattr(getattr(m, "_source", None), "plugin_id", None) != "binding-test"]
 
 
 @pytest.mark.asyncio

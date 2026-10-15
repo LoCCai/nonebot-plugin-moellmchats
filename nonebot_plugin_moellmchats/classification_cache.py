@@ -82,6 +82,7 @@ class ClassificationResultSource(str, Enum):
     MODEL_SUCCESS = "model_success"
     TIMEOUT_FALLBACK = "timeout_fallback"
     PARSE_FALLBACK = "parse_fallback"
+    RATE_LIMIT_FALLBACK = "rate_limit_fallback"
     CONTENT_BLOCKED = "content_blocked"
 
     @classmethod

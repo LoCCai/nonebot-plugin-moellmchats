@@ -34,9 +34,11 @@ mcp = {extras = ["cli"], version = ">=1.28.1,<2.0.0"}
 # simply stay unregistered and log the remedy.
 nonebot-plugin-htmlrender = { version = ">=0.7.0,<0.8.0", optional = true }
 pillow = { version = ">=9.0.0", optional = true }
+pypdf = { version = ">=6.20.1,<7.0.0", optional = true }
 
 [tool.poetry.extras]
 render = ["nonebot-plugin-htmlrender", "pillow"]
+media = ["pillow", "pypdf"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"

@@ -531,6 +531,17 @@ class LlmToolsMixin:
             self._tool_retry_blocked_tools = blocked_tools
         return attempts, blocked_tools
 
+    @staticmethod
+    def _tool_vision_images(result: ToolResult, tool_name: str) -> tuple[str, ...]:
+        """Image delivery is independent of optional model reinspection."""
+        if (
+            not config_parser.get_config("tool_image_vision_enabled", True)
+            or tool_name in config_parser.get_config("tool_image_vision_excluded_tools", [])
+            or result.metadata.get("skip_image_vision") is True
+        ):
+            return ()
+        return tuple(result.images)
+
     def _tool_fingerprint_usage(
         self,
     ) -> Counter[tuple[int, str, str]]:
@@ -565,7 +576,10 @@ class LlmToolsMixin:
             PluginDispatchStatus.MATCHED_WITH_OUTPUT.value,
             PluginDispatchStatus.MATCHED_SIDE_EFFECT.value,
         }:
-            return "相同插件指令已执行成功，结果已向用户发送，禁止重复投递；请基于已有结果完成回答，图片分析使用已返回的图片。"
+            return (
+                "相同插件指令已执行成功，结果已向用户发送，禁止重复投递；"
+                "请使用已有文本或结构化数据，缺少字段时按render_id读取。"
+            )
         if prior in {
             PluginDispatchStatus.NOT_MATCHED.value,
             PluginDispatchStatus.MATCHED_EMPTY.value,
@@ -905,7 +919,10 @@ class LlmToolsMixin:
         )
         rendered = render_tool_result(result, max_chars=render_limit)
         content = f"函数执行返回结果：\n{rendered}" if rendered else "函数执行成功，但未返回有效结果。"
-        return _ParallelToolOutcome(content=content, images=tuple(result.images))
+        return _ParallelToolOutcome(
+            content=content,
+            images=LlmToolsMixin._tool_vision_images(result, prepared.tool_name),
+        )
 
     def _append_tool_round_history(
         self,
@@ -1309,7 +1326,11 @@ class LlmToolsMixin:
         ):
             max_tool_calls_per_round = 4
         runtime = getattr(self, "agent_runtime", None)
-        if runtime is not None and runtime.coordinator.resources.parallel_tool_graph is not None:
+        if (
+            runtime is not None
+            and runtime.coordinator.resources.parallel_tool_graph is not None
+            and not config_parser.get_config("tool_batch_sequential_fallback", False)
+        ):
             # A rejected explicit graph batch must retain its existing
             # one-call fallback, including conflicts and confirmation gates.
             max_tool_calls_per_round = 1
@@ -1884,7 +1905,7 @@ class LlmToolsMixin:
                     # fallback below.
                     render_limit = spec.result_limit if spec is not None and spec.result_limit is not None else result_limit
                     result_limit = None
-                    result_images = list(result.images)
+                    result_images = self._tool_vision_images(result, func_name)
                     if result_images:
                         self._pending_vision_images.extend(result_images)
                     rendered_result = render_tool_result(
@@ -2033,8 +2054,9 @@ class LlmToolsMixin:
                         "仅可选择不同工具或实质不同参数继续未完成步骤。若任务已完成，"
                         "请直接做一两句话的简短总结，严禁重复上述已发送结果。"
                     )
-                    if plugin_images:
-                        self._pending_vision_images.extend(plugin_images)
+                    self._pending_vision_images.extend(
+                        self._tool_vision_images(plugin_result, func_name)
+                    )
                     visible_metadata = {
                         key: value
                         for key, value in plugin_result.metadata.items()

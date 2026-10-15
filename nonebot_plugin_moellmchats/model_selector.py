@@ -464,6 +464,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         _check_config("category_model", fallback=self.model_config["selected_model"])
         _check_config("summary_model", fallback=self.model_config["selected_model"])
         _check_config("vision_model", is_required=False)
+        for media_role in ("image_model", "multimodal_model", "chat_summary_model"):
+            _check_config(media_role, is_required=False)
 
         moe_models = self.model_config.setdefault("moe_models", {})
         for difficulty in ["0", "1", "2"]:
@@ -482,10 +484,57 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 moe_models[difficulty] = resolved_moe
                 changed = True
 
+        try:
+            self._validate_fallbacks(self.model_config.get("model_fallbacks", {}), self.models)
+        except ValueError as error:
+            return False, [str(error)]
+
         if persist and changed:
             self._write_config(self.model_config_file, self.model_config)
 
         return True, warnings
+
+    @staticmethod
+    def _validate_fallbacks(fallbacks, models) -> None:
+        if not isinstance(fallbacks, Mapping) or len(fallbacks) > 32:
+            raise ValueError("model_fallbacks 必须为最多 32 组模型映射")
+        for primary, backups in fallbacks.items():
+            if (not isinstance(primary, str) or primary not in models
+                    or not isinstance(backups, (list, tuple)) or not 1 <= len(backups) <= 4
+                    or not all(isinstance(name, str) and name in models and name != primary for name in backups)
+                    or len(set(backups)) != len(backups)):
+                raise ValueError("model_fallbacks 须使用存在的完整模型名，每组 1 至 4 个不重复备用模型")
+
+    def get_rate_limit_fallback(self, current: Mapping, attempted: set[str], *,
+                                has_tools: bool = False, has_images: bool = False) -> dict | None:
+        """Select only an explicitly configured, untried 429 backup in this snapshot."""
+        from .runtime_snapshot import mutable_value
+
+        state = self._active_state()
+        # Capability routing has its own trusted selection contract. Do not
+        # bypass it with the legacy model-pair configuration.
+        routing = state.model_config.get("capability_routing", {})
+        if isinstance(routing, Mapping) and routing.get("enabled"):
+            return None
+        fallbacks = state.model_config.get("model_fallbacks", {})
+        self._validate_fallbacks(fallbacks, state.models)
+        identity = f"{current.get('model')} ({current.get('provider')})"
+        attempted.add(identity)
+        for name in fallbacks.get(identity, ()):
+            if name in attempted:
+                continue
+            model = mutable_value(state.models[name])
+            if has_tools and model.get("no_tools"):
+                continue
+            if has_images and not model.get("is_vision"):
+                continue
+            key = self._get_random_key(model)
+            if not key:
+                continue
+            attempted.add(name)
+            model["key"] = key
+            return model
+        return None
 
     def _load_model_config(self):
         # 读取model_config.json文件，获取是否使用MOE及MOE难度模型等配置
@@ -783,6 +832,23 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         self.model_config["summary_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
         return f"已切换总结模型为 {model_name}"
+
+    def set_media_model(self, role: str, model_query: str) -> str:
+        labels = {"image_model": "绘图", "multimodal_model": "多模态", "chat_summary_model": "群聊总结"}
+        if role not in labels:
+            raise ValueError("未知媒体模型角色")
+        if model_query in {"关闭", "off"}:
+            self.model_config[role] = ""
+            self._write_config(self.model_config_file, self.model_config)
+            return f"已关闭{labels[role]}模型"
+        model_name = self.resolve_model_name(model_query)
+        if not model_name:
+            return self._get_resolve_error_msg(model_query)
+        if role == "multimodal_model" and not self.models[model_name].get("is_vision"):
+            return "该模型未声明视觉能力，请先在 providers.toml 设置 is_vision=true。"
+        self.model_config[role] = model_name
+        self._write_config(self.model_config_file, self.model_config)
+        return f"已切换{labels[role]}模型为 {model_name}"
 
     def get_formatted_model_list(self, search_query: str | None = None) -> str:
         """获取美化后的可用模型列表，支持多关键词模糊搜索"""

@@ -29,8 +29,10 @@ _runner_preflight_task: asyncio.Task | None = None
 # Optional render/meme tools register themselves only when their runtime
 # dependencies and configuration are present; both modules stay importable
 # without the optional extras installed.
+from . import media_tools as _media_tools  # noqa: F401
 from . import meme_tools as _meme_tools  # noqa: F401
 from . import moe_llm as llm
+from . import render_data as _render_data  # noqa: F401
 from . import render_tools as _render_tools  # noqa: F401
 from .agent_context_runtime import runtime_resource_host
 from .chat_runtime import (
@@ -231,6 +233,9 @@ async def _(event: MessageEvent):
         f"▪ 基础聊天模型: {cfg.get('selected_model')}\n"
         f"▪ 视觉专用模型: {cfg.get('vision_model') or '未设置 (图片任务需先设置)'}\n"
         f"▪ 意图分类模型: {cfg.get('category_model')}\n"
+        f"▪ AI绘图模型: {cfg.get('image_model') or '未设置'}\n"
+        f"▪ 多模态分析模型: {cfg.get('multimodal_model') or '未设置'}\n"
+        f"▪ 群聊总结模型: {cfg.get('chat_summary_model') or '未设置'}\n"
         f"▪ 启用MoE调度: {'✅开启' if cfg.get('use_moe') else '❌关闭'}\n"
         f"  - 难度0: {cfg.get('moe_models', {}).get('0')}\n"
         f"  - 难度1: {cfg.get('moe_models', {}).get('1')}\n"
@@ -310,6 +315,22 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     model_name = args.extract_plain_text().strip()
     result = model_selector.set_vision_model(model_name)
     await vision_model_matcher.finish(result)
+
+
+media_model_matcher = on_command(
+    "设置媒体模型", permission=SUPERUSER, priority=10, block=True,
+)
+
+
+@media_model_matcher.handle()
+async def _(args: Message = CommandArg()):
+    role, _, query = args.extract_plain_text().strip().partition(" ")
+    roles = {"绘图": "image_model", "多模态": "multimodal_model", "群聊总结": "chat_summary_model"}
+    if role not in roles or not query.strip():
+        await media_model_matcher.finish(
+            "格式：!设置媒体模型 绘图 模型名；类型可选：绘图、多模态、群聊总结。模型名填 关闭 可停用。"
+        )
+    await media_model_matcher.finish(model_selector.set_media_model(roles[role], query.strip()))
 
 
 llm_matcher = on_message(

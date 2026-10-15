@@ -285,6 +285,10 @@ async def plugin_dispatch_tool_result(
     metadata: dict[str, Any] = {"plugin_dispatch": _dispatch_metadata(dispatch)}
     if normalization:
         metadata["output_text_normalization"] = normalization
+    structured = None
+    if dispatch.rendered_views:
+        structured = {"rendered_views": list(dispatch.rendered_views)}
+        metadata["skip_image_vision"] = True
     if dispatch.status is PluginDispatchStatus.MATCHED_WITH_OUTPUT:
         images, image_normalization = await asyncio.to_thread(_normalize_dispatch_images, dispatch.images)
         if image_normalization:
@@ -299,6 +303,7 @@ async def plugin_dispatch_tool_result(
             text=text,
             images=images,
             metadata=metadata,
+            structured=structured,
         )
     if dispatch.status is PluginDispatchStatus.MATCHED_SIDE_EFFECT:
         return ToolResult(

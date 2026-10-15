@@ -64,8 +64,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_repeated_tool_calls": 2,
     "max_tool_result_chars": 6_000,
     "max_tool_images": 4,
+    "tool_batch_sequential_fallback": False,
+    "tool_image_vision_enabled": True,
+    "tool_image_vision_excluded_tools": [],
     "request_timeout_seconds": 180,
     "classification_timeout_seconds": 20,
+    "classification_max_tokens": 512,
     "tool_timeout_seconds": 180,
     "pending_action_ttl_seconds": 120,
     "pending_action_max_entries": 256,
@@ -137,6 +141,7 @@ _POSITIVE_INTEGER_FIELDS = {
     "max_tool_images",
     "request_timeout_seconds",
     "classification_timeout_seconds",
+    "classification_max_tokens",
     "tool_timeout_seconds",
     "pending_action_ttl_seconds",
     "pending_action_max_entries",
@@ -253,6 +258,11 @@ class ConfigParser:
             isinstance(item, str) and item.strip() for item in background_plugins
         ):
             raise ValueError("config.json: legacy_background_plugins 必须是字符串数组")
+        excluded_tools = candidate.get("tool_image_vision_excluded_tools")
+        if not isinstance(excluded_tools, list) or not all(
+            isinstance(item, str) and item.strip() for item in excluded_tools
+        ):
+            raise ValueError("config.json: tool_image_vision_excluded_tools 必须是字符串数组")
         background_grace = candidate.get("legacy_background_grace_seconds")
         background_timeout = candidate.get("legacy_background_timeout_seconds")
         if not isinstance(background_grace, int) or isinstance(background_grace, bool) or background_grace <= 0:
@@ -278,6 +288,8 @@ class ConfigParser:
             "protocol_tools_business_first",
             "tool_progress_messages_enabled",
             "tool_progress_model_preface_enabled",
+            "tool_batch_sequential_fallback",
+            "tool_image_vision_enabled",
             "runtime_watch_enabled",
             "generated_tools_enabled",
             "fastai_enabled",

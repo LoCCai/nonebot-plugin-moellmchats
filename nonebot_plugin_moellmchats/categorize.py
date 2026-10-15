@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import re
 import time
 
@@ -32,7 +33,7 @@ from .tool_catalog_cache import (
 from .tool_manager import tool_manager
 from .utils import get_session
 
-_CLASSIFICATION_POLICY_VERSION = "categorize-json-v3-business-owner"
+_CLASSIFICATION_POLICY_VERSION = "categorize-json-v5-actual-images"
 _CategoryResult = tuple[str, bool, list[str]] | str | bool
 
 
@@ -95,6 +96,9 @@ class Categorize:
             raise ValueError("categorize scene 非法")
         self.scene = scene
         self.selection_source = "classification_model"
+        self._phase = "start"
+        self._classifier_model = "unselected"
+        self._prompt_chars = 0
 
     async def get_category(self) -> _CategoryResult:
         started = time.monotonic()
@@ -103,11 +107,20 @@ class Categorize:
             async with timeout_scope(config_parser.get_config("classification_timeout_seconds", 20)):
                 return await self._get_category()
         except TimeoutError:
-            logger.warning("分类模型超过时间预算，降级为无工具中等难度")
+            self.selection_source = "classification_timeout_fallback"
+            logger.warning(
+                "分类模型超过时间预算，按中等难度继续，仅使用已配置的常驻工具: "
+                "model={} phase={} elapsed_ms={} prompt_chars={}",
+                self._classifier_model,
+                self._phase,
+                int((time.monotonic() - started) * 1000),
+                self._prompt_chars,
+            )
             return "1", "[图片]" in self.plain, []
         except (ClassificationCacheError, ToolCatalogCacheUnavailableError) as error:
+            self.selection_source = "classification_cache_fallback"
             logger.warning(
-                "分类缓存不可用，降级为无工具中等难度: error_type={}",
+                "分类缓存不可用，按中等难度继续，仅使用已配置的常驻工具: error_type={}",
                 type(error).__name__,
             )
             return "1", "[图片]" in self.plain, []
@@ -179,6 +192,42 @@ class Categorize:
         *,
         cache_key: ClassificationCacheKey | None = None,
     ) -> _CategoryResult | ClassificationCacheRecord:
+        attempted: set[str] = set()
+        switched = False
+        while True:
+            try:
+                result = await self._request_category_model_once(
+                    category_model_config, prompt, cache_key=None if switched else cache_key,
+                )
+            except _UncacheableClassificationResult:
+                if self._phase != "http_status_429":
+                    raise
+                result = False
+            if self._phase != "http_status_429":
+                if switched and cache_key is not None:
+                    # Do not publish a backup model's answer under the primary
+                    # model identity in the successful classification cache.
+                    raise _UncacheableClassificationResult(result, ClassificationResultSource.RATE_LIMIT_FALLBACK)
+                return result
+            backup = model_selector.get_rate_limit_fallback(category_model_config, attempted)
+            if backup is None:
+                if cache_key is not None:
+                    raise _UncacheableClassificationResult(False, ClassificationResultSource.PARSE_FALLBACK)
+                return False
+            logger.info("分类模型限流，切换已配置备用: from={} to={}",
+                        category_model_config["model"], backup["model"])
+            category_model_config = backup
+            self._classifier_model = backup["model"]
+            self.selection_source = "classification_rate_limit_fallback"
+            switched = True
+
+    async def _request_category_model_once(
+        self,
+        category_model_config: dict,
+        prompt: str,
+        *,
+        cache_key: ClassificationCacheKey | None = None,
+    ) -> _CategoryResult | ClassificationCacheRecord:
         headers = {
             "Authorization": category_model_config["key"],
             "Content-Type": "application/json",
@@ -194,7 +243,17 @@ class Categorize:
                         {"role": "user", "content": current_plain},
                     ],
                     "temperature": 0,
+                    "max_tokens": config_parser.get_config("classification_max_tokens", 512),
+                    "stream": False,
                 }
+                # Preserve explicit provider options (e.g. disable thinking),
+                # without allowing them to replace the request's real input.
+                extra = category_model_config.get("extra_payload")
+                if isinstance(extra, dict):
+                    protected = {"messages", "model", "stream", "tools", "tool_choice", "max_tokens"}
+                    current_data.update({
+                        key: value for key, value in extra.items() if key not in protected
+                    })
                 if try_times == 0:
                     if category_model_config.get("json_mode"):
                         current_data["response_format"] = {"type": "json_object"}
@@ -204,7 +263,8 @@ class Categorize:
                     current_data["messages"][1]["content"] = current_plain
 
                 payload = json.dumps(current_data)
-
+                self._phase = "http_response"
+                request_started = time.monotonic()
                 async with get_session().post(
                     url=category_model_config["url"],
                     data=payload,
@@ -212,6 +272,15 @@ class Categorize:
                     timeout=aiohttp.ClientTimeout(total=config_parser.get_config("classification_timeout_seconds", 20)),
                     proxy=category_model_config.get("proxy"),
                 ) as resp:
+                    logger.info(
+                        "分类接口返回: model={} attempt={} status={} headers_ms={} prompt_chars={}",
+                        category_model_config["model"],
+                        try_times + 1,
+                        resp.status,
+                        int((time.monotonic() - request_started) * 1000),
+                        len(prompt),
+                    )
+                    self._phase = "response_json"
                     if resp.status == 400:
                         # Never decode or log a provider's 400 payload.  Leaving
                         # the context releases the response without loading an
@@ -226,9 +295,22 @@ class Categorize:
                             )
                         continue
 
+                    if resp.status >= 400:
+                        # An exhausted/rate-limited upstream is not a JSON-mode
+                        # compatibility error. Do not immediately send it again
+                        # or wait for its error body before using resident tools.
+                        self._phase = f"http_status_{resp.status}"
+                        self.selection_source = "classification_http_fallback"
+                        logger.warning(
+                            "分类接口不可用，保留常驻工具继续: model={} status={}",
+                            category_model_config["model"], resp.status,
+                        )
+                        break
+
                     response = await resp.json()
 
                 if choices := response.get("choices"):
+                    self._phase = "parse_result"
                     raw_result = choices[0]["message"]["content"]
                     raw_result = re.sub(
                         r"<(think|thought|thinking)>.*?</\1>",
@@ -246,9 +328,14 @@ class Categorize:
                         clean_result = clean_result[:-3]
 
                     result_dict = json.loads(clean_result.strip())
+                    if type(result_dict["vision_required"]) is not bool:
+                        raise ValueError("vision_required must be boolean")
                     result = (
                         str(result_dict["difficulty"]),
-                        result_dict["vision_required"],
+                        # Image generation/avatars are often misclassified as
+                        # image input. Actual current-image markers determine
+                        # vision; resolved image URLs also win in llm_payload.
+                        "[图片]" in self.plain,
                         result_dict.get("required_plugins", []),
                     )
                     if cache_key is None:
@@ -329,9 +416,11 @@ class Categorize:
                 )
                 return "这个功能当前不可用或你没有可见权限，已停止执行，未改用其他插件。"
 
+        self._phase = "tool_catalog"
         catalog, catalog_record = await self._resolve_catalog()
         logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
         prompt = self._build_prompt(catalog)
+        self._prompt_chars = len(prompt)
 
         # 判断是否开启 MoE，若未开启（但因为开启了工具走到这里），则使用默认模型（selected_model）
         required_capabilities = ModelCapability(
@@ -353,6 +442,13 @@ class Categorize:
                 required_capabilities,
             )
             logger.debug("未开启MoE，使用默认模型进行工具/联网/视觉判断分类")
+        self._classifier_model = category_model_config["model"]
+        logger.info(
+            "分类请求准备: model={} budget_seconds={} prompt_chars={}",
+            self._classifier_model,
+            config_parser.get_config("classification_timeout_seconds", 20),
+            self._prompt_chars,
+        )
         if self.classification_cache is None:
             result = await self._request_category_model(
                 category_model_config,
@@ -360,6 +456,8 @@ class Categorize:
             )
             if isinstance(result, ClassificationCacheRecord):
                 raise TypeError("legacy classification path 返回了 cache record")
+            if result is False and self.selection_source == "classification_model":
+                self.selection_source = "classification_parse_fallback"
             return result
 
         if catalog_record is None:
@@ -369,12 +467,16 @@ class Categorize:
             endpoint=category_model_config["url"],
             json_mode=bool(category_model_config.get("json_mode", False)),
         )
+        options_digest = hashlib.sha256(json.dumps({
+            "max_tokens": config_parser.get_config("classification_max_tokens", 512),
+            "extra_payload": category_model_config.get("extra_payload"),
+        }, sort_keys=True).encode()).hexdigest()[:16]
         context = ClassificationRenderContext.capture(
             prompt=self.plain,
             catalog_record=catalog_record,
             model_identity=model_identity,
             request_scope=ClassificationRequestScope.standard_prompt(),
-            policy_version=_CLASSIFICATION_POLICY_VERSION,
+            policy_version=f"{_CLASSIFICATION_POLICY_VERSION}-{options_digest}",
             scene=self.scene,
         )
 
@@ -389,11 +491,14 @@ class Categorize:
             return result
 
         try:
+            self._phase = "classification_cache"
             record = await resolve_classification(
                 self.classification_cache,
                 context.cache_key,
                 build_record,
             )
         except _UncacheableClassificationResult as fallback:
+            if self.selection_source == "classification_model":
+                self.selection_source = f"classification_{fallback.source.value}"
             return fallback.result
         return record.materialize()

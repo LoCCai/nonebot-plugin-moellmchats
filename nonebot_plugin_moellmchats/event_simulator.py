@@ -75,13 +75,14 @@ if TYPE_CHECKING:
 _capture_key: ContextVar[str | None] = ContextVar("moellm_capture_key", default=None)
 _synthetic_plugin: ContextVar[str | None] = ContextVar("moellm_synthetic_plugin", default=None)
 _captures: dict[str, dict] = {}
+_SESSION_ORIGIN_KEY = "_moellm_session_original_message_id"
 _SEND_ACTIONS = {
     "send_msg",
     "send_group_msg",
     "send_private_msg",
     "send_message",
 }
-_AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all|history_at:([a-f0-9]{32}))\]")
+_AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all|history_at:([a-f0-9]{32})|CQ:at,qq=([1-9][0-9]{0,11}))\]")
 _MENTION_QUERY_COMMANDS = frozenset({
     "战力对比", "造梦战力对比", "造梦资料", "造梦详情", "造梦面板",
     "造梦战力分析", "造梦面板分析", "造梦在线", "造梦实时",
@@ -114,6 +115,7 @@ class PluginDispatchResult:
     status: PluginDispatchStatus
     text: str = ""
     images: tuple[str, ...] = ()
+    rendered_views: tuple[dict, ...] = ()
     matcher_checked: int = 0
     matcher_matched: int = 0
     matcher_failed: int = 0
@@ -388,7 +390,10 @@ def _build_fake_message(
         if match.start() > last:
             result.append(segment_class.text(command[last : match.start()]))
         token = match.group(1)
-        if token.startswith("history_at:"):
+        if token.startswith("CQ:at,qq="):
+            qq = match.group(4)
+            result.append(segment_class.mention(qq) if protocol == "onebot_v12" else segment_class.at(int(qq)))
+        elif token.startswith("history_at:"):
             head = command.split()[0].lstrip("/!！")
             target = (source.get("history_mentions") or {}).get(match.group(3), {})
             scope = source.get("mention_scope")
@@ -535,13 +540,39 @@ async def _dispatch_targeted(bot: Bot, event, plugin_name: str) -> None:
         TrieRule.get_value(bot, event, state)
     except Exception:
         logger.exception("解析目标插件指令失败")
-    for matcher in sorted(plugin.matcher, key=lambda item: item.priority):
+    # NoneBot registers got/reject/pause continuations on the live bus, not
+    # plugin.matcher. Include only this plugin's live temporary matchers;
+    # _check_matcher still enforces their expiry and original session permission.
+    candidates = list(plugin.matcher)
+    plugin_id = getattr(plugin, "id_", None)
+    if plugin_id is not None:
+        candidates.extend(
+            matcher
+            for priority_matchers in list(matchers.values())
+            for matcher in list(priority_matchers)
+            if matcher.temp
+            and getattr(getattr(matcher, "_source", None), "plugin_id", None) == plugin_id
+            and matcher not in candidates
+        )
+    for matcher in sorted(candidates, key=lambda item: item.priority):
+        context = _captures.get(_capture_key.get())
+        if context is not None and matcher.temp:
+            # A model may relay a user's reply, but must not invent one or
+            # confirm a prompt it just opened within the same user message.
+            origin = matcher._default_state.get(_SESSION_ORIGIN_KEY)
+            if (origin is not None and str(origin) == str(context["original_id"])) or event.get_plaintext().strip() != context[
+                "original_plain_text"
+            ].strip():
+                continue
+        local_state = state.copy()
+        if context is not None:
+            local_state[_SESSION_ORIGIN_KEY] = context["original_id"]
         try:
             await _observe_and_run_matcher(
                 matcher,
                 bot,
                 event,
-                state.copy(),
+                local_state,
                 None,
                 dependency_cache,
             )
@@ -654,6 +685,7 @@ def _dispatch_result(
         status=status,
         text="\n".join(texts),
         images=tuple(images),
+        rendered_views=tuple(context.get("rendered_views", ())),
         matcher_checked=int(context.get("matcher_checked", 0)),
         matcher_matched=int(context.get("matcher_matched", 0)),
         matcher_failed=int(context.get("matcher_failed", 0)),
@@ -800,9 +832,13 @@ class EventSimulator:
                 fake_event, fake_id = _build_event(original_event, command_str, format_message_dict)
                 capture_id = uuid.uuid4().hex
                 context = _empty_dispatch_context()
+                from .render_data import render_scope
+
                 context.update(
                     {
                         "original_id": original_event.message_id,
+                        "original_plain_text": original_event.get_plaintext(),
+                        "render_scope": render_scope(bot, original_event),
                         "fake_id": fake_id,
                         "protocol": onebot_protocol(bot, original_event) or "onebot_v11",
                     }

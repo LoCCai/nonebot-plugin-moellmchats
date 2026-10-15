@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 import pytest
@@ -80,8 +81,75 @@ async def test_user_mentions_keep_identity_tokens_in_original_position(monkeypat
         {"qq": "1969334055", "name": "1969334055"}, {"qq": "234", "name": "234"},
     ]
     assert result["text"] == [
-        " 战力对比", "1969334055[at:1]", " 1470907075|4399|1 ", "234[at:2]",
+        " 战力对比", "[CQ:at,qq=1969334055]", " 1470907075|4399|1 ", "[CQ:at,qq=234]",
     ]
+
+
+@pytest.mark.asyncio
+async def test_current_and_quoted_image_sources_are_available_to_tools():
+    event = _WakeEvent("用图做表情")
+    event.reply = SimpleNamespace(
+        message=Message([MessageSegment.image("quoted-file")]),
+        sender=SimpleNamespace(user_id=12002, nickname="被引用者"),
+    )
+    event.get_message = lambda: Message([MessageSegment.text("用图做表情"),
+                                        MessageSegment.image("https://example.com/current.png")])
+    bot = SimpleNamespace(self_id="42", call_api=AsyncMock(return_value={"url": "https://example.com/reply.png"}))
+    result = await format_message(event, bot)
+    assert result["image_sources"] == [
+        {"source": "reply", "url": "https://example.com/reply.png"},
+        {"source": "current", "url": "https://example.com/current.png"},
+    ]
+    assert result["images"] == [item["url"] for item in result["image_sources"]]
+    assert result["unresolved_images"] == 0
+    assert result["current_user"]["qq"] == "42"
+    assert result["reply_user"]["qq"] == "12002"
+    bot.call_api.assert_awaited_once_with("get_image", file="quoted-file")
+
+
+@pytest.mark.asyncio
+async def test_reply_segment_fetches_real_quoted_message_then_resolves_image():
+    event = _WakeEvent("")
+    event.get_message = lambda: Message([MessageSegment.reply(789), MessageSegment.text("做表情")])
+    bot = SimpleNamespace(self_id="42", call_api=AsyncMock(side_effect=[
+        {"sender": {"user_id": 12002, "nickname": "被引用者"},
+         "message": [{"type": "image", "data": {"file": "quoted-hash"}}]},
+        {"url": "https://example.com/reply.png"},
+    ]))
+    result = await format_message(event, bot)
+    assert result["reply"] == "[图片]"
+    assert result["reply_user"]["qq"] == "12002"
+    assert result["image_sources"] == [{"source": "reply", "url": "https://example.com/reply.png"}]
+    assert bot.call_api.await_args_list[0].kwargs == {"message_id": 789}
+    assert bot.call_api.await_args_list[1].kwargs == {"file": "quoted-hash"}
+
+
+@pytest.mark.asyncio
+async def test_failed_image_lookup_preserves_request_and_does_not_expose_local_path():
+    event = _WakeEvent("")
+    event.get_message = lambda: Message([MessageSegment.text("继续回答"), MessageSegment.image("hash")])
+    for response in ({"file": "/private/cache/image.png"}, TimeoutError()):
+        bot = SimpleNamespace(self_id="42", call_api=AsyncMock())
+        if isinstance(response, Exception):
+            bot.call_api.side_effect = response
+        else:
+            bot.call_api.return_value = response
+        result = await format_message(event, bot)
+        assert result["text"] == ["继续回答", "[图片]"]
+        assert result["images"] == []
+        assert result["unresolved_images"] == 1
+        assert "/private" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_qq_signed_image_is_refreshed_even_when_message_already_has_url():
+    event = _WakeEvent("")
+    segment = MessageSegment("image", {"file": "original-hash", "url": "https://multimedia.nt.qq.com.cn/download?rkey=expired"})
+    event.get_message = lambda: Message([segment])
+    bot = SimpleNamespace(self_id="42", call_api=AsyncMock(return_value={"url": "https://example.com/fresh.png"}))
+    result = await format_message(event, bot)
+    assert result["images"] == ["https://example.com/fresh.png"]
+    bot.call_api.assert_awaited_once_with("get_image", file="original-hash")
 
 
 def test_nul_in_quote_does_not_duplicate_previous_assistant_message() -> None:

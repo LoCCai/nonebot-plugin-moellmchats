@@ -1,24 +1,31 @@
+import asyncio
+from collections.abc import Mapping
 import inspect
 from os import listdir
 from pathlib import Path
 from random import choice
 import re
 from traceback import format_exc
+from types import SimpleNamespace
 from typing import Annotated, get_args, get_origin, get_type_hints
+from urllib.parse import urlsplit
 
 import aiohttp
 import nonebot
 from nonebot.log import logger
 
+from .compat import timeout as timeout_scope
 from .config import config_parser, config_path
 from .member_cache import member_name_cache
 from .onebot_facade import (
     bot_self_id,
     event_group_id,
     event_message,
+    event_reply_message_id,
     event_sender_name,
     event_user_id,
     message_segments,
+    onebot_protocol,
 )
 
 try:
@@ -245,11 +252,72 @@ def format_context_message(event) -> dict:
     return {"text": text_message}
 
 
+def _image_http_url(value) -> str | None:
+    if not isinstance(value, str) or len(value) > 2048:
+        return None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password:
+            return value
+    except ValueError:
+        pass
+    return None
+
+
+async def _image_url(segment, bot, event) -> str | None:
+    data = segment.data
+    url = _image_http_url(data.get("url")) or _image_http_url(data.get("file"))
+    # NT QQ URLs carry expiring download credentials. get_image refreshes
+    # them in SnowLuma/NapCat, even when the quoted message already has a URL.
+    refresh = url is not None and urlsplit(url).hostname in {"multimedia.nt.qq.com.cn", "multimedia.nt.qq.com"}
+    if url and not refresh:
+        return url
+    reference = data.get("file_id") or data.get("file") or url
+    if not isinstance(reference, str) or not reference or len(reference) > 512 or bot is None:
+        return url
+    try:
+        async with timeout_scope(3):
+            if onebot_protocol(bot, event) == "onebot_v12":
+                result = await bot.call_api("get_file", file_id=reference, type="url")
+            else:
+                result = await bot.call_api("get_image", file=reference)
+        if isinstance(result, Mapping):
+            return _image_http_url(result.get("url")) or url
+    except Exception:
+        # An optional image lookup must not suppress the user's text request.
+        logger.debug("消息图片地址解析失败，保留未解析标记")
+    return url
+
+
+async def _message_reply(event, bot):
+    reply = getattr(event, "reply", None)
+    if reply is not None and getattr(reply, "message", None) is not None:
+        return reply
+    reply_id = event_reply_message_id(event)
+    if reply_id and bot is not None and onebot_protocol(bot, event) != "onebot_v12":
+        try:
+            async with timeout_scope(3):
+                data = await bot.call_api("get_msg", message_id=int(reply_id))
+            if isinstance(data, Mapping) and data.get("message") is not None:
+                from nonebot.adapters.onebot.v11 import Message, MessageSegment
+
+                sender = data.get("sender") or {}
+                raw = data["message"]
+                message = Message(MessageSegment(item["type"], item["data"]) if isinstance(item, Mapping) else item
+                                  for item in raw) if isinstance(raw, list) else Message(raw)
+                return SimpleNamespace(message=message, message_id=reply_id,
+                                       sender=SimpleNamespace(**sender))
+        except Exception:
+            logger.debug("引用消息读取失败，继续处理当前消息")
+    return reply
+
+
 async def format_message(event, bot) -> dict:
     text_message = []
     reply_text = ""
     image_urls = []
     image_file_ids = []
+    image_segments = []
     mentions = []
     reply_user = None
     current_user_id = event_user_id(event)
@@ -259,7 +327,7 @@ async def format_message(event, bot) -> dict:
     }
 
     # 1. 处理回复消息
-    if reply := getattr(event, "reply", None):
+    if reply := await _message_reply(event, bot):
         reply_segments = []
         reply_message = getattr(reply, "message", None)
         if reply_message is not None:
@@ -270,13 +338,12 @@ async def format_message(event, bot) -> dict:
                     reply_segments.append("[图片]")
                 elif seg.type in {"at", "mention"}:
                     reply_segments.append("[提及]")
+                elif seg.type in {"forward", "node", "json", "file", "video", "record", "audio"}:
+                    reply_segments.append(f"[引用{seg.type}：可用read_message_content读取]")
             for seg in reply_message:
                 if seg.type != "image":
                     continue
-                if url := seg.data.get("url"):
-                    image_urls.append(url)
-                elif file_id := seg.data.get("file_id"):
-                    image_file_ids.append(str(file_id))
+                image_segments.append(("reply", seg))
         else:
             reply_id = getattr(reply, "message_id", None)
             if reply_id is not None:
@@ -306,15 +373,14 @@ async def format_message(event, bot) -> dict:
                 mentions.append({"qq": qq, "name": name})
                 # Keep the identity token at the original position. A name
                 # alone makes a mentioned account look like literal text.
-                text_message.append(f"{name}[at:{len(mentions)}]")
+                text_message.append(f"[CQ:at,qq={qq}]")
         elif msgseg.type == "image":
             text_message.append("[图片]")
-            if url := msgseg.data.get("url"):
-                image_urls.append(url)
-            elif file_id := msgseg.data.get("file_id"):
-                image_file_ids.append(str(file_id))
+            image_segments.append(("current", msgseg))
         elif msgseg.type == "face":
             pass
+        elif msgseg.type in {"forward", "node", "json", "file", "video", "record", "audio"}:
+            text_message.append(f"[{msgseg.type}素材：可用read_message_content读取]")
         elif msgseg.type == "text":
             if plain := msgseg.data.get("text", ""):
                 # Strip only the standalone, case-insensitive wake word.  Text
@@ -324,11 +390,21 @@ async def format_message(event, bot) -> dict:
                     plain = plain[wake_word.end() :].lstrip()
                 text_message.append(plain)
 
+    image_sources = []
+    resolved = await asyncio.gather(*(_image_url(seg, bot, event) for _, seg in image_segments[:8]))
+    for (origin, segment), url in zip(image_segments[:8], resolved):
+        if url:
+            image_urls.append(url)
+            image_sources.append({"source": origin, "url": url})
+        elif file_id := segment.data.get("file_id"):
+            image_file_ids.append(str(file_id))
     return {
         "text": text_message,
         "reply": reply_text,
         "images": image_urls,
         "image_file_ids": image_file_ids,
+        "image_sources": image_sources,
+        "unresolved_images": len(image_segments) - len(image_sources),
         "mentions": mentions,
         "reply_user": reply_user,
         "current_user": current_user,

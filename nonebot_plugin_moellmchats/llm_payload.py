@@ -167,15 +167,20 @@ class LlmPayloadMixin:
         reply_user = self.format_message_dict.get("reply_user") or {}
 
         parts = []
+        current_user = self.format_message_dict.get("current_user") or {}
+        if current_user.get("qq"):
+            parts.append(f"当前提问者QQ号：{current_user['qq']}；‘我/我的头像’指此账号。")
 
         if mentions:
             mention_desc = "，".join(
-                f"[at:{i+1}]={m.get('name', '未知用户')}" for i, m in enumerate(mentions)
+                f"[at:{i+1}]={json.dumps(m.get('name', '未知用户'), ensure_ascii=False)}，"
+                f"QQ号={m.get('qq')}，真实@码=[CQ:at,qq={m.get('qq')}]" for i, m in enumerate(mentions)
             )
             parts.append(f"当前消息额外提到的人：{mention_desc}。")
 
         if reply_user and reply_user.get("name"):
-            parts.append(f"当前用户引用的群友：{reply_user['name']}，占位符为[at:0]。")
+            parts.append(f"当前用户引用的群友：{json.dumps(reply_user['name'], ensure_ascii=False)}，"
+                         f"QQ号={reply_user.get('qq')}，真实@码=[CQ:at,qq={reply_user.get('qq')}]；旧占位符[at:0]。")
 
         history_mentions = self.format_message_dict.get("history_mentions") or {}
         if history_mentions:
@@ -191,24 +196,33 @@ class LlmPayloadMixin:
 
         if reply_user and reply_user.get("name"):
             parts.append(
-                "工具指令里若需提及当前消息中的人，勿写QQ号或者id，用中括号和数字占位。"
-                "用户引用的群友为[at:0]，当前消息里有 @ 的人时从 [at:1]、[at:2] ... 开始。"
-                "仅当用户明确要求回复、@或转告被引用群友时才使用[at:0]；不要把[at:0]当作当前提问者。"
+                "工具指令及最终回复需要真实@时使用[CQ:at,qq=真实QQ号]，运行时会组装为真实@消息段。"
+                "仅当用户明确要求回复、@或转告被引用群友时才@引用者，不要把引用者当作当前提问者。"
             )
         else:
             parts.append(
-                "工具指令里若需提及当前消息中的人，勿写QQ号或者id，用中括号和数字占位。"
-                "当前消息里有 @ 的人时从 [at:1]、[at:2] ... 开始。"
+                "工具指令及最终回复需要真实@时使用[CQ:at,qq=真实QQ号]，运行时会组装为真实@消息段。"
             )
 
         parts.append(
+            "QQ号可从当前身份映射或Bot资料查询获得；不要把@1、昵称或玩家UID当QQ号。"
+            "数字型user_id参数填写真实QQ整数；字符串command里的@使用真实@码，旧[at:N]仅兼容当前映射。"
+            "@全体成员不能用来代替@某个用户。"
             "[at:N]只对应当前消息，禁止直接复用历史消息或旧工具调用中的[at:N]。"
             "缺少可信身份映射时请用户补充真实@或完整玩家UID，不能猜身份或换成提问者。"
-            "生成插件 command 时，@目标的身份占位符是参数，不是显示昵称。"
+            "生成插件 command 时，真实@码是一个参数，不是显示昵称。"
             "必须保留其原始顺序，不附加昵称；用户写出的玩家UID原样保留。"
-            "例如战力对比 @某人 UID，应生成 /战力对比 [at:1] UID，"
+            "例如战力对比某人与玩家UID，应生成 /战力对比 [CQ:at,qq=目标QQ号] UID（填入真实QQ号），"
             "不能写成昵称加UID，也不能只剩UID，否则会对比错误的玩家。"
         )
+        image_sources = self.format_message_dict.get("image_sources") or [
+            {"source": "message", "url": url} for url in self.format_message_dict.get("images") or []]
+        if image_sources:
+            parts.append("本次消息图片素材（reply=引用图片，current=当前图片）："
+                         + json.dumps(image_sources[:8], ensure_ascii=False, escape_forward_slashes=False)
+                         + "。这些url可以原样传给图片/表情工具，不需要用户再发链接；不要把地址贴进最终回复。")
+        parts.append("需要头像或消息图片时，若提供了bot_api_query，先查get_user_avatar/get_message_images，"
+                     "取得地址后继续调用图片工具。工具确实失败才能说明获取失败。")
         return "".join(parts)
 
     def _build_payload(self, send_message_list: list) -> tuple[dict, bool]:
@@ -311,8 +325,10 @@ class LlmPayloadMixin:
                 + progress_rule
                 + "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
                 "自动且连续地调用下一个工具，直至彻底完成要求。"
-                "3. 工具执行结束后，原始数据将被清理。因此你最终呈现给用户的回复content中，"
-                "必须完整包含查询到的核心数据和关键结论，这将作为你下一轮对话的记忆依据。"
+                "可以跨插件调用多个功能；互不依赖的查询可以在同一轮提出，后续参数应基于前置结果。"
+                "3. 优先使用工具返回的文字和结构化字段。存在render_id时，可用read_rendered_view"
+                "按pointer读取原卡片文字、字段及位置；分页未读全应继续读取，不要凭图片猜数字。"
+                "向用户解释时引用准确数据和关键结论，已发送的图片无需再次投递。"
             )
 
             if mention_hint:

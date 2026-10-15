@@ -250,6 +250,9 @@ class LlmApiMixin:
         async with session.post(
             url, headers=headers, json=data, proxy=proxy, timeout=timeout
         ) as resp:
+            self._last_api_http_status = resp.status
+            if resp.status == 429:
+                return False, "API请求限流 (HTTP 429)", None, ""
             if error_msg := await self._check_400_error(resp, request_data=data):
                 self._last_api_error_non_retryable = True
                 return False, error_msg, None, ""
@@ -351,6 +354,9 @@ class LlmApiMixin:
         async with session.post(
             url=url, json=data, headers=headers, proxy=proxy, timeout=timeout
         ) as resp:
+            self._last_api_http_status = resp.status
+            if resp.status == 429:
+                return False, "API请求限流 (HTTP 429)", None, ""
             if error_msg := await self._check_400_error(resp, request_data=data):
                 self._last_api_error_non_retryable = True
                 return False, error_msg, None, ""

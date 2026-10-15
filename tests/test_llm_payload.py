@@ -13,10 +13,26 @@ def test_tool_hint_distinguishes_mentions_from_literal_player_uids() -> None:
     harness = PayloadHarness()
     harness.format_message_dict = {"mentions": [{"qq": "1969334055", "name": "♻️"}]}
     hint = harness._build_tool_mention_hint()
-    assert "[at:1]=♻️" in hint
-    assert "/战力对比 [at:1] UID" in hint
+    assert '[at:1]="♻️"' in hint
+    assert "/战力对比 [CQ:at,qq=目标QQ号] UID" in hint
     assert "不能只剩UID" in hint
-    assert "1969334055" not in hint
+    assert "QQ号=1969334055" in hint
+    assert "[CQ:at,qq=1969334055]" in hint
+    assert "不要把@1" in hint
+
+
+def test_tool_hint_exposes_images_as_copyable_sources_and_distinguishes_sender():
+    harness = PayloadHarness()
+    harness.format_message_dict = {
+        "current_user": {"qq": "12001"}, "reply_user": {"qq": "12002", "name": "引用者"},
+        "image_sources": [{"source": "reply", "url": "https://example.com/quoted.png"}],
+    }
+    hint = harness._build_tool_mention_hint()
+    assert "当前提问者QQ号：12001" in hint
+    assert "qq=12002" in hint
+    assert '"source":"reply"' in hint
+    assert "https://example.com/quoted.png" in hint
+    assert "get_user_avatar/get_message_images" in hint
 
 
 def test_payload_delegates_tool_view_to_generation_snapshot(monkeypatch) -> None:

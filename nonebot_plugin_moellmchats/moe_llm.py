@@ -30,6 +30,7 @@ from .onebot_facade import (
     event_group_id,
     event_sender_name,
     event_user_id,
+    make_mention_message,
     onebot_protocol,
 )
 from .runtime_snapshot import runtime_snapshots
@@ -161,7 +162,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             content, emotion_names_list = parse_emotion(content)
             delivered = False
             if content:
-                await self.bot.send(self.event, content)
+                await self.bot.send(self.event, make_mention_message(
+                    onebot_protocol(self.bot, self.event) or "onebot_v11", content, getattr(self, "format_message_dict", {})))
                 delivered = True
             for emotion_name in emotion_names_list:
                 # 发送
@@ -187,7 +189,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                             f"retcode={retcode!r}"
                         )
         else:  # 默认直接发送
-            await self.bot.send(self.event, content)
+            await self.bot.send(self.event, make_mention_message(
+                onebot_protocol(self.bot, self.event) or "onebot_v11", content, getattr(self, "format_message_dict", {})))
         return content
 
     def _remaining_request_seconds(self) -> float:
@@ -304,7 +307,65 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         )
         return result
 
+    async def _request_with_rate_limit_fallback(self, session, headers, data, stream):
+        attempted = getattr(self, "_rate_limit_attempted_models", None)
+        if attempted is None:
+            attempted = self._rate_limit_attempted_models = set()
+        while True:
+            self._last_api_http_status = None
+
+            async def model_operation():
+                if stream:
+                    return await self.stream_llm_chat(
+                        session, self.model_info["url"], headers, data,
+                        self.model_info.get("proxy"), self.model_info.get("is_segment"),
+                        self._llm_request_timeout(),
+                    )
+                return await self.none_stream_llm_chat(
+                    session, self.model_info["url"], headers, data,
+                    self.model_info.get("proxy"), self._llm_request_timeout(),
+                )
+
+            result = await self._call_model_with_trace(
+                model_operation,
+                input_preview=f"chat model request with {len(data.get('messages', []))} messages",
+            )
+            if result[0] or self._last_api_http_status != 429:
+                return (*result, stream)
+            backup = model_selector.get_rate_limit_fallback(
+                self.model_info, attempted, has_tools=bool(data.get("tools")),
+                has_images=self._payload_contains_image(data.get("messages")),
+            )
+            if backup is None:
+                self._last_api_error_non_retryable = True
+                return (*result, stream)
+            logger.info("回答模型限流，切换已配置备用: from={} to={}", self.model_info["model"], backup["model"])
+            # Replace transport options while preserving messages, tool schemas
+            # and completed tool results. A model switch never replays a tool.
+            protected = {"messages", "tools", "tool_choice"}
+            previous_extra = self.model_info.get("extra_payload") or {}
+            options = {"model", "max_tokens", "temperature", "top_p", "top_k", "stream", "stream_options"}
+            if isinstance(previous_extra, dict):
+                options.update(set(previous_extra) - protected)
+            for name in options:
+                data.pop(name, None)
+            self.model_info = backup
+            for name in ("max_tokens", "temperature", "top_p", "top_k"):
+                if backup.get(name) is not None:
+                    data[name] = backup[name]
+            extra = backup.get("extra_payload")
+            if isinstance(extra, dict):
+                data.update({name: value for name, value in extra.items()
+                             if name not in protected | {"model", "stream", "stream_options"}})
+            data["model"] = backup["model"]
+            headers["Authorization"] = backup["key"]
+            stream = bool(backup.get("stream", False) and not data.get("tools"))
+            data["stream"] = stream
+            if stream:
+                data["stream_options"] = {"include_usage": True}
+
     async def get_llm_chat(self) -> str | bool:
+        self._rate_limit_attempted_models: set[str] = set()
         try:
             return await self._get_llm_chat()
         finally:
@@ -455,49 +516,9 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                     await self._send_retry_notice(retry_times)
                     await asyncio.sleep(2 ** (retry_times + 1))
                 try:
-                    if current_stream_flag:
-
-                        async def model_operation():
-                            return await self.stream_llm_chat(
-                                session,
-                                self.model_info["url"],
-                                headers,
-                                data,
-                                self.model_info.get("proxy"),
-                                self.model_info.get("is_segment"),
-                                self._llm_request_timeout(),
-                            )
-
-                        (
-                            success,
-                            result_text,
-                            tool_calls,
-                            reasoning_content,
-                        ) = await self._call_model_with_trace(
-                            model_operation,
-                            input_preview=(f"chat model request with {len(data.get('messages', []))} messages"),
-                        )
-                    else:
-
-                        async def model_operation():
-                            return await self.none_stream_llm_chat(
-                                session,
-                                self.model_info["url"],
-                                headers,
-                                data,
-                                self.model_info.get("proxy"),
-                                self._llm_request_timeout(),
-                            )
-
-                        (
-                            success,
-                            result_text,
-                            tool_calls,
-                            reasoning_content,
-                        ) = await self._call_model_with_trace(
-                            model_operation,
-                            input_preview=(f"chat model request with {len(data.get('messages', []))} messages"),
-                        )
+                    success, result_text, tool_calls, reasoning_content, current_stream_flag = (
+                        await self._request_with_rate_limit_fallback(session, headers, data, current_stream_flag)
+                    )
                     if self.agent_runtime is not None:
                         await self.agent_runtime.flush_usage()
                     if success:
@@ -534,7 +555,10 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         await self.agent_runtime.finish_success()
                     return True
 
-                # 若插件返回了图片，自动切换至视觉模型并注入图片消息
+                # User-uploaded images are handled at preparation; this switch
+                # only controls reinspection of tool output images.
+                if not config_parser.get_config("tool_image_vision_enabled", True):
+                    self._pending_vision_images = []
                 if self._pending_vision_images:
                     vision_model_info = model_selector.get_model_for_capabilities(
                         "vision_model",
