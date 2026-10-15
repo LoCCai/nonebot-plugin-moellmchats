@@ -120,19 +120,23 @@ class _RateLimitResponse:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-async def test_both_transports_report_429_before_reading_body(stream):
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+async def test_both_transports_report_recoverable_status_before_reading_body(stream, status):
     api = LlmApiMixin()
-    session = SimpleNamespace(post=lambda *a, **k: _RateLimitResponse())
+    response = _RateLimitResponse()
+    response.status = status
+    session = SimpleNamespace(post=lambda *a, **k: response)
     operation = api.stream_llm_chat if stream else api.none_stream_llm_chat
     result = await operation(session, "https://primary.invalid", {}, {}, None)
     assert not result[0]
-    assert api._last_api_http_status == 429
+    assert api._last_api_http_status == status
+    assert not getattr(api, "_last_api_quota_exhausted", False)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("backup_ok", [False, True])
-@pytest.mark.parametrize("primary_status", [429, 402, 403])
+@pytest.mark.parametrize("primary_status", [429, 402, 403, 500, 502, 503, 504])
 async def test_chat_failover_preserves_history_tools_and_uses_backup_transport(
     tmp_path, monkeypatch, stream, backup_ok, primary_status,
 ):
@@ -170,6 +174,7 @@ async def test_chat_failover_preserves_history_tools_and_uses_backup_transport(
     assert "primary_only_option" not in requests[1][2]
     assert requests[1][2]["thinking"] == {"type": "disabled"}
     assert chat._last_api_error_non_retryable is (not backup_ok)
+    assert selector.is_model_exhausted("model-a (good)") is (primary_status in {402, 403})
     if backup_ok:
         next_round = await chat._request_with_rate_limit_fallback(object(), {"Authorization": "Bearer test-backup"}, data, False)
         assert not next_round[0]
@@ -244,6 +249,71 @@ async def test_actual_403_transport_only_routes_quota_to_backup(tmp_path, monkey
     if quota:
         assert result[1] == "backup answer"
         assert requests[1]["headers"]["Authorization"] == "Bearer test-backup"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_exhausted", [False, True])
+@pytest.mark.parametrize("last_ok", [False, True])
+async def test_transient_chain_keeps_remaining_vision_backups_and_completed_tools(
+    tmp_path, monkeypatch, primary_exhausted, last_ok,
+):
+    selector = _pair(tmp_path, monkeypatch)
+    selector.model_config["vision_model"] = "model-a (good)"
+    selector.models["last (other)"] = dict(selector.models["backup (other)"], model="last")
+    selector.model_config["model_fallbacks"]["model-a (good)"].append("last (other)")
+    for model in selector.models.values():
+        model["is_vision"] = True
+    if primary_exhausted:
+        await selector.mark_model_exhausted(selector.models["model-a (good)"], status=403)
+    monkeypatch.setattr(moe_llm.model_selector, "get_rate_limit_fallback", selector.get_rate_limit_fallback)
+    chat = object.__new__(MoeLlm)
+    chat.model_info = selector.get_model("vision_model", has_images=True, has_tools=True)
+    chat.agent_runtime = None
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://image.invalid/input"}}]},
+        {"role": "tool", "tool_call_id": "completed", "content": "saved tool result"},
+    ]
+    tools = [{"type": "function", "function": {"name": "query"}}]
+    requests = []
+
+    def post(**kwargs):
+        requests.append(deepcopy(kwargs))
+        if kwargs["json"]["model"] == "last" and last_ok:
+            return _JsonResponse(200, {"choices": [{"message": {"content": "backup answer"}}]})
+        response = _RateLimitResponse()
+        response.status = 502
+        return response
+
+    result = await chat._request_with_rate_limit_fallback(
+        SimpleNamespace(post=post), {"Authorization": chat.model_info["key"]},
+        {"model": chat.model_info["model"], "messages": messages, "tools": tools}, False,
+    )
+    assert result[0] is last_ok
+    assert [request["json"]["model"] for request in requests] == (
+        ["backup", "last"] if primary_exhausted else ["model-a", "backup", "last"]
+    )
+    assert all(request["json"]["messages"] == messages and request["json"]["tools"] == tools for request in requests)
+    assert not selector.is_model_exhausted("backup (other)")
+    assert not selector.is_model_exhausted("last (other)")
+    assert selector.is_model_exhausted("model-a (good)") is primary_exhausted
+    assert chat._last_api_error_non_retryable is (not last_ok)
+
+
+@pytest.mark.asyncio
+async def test_transient_single_model_preserves_bounded_outer_retry(tmp_path, monkeypatch):
+    selector = _pair(tmp_path, monkeypatch)
+    selector.model_config["model_fallbacks"] = {}
+    monkeypatch.setattr(moe_llm.model_selector, "get_rate_limit_fallback", selector.get_rate_limit_fallback)
+    chat = object.__new__(MoeLlm)
+    chat.model_info, chat.agent_runtime = selector.get_model("category_model"), None
+    response = _RateLimitResponse()
+    response.status = 503
+    result = await chat._request_with_rate_limit_fallback(
+        SimpleNamespace(post=lambda **kwargs: response), {}, {"model": "model-a", "messages": []}, False,
+    )
+    assert not result[0]
+    assert not chat._last_api_error_non_retryable
+    assert not selector.is_model_exhausted("model-a (good)")
 
 
 @pytest.mark.asyncio

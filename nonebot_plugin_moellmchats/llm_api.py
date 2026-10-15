@@ -8,7 +8,12 @@ from nonebot.log import logger
 import ujson as json
 
 from .llm_state import token_usage_history
-from .model_error_policy import is_content_policy_error_info, is_quota_exhaustion_error, read_bounded_error
+from .model_error_policy import (
+    TRANSIENT_HTTP_STATUSES,
+    is_content_policy_error_info,
+    is_quota_exhaustion_error,
+    read_bounded_error,
+)
 from .request_manager import get_current_request_elapsed
 
 
@@ -266,6 +271,9 @@ class LlmApiMixin:
             url, headers=headers, json=data, proxy=proxy, timeout=timeout
         ) as resp:
             self._last_api_http_status = resp.status
+            if resp.status in TRANSIENT_HTTP_STATUSES:
+                logger.warning("模型服务暂时不可用：HTTP {}，交由调度器处理", resp.status)
+                return False, f"模型服务暂时不可用 (HTTP {resp.status})，请稍后重试。", None, ""
             if resp.status == 429:
                 return False, "API请求限流 (HTTP 429)", None, ""
             if resp.status in {402, 403}:
@@ -374,6 +382,9 @@ class LlmApiMixin:
             url=url, json=data, headers=headers, proxy=proxy, timeout=timeout
         ) as resp:
             self._last_api_http_status = resp.status
+            if resp.status in TRANSIENT_HTTP_STATUSES:
+                logger.warning("模型服务暂时不可用：HTTP {}，交由调度器处理", resp.status)
+                return False, f"模型服务暂时不可用 (HTTP {resp.status})，请稍后重试。", None, ""
             if resp.status == 429:
                 return False, "API请求限流 (HTTP 429)", None, ""
             if resp.status in {402, 403}:

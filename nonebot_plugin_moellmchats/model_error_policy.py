@@ -8,6 +8,8 @@ from aiohttp import ClientError
 
 from .compat import TimeoutError, timeout
 
+TRANSIENT_HTTP_STATUSES = frozenset({500, 502, 503, 504})
+
 _CONTENT_POLICY_IDENTIFIERS = frozenset(
     {
         "content_blocked",
@@ -95,5 +97,7 @@ async def read_bounded_error(response) -> str:
         return ""
 
 
-__all__ = ["is_content_policy_error_info", "is_quota_exhaustion_error", "is_quota_exhaustion_error_info",
-           "normalize_error_identifier", "read_bounded_error"]
+__all__ = [
+    "TRANSIENT_HTTP_STATUSES", "is_content_policy_error_info", "is_quota_exhaustion_error",
+    "is_quota_exhaustion_error_info", "normalize_error_identifier", "read_bounded_error",
+]

@@ -802,21 +802,23 @@ async def test_classifier_http_failure_falls_back_without_reading_body_or_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cached", [False, True])
-@pytest.mark.parametrize("status", [429, 403])
-async def test_classifier_429_uses_backup_without_publishing_under_primary_identity(monkeypatch, cached, status):
+@pytest.mark.parametrize("status", [429, 403, 500, 502, 503, 504])
+async def test_classifier_uses_backup_without_publishing_under_primary_identity(monkeypatch, cached, status):
     _configure_runtime(monkeypatch)
     primary = {"model": "primary", "provider": "test", "url": "https://primary.invalid/chat", "key": "primary-test"}
     backup = {"model": "backup", "provider": "test", "url": "https://backup.invalid/chat", "key": "backup-test"}
     monkeypatch.setattr(categorize_module.model_selector, "get_model_for_capabilities", lambda *a: primary)
     monkeypatch.setattr(categorize_module.model_selector, "get_rate_limit_fallback", lambda current, attempted: backup)
-    failure = _UnreadableBodyResponse({}, status=429) if status == 429 else _QuotaResponse({}, status=403)
+    failure = _QuotaResponse({}, status=403) if status == 403 else _UnreadableBodyResponse({}, status=status)
     session = _FakeSession([failure, _model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
     cache = _RecordingClassificationCache() if cached else None
     category = _categorizer("choose tool", _CountingSnapshot(_snapshot()),
                             catalog_cache=MemoryToolCatalogCache(), classification_cache=cache)
     assert await category.get_category() == ("1", False, ["alpha"])
-    assert category.selection_source == "classification_rate_limit_fallback"
+    assert category.selection_source == (
+        "classification_rate_limit_fallback" if status in {429, 403} else "classification_service_fallback"
+    )
     assert category._classifier_model == "backup"
     assert [request["headers"]["Authorization"] for request in session.requests] == ["primary-test", "backup-test"]
     if cache is not None:
@@ -855,12 +857,13 @@ async def test_classifier_vision_depends_on_actual_input_images(monkeypatch, pla
 
 
 @pytest.mark.asyncio
-async def test_classifier_backup_shares_original_overall_deadline(monkeypatch):
+@pytest.mark.parametrize("status", [429, 502])
+async def test_classifier_backup_shares_original_overall_deadline(monkeypatch, status):
     state = _configure_runtime(monkeypatch)
     state["classification_timeout_seconds"] = 0.02
     backup = {"model": "backup", "provider": "test", "url": "https://backup.invalid/chat", "key": "backup-test"}
     monkeypatch.setattr(categorize_module.model_selector, "get_rate_limit_fallback", lambda current, attempted: backup)
-    session = _FakeSession([_UnreadableBodyResponse({}, status=429), _FakeResponse(_model_response(), enter_delay=0.2)])
+    session = _FakeSession([_UnreadableBodyResponse({}, status=status), _FakeResponse(_model_response(), enter_delay=0.2)])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
     category = _categorizer("slow backup", _CountingSnapshot(_snapshot()), catalog_cache=MemoryToolCatalogCache())
     assert await category.get_category() == ("1", False, [])

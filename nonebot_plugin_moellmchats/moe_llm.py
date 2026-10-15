@@ -26,6 +26,7 @@ from .llm_tools import LlmToolsMixin
 from .mention_context import mention_scope
 from .messages_handler import MessagesHandler
 from .model_capabilities import ModelCapability
+from .model_error_policy import TRANSIENT_HTTP_STATUSES
 from .model_selector import model_selector
 from .onebot_facade import (
     event_group_id,
@@ -354,7 +355,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 model_operation,
                 input_preview=f"chat model request with {len(data.get('messages', []))} messages",
             )
-            if result[0] or (self._last_api_http_status != 429 and not self._last_api_quota_exhausted):
+            transient = self._last_api_http_status in TRANSIENT_HTTP_STATUSES
+            if result[0] or (self._last_api_http_status != 429 and not self._last_api_quota_exhausted and not transient):
                 return (*result, stream)
             if self._last_api_quota_exhausted:
                 await model_selector.mark_model_exhausted(self.model_info, self._last_api_http_status)
@@ -363,9 +365,13 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 has_images=self._payload_contains_image(data.get("messages")),
             )
             if backup is None:
-                self._last_api_error_non_retryable = True
+                # Preserve bounded retries when no backup exists. Once an
+                # available chain was tried, do not repeatedly hit its last model.
+                self._last_api_error_non_retryable = not transient or len(attempted) > 1
                 return (*result, stream)
-            logger.info("回答模型配额不足或限流，切换已配置备用: from={} to={}", self.model_info["model"], backup["model"])
+            reason = "服务临时不可用" if transient else "配额不足或限流"
+            logger.info("回答模型{}，切换已配置备用: status={} from={} to={}",
+                        reason, self._last_api_http_status, self.model_info["model"], backup["model"])
             # Replace transport options while preserving messages, tool schemas
             # and completed tool results. A model switch never replays a tool.
             protected = {"messages", "tools", "tool_choice"}

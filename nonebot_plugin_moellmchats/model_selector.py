@@ -529,7 +529,14 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         role = current.get("_model_pool")
         if role in state.model_config.get("model_pools", {}):
             return self._select_pool_model(state, role, has_tools=has_tools, has_images=has_images, attempted=attempted)
-        for name in fallbacks.get(identity, ()):
+        # Keep the original ordered backup list when the selected primary is
+        # exhausted or a first backup also fails. Explicit nested mappings
+        # remain available after the original list, with cycles bounded above.
+        origin = current.get("_fallback_root", identity)
+        if not isinstance(origin, str) or origin not in fallbacks:
+            origin = identity
+        names = dict.fromkeys((*fallbacks.get(origin, ()), *fallbacks.get(identity, ())))
+        for name in names:
             if name in attempted or self.is_model_exhausted(name):
                 continue
             model = mutable_value(state.models[name])
@@ -542,6 +549,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 continue
             attempted.add(name)
             model["key"] = key
+            model["_fallback_root"] = origin
             return model
         return None
 

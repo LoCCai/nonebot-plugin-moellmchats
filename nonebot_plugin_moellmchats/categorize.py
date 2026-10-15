@@ -22,6 +22,7 @@ from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .model_capabilities import ModelCapability
+from .model_error_policy import TRANSIENT_HTTP_STATUSES
 from .model_selector import model_selector
 from .runtime_metrics import runtime_metrics
 from .tool_catalog_cache import (
@@ -194,6 +195,9 @@ class Categorize:
     ) -> _CategoryResult | ClassificationCacheRecord:
         attempted: set[str] = set()
         switched = False
+        service_fallback = False
+        fallback_phases = {"http_status_429", "http_status_quota_exhausted"} | {
+            f"http_status_{status}" for status in TRANSIENT_HTTP_STATUSES}
         while True:
             from .request_recovery import current_binding
 
@@ -204,25 +208,31 @@ class Categorize:
                     category_model_config, prompt, cache_key=None if switched else cache_key,
                 )
             except _UncacheableClassificationResult:
-                if self._phase not in {"http_status_429", "http_status_quota_exhausted"}:
+                if self._phase not in fallback_phases:
                     raise
                 result = False
-            if self._phase not in {"http_status_429", "http_status_quota_exhausted"}:
+            if self._phase not in fallback_phases:
                 if switched and cache_key is not None:
                     # Do not publish a backup model's answer under the primary
                     # model identity in the successful classification cache.
-                    raise _UncacheableClassificationResult(result, ClassificationResultSource.RATE_LIMIT_FALLBACK)
+                    source = (ClassificationResultSource.SERVICE_FALLBACK if service_fallback
+                              else ClassificationResultSource.RATE_LIMIT_FALLBACK)
+                    raise _UncacheableClassificationResult(result, source)
                 return result
             backup = model_selector.get_rate_limit_fallback(category_model_config, attempted)
             if backup is None:
                 if cache_key is not None:
                     raise _UncacheableClassificationResult(False, ClassificationResultSource.PARSE_FALLBACK)
                 return False
-            logger.info("分类模型配额不足或限流，切换已配置备用: from={} to={}",
+            transient = self._phase not in {"http_status_429", "http_status_quota_exhausted"}
+            service_fallback = service_fallback or transient
+            logger.info("分类模型{}，切换已配置备用: status={} from={} to={}",
+                        "服务临时不可用" if transient else "配额不足或限流", self._phase,
                         category_model_config["model"], backup["model"])
             category_model_config = backup
             self._classifier_model = backup["model"]
-            self.selection_source = "classification_rate_limit_fallback"
+            self.selection_source = ("classification_service_fallback" if service_fallback
+                                     else "classification_rate_limit_fallback")
             switched = True
 
     async def _request_category_model_once(
