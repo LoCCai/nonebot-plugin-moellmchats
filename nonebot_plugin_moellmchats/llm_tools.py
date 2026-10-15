@@ -39,6 +39,7 @@ from .protocol_broker import (
     ProtocolInvocationStatus,
 )
 from .protocol_registry import protocol_registry
+from .request_recovery import current_binding
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
     ToolEffect,
@@ -761,6 +762,12 @@ class LlmToolsMixin:
         confirmation_id: str | None = None,
         error_type: str | None = None,
     ) -> None:
+        recovery = current_binding()
+        messages = getattr(self, "_recovery_messages", None)
+        if recovery is not None and messages is not None:
+            completed = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+            pending = [c for c in recovery.record["inflight_tools"] if c.get("id") not in completed]
+            await recovery.checkpoint(messages, phase="tools", calls=pending)
         runtime = getattr(self, "agent_runtime", None)
         if runtime is None:
             return
@@ -1298,6 +1305,25 @@ class LlmToolsMixin:
         return send_message_list
 
     async def _execute_tools(
+        self, tool_calls: list, result_text: str, send_message_list: list, reasoning_content: str,
+    ) -> list:
+        recovery = current_binding()
+        if recovery is not None:
+            recovery.pause_if_stopping()
+            await recovery.checkpoint([*send_message_list,
+                {"role": "assistant", "content": result_text or "", "tool_calls": tool_calls}],
+                phase="tools", calls=tool_calls)
+        self._recovery_messages = send_message_list
+        try:
+            result = await self._execute_tools_inner(tool_calls, result_text, send_message_list, reasoning_content)
+            if recovery is not None:
+                recovery.record["blocked_tools"] = sorted(getattr(self, "_tool_retry_blocked_tools", set()))
+                await recovery.checkpoint(result, phase="model")
+            return result
+        finally:
+            self._recovery_messages = None
+
+    async def _execute_tools_inner(
         self,
         tool_calls: list,
         result_text: str,
@@ -2259,14 +2285,15 @@ class LlmToolsMixin:
             if isinstance(extra_payload, dict):
                 retry_data.update(extra_payload)
 
-        success, summary_text, retry_tool_calls, _ = await self.none_stream_llm_chat(
-            session,
-            self.model_info["url"],
-            headers,
-            retry_data,
-            self.model_info.get("proxy"),
-            timeout,
-        )
+        request_with_fallback = getattr(self, "_request_with_rate_limit_fallback", None)
+        if callable(request_with_fallback):
+            success, summary_text, retry_tool_calls, _, _stream = await request_with_fallback(
+                session, headers, retry_data, False,
+            )
+        else:
+            success, summary_text, retry_tool_calls, _ = await self.none_stream_llm_chat(
+                session, self.model_info["url"], headers, retry_data, self.model_info.get("proxy"), timeout,
+            )
         if not success:
             return ""
         if retry_tool_calls:

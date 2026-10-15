@@ -227,25 +227,30 @@ def test_registration_respects_capability(monkeypatch: pytest.MonkeyPatch) -> No
 # Standalone posture (no Qiqi host modules on this import path)
 def test_render_theme_reads_published_host_palette(monkeypatch):
     from types import ModuleType, SimpleNamespace
-    host = ModuleType('src')
-    utils = ModuleType('src.utils')
+    host = ModuleType("src")
+    utils = ModuleType("src.utils")
     utils.render_theme = SimpleNamespace(stylesheet_context=lambda _: {
-        'theme_family': 'qiqi', 'theme': 'night',
-        'theme_css': ':root[data-theme="light"]{--accent-color:#123456;} :root[data-theme="dark"]{--accent-color:#cbb0ff;--font-color-main:#f2f2fb;--background-color:#141b32;}'})
-    utils.report_theme = SimpleNamespace(post_theme_context=lambda: {'post_theme':'qiqi','post_mode':'night'}, graph_palette=lambda _: {'accent':'#cbb0ff'})
-    monkeypatch.setitem(sys.modules, 'src', host)
-    monkeypatch.setitem(sys.modules, 'src.utils', utils)
-    result = module.render_theme_reference('zmws')
-    assert result['source'] == 'host' and result['mode'] == 'night'
-    assert result['palette']['accent'] == '#cbb0ff'
-    assert result['palette']['background'] == '#141b32'
-    assert '#cbb0ff' in result['css'] and '文字' in result['guidance']
+        "theme_family": "qiqi", "theme": "night",
+        "theme_css": (':root[data-theme="light"]{--accent-color:#123456;} '
+                      ':root[data-theme="dark"]{--accent-color:#cbb0ff;--font-color-main:#f2f2fb;--background-color:#141b32;}')})
+    utils.report_theme = SimpleNamespace(post_theme_context=lambda: {"post_theme": "qiqi", "post_mode": "night"},
+                                        graph_palette=lambda _: {"accent": "#cbb0ff"})
+    monkeypatch.setitem(sys.modules, "src", host)
+    monkeypatch.setitem(sys.modules, "src.utils", utils)
+    result = module.render_theme_reference("zmws")
+    assert result["source"] == "host"
+    assert result["mode"] == "night"
+    assert result["palette"]["accent"] == "#cbb0ff"
+    assert result["palette"]["background"] == "#141b32"
+    assert "#cbb0ff" in result["css"]
+    assert "文字" in result["guidance"]
 
 
 def test_render_theme_standalone_fallback(monkeypatch):
-    monkeypatch.setitem(sys.modules, 'src', None)
+    monkeypatch.setitem(sys.modules, "src", None)
     result = module.render_theme_reference()
-    assert result['source'] == 'standalone' and result['palette']['surface']
+    assert result["source"] == "standalone"
+    assert result["palette"]["surface"]
 
 
 # ---------------------------------------------------------------------------

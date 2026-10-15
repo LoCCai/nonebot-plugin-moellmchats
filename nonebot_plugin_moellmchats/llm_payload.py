@@ -150,6 +150,8 @@ class LlmPayloadMixin:
                 difficulty,
                 required_capabilities,
             )
+            if not self.model_info:
+                return "本档模型暂时都不可用或额度已耗尽，请联系管理员检查模型池。"
 
         # 兜底：既没触发视觉，也没开启MoE，或者啥都没开启（原逻辑），使用默认模型
         if not self.model_info:
@@ -157,6 +159,8 @@ class LlmPayloadMixin:
                 "selected_model",
                 required_capabilities,
             )
+        if not self.model_info:
+            return "当前模型池没有可用模型，请联系管理员检查额度与模型配置。"
         await self._prepare_tool_schema_record()
         logger.info(f"模型选择为：{self.model_info['model']}")
         return None

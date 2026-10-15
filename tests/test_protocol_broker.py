@@ -149,9 +149,7 @@ async def test_like_wrapper_injects_current_actor_and_calls_send_like_once(
 @pytest.mark.parametrize("app_name", ["SnowLuma", "NapCat.Onebot"])
 @pytest.mark.parametrize("emoji_id", [38, "10060"])
 @pytest.mark.parametrize("message_id", [789, -950661342])
-async def test_group_reaction_uses_current_message_and_string_emoji_id(
-    protocol_config, app_name, emoji_id, message_id
-) -> None:
+async def test_group_reaction_uses_current_message_and_string_emoji_id(protocol_config, app_name, emoji_id, message_id) -> None:
     bot = _Bot(app_name=app_name)
     broker = _broker()
     async with protocol_request_scope(bot, _event(message_id=message_id), generation=1, is_superuser=False):

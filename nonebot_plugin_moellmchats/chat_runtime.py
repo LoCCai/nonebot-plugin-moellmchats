@@ -36,6 +36,7 @@ from .onebot_facade import (
 )
 from .protocol_context import protocol_request_scope
 from .request_manager import register_request, unregister_request
+from .request_recovery import recovery_service, restarting
 from .runtime_snapshot import runtime_snapshots
 from .state_store import BoundedValueStore
 from .temperament_manager import temperament_manager
@@ -148,6 +149,13 @@ async def _generation_redis_lease(
 
 
 async def handle_llm(
+    bot: Bot, event: MessageEvent, matcher, format_message_dict: dict, is_ai=False, **kwargs,
+):
+    return await recovery_service.run(bot, event, format_message_dict, is_ai,
+        lambda: _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs))
+
+
+async def _handle_llm(
     bot: Bot,
     event: MessageEvent,
     matcher,
@@ -314,7 +322,8 @@ async def handle_llm(
                 cooldown_claim.lease,
                 user_id=user_id,
             )
-            await _send_cancel_notice(matcher)
+            if not restarting():
+                await _send_cancel_notice(matcher)
             raise
         except Exception:
             await _release_cooldown(

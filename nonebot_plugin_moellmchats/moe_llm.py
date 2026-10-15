@@ -2,6 +2,7 @@ import asyncio
 from collections import Counter
 from collections.abc import Awaitable, Callable
 import datetime
+import json
 import random
 import time
 from typing import Any
@@ -33,6 +34,7 @@ from .onebot_facade import (
     make_mention_message,
     onebot_protocol,
 )
+from .request_recovery import current_binding, durable_reply, resume_checkpoint
 from .runtime_snapshot import runtime_snapshots
 from .temperament_manager import temperament_manager
 from .tool_manager import tool_manager
@@ -86,6 +88,10 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self.tool_snapshot = runtime_snapshot.tool_snapshot if runtime_snapshot is not None else tool_manager.snapshot()
 
     async def _validate_runtime_model_config(self) -> str | None:
+        # Pool admission happens after classification; peeking at the default
+        # here would rotate the simple pool twice and reject other healthy tiers.
+        if model_selector.get_config_value("model_pools", {}):
+            return None
         if (
             model_selector.get_model_for_capabilities(
                 "selected_model",
@@ -158,6 +164,20 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         """处理和发送表情包
         Returns: str: 替换表情之后的内容
         """
+        if current_binding() is not None:
+            protocol = onebot_protocol(self.bot, self.event) or "onebot_v11"
+            messages = []
+            emotions = []
+            if self.emotion_flag:
+                content, emotions = parse_emotion(content)
+            for start in range(0, len(content), 1200):
+                messages.append(make_mention_message(protocol, content[start:start + 1200],
+                                                    getattr(self, "format_message_dict", {})))
+            for name in emotions:
+                if emotion := get_emotion(name, protocol=protocol):
+                    messages.append(emotion)
+            await durable_reply(self.bot, self.event, messages)
+            return content
         if self.emotion_flag:  # 本次对话发送表情包
             content, emotion_names_list = parse_emotion(content)
             delivered = False
@@ -312,7 +332,11 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         if attempted is None:
             attempted = self._rate_limit_attempted_models = set()
         while True:
+            if recovery := current_binding():
+                recovery.pause_if_stopping()
             self._last_api_http_status = None
+            self._last_api_quota_exhausted = False
+            self._last_api_error_non_retryable = False
 
             async def model_operation():
                 if stream:
@@ -330,8 +354,10 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 model_operation,
                 input_preview=f"chat model request with {len(data.get('messages', []))} messages",
             )
-            if result[0] or self._last_api_http_status != 429:
+            if result[0] or (self._last_api_http_status != 429 and not self._last_api_quota_exhausted):
                 return (*result, stream)
+            if self._last_api_quota_exhausted:
+                await model_selector.mark_model_exhausted(self.model_info, self._last_api_http_status)
             backup = model_selector.get_rate_limit_fallback(
                 self.model_info, attempted, has_tools=bool(data.get("tools")),
                 has_images=self._payload_contains_image(data.get("messages")),
@@ -339,7 +365,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             if backup is None:
                 self._last_api_error_non_retryable = True
                 return (*result, stream)
-            logger.info("回答模型限流，切换已配置备用: from={} to={}", self.model_info["model"], backup["model"])
+            logger.info("回答模型配额不足或限流，切换已配置备用: from={} to={}", self.model_info["model"], backup["model"])
             # Replace transport options while preserving messages, tool schemas
             # and completed tool results. A model switch never replays a tool.
             protected = {"messages", "tools", "tool_choice"}
@@ -372,6 +398,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             await self._finish_tool_progress()
 
     async def _get_llm_chat(self) -> str | bool:
+        recovery = current_binding()
+        resuming = recovery is not None and recovery.record["state"] == "recovering"
         self.messages_handler = MessagesHandler(self.user_id)
         if self.agent_runtime is not None:
             history_exchanges = config_parser.get_config("max_user_history", 8)
@@ -385,7 +413,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         plain = self.messages_handler.pre_process(
             self.format_message_dict, scope=mention_scope(getattr(self, "event", None)),
         )
-        if self.agent_runtime is not None:
+        if self.agent_runtime is not None and not resuming:
             await self.agent_runtime.persist_user_message(
                 plain, mention_context=self.messages_handler.messages_entity.mention_context,
             )
@@ -467,6 +495,28 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 system_content += "\n" + untrusted_context
         # 将动态上下文追加到系统提示末尾，避免部分模型不支持多条 system 消息
         send_message_list.insert(0, {"role": "system", "content": system_content})
+        if resuming:
+            restored, completed, self._recovery_no_tools = resume_checkpoint(recovery.record)
+            if restored:
+                send_message_list = [send_message_list[0], *restored]
+            for call in completed:
+                name = call.get("function", {}).get("name", "")
+                try:
+                    arguments = json.loads(call["function"]["arguments"])
+                    view = self.tool_snapshot.resolve_llm_tool_execution(name, is_superuser=self.is_superuser)
+                    fingerprint = (int(self.tool_snapshot.generation), name,
+                                   self._execution_arguments_digest(arguments, view))
+                    self._remember_tool_attempt(fingerprint, "matched_with_output")
+                except (ValueError, TypeError, KeyError):
+                    self._tool_retry_blocked_tools.add(name)
+            recovery.record["unsafe_tools"] = self._recovery_no_tools
+            self._tool_retry_blocked_tools.update(recovery.record.get("blocked_tools", []))
+            send_message_list.append({"role": "user", "content":
+                "这是重启后继续的原任务。请基于已有工具结果继续，不要重复已完成步骤。"
+                + ("存在结果未确认的操作，本次仅总结已有信息并请用户核对，不能继续执行工具。"
+                   if self._recovery_no_tools else "")})
+            self.messages_handler.messages_entity.tool_messages = [
+                m for m in send_message_list if m.get("role") in {"assistant", "tool"}]
         # 2. 构建 Payload
         data, current_stream_flag = self._build_payload(send_message_list)
         # DEBUG
@@ -493,6 +543,11 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         self._waiting_confirmation = False
         # 修改：增加上限至 max_tool_rounds + 1，以容纳最后一次强制总结
         for tool_round in range(max_tool_rounds + 1):
+            if recovery is not None:
+                await recovery.checkpoint(send_message_list, phase="model")
+                recovery.pause_if_stopping()
+            if getattr(self, "_recovery_no_tools", False):
+                data.pop("tools", None)
             result_text = ""
             success = False
             tool_calls = None
@@ -538,7 +593,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 return result_text or "api寄！"
 
             # 3. 执行工具调用（非总结轮次才执行）
-            if tool_calls and tool_round < max_tool_rounds:
+            if tool_calls and tool_round < max_tool_rounds and not getattr(self, "_recovery_no_tools", False):
                 send_message_list = await self._execute_tools(tool_calls, result_text, send_message_list, reasoning_content)
 
                 if self._waiting_confirmation:

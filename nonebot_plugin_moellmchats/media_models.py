@@ -12,12 +12,9 @@ from nonebot.log import logger
 
 from .llm_api import LlmApiMixin
 from .media_context import MAX_MEDIA_BYTES, MediaAsset, MediaError, download_media
+from .model_error_policy import is_quota_exhaustion_error_info
 from .model_selector import model_selector
-
-_QUOTA_CODES = frozenset({
-    "allocationquota.freetieronly", "allocationquota.quotaexceeded", "freetierexhausted",
-    "free_tier_exhausted", "quotaexhausted", "insufficient_quota",
-})
+from .request_recovery import current_binding
 
 
 def data_uri(data: bytes, mime: str) -> str:
@@ -76,9 +73,7 @@ async def _post(model: Mapping, url: str, *, payload: dict | None = None,
 
 
 def _quota(status: int, body: Mapping) -> bool:
-    error = body.get("error")
-    code = error.get("code") if isinstance(error, Mapping) else body.get("code")
-    return status == 429 or str(code).casefold() in _QUOTA_CODES
+    return status == 429 or is_quota_exhaustion_error_info(status, body)
 
 
 def _success(status: int, body: Mapping) -> None:
@@ -103,6 +98,8 @@ async def complete_media(role: str, *, prompt: str, parts: list[dict] | None = N
     required = {"image" if part.get("type") == "image_url" else "audio" if part.get("type") == "input_audio"
                 else "video" for part in (parts or [])}
     for _ in range(5):
+        if recovery := current_binding():
+            recovery.pause_if_stopping()
         if parts and not current.get("is_vision"):
             raise MediaError("所选多模态模型未声明视觉能力，请在模型配置中设置 is_vision。")
         supported = set(current.get("media_types", ["image"]))
@@ -121,6 +118,8 @@ async def complete_media(role: str, *, prompt: str, parts: list[dict] | None = N
                         if k not in {"messages", "model", "tools", "stream", "max_tokens"}})
         status, body = await _post(current, current["url"], payload=payload)
         if _quota(status, body):
+            if status != 429:
+                await model_selector.mark_model_exhausted(current, status)
             current = model_selector.get_rate_limit_fallback(root, attempted, has_images=bool(parts))
             if current is None:
                 raise MediaError("本功能已配置模型均限流或免费额度已用完，请稍后重试。")
@@ -143,6 +142,8 @@ async def generate_picture(prompt: str, references: list[bytes], *, size: str = 
     current = root
     attempted: set[str] = set()
     for _ in range(5):
+        if recovery := current_binding():
+            recovery.pause_if_stopping()
         base = current["url"].rstrip("/").removesuffix("/chat/completions")
         api = current.get("image_api_format", "openai")
         form = None
@@ -167,6 +168,8 @@ async def generate_picture(prompt: str, references: list[bytes], *, size: str = 
         status, body = await _post(current, endpoint, payload=payload, form=form)
         if _quota(status, body):
             logger.info("绘图模型限流或免费额度不可用：model={}", current["model"])
+            if status != 429:
+                await model_selector.mark_model_exhausted(current, status)
             current = model_selector.get_rate_limit_fallback(root, attempted)
             if current is None:
                 raise MediaError("已配置绘图模型均限流或免费额度已用完。")

@@ -83,14 +83,43 @@ _SEND_ACTIONS = {
     "send_message",
 }
 _AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all|history_at:([a-f0-9]{32})|CQ:at,qq=([1-9][0-9]{0,11}))\]")
-_MENTION_QUERY_COMMANDS = frozenset({
-    "战力对比", "造梦战力对比", "造梦资料", "造梦详情", "造梦面板",
-    "造梦战力分析", "造梦面板分析", "造梦在线", "造梦实时",
-    "造梦改名", "造梦轨迹", "造梦改名轨迹", "蟠桃趋势", "造梦蟠桃趋势",
-    "造梦升满", "造梦升满材料", "造梦充值", "造梦VIP", "造梦vip",
-    "六维计算", "六纬计算", "六维计算器", "造梦六维", "对战演绎",
-    "pvp", "PVP", "PvP", "造梦对战", "pve", "PVE", "PvE", "造梦PVE", "造梦打怪",
-})
+_MENTION_QUERY_COMMANDS = frozenset(
+    {
+        "战力对比",
+        "造梦战力对比",
+        "造梦资料",
+        "造梦详情",
+        "造梦面板",
+        "造梦战力分析",
+        "造梦面板分析",
+        "造梦在线",
+        "造梦实时",
+        "造梦改名",
+        "造梦轨迹",
+        "造梦改名轨迹",
+        "蟠桃趋势",
+        "造梦蟠桃趋势",
+        "造梦升满",
+        "造梦升满材料",
+        "造梦充值",
+        "造梦VIP",
+        "造梦vip",
+        "六维计算",
+        "六纬计算",
+        "六维计算器",
+        "造梦六维",
+        "对战演绎",
+        "pvp",
+        "PVP",
+        "PvP",
+        "造梦对战",
+        "pve",
+        "PVE",
+        "PvE",
+        "造梦PVE",
+        "造梦打怪",
+    }
+)
 
 
 class MentionIdentityRequired(ValueError):
@@ -276,6 +305,17 @@ async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
         "effect": _api_effect(protocol, api),
         "output": output,
     }
+    if api in _SEND_ACTIONS and message is not None:
+        from .request_recovery import _message_json, current_binding
+
+        binding = current_binding()
+        if binding is not None:
+            # Arbitrary plugins own their send path. Record evidence without
+            # forging receipts or replaying their side effects after restart.
+            entry = {"message": _message_json(bot, data["message"]), "kwargs": {}, "state": "sending", "external": True}
+            binding.record["outbox"].append(entry)
+            context["pending_api"][id(data)]["recovery_entry"] = entry
+            await binding.save()
 
 
 async def _confirm_outgoing_api(
@@ -287,7 +327,7 @@ async def _confirm_outgoing_api(
 ) -> None:
     """Commit captured output/effect only after the adapter confirms success."""
 
-    del bot, result
+    del bot
     key = _capture_key.get()
     if key is None:
         return
@@ -297,6 +337,14 @@ async def _confirm_outgoing_api(
     staged = context["pending_api"].pop(id(data), None)
     if staged is None:
         staged = {"api": api, "effect": None, "output": None}
+    entry = staged.get("recovery_entry")
+    if entry is not None:
+        from .request_recovery import current_binding, has_delivery_receipt
+
+        binding = current_binding()
+        entry["state"] = "sent" if exception is None and has_delivery_receipt(result) else "unknown"
+        if binding is not None:
+            await binding.save()
     if exception is not None:
         context["api_failed"] += 1
         unknown_result = _unknown_api_result(exception)
@@ -555,7 +603,8 @@ async def _dispatch_targeted(bot: Bot, event, plugin_name: str) -> None:
             and matcher not in candidates
         )
     for matcher in sorted(candidates, key=lambda item: item.priority):
-        context = _captures.get(_capture_key.get())
+        key = _capture_key.get()
+        context = _captures.get(key) if key is not None else None
         if context is not None and matcher.temp:
             # A model may relay a user's reply, but must not invent one or
             # confirm a prompt it just opened within the same user message.
@@ -728,13 +777,7 @@ def _snapshot_dispatch_context(context: dict[str, Any]) -> dict[str, Any]:
     ``pending_api`` into failures), which must not hit APIs still in flight
     inside a background dispatch task."""
     snapshot = _empty_dispatch_context()
-    snapshot.update(
-        {
-            key: value
-            for key, value in context.items()
-            if key not in {"messages", "pending_api"}
-        }
-    )
+    snapshot.update({key: value for key, value in context.items() if key not in {"messages", "pending_api"}})
     snapshot["messages"] = [dict(item) for item in context.get("messages", [])]
     return snapshot
 
@@ -853,9 +896,7 @@ class EventSimulator:
                 background_started = False
                 background_snapshot: dict[str, Any] | None = None
                 try:
-                    background_plugins = set(
-                        config_parser.get_config("legacy_background_plugins", []) or []
-                    )
+                    background_plugins = set(config_parser.get_config("legacy_background_plugins", []) or [])
                     # Model tool observations must include the completed output.
                     # A progress notice cannot stand in for the image the next
                     # model round needs to inspect. Explicit delivery callers
@@ -866,15 +907,9 @@ class EventSimulator:
                         # 并把任务掐死在半路。这里分离执行、只等首个可见副
                         # 作用或 grace 超时即返回，捕获注册表条目转交后台任务
                         runtime_metrics.dispatch_background_started += 1
-                        background_timeout = float(
-                            config_parser.get_config("legacy_background_timeout_seconds", 300)
-                        )
-                        grace_seconds = float(
-                            config_parser.get_config("legacy_background_grace_seconds", 5)
-                        )
-                        command_digest = hashlib.sha256(
-                            command_str.encode("utf-8")
-                        ).hexdigest()
+                        background_timeout = float(config_parser.get_config("legacy_background_timeout_seconds", 300))
+                        grace_seconds = float(config_parser.get_config("legacy_background_grace_seconds", 5))
+                        command_digest = hashlib.sha256(command_str.encode("utf-8")).hexdigest()
                         # create_task 复制当前 contextvar（capture 已置位），
                         # 后台任务晚到的 API 调用仍记账到同一 capture 上下文
                         background_task = asyncio.create_task(
@@ -893,11 +928,7 @@ class EventSimulator:
                         background_started = True
                         grace_deadline = time.monotonic() + grace_seconds
                         while time.monotonic() < grace_deadline:
-                            if (
-                                context.get("mutating_api_succeeded", 0)
-                                or context.get("messages")
-                                or background_task.done()
-                            ):
+                            if context.get("mutating_api_succeeded", 0) or context.get("messages") or background_task.done():
                                 break
                             await asyncio.sleep(0.1)
                         background_snapshot = _snapshot_dispatch_context(context)
@@ -914,11 +945,7 @@ class EventSimulator:
                             )
                         early_result = dataclass_replace(
                             early_result,
-                            text="\n".join(
-                                part
-                                for part in (early_result.text, _BACKGROUND_NOTICE)
-                                if part
-                            ),
+                            text="\n".join(part for part in (early_result.text, _BACKGROUND_NOTICE) if part),
                         )
                         logger.info(
                             "NoneBot 插件兼容调度转入后台: "
@@ -992,6 +1019,7 @@ class EventSimulator:
             )
         except Exception as exc:
             from .diagnostics import exception_metadata
+
             logger.error("NoneBot 插件兼容调度构造失败: plugin={} details={}", plugin_name, exception_metadata(exc))
             return _dispatch_result(
                 _empty_dispatch_context(),

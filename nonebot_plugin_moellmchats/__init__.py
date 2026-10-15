@@ -56,7 +56,9 @@ from .pending_actions import (
     execute_pending_action,
     pending_action_store,
 )
+from .recovery_lifecycle import connect_recovery, start_recovery
 from .request_manager import cancel_request_by_arg, format_active_requests
+from .request_recovery import recovery_service
 from .runtime_metrics import runtime_metrics
 from .runtime_reload import runtime_reloader
 from .runtime_snapshot import runtime_snapshots
@@ -243,7 +245,21 @@ async def _(event: MessageEvent):
         f"▪ 启用联网搜索: {'✅开启' if cfg.get('use_web_search') else '❌关闭'}\n"
         f"▪ 启用函数调用: {'✅开启' if cfg.get('use_tools', False) else '❌关闭'}"
     )
+    pools = model_selector.format_model_pools()
+    if pools:
+        msg += "\n" + pools
     await check_config_matcher.finish(msg)
+
+
+restore_quota_matcher = on_command("恢复模型额度", permission=SUPERUSER, priority=10, block=True)
+
+
+@restore_quota_matcher.handle()
+async def _(args: Message = CommandArg()):
+    query = args.extract_plain_text().strip()
+    if not query:
+        await restore_quota_matcher.finish("格式：!恢复模型额度 模型名或编号。仅在确认额度恢复后使用。")
+    await restore_quota_matcher.finish(await model_selector.restore_model_quota(query))
 
 
 model_matcher = on_command("切换模型", permission=SUPERUSER, priority=10, block=True)
@@ -674,6 +690,8 @@ async def _startup_tasks():
 
 @get_driver().on_shutdown
 async def _close_http_session():
+    # Drain requests while their generation leases and transports still exist.
+    await recovery_service.drain(grace=0)
     for task in (_model_refresh_task, _runner_preflight_task):
         if task is not None and not task.done():
             task.cancel()
@@ -686,6 +704,10 @@ async def _close_http_session():
         await runtime_resource_host.close()
     finally:
         await close_session()
+
+
+get_driver().on_startup(start_recovery)
+get_driver().on_bot_connect(connect_recovery)
 
 
 # 超级管理员可手动触发模型刷新

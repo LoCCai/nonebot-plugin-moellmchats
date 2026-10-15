@@ -195,15 +195,19 @@ class Categorize:
         attempted: set[str] = set()
         switched = False
         while True:
+            from .request_recovery import current_binding
+
+            if recovery := current_binding():
+                recovery.pause_if_stopping()
             try:
                 result = await self._request_category_model_once(
                     category_model_config, prompt, cache_key=None if switched else cache_key,
                 )
             except _UncacheableClassificationResult:
-                if self._phase != "http_status_429":
+                if self._phase not in {"http_status_429", "http_status_quota_exhausted"}:
                     raise
                 result = False
-            if self._phase != "http_status_429":
+            if self._phase not in {"http_status_429", "http_status_quota_exhausted"}:
                 if switched and cache_key is not None:
                     # Do not publish a backup model's answer under the primary
                     # model identity in the successful classification cache.
@@ -214,7 +218,7 @@ class Categorize:
                 if cache_key is not None:
                     raise _UncacheableClassificationResult(False, ClassificationResultSource.PARSE_FALLBACK)
                 return False
-            logger.info("分类模型限流，切换已配置备用: from={} to={}",
+            logger.info("分类模型配额不足或限流，切换已配置备用: from={} to={}",
                         category_model_config["model"], backup["model"])
             category_model_config = backup
             self._classifier_model = backup["model"]
@@ -300,6 +304,12 @@ class Categorize:
                         # compatibility error. Do not immediately send it again
                         # or wait for its error body before using resident tools.
                         self._phase = f"http_status_{resp.status}"
+                        if resp.status in {402, 403}:
+                            from .model_error_policy import is_quota_exhaustion_error, read_bounded_error
+
+                            if is_quota_exhaustion_error(resp.status, await read_bounded_error(resp)):
+                                self._phase = "http_status_quota_exhausted"
+                                await model_selector.mark_model_exhausted(category_model_config, resp.status)
                         self.selection_source = "classification_http_fallback"
                         logger.warning(
                             "分类接口不可用，保留常驻工具继续: model={} status={}",
@@ -442,6 +452,9 @@ class Categorize:
                 required_capabilities,
             )
             logger.debug("未开启MoE，使用默认模型进行工具/联网/视觉判断分类")
+        if not category_model_config:
+            self.selection_source = "classification_pool_exhausted"
+            return False
         self._classifier_model = category_model_config["model"]
         logger.info(
             "分类请求准备: model={} budget_seconds={} prompt_chars={}",

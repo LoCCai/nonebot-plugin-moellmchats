@@ -57,6 +57,27 @@ class _FakeSession:
         return self.responses.pop(0)
 
 
+@pytest.mark.asyncio
+async def test_draft_model_switches_quota_backup_with_its_own_options(tmp_path, monkeypatch):
+    from test_model_failover import _pair
+
+    from nonebot_plugin_moellmchats import tool_authoring as module
+
+    selector = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(module.model_selector, "get_model", selector.get_model)
+    monkeypatch.setattr(module.model_selector, "get_rate_limit_fallback", selector.get_rate_limit_fallback)
+    session = _FakeSession([
+        _FakeResponse(403, json.dumps({"error": {"code": "AllocationQuota.FreeTierOnly"}})),
+        _FakeResponse(200, json.dumps({"choices": [{"message": {"content": "draft"}}]})),
+    ])
+    monkeypatch.setattr(module, "get_session", lambda: session)
+    assert await ToolAuthoringService()._call_model("selected_model", "system", "task") == "draft"
+    assert len(session.requests) == 2
+    assert session.requests[1]["headers"]["Authorization"] == "Bearer test-backup"
+    assert session.requests[1]["json"]["thinking"] == {"type": "disabled"}
+    assert selector.is_model_exhausted("model-a (good)")
+
+
 def _store(tmp_path) -> GeneratedToolStore:
     store = GeneratedToolStore()
     store.root = tmp_path / "generated"

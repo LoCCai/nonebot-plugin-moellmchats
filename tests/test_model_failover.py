@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,11 +9,13 @@ from test_model_selector import _initialized_selector
 
 from nonebot_plugin_moellmchats import moe_llm
 from nonebot_plugin_moellmchats.llm_api import LlmApiMixin
+from nonebot_plugin_moellmchats.model_error_policy import is_quota_exhaustion_error, read_bounded_error
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
 
 
 def _pair(tmp_path, monkeypatch):
     selector = _initialized_selector(tmp_path, monkeypatch)
+    monkeypatch.setattr(moe_llm.model_selector, "mark_model_exhausted", selector.mark_model_exhausted)
     selector.models["backup (other)"] = {
         "model": "backup", "provider": "other", "url": "https://backup.invalid/v1/chat/completions",
         "key": ["test-backup"], "stream": False, "extra_payload": {"thinking": {"type": "disabled"}},
@@ -82,8 +85,9 @@ async def test_both_transports_report_429_before_reading_body(stream):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("backup_ok", [False, True])
+@pytest.mark.parametrize("primary_status", [429, 402, 403])
 async def test_chat_failover_preserves_history_tools_and_uses_backup_transport(
-    tmp_path, monkeypatch, stream, backup_ok,
+    tmp_path, monkeypatch, stream, backup_ok, primary_status,
 ):
     selector = _pair(tmp_path, monkeypatch)
     selector.model_config["model_fallbacks"]["backup (other)"] = ["model-a (good)"]
@@ -97,7 +101,8 @@ async def test_chat_failover_preserves_history_tools_and_uses_backup_transport(
 
     async def model(session, url, headers, data, *args):
         requests.append((url, dict(headers), deepcopy(data)))
-        chat._last_api_http_status = 200 if len(requests) == 2 and backup_ok else 429
+        chat._last_api_http_status = 200 if len(requests) == 2 and backup_ok else primary_status
+        chat._last_api_quota_exhausted = chat._last_api_http_status in {402, 403}
         return chat._last_api_http_status == 200, "answer", None, ""
 
     chat.stream_llm_chat = model
@@ -123,3 +128,89 @@ async def test_chat_failover_preserves_history_tools_and_uses_backup_transport(
         assert not next_round[0]
         assert len(requests) == 3
         assert requests[-1][2]["model"] == "backup"
+
+
+class _JsonResponse(_RateLimitResponse):
+    def __init__(self, status, body):
+        self.status, self.body = status, body
+
+    async def text(self):
+        return json.dumps(self.body)
+
+    async def json(self):
+        return self.body
+
+
+@pytest.mark.parametrize(("status", "error", "expected"), [
+    (403, {"code": "AllocationQuota.FreeTierOnly", "message": "Free quota exhausted."}, True),
+    (402, {"code": "insufficient_quota"}, True),
+    (403, {"code": "Forbidden", "message": "Free quota exhausted. To continue accessing the model..."}, True),
+    (403, {"message": "Free quota exhausted."}, True),
+    (403, {"code": "AccessDenied", "message": "Free quota exhausted."}, False),
+    (403, {"code": "InvalidApiKey"}, False),
+    (403, {"code": "content_policy_violation", "message": "Free quota exhausted."}, False),
+    (401, {"code": "insufficient_quota"}, False),
+    (403, {"message": "Forbidden"}, False),
+])
+def test_quota_policy_only_matches_explicit_billing_failures(status, error, expected):
+    assert is_quota_exhaustion_error(status, json.dumps({"error": error})) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("quota", [False, True])
+async def test_transports_classify_403_without_retrying_generic_forbidden(stream, quota):
+    api = LlmApiMixin()
+    code = "AllocationQuota.FreeTierOnly" if quota else "InvalidApiKey"
+    session = SimpleNamespace(post=lambda *args, **kwargs: _JsonResponse(403, {"error": {"code": code}}))
+    operation = api.stream_llm_chat if stream else api.none_stream_llm_chat
+    result = await operation(session, "https://primary.invalid", {}, {}, None)
+    assert not result[0]
+    assert api._last_api_http_status == 403
+    assert api._last_api_quota_exhausted is quota
+    assert api._last_api_error_non_retryable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota", [False, True])
+async def test_actual_403_transport_only_routes_quota_to_backup(tmp_path, monkeypatch, quota):
+    selector = _pair(tmp_path, monkeypatch)
+    monkeypatch.setattr(moe_llm.model_selector, "get_rate_limit_fallback", selector.get_rate_limit_fallback)
+    chat = object.__new__(MoeLlm)
+    chat.model_info, chat.agent_runtime = selector.get_model("category_model"), None
+    requests = []
+    responses = iter([
+        _JsonResponse(403, {"error": {"code": "AllocationQuota.FreeTierOnly" if quota else "AccessDenied"}}),
+        _JsonResponse(200, {"choices": [{"message": {"content": "backup answer"}}]}),
+    ])
+
+    def post(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+
+    result = await chat._request_with_rate_limit_fallback(
+        SimpleNamespace(post=post), {"Authorization": "Bearer primary"},
+        {"model": "model-a", "messages": [{"role": "user", "content": "hello"}]}, False,
+    )
+    assert result[0] is quota
+    assert len(requests) == (2 if quota else 1)
+    if quota:
+        assert result[1] == "backup answer"
+        assert requests[1]["headers"]["Authorization"] == "Bearer test-backup"
+
+
+@pytest.mark.asyncio
+async def test_quota_response_reads_partial_chunks_and_enforces_size_bound():
+    chunks = iter([b'{"error":', b'{"message":"Free quota exhausted."}}', b""])
+
+    async def read(size):
+        return next(chunks)
+
+    response = SimpleNamespace(content=SimpleNamespace(read=read))
+    assert is_quota_exhaustion_error(403, await read_bounded_error(response))
+    response.content.read = lambda size: _large_chunk(size)
+    assert await read_bounded_error(response) == ""
+
+
+async def _large_chunk(size):
+    return b"x" * size

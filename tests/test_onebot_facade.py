@@ -36,9 +36,13 @@ from nonebot_plugin_moellmchats.utils import format_message
 
 @pytest.mark.parametrize(("protocol", "kind", "key"), [("onebot_v11", "at", "qq"), ("onebot_v12", "mention", "user_id")])
 def test_actual_mentions_are_segments_and_other_cq_codes_remain_literal(protocol, kind, key):
-    message = make_mention_message(protocol, "通知[CQ:at,qq=12001] [at:1] [CQ:image,file=secret]", {
-        "mentions": [{"qq": "12002"}],
-    })
+    message = make_mention_message(
+        protocol,
+        "通知[CQ:at,qq=12001] [at:1] [CQ:image,file=secret]",
+        {
+            "mentions": [{"qq": "12002"}],
+        },
+    )
     assert [s.data[key] for s in message if s.type == kind] == ["12001", "12002"]
     assert not any(s.type == "image" for s in message)
     assert "[CQ:image,file=secret]" in message.extract_plain_text()

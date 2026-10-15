@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -801,13 +802,15 @@ async def test_classifier_http_failure_falls_back_without_reading_body_or_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cached", [False, True])
-async def test_classifier_429_uses_backup_without_publishing_under_primary_identity(monkeypatch, cached):
+@pytest.mark.parametrize("status", [429, 403])
+async def test_classifier_429_uses_backup_without_publishing_under_primary_identity(monkeypatch, cached, status):
     _configure_runtime(monkeypatch)
     primary = {"model": "primary", "provider": "test", "url": "https://primary.invalid/chat", "key": "primary-test"}
     backup = {"model": "backup", "provider": "test", "url": "https://backup.invalid/chat", "key": "backup-test"}
     monkeypatch.setattr(categorize_module.model_selector, "get_model_for_capabilities", lambda *a: primary)
     monkeypatch.setattr(categorize_module.model_selector, "get_rate_limit_fallback", lambda current, attempted: backup)
-    session = _FakeSession([_UnreadableBodyResponse({}, status=429), _model_response()])
+    failure = _UnreadableBodyResponse({}, status=429) if status == 429 else _QuotaResponse({}, status=403)
+    session = _FakeSession([failure, _model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
     cache = _RecordingClassificationCache() if cached else None
     category = _categorizer("choose tool", _CountingSnapshot(_snapshot()),
@@ -818,6 +821,24 @@ async def test_classifier_429_uses_backup_without_publishing_under_primary_ident
     assert [request["headers"]["Authorization"] for request in session.requests] == ["primary-test", "backup-test"]
     if cache is not None:
         assert cache.publish_count == 0
+
+
+class _QuotaResponse(_FakeResponse):
+    async def text(self):
+        return json.dumps({"error": {"code": "AllocationQuota.FreeTierOnly", "message": "Free quota exhausted."}})
+
+
+@pytest.mark.asyncio
+async def test_classifier_permission_403_does_not_switch_models(monkeypatch):
+    _configure_runtime(monkeypatch)
+    def fallback(*args):
+        pytest.fail("permission errors must not trigger a fallback")
+    monkeypatch.setattr(categorize_module.model_selector, "get_rate_limit_fallback", fallback)
+    session = _FakeSession([_FakeResponse({}, status=403)])
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    category = _categorizer("choose tool", _CountingSnapshot(_snapshot()), catalog_cache=MemoryToolCatalogCache())
+    assert await category.get_category() is False
+    assert session.call_count == 1
 
 
 @pytest.mark.asyncio

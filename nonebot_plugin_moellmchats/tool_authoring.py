@@ -16,9 +16,10 @@ from .compat import timeout as timeout_scope
 from .config import config_parser
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import BundleValidation, generated_tool_store
-from .model_error_policy import is_content_policy_error_info
+from .model_error_policy import is_content_policy_error_info, is_quota_exhaustion_error
 from .model_selector import model_selector
 from .private_files import harden_private_tree
+from .request_recovery import current_binding
 from .runtime_metrics import runtime_metrics
 from .utils import get_session
 
@@ -175,8 +176,10 @@ class ToolAuthoringService:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
 
-    async def _call_model(self, model_key: str, system: str, user: str) -> str:
-        model = model_selector.get_model(model_key)
+    async def _call_model(self, model_key: str, system: str, user: str, *, _model=None, _attempted=None) -> str:
+        if recovery := current_binding():
+            recovery.pause_if_stopping()
+        model = _model if _model is not None else model_selector.get_model(model_key)
         if not model:
             raise RuntimeError(f"{model_key} 未配置或不可用")
         headers = {
@@ -217,7 +220,18 @@ class ToolAuthoringService:
                 if response.status == 200:
                     body = await response.text()
                     break
-                error_body, truncated, read_bytes = await _read_model_error_body(response)
+                if response.status == 429:
+                    error_body, truncated, read_bytes = "", False, 0
+                else:
+                    error_body, truncated, read_bytes = await _read_model_error_body(response)
+                quota = is_quota_exhaustion_error(response.status, error_body)
+                if response.status == 429 or quota:
+                    if quota:
+                        await model_selector.mark_model_exhausted(model, response.status)
+                    attempted = set() if _attempted is None else _attempted
+                    backup = model_selector.get_rate_limit_fallback(model, attempted)
+                    if backup is not None:
+                        return await self._call_model(model_key, system, user, _model=backup, _attempted=attempted)
                 logger.warning(
                     "AI 工具草稿模型请求失败；"
                     f"status={response.status} "

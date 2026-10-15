@@ -33,6 +33,20 @@ class MentionAckConfig(BaseModel):
 mention_ack_config = get_plugin_config(MentionAckConfig)
 
 
+class RecoveryConfig(BaseModel):
+    """Durable request/outbox settings, independent of model credentials."""
+
+    moellm_recovery_enabled: bool = True
+    moellm_restart_grace_seconds: float = Field(default=15, ge=0, le=60)
+    moellm_restart_cancel_seconds: float = Field(default=5, ge=1, le=15)
+    moellm_recovery_retention_seconds: int = Field(default=86400, ge=300, le=604800)
+    moellm_recovery_max_entries: int = Field(default=512, ge=1, le=10000)
+    moellm_recovery_max_bytes: int = Field(default=268435456, ge=1048576, le=1073741824)
+
+
+recovery_config = get_plugin_config(RecoveryConfig)
+
+
 class RenderToolsConfig(BaseModel):
     """Browser render / meme tools are configured by NoneBot, not config.json.
 

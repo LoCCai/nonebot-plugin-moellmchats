@@ -125,6 +125,8 @@ COMMAND_START=["/",""]   # 可选
 
 **[→ 完整配置参考（含所有字段说明与示例）](docs/configuration.md)**
 
+[模型池与额度退池](docs/model-pools.md) · [重启任务保留与结果补发](docs/request-recovery.md)
+
 文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [故障排查](docs/troubleshooting.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)
 
 ## 🎮 使用

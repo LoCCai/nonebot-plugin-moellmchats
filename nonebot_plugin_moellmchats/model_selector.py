@@ -19,6 +19,7 @@ import aiohttp
 from nonebot.log import logger
 import nonebot_plugin_localstore as store
 
+from .model_pools import ModelPoolMixin
 from .private_files import (
     atomic_write_private_text,
     ensure_private_directory,
@@ -55,7 +56,7 @@ def _readonly(value: dict) -> Mapping:
 
 
 # 模型选择类
-class ModelSelector:
+class ModelSelector(ModelPoolMixin):
     def __init__(self):
         # 配置文件路径
         self.models_file = Path(config_path / "models.json")
@@ -76,6 +77,7 @@ class ModelSelector:
         self.load_providers()
         self._load_all_models()
         self.model_config = self._load_model_config()
+        self._quota_status()
 
     @staticmethod
     def _ensure_private_storage(*paths: Path) -> None:
@@ -486,6 +488,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         try:
             self._validate_fallbacks(self.model_config.get("model_fallbacks", {}), self.models)
+            pools = self.model_config.get("model_pools", {})
+            self.validate_model_pools(pools, self.models)
+            if pools and self.model_config.get("capability_routing", {}).get("enabled"):
+                raise ValueError("model_pools 与 capability_routing 不能同时启用")
         except ValueError as error:
             return False, [str(error)]
 
@@ -507,7 +513,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def get_rate_limit_fallback(self, current: Mapping, attempted: set[str], *,
                                 has_tools: bool = False, has_images: bool = False) -> dict | None:
-        """Select only an explicitly configured, untried 429 backup in this snapshot."""
+        """Select an untried same-role pool member or an explicit legacy backup."""
         from .runtime_snapshot import mutable_value
 
         state = self._active_state()
@@ -520,8 +526,11 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         self._validate_fallbacks(fallbacks, state.models)
         identity = f"{current.get('model')} ({current.get('provider')})"
         attempted.add(identity)
+        role = current.get("_model_pool")
+        if role in state.model_config.get("model_pools", {}):
+            return self._select_pool_model(state, role, has_tools=has_tools, has_images=has_images, attempted=attempted)
         for name in fallbacks.get(identity, ()):
-            if name in attempted:
+            if name in attempted or self.is_model_exhausted(name):
                 continue
             model = mutable_value(state.models[name])
             if has_tools and model.get("no_tools"):
@@ -602,15 +611,21 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def get_config_value(self, key: str, default=None):
         return self._active_state().model_config.get(key, default)
 
-    def get_model(self, key: str) -> dict:
+    def get_model(self, key: str, *, has_tools=False, has_images=False) -> dict:
         # 获取单个模型的配置
         state = self._active_state()
+        role = {"category_model": "category", "summary_model": "category",
+                "selected_model": "0", "chat_summary_model": "2"}.get(key)
+        if role in state.model_config.get("model_pools", {}):
+            return self._select_pool_model(state, role, has_tools=has_tools, has_images=has_images, rotate=True)
         selected_model = state.model_config.get(key)
         if selected_model and selected_model in state.models:
             from .runtime_snapshot import mutable_value
 
             model_data = mutable_value(state.models[selected_model])
             model_data["key"] = self._get_random_key(model_data)
+            if self.is_model_exhausted(selected_model):
+                return self.get_rate_limit_fallback(model_data, set(), has_tools=has_tools, has_images=has_images)
             return model_data
         return None
 
@@ -658,6 +673,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             model_config=state.model_config,
         )
         if routing is None:
+            if state.model_config.get("model_pools"):
+                return self.get_model(key, has_tools=capabilities.tools, has_images=capabilities.vision)
             return self.get_model(key)
         decision = routing.select(role, capabilities=capabilities)
         descriptor = decision.selected.descriptor
@@ -680,9 +697,11 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             model_data["no_tools"] = True
         return model_data
 
-    def get_moe_current_model(self, difficulty: str) -> dict:
+    def get_moe_current_model(self, difficulty: str, *, has_tools=False, has_images=False) -> dict:
         # 获取当前MOE模型的配置
         state = self._active_state()
+        if difficulty in state.model_config.get("model_pools", {}):
+            return self._select_pool_model(state, difficulty, has_tools=has_tools, has_images=has_images, rotate=True)
         moe_models = state.model_config["moe_models"]
         model_name = moe_models.get(difficulty)
         if model_name and model_name in state.models:
@@ -690,6 +709,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
             model_data = mutable_value(state.models[model_name])
             model_data["key"] = self._get_random_key(model_data)
+            if self.is_model_exhausted(model_name):
+                return self.get_rate_limit_fallback(model_data, set(), has_tools=has_tools, has_images=has_images)
             return model_data
         return None
 
@@ -727,6 +748,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             model_config=state.model_config,
         )
         if routing is None:
+            if state.model_config.get("model_pools"):
+                return self.get_moe_current_model(difficulty, has_tools=capabilities.tools, has_images=capabilities.vision)
             return self.get_moe_current_model(difficulty)
         decision = routing.select(role, capabilities=capabilities)
         descriptor = decision.selected.descriptor
@@ -877,7 +900,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             lines.append(f"🔸 【{provider}】")
             # 这里的 umid 是唯一键，但在展示时提取原始的 model 字段，防止视觉冗余
             formatted_items = [
-                f"[{idx}] {state.models[umid]['model']}" for idx, umid in m_list
+                f"[{idx}] {state.models[umid]['model']}" + (" [额度耗尽，已移出池]" if self.is_model_exhausted(umid) else "")
+                for idx, umid in m_list
             ]
             lines.append("  " + ", ".join(formatted_items))
 

@@ -153,7 +153,10 @@ def _check_dependencies() -> tuple[int, int]:
         "mcp",
         "nonebot-adapter-onebot",
         "nonebot-plugin-localstore",
+        "nonebot-plugin-htmlrender",
         "nonebot2",
+        "pillow",
+        "pypdf",
         "python-dotenv",
         "redis",
         "sqlalchemy",
@@ -167,6 +170,7 @@ def _check_dependencies() -> tuple[int, int]:
         "fakeredis",
         "filelock",
         "nonemoji",
+        "pillow",
         "pre-commit",
         "pyright",
         "pytest",
@@ -176,6 +180,9 @@ def _check_dependencies() -> tuple[int, int]:
     }
     if set(development) != expected_development:
         raise RepositoryCheckError(f"development dependency set drifted: {sorted(development)}")
+    for optional in ("nonebot-plugin-htmlrender", "pillow", "pypdf"):
+        if not isinstance(runtime[optional], dict) or runtime[optional].get("optional") is not True:
+            raise RepositoryCheckError(f"media/render dependency must remain optional: {optional}")
     dependency_document = (ROOT / "docs" / "dependencies.md").read_text(encoding="utf-8")
     for name in sorted(expected_runtime | expected_development):
         if re.search(rf"`{re.escape(name)}(?:`|[^A-Za-z0-9_-])", dependency_document) is None:
@@ -188,8 +195,8 @@ def _check_dependencies() -> tuple[int, int]:
         for item in includes
     ):
         raise RepositoryCheckError("wheel/sdist protocol resource include is missing")
-    if poetry.get("version") != "0.26.5":
-        raise RepositoryCheckError("package version is not 0.26.5")
+    if poetry.get("version") != "0.26.5.post1":
+        raise RepositoryCheckError("package version is not 0.26.5.post1")
     return len(expected_runtime), len(expected_development)
 
 

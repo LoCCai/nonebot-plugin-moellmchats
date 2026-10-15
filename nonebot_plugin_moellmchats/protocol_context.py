@@ -376,11 +376,7 @@ def protocol_action_available(
         return False
     if snapshot.implementation == "napcat":
         return bool(config_parser.get_config("protocol_tools_napcat_extensions_enabled", True))
-    return (
-        snapshot.implementation == "snowluma"
-        and snapshot.scene == "group"
-        and action in _SNOWLUMA_COMPATIBLE_ACTIONS
-    )
+    return snapshot.implementation == "snowluma" and snapshot.scene == "group" and action in _SNOWLUMA_COMPATIBLE_ACTIONS
 
 
 def protocol_tool_available(

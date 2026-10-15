@@ -8,11 +8,21 @@ from nonebot.log import logger
 import ujson as json
 
 from .llm_state import token_usage_history
-from .model_error_policy import is_content_policy_error_info
+from .model_error_policy import is_content_policy_error_info, is_quota_exhaustion_error, read_bounded_error
 from .request_manager import get_current_request_elapsed
 
 
 class LlmApiMixin:
+    async def _forbidden_or_quota_reply(self, response) -> str:
+        body = await read_bounded_error(response)
+        self._last_api_quota_exhausted = is_quota_exhaustion_error(response.status, body)
+        self._last_api_error_non_retryable = True
+        if self._last_api_quota_exhausted:
+            logger.warning("模型免费额度或余额已耗尽：status={}", response.status)
+            return f"模型额度已耗尽 (HTTP {response.status})，当前没有可用的已配置备用模型。"
+        detail = self._extract_api_error_detail(body)
+        return f"API返回异常 (HTTP {response.status})" + (f"\n原因：{detail[:150]}" if detail else "")
+
     @staticmethod
     def _usage_integer(value: object) -> int:
         if (
@@ -227,7 +237,9 @@ class LlmApiMixin:
     async def stream_llm_chat(
         self, session, url, headers, data, proxy, is_segment=False, timeout=None
     ) -> tuple[bool, str, list, str]:
-        # 流式响应内容
+        from .request_recovery import current_binding
+        durable_stream = current_binding() is not None
+        # Keep a durable answer atomic: a broken stream cannot replay a visible prefix.
         buffer = []
         assistant_result = []  # 后处理助手回复
         punctuation_buffer = ""  # 存标点
@@ -238,6 +250,9 @@ class LlmApiMixin:
 
         async def send_text(text: str) -> None:
             if not text.strip():
+                return
+            if durable_stream:
+                assistant_result.append(text)
                 return
             # max_segments limits sentence fragmentation, not answer length.
             # Long remaining text still needs bounded OneBot message sizes.
@@ -253,6 +268,8 @@ class LlmApiMixin:
             self._last_api_http_status = resp.status
             if resp.status == 429:
                 return False, "API请求限流 (HTTP 429)", None, ""
+            if resp.status in {402, 403}:
+                return False, await self._forbidden_or_quota_reply(resp), None, ""
             if error_msg := await self._check_400_error(resp, request_data=data):
                 self._last_api_error_non_retryable = True
                 return False, error_msg, None, ""
@@ -328,6 +345,8 @@ class LlmApiMixin:
                     remaining += tag_buffer
                 await send_text(remaining)
                 if assistant_result:
+                    if durable_stream:
+                        assistant_result = [await self.send_emotion_message("".join(assistant_result))]
                     return (
                         True,
                         "".join(assistant_result),
@@ -357,6 +376,8 @@ class LlmApiMixin:
             self._last_api_http_status = resp.status
             if resp.status == 429:
                 return False, "API请求限流 (HTTP 429)", None, ""
+            if resp.status in {402, 403}:
+                return False, await self._forbidden_or_quota_reply(resp), None, ""
             if error_msg := await self._check_400_error(resp, request_data=data):
                 self._last_api_error_non_retryable = True
                 return False, error_msg, None, ""

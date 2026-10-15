@@ -498,7 +498,9 @@ async def deliver_image(context: ToolContext, payload: bytes) -> None:
     if bot is None or event is None or MessageSegment is None:
         raise RenderToolError("当前会话不支持图片发送，渲染结果已丢弃。")
     try:
-        await bot.send(event, MessageSegment.image(payload))
+        from .request_recovery import durable_send
+
+        await durable_send(bot, event, MessageSegment.image(payload))
     except Exception as error:
         raise RenderToolError("图片已生成但发送失败，请稍后再试。") from error
 
@@ -772,8 +774,9 @@ def render_theme_reference(card: str = "general") -> dict[str, Any]:
             family, mode = context["theme_family"], context.get("palette_mode", context["theme"])
             selector = "light" if mode == "day" else "dark"
             match = re.search(r':root\[data-theme=[\"\']' + selector + r'[\"\']\]\s*\{([^}]+)', context["theme_css"])
-            variables = dict(re.findall(r'--([\w-]+)\s*:\s*([^;{}]+)\s*;', match[1] if match else ""))
-            names = {"background": "background-color", "surface": "card-background-color", "text": "font-color-main", "muted": "font-color-sub", "accent": "accent-color", "border": "border-color"}
+            variables = dict(re.findall(r"--([\w-]+)\s*:\s*([^;{}]+)\s*;", match[1] if match else ""))
+            names = {"background": "background-color", "surface": "card-background-color", "text": "font-color-main",
+                     "muted": "font-color-sub", "accent": "accent-color", "border": "border-color"}
             palette.update({key: variables[name].strip() for key, name in names.items() if name in variables})
         else:
             context = report_theme.post_theme_context()
@@ -781,9 +784,12 @@ def render_theme_reference(card: str = "general") -> dict[str, Any]:
             palette = report_theme.graph_palette(context)
         source = "host"
     css = ":root{" + ";".join(f"--{key}:{value}" for key, value in palette.items()) + "}"
-    css += "body{margin:0;padding:24px;background:var(--background);color:var(--text);font-family:Arial,'Noto Sans CJK SC',sans-serif} .panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px}"
+    css += ("body{margin:0;padding:24px;background:var(--background);color:var(--text);"
+            "font-family:Arial,'Noto Sans CJK SC',sans-serif} "
+            ".panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px}")
     return {"theme": family, "mode": mode, "source": source, "palette": palette, "css": css,
-            "guidance": "这是当前主题参考，可自行调整 HTML、CSS 和布局。根据用户需要选择文字、图片或其他已授权工具；简短回复可直接用文字，表格和图表可选图片。"}
+            "guidance": ("这是当前主题参考，可自行调整 HTML、CSS 和布局。根据用户需要选择文字、图片或其他已授权工具；"
+                         "简短回复可直接用文字，表格和图表可选图片。")}
 
 
 async def get_render_theme(*, _tool_context: ToolContext, card: str = "general") -> ToolResult:
@@ -797,8 +803,10 @@ async def get_render_theme(*, _tool_context: ToolContext, card: str = "general")
 
 RENDER_THEME_TOOL = ToolSpec(
     name="get_render_theme",
-    description="读取当前会话宿主的已发布主题、昼夜模式、配色与基础 CSS，供你自主设计 HTML。文字或图片由你按用户需求选择；主题是参考，可自由调整布局和样式。",
-    parameters={"type": "object", "properties": {"card": {"type": "string", "enum": ["general", "zmws"], "description": "通用卡或造梦游戏卡，默认 general。"}}, "additionalProperties": False},
+    description=("读取当前会话宿主的已发布主题、昼夜模式、配色与基础 CSS，供你自主设计 HTML。"
+                 "文字或图片由你按用户需求选择；主题是参考，可自由调整布局和样式。"),
+    parameters={"type": "object", "properties": {"card": {"type": "string", "enum": ["general", "zmws"],
+                "description": "通用卡或造梦游戏卡，默认 general。"}}, "additionalProperties": False},
     handler=get_render_theme, effect=ToolEffect.READ_ONLY, permission="user", timeout_seconds=10, result_limit=4000,
 )
 
