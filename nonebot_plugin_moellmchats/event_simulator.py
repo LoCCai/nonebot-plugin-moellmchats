@@ -958,7 +958,9 @@ class EventSimulator:
                             f"duration_ms={early_result.duration_ms}"
                         )
                         return early_result
-                    timeout = config_parser.get_config("legacy_dispatch_timeout_seconds", 180)
+                    from .plugin_timeouts import plugin_timeout
+
+                    timeout = plugin_timeout(plugin_name, config_parser.get_config("legacy_dispatch_timeout_seconds", 180))
                     async with timeout_scope(timeout):
                         if mode == "full":
                             await _dispatch_full_bus(bot, fake_event)

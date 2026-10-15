@@ -8,6 +8,7 @@ from typing import Any
 from .compat import timeout as timeout_scope
 from .config import config_parser
 from .network_safety import validate_url_arguments
+from .plugin_timeouts import plugin_timeout
 from .request_manager import get_current_request_id
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import ToolContext, ToolEffect, ToolResult
@@ -275,6 +276,7 @@ async def execute_custom_tool(
         if spec is not None and spec.timeout_seconds
         else config_parser.get_config("tool_timeout_seconds", 180)
     )
+    timeout = plugin_timeout(tool_name, timeout)
     try:
         async with timeout_scope(timeout):
             result = (

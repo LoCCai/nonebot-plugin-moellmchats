@@ -723,6 +723,30 @@ async def test_natural_language_like_runs_real_business_matcher_once(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_respects_host_registered_retry_budget(monkeypatch) -> None:
+    from nonebot_plugin_moellmchats import plugin_timeouts
+
+    monkeypatch.setattr(plugin_timeouts, "_plugin_timeouts", {})
+    plugin_timeouts.register_plugin_timeout("budgeted", .2)
+    gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
+    monkeypatch.setattr(simulator_module, "get_dispatch_controller", lambda: gate)
+    original = simulator_module.config_parser.get_config
+    monkeypatch.setattr(simulator_module.config_parser, "get_config", lambda key, default=None:
+        .01 if key == "legacy_dispatch_timeout_seconds" else
+        [] if key in {"legacy_full_event_plugins", "legacy_background_plugins"} else original(key, default))
+    completed = asyncio.Event()
+
+    async def dispatch(*args):
+        await asyncio.sleep(.03)
+        completed.set()
+
+    monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(3), "slow", plugin_name="budgeted")
+    assert completed.is_set()
+    assert result.status.value != "timed_out"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_timeout_cancels_target(monkeypatch) -> None:
     cancelled = asyncio.Event()
     gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
