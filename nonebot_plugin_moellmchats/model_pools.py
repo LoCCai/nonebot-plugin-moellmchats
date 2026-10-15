@@ -38,6 +38,12 @@ class ModelQuotaStatus:
 
 
 class ModelPoolMixin:
+    def pool_override_notice(self, role: str) -> str:
+        if role not in self._active_state().model_config.get("model_pools", {}):
+            return ""
+        label = "分类" if role == "category" else role
+        return f"\n注意：{label}模型池仍优先使用；若要使用此固定模型，请先执行 !关闭模型池 {label}。"
+
     @staticmethod
     def validate_model_pools(pools, models) -> None:
         if not isinstance(pools, Mapping) or any(role not in {"category", "0", "1", "2"} for role in pools):

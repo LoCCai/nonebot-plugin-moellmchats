@@ -785,7 +785,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         self.model_config["moe_models"][difficulty] = model_name
         self._write_config(self.model_config_file, self.model_config)
-        return f"已将难度 {difficulty} 的模型切换为 {model_name}"
+        return f"已将难度 {difficulty} 的固定模型切换为 {model_name}" + self.pool_override_notice(difficulty)
 
     def set_web_search(self, is_web_search: bool = True) -> str:
         # 切换联网配置配置
@@ -800,7 +800,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         self.model_config["category_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
-        return f"已切换分类模型为 {model_name}"
+        return f"已切换分类固定模型为 {model_name}" + self.pool_override_notice("category")
 
     def set_use_tools(self, is_use_tools: bool = True) -> str:
         self.model_config["use_tools"] = is_use_tools
@@ -830,7 +830,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         self.model_config["selected_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
-        return f"已切换聊天模型为 {model_name}"
+        return f"已切换聊天固定模型为 {model_name}" + self.pool_override_notice("0")
 
     def set_moe(self, is_moe: bool = True) -> str:
         """控制是否启用混合专家模型调度 (MoE)"""
@@ -854,7 +854,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         self.model_config["summary_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
-        return f"已切换总结模型为 {model_name}"
+        return f"已切换工具草稿复核固定模型为 {model_name}" + self.pool_override_notice("category")
 
     def set_media_model(self, role: str, model_query: str) -> str:
         labels = {"image_model": "绘图", "multimodal_model": "多模态", "chat_summary_model": "群聊总结"}
@@ -863,7 +863,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         if model_query in {"关闭", "off"}:
             self.model_config[role] = ""
             self._write_config(self.model_config_file, self.model_config)
-            return f"已关闭{labels[role]}模型"
+            return f"已关闭{labels[role]}固定模型" + (self.pool_override_notice("2") if role == "chat_summary_model" else "")
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
@@ -871,7 +871,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             return "该模型未声明视觉能力，请先在 providers.toml 设置 is_vision=true。"
         self.model_config[role] = model_name
         self._write_config(self.model_config_file, self.model_config)
-        return f"已切换{labels[role]}模型为 {model_name}"
+        notice = self.pool_override_notice("2") if role == "chat_summary_model" else ""
+        return f"已切换{labels[role]}模型为 {model_name}" + notice
 
     def get_formatted_model_list(self, search_query: str | None = None) -> str:
         """获取美化后的可用模型列表，支持多关键词模糊搜索"""

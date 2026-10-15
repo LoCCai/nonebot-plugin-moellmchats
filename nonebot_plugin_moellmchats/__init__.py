@@ -47,6 +47,7 @@ from .config import MAX_CD_SECONDS, config_parser
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import generated_tool_store
 from .messages_handler import messages_dict
+from .model_admin import POOL_HELP, format_chain, format_pools, manage_pool, pool_role
 from .model_selector import model_selector
 from .moe_llm import token_usage_history
 from .pending_actions import (
@@ -137,6 +138,7 @@ __plugin_meta__ = PluginMetadata(
 17.超级管理员限定：用"设置LLM功能权限 <包> <哈希> <工具> user|superuser"审批生成工具的普通用户权限
 18.超级管理员限定：用"设置LLM冷却 <秒数>"直接调整对话冷却；设为 0 可关闭冷却
 19.超级管理员限定：用"设置工具进度 开/关"控制是否向当前会话发送工具调用前的进度提示
+20.超级管理员限定：用"!查看LLM链路"查询实际模型与思考参数；用"!模型池帮助"查看分类/三档池的设置、增删、关闭命令
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
@@ -222,33 +224,52 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
 
 
 # 2. 查看当前机器人身上挂着哪些配置
-check_config_matcher = on_fullmatch(("查看当前配置", "查看配置"), permission=SUPERUSER, priority=10, block=True)
+check_config_matcher = on_regex(
+    r"^[!！/]?(?:查看当前配置|查看配置|查看LLM链路|查看当前链路)\s*$",
+    flags=re.IGNORECASE, permission=SUPERUSER, priority=10, block=True,
+)
 
 
 @check_config_matcher.handle()
 async def _(event: MessageEvent):
-    cfg = model_selector.model_config
+    settings = {key: config_parser.get_config(key, default) for key, default in (
+        ("tool_image_vision_enabled", True), ("tool_image_vision_excluded_tools", []),
+        ("classification_timeout_seconds", 20),
+    )}
+    await check_config_matcher.finish(format_chain(model_selector, settings))
 
-    # 构建美观的配置面板
-    msg = (
-        "✨ 当前大模型运行配置 ✨\n"
-        f"▪ 基础聊天模型: {cfg.get('selected_model')}\n"
-        f"▪ 视觉专用模型: {cfg.get('vision_model') or '未设置 (图片任务需先设置)'}\n"
-        f"▪ 意图分类模型: {cfg.get('category_model')}\n"
-        f"▪ AI绘图模型: {cfg.get('image_model') or '未设置'}\n"
-        f"▪ 多模态分析模型: {cfg.get('multimodal_model') or '未设置'}\n"
-        f"▪ 群聊总结模型: {cfg.get('chat_summary_model') or '未设置'}\n"
-        f"▪ 启用MoE调度: {'✅开启' if cfg.get('use_moe') else '❌关闭'}\n"
-        f"  - 难度0: {cfg.get('moe_models', {}).get('0')}\n"
-        f"  - 难度1: {cfg.get('moe_models', {}).get('1')}\n"
-        f"  - 难度2: {cfg.get('moe_models', {}).get('2')}\n"
-        f"▪ 启用联网搜索: {'✅开启' if cfg.get('use_web_search') else '❌关闭'}\n"
-        f"▪ 启用函数调用: {'✅开启' if cfg.get('use_tools', False) else '❌关闭'}"
-    )
-    pools = model_selector.format_model_pools()
-    if pools:
-        msg += "\n" + pools
-    await check_config_matcher.finish(msg)
+
+model_pool_matcher = on_regex(
+    r"^[!！/]?(?:(?:查看|设置|添加|移除|关闭)模型池(?:\s+[\s\S]*)?|模型池帮助)\s*$",
+    permission=SUPERUSER, priority=10, block=True,
+)
+
+
+@model_pool_matcher.handle()
+async def _(event: MessageEvent):
+    text = event.get_plaintext().strip().lstrip("!！/")
+    if text == "模型池帮助":
+        await model_pool_matcher.finish(POOL_HELP)
+    command, *args = text.split(maxsplit=1)
+    action = command[:2]
+    arguments = args[0].split(maxsplit=1) if args else []
+    try:
+        role = pool_role(arguments[0]) if arguments else None
+        query = arguments[1] if len(arguments) == 2 else ""
+        if action == "查看":
+            if query:
+                raise ValueError("查看模型池只需填写类型。")
+            result = format_pools(model_selector, role)
+        elif role is None:
+            result = POOL_HELP
+        else:
+            result = manage_pool(model_selector, action, role, query)
+    except ValueError as error:
+        result = str(error)
+    except OSError:
+        logger.error("模型池保存失败，保留生效配置")
+        result = "模型池保存失败，当前生效配置保留，请检查配置目录权限后重试。"
+    await model_pool_matcher.finish(result)
 
 
 restore_quota_matcher = on_command("恢复模型额度", permission=SUPERUSER, priority=10, block=True)
@@ -310,10 +331,10 @@ moe_matcher = on_command("切换moe", permission=SUPERUSER, priority=10, block=T
 @moe_matcher.handle()
 async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     try:
-        difficulty, model_name = args.extract_plain_text().split()
+        difficulty, model_name = args.extract_plain_text().split(maxsplit=1)
         result = model_selector.set_moe_model(model_name, difficulty)
     except Exception:
-        await moe_matcher.finish("参数错误，格式为：切换moe 难度 模型名")
+        await moe_matcher.finish("参数错误，格式为：!切换moe 难度 模型名（可使用完整供应商后缀）")
     await moe_matcher.finish(result)
 
 
