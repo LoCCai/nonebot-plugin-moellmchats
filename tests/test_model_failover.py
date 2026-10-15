@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from test_model_selector import _initialized_selector
 
-from nonebot_plugin_moellmchats import moe_llm
+from nonebot_plugin_moellmchats import llm_payload, moe_llm
 from nonebot_plugin_moellmchats.llm_api import LlmApiMixin
 from nonebot_plugin_moellmchats.model_error_policy import is_quota_exhaustion_error, read_bounded_error
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
@@ -45,6 +45,53 @@ def test_ineligible_backup_is_not_selected(tmp_path, monkeypatch, options, requi
     selector = _pair(tmp_path, monkeypatch)
     selector.models["backup (other)"].update(options)
     assert selector.get_rate_limit_fallback(selector.get_model("category_model"), set(), **requirements) is None
+
+
+@pytest.mark.parametrize("primary_options", [
+    {"is_vision": False}, {"no_tools": True}, {"key": [], "keys": []},
+])
+def test_vision_pin_uses_eligible_backup_when_primary_cannot_serve_images_and_tools(
+    tmp_path, monkeypatch, primary_options,
+):
+    selector = _pair(tmp_path, monkeypatch)
+    selector.model_config["vision_model"] = "model-a (good)"
+    selector.models["model-a (good)"].update(is_vision=True, no_tools=False)
+    selector.models["model-a (good)"].update(primary_options)
+    selector.models["backup (other)"]["is_vision"] = True
+    chosen = selector.get_model("vision_model", has_images=True, has_tools=True)
+    assert chosen["model"] == "backup"
+    assert chosen["key"] == "Bearer test-backup"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_vision_pair_reaches_configured_cross_provider_backup(tmp_path, monkeypatch):
+    selector = _pair(tmp_path, monkeypatch)
+    selector.model_config["vision_model"] = "model-a (good)"
+    selector.models["empty-vision (good)"] = dict(selector.models["model-a (good)"], model="empty-vision")
+    selector.models["backup (other)"]["is_vision"] = True
+    selector.model_config["model_fallbacks"]["model-a (good)"] = ["empty-vision (good)", "backup (other)"]
+    await selector.mark_model_exhausted(selector.models["model-a (good)"], status=403)
+    await selector.mark_model_exhausted(selector.models["empty-vision (good)"], status=403)
+    chosen = selector.get_model("vision_model", has_images=True, has_tools=True)
+    assert chosen["provider"] == "other"
+    assert chosen["is_vision"]
+    assert selector.is_model_exhausted("model-a (good)")
+
+
+@pytest.mark.asyncio
+async def test_exhausted_vision_chain_does_not_claim_it_was_never_configured(tmp_path, monkeypatch):
+    selector = _pair(tmp_path, monkeypatch)
+    selector.model_config.update(vision_model="model-a (good)", use_tools=False)
+    for model in selector.models.values():
+        await selector.mark_model_exhausted(model, status=403)
+    monkeypatch.setattr(llm_payload, "model_selector", selector)
+    chat = object.__new__(MoeLlm)
+    chat.model_info = {}
+    chat.messages_handler = SimpleNamespace(current_images=["https://image.invalid/input"])
+    result = await chat._prepare_model_info("看看图片")
+    assert "额度耗尽" in result
+    assert "查看LLM链路" in result
+    assert "未配置" not in result
 
 
 @pytest.mark.parametrize("bad", [[], {"missing": ["backup (other)"]},

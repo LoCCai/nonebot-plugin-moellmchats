@@ -624,7 +624,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
             model_data = mutable_value(state.models[selected_model])
             model_data["key"] = self._get_random_key(model_data)
-            if self.is_model_exhausted(selected_model):
+            if (self.is_model_exhausted(selected_model)
+                    or not model_data["key"]
+                    or (has_tools and model_data.get("no_tools"))
+                    or (has_images and not model_data.get("is_vision"))):
                 return self.get_rate_limit_fallback(model_data, set(), has_tools=has_tools, has_images=has_images)
             return model_data
         return None
