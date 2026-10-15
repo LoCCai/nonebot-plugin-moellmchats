@@ -695,6 +695,182 @@ async def test_host_accepts_same_generation_patched_request_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_host_new_requests_use_published_generation_while_old_request_finishes() -> None:
+    host = RuntimeResourceHost()
+    old_snapshot, new_snapshot = _snapshot(1), _snapshot(2)
+    await host.start(old_snapshot)
+    old_entered, release_old = asyncio.Event(), asyncio.Event()
+
+    async def old_request():
+        async with host.lease(old_snapshot) as coordinator:
+            old_entered.set()
+            await release_old.wait()
+            assert coordinator.generation == 1
+            # Nested work remains pinned to the old lease during retirement.
+            async with host.lease(old_snapshot) as nested:
+                assert nested is coordinator
+
+    async def new_request():
+        async with host.lease(new_snapshot) as coordinator:
+            return coordinator.generation
+
+    old = asyncio.create_task(old_request())
+    await old_entered.wait()
+    try:
+        # This request initiates the reload itself, so both the first request
+        # and followers must proceed before the old lease is released.
+        assert await asyncio.wait_for(new_request(), timeout=2) == 2
+        assert await asyncio.wait_for(new_request(), timeout=2) == 2
+        assert host.manager.safe_diagnostics()["retired_generation_count"] == 1
+        assert not old.done()
+    finally:
+        release_old.set()
+        await old
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_host_failed_reload_rolls_back_and_allows_retry() -> None:
+    from nonebot_plugin_moellmchats.runtime_resources import RuntimeResourceReloadError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    closed = []
+
+    class Port:
+        lifecycle_name = "host-reload-test"
+
+        async def start(self, generation):
+            if generation == 2:
+                entered.set()
+                await release.wait()
+                raise RuntimeError("candidate failed")
+
+        async def close(self):
+            closed.append(self)
+
+    host = RuntimeResourceHost(RuntimeResourceBuilder(lifecycle_ports_factory=lambda _snapshot: (Port(),)))
+    original = await host.start(_snapshot(1))
+    changing = asyncio.create_task(host.synchronize(_snapshot(2)))
+    await asyncio.wait_for(entered.wait(), 2)
+    try:
+        # Candidate startup must not block requests for the current snapshot.
+        assert await asyncio.wait_for(host.synchronize(_snapshot(1)), 2) is original
+        release.set()
+        with pytest.raises(RuntimeResourceReloadError):
+            await asyncio.wait_for(changing, 2)
+        assert host.manager.active() is original
+        assert len(closed) == 1
+        assert (await asyncio.wait_for(host.synchronize(_snapshot(3)), 2)).generation == 3
+    finally:
+        release.set()
+        await asyncio.gather(changing, return_exceptions=True)
+        await host.close()
+    assert len(closed) == 3
+
+
+@pytest.mark.asyncio
+async def test_host_cancelled_initiating_request_keeps_reload_owned_until_close() -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    closed = []
+
+    class Port:
+        lifecycle_name = "host-cancel-test"
+
+        async def start(self, generation):
+            if generation == 2:
+                entered.set()
+                await release.wait()
+
+        async def close(self):
+            closed.append(self)
+
+    host = RuntimeResourceHost(RuntimeResourceBuilder(lifecycle_ports_factory=lambda _snapshot: (Port(),)))
+    await host.start(_snapshot(1))
+    changing = asyncio.create_task(host.synchronize(_snapshot(2)))
+    await asyncio.wait_for(entered.wait(), 2)
+    try:
+        changing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await changing
+        release.set()
+        assert (await asyncio.wait_for(host.synchronize(_snapshot(2)), 2)).generation == 2
+        async with host.lease(_snapshot(2)) as coordinator:
+            assert coordinator.generation == 2
+    finally:
+        release.set()
+        await asyncio.gather(changing, return_exceptions=True)
+        await host.close()
+    assert len(closed) == 2
+
+
+@pytest.mark.asyncio
+async def test_host_closing_during_candidate_startup_does_not_admit_waiting_request() -> None:
+    from nonebot_plugin_moellmchats.runtime_resources import RuntimeResourceLifecycleError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Port:
+        lifecycle_name = "host-close-startup-test"
+
+        async def start(self, generation):
+            if generation == 2:
+                entered.set()
+                await release.wait()
+
+        async def close(self):
+            pass
+
+    host = RuntimeResourceHost(RuntimeResourceBuilder(lifecycle_ports_factory=lambda _snapshot: (Port(),)))
+    await host.start(_snapshot(1))
+
+    async def request():
+        async with host.lease(_snapshot(2)):
+            pytest.fail("a closing host must not admit a waiting request")
+
+    waiting = asyncio.create_task(request())
+    await asyncio.wait_for(entered.wait(), 2)
+    closing = asyncio.create_task(host.close())
+    await asyncio.sleep(0)
+    try:
+        release.set()
+        with pytest.raises(RuntimeResourceLifecycleError):
+            await asyncio.wait_for(waiting, 2)
+        await asyncio.wait_for(closing, 2)
+    finally:
+        release.set()
+        await asyncio.gather(waiting, closing, return_exceptions=True)
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_host_rejects_new_work_as_soon_as_close_waits_for_old_leases() -> None:
+    from nonebot_plugin_moellmchats.runtime_resources import RuntimeResourceLifecycleError
+
+    host = RuntimeResourceHost()
+    snapshot = _snapshot(1)
+    await host.start(snapshot)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def request():
+        async with host.lease(snapshot):
+            entered.set()
+            await release.wait()
+
+    running = asyncio.create_task(request())
+    await entered.wait()
+    closing = asyncio.create_task(host.close())
+    await asyncio.sleep(0)
+    try:
+        with pytest.raises(RuntimeResourceLifecycleError):
+            await host.synchronize(snapshot)
+        assert not closing.done()
+    finally:
+        release.set()
+        await running
+        await closing
+
+
+@pytest.mark.asyncio
 async def test_postgres_transaction_is_short_and_commits_once() -> None:
     resources, engine = _database_resources()
     events: list[str] = []

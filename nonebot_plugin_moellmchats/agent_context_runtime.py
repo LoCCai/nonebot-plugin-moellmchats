@@ -1778,7 +1778,9 @@ class RuntimeResourceHost:
             AgentGenerationCoordinator,
         ] = {}
         self._sync_lock = asyncio.Lock()
+        self._reload_task: asyncio.Task[RuntimeGenerationResources] | None = None
         self._closed = False
+        self._closing = False
 
     @property
     def manager(self) -> RuntimeResourceManager:
@@ -1805,9 +1807,27 @@ class RuntimeResourceHost:
     ) -> RuntimeGenerationResources:
         if not isinstance(snapshot, RuntimeSnapshot):
             raise TypeError("snapshot 必须是 RuntimeSnapshot")
+        if self._closed or self._closing:
+            raise RuntimeResourceLifecycleError("runtime resource host 已关闭")
+        resources = await self._manager.wait_for_published_generation(snapshot.generation)
+        if self._closed or self._closing:
+            raise RuntimeResourceLifecycleError("runtime resource host 已关闭")
+        if resources is not None:
+            return resources
         async with self._sync_lock:
-            if self._closed:
+            if self._closed or self._closing:
                 raise RuntimeResourceLifecycleError("runtime resource host 已关闭")
+            if self._reload_task is not None and self._reload_task.done():
+                self._reload_task = None
+            if self._reload_task is not None:
+                # A later generation must wait for the previous handoff to
+                # settle. Requests for the published generation bypass this
+                # lock and continue using its own leases.
+                try:
+                    await asyncio.shield(self._reload_task)
+                finally:
+                    if self._reload_task.done():
+                        self._reload_task = None
             state = self._manager.state
             if state is RuntimeResourceManagerState.CREATED:
                 return await self._manager.start(snapshot)
@@ -1825,11 +1845,31 @@ class RuntimeResourceHost:
                 return active
             if snapshot.generation < active.generation:
                 raise RuntimeResourceLifecycleError("runtime snapshot 已落后于 active generation")
-            resources = await self._manager.reload(snapshot)
+            entered = asyncio.Event()
+
+            async def reload_resources() -> RuntimeGenerationResources:
+                entered.set()
+                return await self._manager.reload(snapshot)
+
+            task = asyncio.create_task(reload_resources(), name=f"moellm-host-reload-{snapshot.generation}")
+            self._reload_task = task
+            task.add_done_callback(self._reload_finished)
+            # The manager enters reload before its first suspended operation.
+            # Retain the task independently of the request that initiated it.
+            await entered.wait()
+            resources = await self._manager.wait_for_published_generation(snapshot.generation)
+            if resources is not None:
+                return resources
+            return await asyncio.shield(task)
+
+    def _reload_finished(self, task: asyncio.Task[RuntimeGenerationResources]) -> None:
+        # Observe background failures even if the initiating request was
+        # cancelled; the manager retains its failed state for subsequent work.
+        if not task.cancelled() and task.exception() is None:
+            resources = task.result()
             self._coordinators = {
                 resource: coordinator for resource, coordinator in self._coordinators.items() if resource is resources
             }
-            return resources
 
     async def start(
         self,
@@ -1859,15 +1899,21 @@ class RuntimeResourceHost:
         snapshot: RuntimeSnapshot,
     ) -> AsyncIterator[AgentGenerationCoordinator]:
         resources = await self.synchronize(snapshot)
+        if self._closed or self._closing:
+            raise RuntimeResourceLifecycleError("runtime resource host 已关闭")
         async with self._manager.lease(expected_generation=snapshot.generation) as leased:
             if leased is not resources:
                 raise RuntimeResourceLifecycleError("runtime resource lease identity 漂移")
             yield self._coordinator(leased)
 
     async def close(self) -> None:
+        self._closing = True
         async with self._sync_lock:
             if self._closed:
                 return
+            if self._reload_task is not None:
+                await asyncio.gather(asyncio.shield(self._reload_task), return_exceptions=True)
+                self._reload_task = None
             await self._manager.close()
             self._coordinators.clear()
             self._closed = True

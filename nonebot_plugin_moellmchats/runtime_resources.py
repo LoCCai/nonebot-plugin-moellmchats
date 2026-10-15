@@ -1581,6 +1581,39 @@ class RuntimeResourceManager:
             self._leases[resources] = count - 1
             condition.notify_all()
 
+    async def wait_for_published_generation(
+        self,
+        generation: int,
+    ) -> RuntimeGenerationResources | None:
+        """Read a published generation without waiting for retired leases.
+
+        During an existing reload, wait only until its candidate is published
+        or the reload rolls back. This never initiates a reload and never
+        exposes an unstarted candidate.
+        """
+        _validate_generation(generation, label="RuntimeSnapshot.generation")
+        _operation_lock, condition = self._claim_owner()
+        inherited = self._bound.get()
+        if inherited is not None:
+            if inherited.released:
+                raise RuntimeResourceLifecycleError("继承的 runtime resource lease 已释放")
+            if inherited.resources.generation != generation:
+                raise RuntimeResourceGenerationError("继承的 runtime resource generation 不匹配")
+            return inherited.resources
+        async with condition:
+            while (
+                self._state is RuntimeResourceManagerState.RELOADING
+                and (self._active is None or self._active.generation < generation)
+            ):
+                await condition.wait()
+            if (
+                self._state in {RuntimeResourceManagerState.RUNNING, RuntimeResourceManagerState.RELOADING}
+                and self._active is not None
+                and self._active.generation == generation
+            ):
+                return self._active
+            return None
+
     async def _finish_reload(
         self,
         *,
