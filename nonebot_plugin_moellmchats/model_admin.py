@@ -112,6 +112,9 @@ def format_chain(selector, settings: Mapping) -> str:
             name = fallback if fallback is not None else cfg.get(key)
             names = (name,) if name else ()
             lines.append(f"{label}：{name or '未配置'}")
+            backups = cfg.get("model_fallbacks", {}).get(name, ()) if name else ()
+            if backups:
+                lines.append("  显式备用：" + " → ".join(backups))
         for name in names:
             if name not in used:
                 used.append(name)
@@ -135,12 +138,19 @@ def format_chain(selector, settings: Mapping) -> str:
     ])
     if routing:
         used = list(cfg.get("capability_routing", {}).get("models", {}))
+    else:
+        # Include the parameters/status of explicitly configured fallback models.
+        for name in used:
+            for backup in cfg.get("model_fallbacks", {}).get(name, ()):
+                if backup not in used:
+                    used.append(backup)
     for name in used:
         model = state.models.get(name, {})
         lines.append(f"• {name} · {_status(selector, model, name)}\n"
                      f"  {_thinking(model)}；识图={'是' if model.get('is_vision') else '否'}；"
                      f"工具={'否' if model.get('no_tools') else '是'}；流式={'开' if model.get('stream') else '关'}")
     lines.extend(["池优先于固定模型。临时限流尝试同池备用；额度耗尽标记会跨重启保留。",
+                  "固定模型不可用时按显式备用筛选；模型配置不替代宿主的绘图授权。",
                   "!查看模型池 ／ !模型池帮助；固定角色沿用 !设置视觉模型、!设置媒体模型 等命令。"])
     return "\n".join(lines)
 

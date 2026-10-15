@@ -94,6 +94,15 @@ def test_key_status_understands_keys_and_legacy_key_without_selecting(tmp_path, 
     assert "third (other) · 未配置密钥" in format_pools(selector, "1")
 
 
+def test_chain_includes_explicit_backup_route_and_parameters(tmp_path, monkeypatch):
+    selector = pool(tmp_path, monkeypatch)
+    selector.model_config["model_pools"] = {}
+    text = format_chain(selector, {})
+    assert "显式备用：backup (other)" in text
+    assert "• backup (other) · 可参与选择" in text
+    assert "思考模式=disabled" in text
+
+
 @pytest.mark.asyncio
 async def test_read_only_chain_reports_effective_models_and_thinking_without_secrets(tmp_path, monkeypatch):
     selector = pool(tmp_path, monkeypatch)
