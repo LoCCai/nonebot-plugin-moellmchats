@@ -44,6 +44,63 @@ def _configure_base(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
     monkeypatch.setattr(module.render_tools_config, "moellm_meme_api_base", base, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_meme_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(module, "_meme_authorizer", None)
+    monkeypatch.setattr(module.render_tools_config, "moellm_meme_policy_required", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["denied", "missing", "error", "timeout"])
+async def test_meme_policy_denies_before_reading_template_or_images(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    monkeypatch.setattr(module.render_tools_config, "moellm_meme_policy_required", True)
+
+    async def authorize(context: ToolContext, key: str) -> bool:
+        assert key == "petpet"
+        if mode == "error":
+            raise RuntimeError("unavailable")
+        if mode == "timeout":
+            raise TimeoutError
+        return False
+
+    if mode != "missing":
+        module.register_meme_authorizer(authorize)
+    result = await generate_meme_image(_tool_context=_context(), meme_key="petpet", image_urls=["https://example.com/a"])
+    assert result.metadata["status"] == "denied"
+    assert not backend.calls
+
+
+@pytest.mark.asyncio
+async def test_meme_policy_receives_real_context_and_allows_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    context = _context()
+    checked: list[tuple[ToolContext, str]] = []
+
+    async def authorize(actual: ToolContext, key: str) -> bool:
+        checked.append((actual, key))
+        return True
+
+    module.register_meme_authorizer(authorize)
+    backend = _ScriptedBackend([_TEXT_INFO, (200, {"image_id": "allowed"}), (200, _tiny_png())])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await generate_meme_image(_tool_context=context, meme_key="5000choyen", texts=["a", "b"])
+    assert checked == [(context, "5000choyen")]
+    assert "已生成" in result.text
+
+
+@pytest.mark.asyncio
+async def test_meme_policy_preserves_cancellation() -> None:
+    async def authorize(context: ToolContext, key: str) -> bool:
+        raise asyncio.CancelledError
+
+    module.register_meme_authorizer(authorize)
+    with pytest.raises(asyncio.CancelledError):
+        await module._meme_allowed(_context(), "petpet")
+
+
 # ---------------------------------------------------------------------------
 # Capability / registration
 # ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@ class RenderToolsConfig(BaseModel):
     moellm_render_browser_endpoint: str = ""
     moellm_render_default_width: int = Field(default=800, ge=320, le=1_600)
     moellm_meme_api_base: str = ""
+    moellm_meme_policy_required: bool = False
 
 
 render_tools_config = get_plugin_config(RenderToolsConfig)

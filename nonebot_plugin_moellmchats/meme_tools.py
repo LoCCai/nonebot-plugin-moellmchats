@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 import re
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -69,6 +69,7 @@ _MAX_DOWNLOAD_BYTES = 8 * 1_024 * 1_024
 # read bound only exists to keep a hostile/huge backend reply in check.
 _MEME_MAX_RESPONSE_BYTES = 32 * 1_024 * 1_024
 _MAX_REDIRECTS = 4
+_meme_authorizer: Callable[[ToolContext, str], Awaitable[bool]] | None = None
 _MEME_ERROR_MESSAGES: dict[int, str] = {
     410: "meme 后端请求参数错误",
     420: "meme 后端读写失败",
@@ -81,6 +82,23 @@ _MEME_ERROR_MESSAGES: dict[int, str] = {
     560: "文字超出长度限制",
     570: "该模板当前不可用",
 }
+
+
+def register_meme_authorizer(authorizer: Callable[[ToolContext, str], Awaitable[bool]]) -> None:
+    global _meme_authorizer
+    if not callable(authorizer):
+        raise TypeError("表情包权限检查必须可调用")
+    _meme_authorizer = authorizer
+
+
+async def _meme_allowed(context: ToolContext, key: str) -> bool:
+    if _meme_authorizer is None:
+        return not render_tools_config.moellm_meme_policy_required
+    try:
+        return await asyncio.wait_for(_meme_authorizer(context, key), timeout=5) is True
+    except Exception as error:
+        logger.warning("表情包权限检查未通过：error_type={}", type(error).__name__)
+        return False
 
 
 def meme_api_base() -> str:
@@ -253,6 +271,8 @@ async def generate_meme_image(
     if not isinstance(meme_key, str) or not _MEME_KEY_RE.fullmatch(meme_key.strip()):
         return ToolResult(text="模板 key 必须是字母、数字、下划线或连字符（如 petpet）。")
     key = meme_key.strip()
+    if not await _meme_allowed(_tool_context, key):
+        return ToolResult(text="当前群已关闭该表情包，无法制作。", metadata={"status": "denied"})
     if texts is None:
         texts = []
     if image_urls is None:
