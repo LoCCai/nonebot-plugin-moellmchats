@@ -245,6 +245,69 @@ def _selector(tmp_path, monkeypatch, role="image_model"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [{}, {"continue_previous": True},
+    {"image_refs": ["private-reference"]}, {"image_urls": ["https://example.com/image"]}])
+async def test_drawing_denied_before_any_media_or_provider_call(monkeypatch, arguments):
+    authorizer = AsyncMock(return_value=False)
+    monkeypatch.setattr(tools, "_image_generation_authorizer", authorizer)
+    source = AsyncMock()
+    download = AsyncMock()
+    generate = AsyncMock()
+    send = AsyncMock()
+    monkeypatch.setattr(tools, "asset_bytes", source)
+    monkeypatch.setattr(tools, "download_media", download)
+    monkeypatch.setattr(tools, "generate_picture", generate)
+    monkeypatch.setattr(tools, "deliver_image", send)
+    context = _context()
+    context.bot.config = SimpleNamespace(superusers={"10001"})
+    result = await tools.generate_image(_tool_context=context, prompt="画一张", **arguments)
+    assert result.metadata["status"] == "denied"
+    assert "仅限授权用户" in result.text
+    authorizer.assert_awaited_once_with(context)
+    for operation in (source, download, generate, send):
+        operation.assert_not_called()
+    assert not tools._drawing_requests
+    assert not tools._previous_images
+
+
+@pytest.mark.asyncio
+async def test_drawing_host_authorization_overrides_unrestricted_plugin_default(monkeypatch):
+    monkeypatch.setattr(tools.image_generation_config, "moellm_image_generation_restricted", False)
+    monkeypatch.setattr(tools, "_image_generation_authorizer", AsyncMock(return_value=False))
+    assert not await tools.can_generate_image(_context())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RuntimeError("database unavailable"), TimeoutError()])
+async def test_drawing_authorization_failure_is_closed(monkeypatch, error):
+    monkeypatch.setattr(tools, "_image_generation_authorizer", AsyncMock(side_effect=error))
+    assert not await tools.can_generate_image(_context())
+
+
+@pytest.mark.asyncio
+async def test_restricted_drawing_requires_host_authorizer_and_does_not_swallow_cancel(monkeypatch):
+    monkeypatch.setattr(tools.image_generation_config, "moellm_image_generation_restricted", True)
+    monkeypatch.setattr(tools, "_image_generation_authorizer", None)
+    assert not await tools.can_generate_image(_context())
+    monkeypatch.setattr(tools, "_image_generation_authorizer", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        await tools.can_generate_image(_context())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("still_allowed", [True, False])
+async def test_drawing_rechecks_manual_grant_before_spending_quota(monkeypatch, still_allowed):
+    monkeypatch.setattr(tools, "_image_generation_authorizer", AsyncMock(side_effect=[True, still_allowed]))
+    generate = AsyncMock(return_value=(_png(), "drawing-model"))
+    send = AsyncMock()
+    monkeypatch.setattr(tools, "generate_picture", generate)
+    monkeypatch.setattr(tools, "deliver_image", send)
+    result = await tools.generate_image(_tool_context=_context(), prompt="画个圆")
+    assert result.metadata["status"] == ("succeeded" if still_allowed else "denied")
+    assert generate.await_count == send.await_count == int(still_allowed)
+
+
+@pytest.mark.asyncio
 async def test_native_image_generation_switches_only_explicit_quota_models_and_downloads_once(tmp_path, monkeypatch):
     _selector(tmp_path, monkeypatch)
     post = AsyncMock(side_effect=[(429, {}), (403, {"code": "AllocationQuota.FreeTierOnly"}),

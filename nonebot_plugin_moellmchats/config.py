@@ -47,6 +47,15 @@ class RecoveryConfig(BaseModel):
 recovery_config = get_plugin_config(RecoveryConfig)
 
 
+class ImageGenerationConfig(BaseModel):
+    """Host-owned drawing access; callers cannot supply an authorization ID."""
+
+    moellm_image_generation_restricted: bool = False
+
+
+image_generation_config = get_plugin_config(ImageGenerationConfig)
+
+
 class RenderToolsConfig(BaseModel):
     """Browser render / meme tools are configured by NoneBot, not config.json.
 

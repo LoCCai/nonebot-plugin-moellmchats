@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import hashlib
 import json
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from nonebot import get_driver
 from nonebot.log import logger
 
+from .config import image_generation_config
 from .media_context import (
     MAX_DOCUMENT_CHARS,
     MediaAsset,
@@ -37,6 +39,27 @@ _previous_images: dict[tuple[str, str, str], str] = {}
 _drawing_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
 _drawing_requests: dict[tuple, str] = {}
 _drawing_gate = asyncio.Semaphore(2)
+DRAWING_ACCESS_DENIED = "绘图和改图当前仅限授权用户使用。"
+_image_generation_authorizer: Callable[[ToolContext], Awaitable[bool]] | None = None
+
+
+def register_image_generation_authorizer(authorizer: Callable[[ToolContext], Awaitable[bool]]) -> None:
+    """Let the host enforce its manual grants for every drawing entry point."""
+    global _image_generation_authorizer
+    if not callable(authorizer):
+        raise TypeError("绘图授权检查必须可调用")
+    _image_generation_authorizer = authorizer
+
+
+async def can_generate_image(context: ToolContext) -> bool:
+    authorizer = _image_generation_authorizer
+    if authorizer is None:
+        return not image_generation_config.moellm_image_generation_restricted
+    try:
+        return await asyncio.wait_for(authorizer(context), timeout=3) is True
+    except Exception as error:
+        logger.warning("绘图授权检查未通过：error_type={}", type(error).__name__)
+        return False
 
 
 def clear_drawing_history(context: ToolContext) -> bool:
@@ -156,6 +179,8 @@ async def summarize_chat(*, _tool_context: ToolContext, source: str = "message",
 async def generate_image(*, _tool_context: ToolContext, prompt: str, image_refs: list[str] | None = None,
                          image_urls: list[str] | None = None, continue_previous: bool = False,
                          size: str = "1024x1024") -> ToolResult:
+    if not await can_generate_image(_tool_context):
+        return ToolResult(text=DRAWING_ACCESS_DENIED, metadata={"status": "denied"})
     try:
         if not prompt.strip() or len(prompt) > 4000 or len(image_refs or []) + len(image_urls or []) > 6:
             raise MediaError("请提供4000字以内的绘图描述，最多6张参考图。")
@@ -195,6 +220,10 @@ async def generate_image(*, _tool_context: ToolContext, prompt: str, image_refs:
                 while len(_drawing_requests) > 256:
                     del _drawing_requests[next(iter(_drawing_requests))]
             async with _drawing_gate:
+                # A grant can be revoked while references download or this call
+                # waits for a drawing slot. Check again before spending quota.
+                if not await can_generate_image(_tool_context):
+                    return ToolResult(text=DRAWING_ACCESS_DENIED, metadata={"status": "denied"})
                 picture, model = await generate_picture(prompt, references, size=size)
             picture = guarded_image_bytes(picture)
             reference = media_store.put(_tool_context,
@@ -239,7 +268,7 @@ SUMMARIZE_CHAT_TOOL = _spec("summarize_chat",
      "max_messages": {"type": "integer", "minimum": 1, "maximum": 200},
      "focus": {"type": "string", "maxLength": 2000}, "include_attachments": {"type": "boolean"}}, [], summarize_chat)
 GENERATE_IMAGE_TOOL = _spec("generate_image",
-    "七七AI绘图和改图。按描述生成一张图片并直接发送；使用image_refs或当前/引用图片、QQ头像的image_urls作为参考。refs由read_message_content取得，头像由bot_api_query取得。不传参考图时是新作图；继续修改上一次生成图时continue_previous=true。模型及429/额度备用链由管理员配置。已直接发图，不需要再次识图或重复发送。",
+    "七七AI绘图和改图，使用前由系统核验用户授权，无权限时不可生成。按描述生成一张图片并直接发送；使用image_refs或当前/引用图片、QQ头像的image_urls作为参考。refs由read_message_content取得，头像由bot_api_query取得。不传参考图时是新作图；继续修改上一次生成图时continue_previous=true。模型及429/额度备用链由管理员配置。已直接发图，不需要再次识图或重复发送。",
     {"prompt": {"type": "string", "minLength": 1, "maxLength": 4000}, "image_refs": _REFS,
      "image_urls": {"type": "array", "items": {"type": "string", "maxLength": 2048}, "maxItems": 6},
      "continue_previous": {"type": "boolean"}, "size": {"type": "string", "enum": ["1024x1024", "1024x1536", "1536x1024"]}},
