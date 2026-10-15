@@ -1519,7 +1519,12 @@ async def _poke_event(bot: Bot, event: PokeNotifyEvent):
         }
         await handle_llm(bot, fake_event, poke_, format_message_dict, is_ai=False)
     else:
-        await poke_.send(V11Message(random.choice(get_reply_messages("poke"))))
+        reply = V11Message(random.choice(get_reply_messages("poke")))
+        if group_id:
+            await poke_.send(reply)
+        else:
+            # 私聊戳一戳携带 group_id=None，不能交给通用事件发送器透传群号。
+            await bot.send_private_msg(user_id=event.user_id, message=reply)
         # try:
         #     await poke_.send(Message(f"[CQ:group_poke,qq={event.user_id}]"))
         # except ActionFailed:
