@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import csv
 import io
 import json
@@ -14,6 +14,7 @@ import threading
 import uuid
 
 from .usage_ledger import get_ledger
+from .usage_pricing import newapi_prices
 _chart_lock = threading.Lock()
 
 HELP = ("用法：模型用量统计 / 模型用量图 / 导出模型用量 [周|月|年|全部] "
@@ -51,19 +52,32 @@ def report_data(text, *, export=False):
     result = {"period": period, "filters": filters, "calls": 0, "unknown": 0,
         "prompt": 0, "completion": 0, "cache": 0, "reasoning": 0, "total": 0,
         "models": defaultdict(int), "days": defaultdict(int), "costs": defaultdict(Decimal),
-        "unpriced": 0, "users": set(), "groups": set(), "unattributed": 0}
+        "model_days": defaultdict(lambda: defaultdict(int)), "model_calls": defaultdict(int),
+        "model_totals": defaultdict(int), "raw_model_calls": defaultdict(int), "platforms": defaultdict(set),
+        "reference_estimated": 0, "unpriced": 0, "users": set(), "groups": set(), "unattributed": 0}
     for row in iter_history(ledger, filters):
         result["calls"] += 1
         result["unknown"] += not row["usage_known"]
-        result["unpriced"] += row["estimate"] is None
         result["unattributed"] += row["scene"] == "unattributed"
         for key in ("prompt", "completion", "cache", "reasoning", "total"):
             result[key] += row[key]
-        result["models"][f"{row['model']} ({row['provider']})"] += row["total"]
+        identity = f"{row['model']} ({row['provider']})"
+        result["models"][identity] += row["total"]
+        result["model_calls"][identity] += 1
+        result['model_totals'][row['model']] += row['total']
+        result['raw_model_calls'][row['model']] += 1
+        result['platforms'][row['model']].add(row['provider'])
         stamp = datetime.fromtimestamp(row["at"], timezone.utc)
-        result["days"][stamp.strftime("%Y-%m" if period in {"年", "全部"} else "%Y-%m-%d")] += row["total"]
-        if row["estimate"] is not None:
-            result["costs"][row["currency"]] += Decimal(row["estimate"])
+        day = stamp.strftime("%Y-%m" if period in {"年", "全部"} else "%Y-%m-%d")
+        result["days"][day] += row["total"]
+        result["model_days"][row['model']][day] += row["total"]
+        estimate, currency = row['estimate'], row['currency']
+        if estimate is None:
+            estimate, currency, _ = ledger.estimate(row, row)
+            result['reference_estimated'] += estimate is not None
+        result['unpriced'] += estimate is None
+        if estimate is not None:
+            result["costs"][currency] += Decimal(estimate)
         if row["user_id"]:
             result["users"].add(row["user_id"])
         if row["group_id"]:
@@ -81,6 +95,8 @@ def format_report(data):
         f"缓存命中 {data['cache']:,} / 输入命中率 {data['cache'] / data['prompt']:.1%}" if data["prompt"] else "缓存命中 0（暂无输入用量）",
         f"推理 {data['reasoning']:,}（已包含在输出中）"]
     lines += [f"参考估价 {amount:.6f} {currency}" for currency, amount in sorted(data["costs"].items())]
+    if data['reference_estimated']:
+        lines.append(f"{data['reference_estimated']} 次历史缺价请求按当前参考价格补估，原账本未改动。")
     if data["unpriced"]:
         lines.append(f"{data['unpriced']} 次缺少用量或适用价格，未计入估价；估价不等于实际扣费。")
     if data["unknown"]:
@@ -88,7 +104,8 @@ def format_report(data):
     if data["unattributed"]:
         lines.append(f"{data['unattributed']} 次系统/测试调用没有个人归属，不用于个人计费。")
     for name, tokens in sorted(data["models"].items(), key=lambda pair: pair[1], reverse=True)[:12]:
-        lines.append(f"• {name}：{tokens:,}")
+        share = tokens / data['total'] if data['total'] else 0
+        lines.append(f"• {name}：{tokens:,} Token · {share:.1%} · {data['model_calls'][name]} 次")
     ledger = get_ledger()
     for name, (allowance, baseline) in ledger.budgets.items():
         left = ledger.remaining(name)
@@ -110,7 +127,8 @@ def export_history(text):
             old.unlink()
     columns = ["id", "at_utc", "provider", "model", "bot_id", "scene", "group_id", "user_id",
         "request_id", "purpose", "status", "prompt", "completion", "cache", "reasoning", "total",
-        "usage_known", "estimate", "currency", "price_snapshot", "raw_usage"]
+        "usage_known", "estimate", "currency", "price_snapshot", "raw_usage",
+        "reference_estimate", "reference_currency", "reference_price_snapshot"]
     count = 0
     with path.open("x", encoding="utf-8-sig", newline="") as file:
         path.chmod(0o600)
@@ -118,6 +136,11 @@ def export_history(text):
         writer.writeheader()
         for row in iter_history(ledger, filters):
             row["at_utc"] = datetime.fromtimestamp(row["at"], timezone.utc).isoformat()
+            if row['estimate'] is None:
+                estimate, currency, snapshot = ledger.estimate(row, row)
+                if estimate is not None:
+                    row.update(reference_estimate=estimate, reference_currency=currency,
+                               reference_price_snapshot=json.dumps(snapshot))
             # Prevent spreadsheet formula execution from an untrusted model ID.
             for key in ("model", "provider", "purpose"):
                 if row[key].startswith(("=", "+", "-", "@")):
@@ -136,7 +159,12 @@ def draw_report(data):
     style = {"font.family": FontProperties(fname=font).get_name() if font else "DejaVu Sans",
         "axes.unicode_minus": False, "figure.facecolor": "#f4f6fb", "axes.facecolor": "#ffffff"}
     with _chart_lock, plt.rc_context(style):
-        fig, (pie, line) = plt.subplots(1, 2, figsize=(14, 6), gridspec_kw={"width_ratios": [1, 1.4]})
+        models = sorted(data['model_totals'].items(), key=lambda item: item[1], reverse=True)
+        shown = models[:18]
+        table_height = max(1.6, .34 * (len(shown) + 1))
+        fig = plt.figure(figsize=(16, 5.3 + table_height))
+        grid = fig.add_gridspec(2, 2, width_ratios=[1, 1.6], height_ratios=[3.8, table_height])
+        pie, line, details = fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1]), fig.add_subplot(grid[1, :])
         title = f"模型用量 · {data['period']} · {data['total']:,} tokens · UTC"
         scope = data["filters"]
         if scope.get("group_id"):
@@ -144,15 +172,18 @@ def draw_report(data):
         if scope.get("user_id"):
             title += f" · QQ {scope['user_id']}"
         fig.suptitle(title, fontsize=15, y=.97)
-        models = sorted(data["models"].items(), key=lambda item: item[1], reverse=True)
         entries = models[:6] + ([("其他", sum(v for _, v in models[6:]))] if len(models) > 6 else [])
+        colors = ['#5268d8', '#21a593', '#eea54b', '#d972a6', '#8d73c6', '#5aa4ce', '#a1aabd']
         if sum(value for _, value in entries):
             wedges, _, _ = pie.pie([v for _, v in entries], autopct="%1.1f%%", startangle=90,
-                                  wedgeprops={"width": .42, "edgecolor": "white"}, pctdistance=.8)
-            pie.legend(wedges, [name for name, _ in entries], loc="lower center", bbox_to_anchor=(.5, -.18), fontsize=8)
+                                  colors=colors[:len(entries)],
+                                  wedgeprops={"width": .32, "edgecolor": "white"}, pctdistance=.83)
+            pie.text(0, 0, f"{len(models)} 个模型\n{data['calls']:,} 次请求", ha='center', va='center', fontsize=12)
+            pie.legend(wedges, [f"{name}  {value / data['total']:.1%}" for name, value in entries],
+                       loc='upper center', bbox_to_anchor=(.5, -.02), fontsize=9, frameon=False, ncol=1)
         else:
             pie.text(.5, .5, "暂无已知用量", ha="center", transform=pie.transAxes)
-        pie.set_title("Token占比（按模型与平台）")
+        pie.set_title("各模型 Token 占比（同模型跨平台合计）", pad=15)
         monthly = data["period"] in {"年", "全部"}
         now = datetime.fromtimestamp(scope["until"], timezone.utc)
         start = datetime.fromtimestamp(scope["since"], timezone.utc) if scope["since"] else datetime.fromisoformat(min(data["days"], default=now.strftime("%Y-%m")) + "-01")
@@ -161,50 +192,43 @@ def draw_report(data):
         while cursor.date() <= now.date():
             keys.append(cursor.strftime("%Y-%m" if monthly else "%Y-%m-%d"))
             cursor = (cursor.replace(year=cursor.year + 1, month=1) if cursor.month == 12 else cursor.replace(month=cursor.month + 1)) if monthly else cursor + timedelta(days=1)
-        line.plot(keys, [data["days"].get(key, 0) / 1_000_000 for key in keys], color="#5268d8", marker="o", linewidth=2)
+        for index, (name, _) in enumerate(entries):
+            names = [key for key, _ in models[6:]] if index == 6 else [name]
+            values = [sum(data['model_days'][model].get(key, 0) for model in names) / 1_000_000 for key in keys]
+            line.plot(range(len(keys)), values, label=name, color=colors[index], marker='o', markersize=3, linewidth=2)
         step = max(1, len(keys) // 7)
         line.set_xticks(range(0, len(keys), step), keys[::step], rotation=35, ha="right")
         line.set_ylabel("百万 Token")
-        line.set_title("按月趋势" if monthly else "每日趋势")
+        line.set_title("各模型按月趋势" if monthly else "各模型每日趋势")
         line.grid(axis="y", alpha=.2)
+        if entries:
+            line.legend(fontsize=8, frameon=False, loc='upper left')
+        details.axis('off')
+        cells = [[name, ' / '.join(sorted(data['platforms'][name])),
+                  f"{data['raw_model_calls'][name]:,}", f"{tokens:,}",
+                  f"{tokens / data['total']:.1%}" if data['total'] else '—'] for name, tokens in shown]
+        if not cells:
+            cells = [['暂无调用记录', '—', '0', '0', '—']]
+        table = details.table(cellText=cells, colLabels=['模型', '平台', '调用次数', 'Token', '占全部用量'],
+            colWidths=[.40, .25, .10, .14, .11], cellLoc='left', colLoc='left', bbox=[0, 0, 1, 1])
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        for (row, column), cell in table.get_celld().items():
+            cell.set_edgecolor('#e8edf5')
+            cell.set_facecolor('#e7ecf8' if row == 0 else '#ffffff' if row % 2 else '#f3f6fc')
+            if row == 0:
+                cell.set_text_props(weight='bold', color='#253454')
+            elif column >= 2:
+                cell.set_text_props(ha='right')
+            if row > 0 and column == 0 and row <= min(6, len(shown)):
+                cell.set_text_props(color=colors[row - 1])
         costs = " / ".join(f"{value:.4f} {currency}" for currency, value in data["costs"].items()) or "暂无可用价格"
-        fig.text(.5, .02, f"NewAPI参考估价：{costs} · 缺价/用量 {data['unpriced']} 次 · 估价不等于实际扣费", ha="center", fontsize=9)
-        fig.tight_layout(rect=(0, .06, 1, .92))
+        footnote = f"参考估价：{costs} · 按现价补估 {data['reference_estimated']} 次 · 缺价/用量 {data['unpriced']} 次 · 估价不等于实际扣费"
+        if len(models) > len(shown):
+            footnote += f"\n明细展示前{len(shown)}个模型，其余请导出完整历史；占比与趋势包含全部模型。"
+        fig.text(.5, .02, footnote, ha="center", fontsize=9)
+        fig.tight_layout(rect=(0, .07, 1, .92), h_pad=4)
         output = io.BytesIO()
         fig.savefig(output, format="png", dpi=140)
         plt.close(fig)
         return output.getvalue()
-
-
-def newapi_prices(options):
-    """NewAPI ratio=USD 2/M input; completion/cache are input multipliers.
-
-    Only explicit, usable rates are imported. Missing built-in defaults or
-    per-request unit prices are not silently interpreted as token prices.
-    """
-    def mapping(key):
-        value = options.get(key, {})
-        return json.loads(value) if isinstance(value, str) else value
-    inputs, outputs, caches = mapping("ModelRatio"), mapping("CompletionRatio"), mapping("CacheRatio")
-    per_request = mapping("ModelPrice")
-    result = {}
-    for model, ratio in inputs.items():
-        try:
-            incoming = Decimal(str(ratio)) * 2
-            if model in per_request or not incoming.is_finite() or incoming < 0:
-                continue
-            # NewAPI's generic completion multiplier is 1 for these families;
-            # special GPT/Claude/Gemini rules require an explicit saved ratio.
-            ratio = outputs.get(model, 1 if model.startswith(('glm-', 'chatglm_', 'deepseek-', 'deepseek-ai/', 'qwen-')) else None)
-            if ratio is None:
-                continue
-            outgoing = incoming * Decimal(str(ratio))
-            cached = incoming * Decimal(str(caches.get(model, 1)))
-            if min(outgoing, cached) < 0 or not outgoing.is_finite() or not cached.is_finite():
-                continue
-            result[model] = {"input": str(incoming), "output": str(outgoing), "cached": str(cached),
-                "currency": "USD", "per_tokens": 1_000_000, "source": "local_newapi_options",
-                "at": time.time(), "group_ratio": "1", "estimate_only": True}
-        except (InvalidOperation, TypeError, ValueError):
-            continue
-    return result

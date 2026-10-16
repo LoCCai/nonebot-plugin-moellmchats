@@ -4,6 +4,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import time
+from urllib.request import ProxyHandler, Request, build_opener
 
 from nonebot import get_driver, get_plugin_config, on_command
 from nonebot.adapters.onebot.v11 import Bot, Message, MessageEvent, MessageSegment
@@ -19,21 +20,55 @@ from .usage_reports import HELP, draw_report, export_history, format_report, new
 
 class UsageConfig(BaseModel):
     moellm_newapi_prices_file: str = ""
+    moellm_newapi_prices_url: str = ""
 
 
 usage_config = get_plugin_config(UsageConfig)
 
 
-def refresh_prices():
+def refresh_prices(*, fetch=True):
     source = usage_config.moellm_newapi_prices_file
-    if not source:
-        return "未配置NewAPI价格快照文件。"
-    from .private_files import ensure_private_file
-    path = Path(source)
-    ensure_private_file(path)
-    prices = newapi_prices(json.loads(path.read_text()))
-    get_ledger().put_prices(prices)
-    return f"已载入 {len(prices)} 个模型的NewAPI参考价格；缺价模型单独标记。"
+    url = usage_config.moellm_newapi_prices_url
+    if not source and not url:
+        return "未配置NewAPI价格来源。"
+    from .private_files import ensure_private_file, atomic_write_private_text
+    ledger = get_ledger()
+    ledger.initialize()
+    options, reference, warning = {}, None, ''
+    if source:
+        path = Path(source)
+        ensure_private_file(path)
+        options = json.loads(path.read_text())
+    if url:
+        cache = ledger.path.parent / 'newapi-reference.json'
+        if fetch:
+            try:
+                if not url.startswith(('https://', 'http://127.0.0.1:', 'http://localhost:')):
+                    raise ValueError('价格源需使用HTTPS或本机接口')
+                opener = build_opener(ProxyHandler({}))
+                with opener.open(Request(url, headers={'User-Agent': 'Qiqi-Usage/1'}), timeout=12) as response:
+                    content = response.read(2_000_001)
+                if len(content) > 2_000_000:
+                    raise ValueError('价格源过大')
+                candidate = json.loads(content)
+                if not any('input' in row for row in newapi_prices({}, candidate).values()):
+                    raise ValueError('价格源没有可用模型价格')
+                atomic_write_private_text(cache, json.dumps(candidate, ensure_ascii=False))
+                reference = candidate
+            except (OSError, ValueError):
+                warning = '价格源拉取失败，使用已有快照。'
+        if reference is None and cache.exists():
+            ensure_private_file(cache)
+            reference = json.loads(cache.read_text())
+        if reference is None:
+            return warning + '尚无参考价格快照，保留原有价格。'
+    prices = newapi_prices(options, reference)
+    ledger.put_prices(prices, replace_imported=True)
+    usable = sum('input' in row for row in prices.values())
+    covered = sum(ledger.estimate(model, {'usage_known': 1, 'total': 1, 'prompt': 1,
+        'completion': 0, 'cache': 0})[0] is not None for model in model_selector.models.values())
+    return (warning + f"已载入 {usable} 个模型的参考价格；当前模型池覆盖 {covered}/{len(model_selector.models)}。"
+        "本地站点自定义价格优先，缺价及不支持的计费规则单独标记。")
 
 
 @get_driver().on_startup
@@ -43,8 +78,11 @@ async def initialize_usage():
     for identity, model in model_selector.models.items():
         if model.get("usage_token_budget"):
             await asyncio.to_thread(ledger.configure_budget, identity, model["usage_token_budget"])
-    if usage_config.moellm_newapi_prices_file:
-        logger.info(await asyncio.to_thread(refresh_prices))
+    if usage_config.moellm_newapi_prices_file or usage_config.moellm_newapi_prices_url:
+        try:
+            logger.info(await asyncio.to_thread(refresh_prices, fetch=False))
+        except (ValueError, OSError):
+            logger.warning('价格快照读取失败，保留已有参考价格；可稍后刷新模型价格。')
 
 
 stats = on_command("模型用量统计", aliases={"模型消耗统计"}, permission=SUPERUSER, priority=10, block=True)

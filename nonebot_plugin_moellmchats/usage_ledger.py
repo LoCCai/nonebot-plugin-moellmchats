@@ -11,7 +11,6 @@ from collections.abc import Mapping
 from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 import sqlite3
@@ -146,27 +145,25 @@ class UsageLedger:
     def exhausted(self, identity):
         return self.remaining(identity) == 0
 
-    def put_prices(self, prices):
+    def put_prices(self, prices, *, replace_imported=False):
         self.initialize()
         with self.lock, self.connect() as db:
+            if replace_imported:
+                expired = [key for key, row in self.prices.items()
+                           if row.get('source', '').startswith(('local_newapi_', 'newapi_reference_'))]
+                db.executemany("DELETE FROM prices WHERE model=?", [(key,) for key in expired])
+                for key in expired:
+                    del self.prices[key]
             for model, row in prices.items():
+                if row.get('source') != 'manual_admin' and self.prices.get(model, {}).get('source') == 'manual_admin':
+                    continue
                 db.execute("INSERT OR REPLACE INTO prices VALUES (?,?)", (model, json.dumps(row)))
-            self.prices.update(prices)
+                self.prices[model] = row
 
     def estimate(self, model, counters):
-        identity = f"{model.get('model')} ({model.get('provider')})"
-        price = self.prices.get(identity) or self.prices.get(model.get('model'))
-        if not price or not counters["usage_known"]:
-            return None, None, {}
-        try:
-            if counters['total'] and not (counters['prompt'] or counters['completion']):
-                return None, None, price
-            cost = ((Decimal(price["input"]) * (counters["prompt"] - counters["cache"])) +
-                    Decimal(price["cached"]) * counters["cache"] +
-                    Decimal(price["output"]) * counters["completion"]) / Decimal(1_000_000)
-            return str(cost), price["currency"], price
-        except (KeyError, InvalidOperation, ValueError, TypeError):
-            return None, None, price
+        from .usage_pricing import applicable_price, estimate_price
+        with self.lock:
+            return estimate_price(applicable_price(self.prices, model), counters)
 
     def record(self, model, usage, *, scope=None, purpose="chat", attempt_id=None, status="completed"):
         self.initialize()
