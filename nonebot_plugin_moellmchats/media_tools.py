@@ -39,7 +39,7 @@ _previous_images: dict[tuple[str, str, str], str] = {}
 _drawing_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
 _drawing_requests: dict[tuple, str] = {}
 _drawing_gate = asyncio.Semaphore(2)
-DRAWING_ACCESS_DENIED = "绘图和改图当前仅限授权用户使用。"
+DRAWING_ACCESS_DENIED = "AI 生图模型和改图当前仅限授权用户使用（由管理员手动授权）；攻略、表格、流程图和思维导图的排版成图无需绘图授权。"
 _image_generation_authorizer: Callable[[ToolContext], Awaitable[bool]] | None = None
 
 
@@ -197,7 +197,9 @@ async def generate_image(*, _tool_context: ToolContext, prompt: str, image_refs:
                          image_urls: list[str] | None = None, continue_previous: bool = False,
                          size: str = "1024x1024") -> ToolResult:
     if not await can_generate_image(_tool_context):
-        return ToolResult(text=DRAWING_ACCESS_DENIED, metadata={"status": "denied"})
+        return ToolResult(text=DRAWING_ACCESS_DENIED, metadata={"status": "denied",
+            "alternatives": ["render_markdown", "render_html"],
+            "guidance": "若用户需要攻略图、表格或思维导图，整理数据并继续调用本轮可用的排版工具。"})
     try:
         if not prompt.strip() or len(prompt) > 4000 or len(image_refs or []) + len(image_urls or []) > 6:
             raise MediaError("请提供4000字以内的绘图描述，最多6张参考图。")
@@ -266,7 +268,7 @@ def _spec(name: str, description: str, properties: dict, required: list[str], ha
         "required": required, "additionalProperties": False}, handler=handler, effect=ToolEffect.READ_ONLY,
         permission="user", timeout_seconds=180, result_limit=16_000,
         dependencies=("get_render_theme", "render_markdown", "render_html")
-            if name in {"summarize_chat", "analyze_media"} else (),
+            if name in {"summarize_chat", "analyze_media", "generate_image"} else (),
         policy=ToolPolicy.configured(ToolCapabilityV2(network_allow=("*",))))
 
 
@@ -285,7 +287,7 @@ SUMMARIZE_CHAT_TOOL = _spec("summarize_chat",
      "max_messages": {"type": "integer", "minimum": 1, "maximum": 200},
      "focus": {"type": "string", "maxLength": 2000}, "include_attachments": {"type": "boolean"}}, [], summarize_chat)
 GENERATE_IMAGE_TOOL = _spec("generate_image",
-    "七七AI绘图和改图，使用前由系统核验用户授权，无权限时不可生成。按描述生成一张图片并直接发送；使用image_refs或当前/引用图片、QQ头像的image_urls作为参考。refs由read_message_content取得，头像由bot_api_query取得。不传参考图时是新作图；继续修改上一次生成图时continue_previous=true。模型及429/额度备用链由管理员配置。已直接发图，不需要再次识图或重复发送。",
+    "AI生图模型及参考改图，需手动授权，以系统核验为准。攻略、表格、流程图、思维导图和代码截图优先用render_markdown/render_html，无需绘图授权。创作插画、照片等需生图模型时使用本工具，按描述生成并发送一张图片；参考图用image_refs或image_urls，素材ref由read_message_content取得、头像由bot_api_query取得。继续修改上一张用continue_previous=true。已直接发图，不重复发送。",
     {"prompt": {"type": "string", "minLength": 1, "maxLength": 4000}, "image_refs": _REFS,
      "image_urls": {"type": "array", "items": {"type": "string", "maxLength": 2048}, "maxItems": 6},
      "continue_previous": {"type": "boolean"}, "size": {"type": "string", "enum": ["1024x1024", "1024x1536", "1536x1024"]}},

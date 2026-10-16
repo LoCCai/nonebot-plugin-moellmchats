@@ -704,6 +704,37 @@ async def test_render_html_tool_happy_path(monkeypatch: pytest.MonkeyPatch, avai
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["markdown", "html"])
+async def test_document_images_work_after_image_model_authorization_denial(monkeypatch, available_capability, kind):
+    from unittest.mock import AsyncMock
+
+    from nonebot_plugin_moellmchats import media_tools
+
+    _install_htmlrender_models_stub(monkeypatch)
+    authorizer = AsyncMock(return_value=False)
+    provider = AsyncMock()
+    monkeypatch.setattr(media_tools, "_image_generation_authorizer", authorizer)
+    monkeypatch.setattr(media_tools, "generate_picture", provider)
+    renderer = _FakeRenderer(_tiny_png())
+    monkeypatch.setattr(module, "get_shared_renderer", _as_async(renderer))
+    bot = _FakeBot()
+    context = _context(bot)
+    denied = await media_tools.generate_image(_tool_context=context, prompt="整理一张攻略图")
+    assert denied.metadata["status"] == "denied"
+    assert f"render_{kind}" in denied.metadata["alternatives"]
+    if kind == "html":
+        result = await module.render_html_image(_tool_context=context,
+            html='<html><body><h1>技能思维导图</h1><svg><text x="10" y="20">技能 → 升级</text></svg></body></html>')
+    else:
+        result = await module.render_markdown_image(_tool_context=context,
+            markdown="# 攻略\n\n|技能|等级|\n|---|---|\n|烈焰|10|\n\n```python\nprint(1)\n```")
+    assert "已完成渲染" in result.text
+    assert len(bot.sent) == 1
+    authorizer.assert_awaited_once()
+    provider.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_render_html_tool_validates_input(
     available_capability: RenderCapability,
 ) -> None:

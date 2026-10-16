@@ -21,6 +21,7 @@ from .classification_cache import (
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .image_output_policy import DOCUMENT_IMAGE_GUIDANCE
 from .model_capabilities import ModelCapability
 from .model_error_policy import TRANSIENT_HTTP_STATUSES
 from .model_selector import model_selector
@@ -34,7 +35,7 @@ from .tool_catalog_cache import (
 from .tool_manager import tool_manager
 from .utils import get_session
 
-_CLASSIFICATION_POLICY_VERSION = "categorize-json-v5-actual-images"
+_CLASSIFICATION_POLICY_VERSION = "categorize-json-v6-document-images"
 _CategoryResult = tuple[str, bool, list[str]] | str | bool
 
 
@@ -171,6 +172,9 @@ class Categorize:
 - vision_required: 当用户输入中包含"[图片]"字样时必须为 true，否则为 false。
 - required_plugins: 字符串列表。根据下方插件目录，判断是否必须调用插件（可以多个）。
   目录可能把同一插件拆成多条功能；只能返回每行第一列的插件标识，同一标识不要重复。
+【图片输出需求】：
+{DOCUMENT_IMAGE_GUIDANCE}
+攻略图等需求应同时选择需要的数据查询工具和目录中可用的排版工具，不能仅按‘绘制’选择生图模型。
 【可用插件目录】：
 {catalog}
 注：若有对应插件请提供。若没有，则保持[]。不确定时倾向于返回可能插件；宁可多给，不要漏给。

@@ -813,8 +813,7 @@ RENDER_THEME_TOOL = ToolSpec(
 RENDER_HTML_TOOL = ToolSpec(
     name="render_html",
     description=(
-        "把完整的 HTML 字符串离线渲染成图片并发到当前会话。"
-        "当你需要给用户展示排版内容（卡片、表格、样式化文本）时使用；"
+        "普通用户可用，无需绘图授权。把攻略、资料卡、表格、流程图或思维导图用 HTML/CSS/内联 SVG 排版成图片并发送。"
         "HTML 必须自包含（内联 CSS，不引用外部资源），不会发起任何网络请求。"
         "可先调用 get_render_theme 读取当前主题，自由编写与调整 CSS；简短内容也可直接文字回复。"
     ),
@@ -850,7 +849,8 @@ RENDER_HTML_TOOL = ToolSpec(
 
 RENDER_MARKDOWN_TOOL = ToolSpec(
     name="render_markdown",
-    description=("把 Markdown 文本渲染成图片并发到当前会话。当用户要求展示较长文章、笔记、清单且纯文本不便阅读时使用。"),
+    description=("普通用户可用，无需绘图授权。把攻略、文章、笔记、清单、表格和代码块整理为 Markdown 后渲染成图片并发送。"
+                 "用户说绘制攻略图、做图、表格转图片等可直接使用；流程图和思维导图可改用 render_html 排版。"),
     parameters={
         "type": "object",
         "properties": {

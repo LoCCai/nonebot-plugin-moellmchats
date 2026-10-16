@@ -6,6 +6,7 @@ import ujson as json
 
 from .categorize import Categorize
 from .config import config_parser
+from .image_output_policy import image_output_hint
 from .model_capabilities import ModelCapability
 from .model_selector import model_selector
 from .onebot_facade import event_group_id
@@ -302,6 +303,9 @@ class LlmPayloadMixin:
 
         if tools_schema:
             data["tools"] = tools_schema
+            send_message_list[0]["content"] += image_output_hint({
+                item.get("function", {}).get("name", "") for item in tools_schema
+            })
 
             mention_hint = self._build_tool_mention_hint()
 
