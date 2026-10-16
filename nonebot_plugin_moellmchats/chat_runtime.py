@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 import time
 import re
@@ -23,6 +23,7 @@ from .agent_runtime import AgentRunState, DeadlineContext
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser, mention_ack_config
+from .conversation_slots import conversation_slots
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
 from .delivery_errors import reply_delivery_failure
 from .onebot_facade import (
@@ -160,12 +161,20 @@ async def _generation_redis_lease(
 
 
 async def handle_llm(
-    bot: Bot, event: MessageEvent, matcher, format_message_dict: dict, is_ai=False, **kwargs,
+    bot: Bot, event: MessageEvent, matcher,
+    format_message_dict: dict | Callable[[], Awaitable[dict]], is_ai=False, **kwargs,
 ):
     from .usage_ledger import bind_usage_scope
-    with bind_usage_scope(bot, event):
-        return await recovery_service.run(bot, event, format_message_dict, is_ai,
-            lambda: _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs))
+    async with conversation_slots.slot(event_user_id(event)) as acquired:
+        if not acquired:
+            from .runtime_metrics import runtime_metrics
+            runtime_metrics.llm_rejected += 1
+            await matcher.finish("七七正在思考你的上一个问题，请耐心等待。")
+            return None
+        with bind_usage_scope(bot, event):
+            formatted = await format_message_dict() if callable(format_message_dict) else format_message_dict
+            return await recovery_service.run(bot, event, formatted, is_ai,
+                                              lambda: _handle_llm(bot, event, matcher, formatted, is_ai, **kwargs))
 
 
 async def _handle_llm(

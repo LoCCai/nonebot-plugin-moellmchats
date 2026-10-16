@@ -147,7 +147,7 @@ def get_llm_controller() -> AdmissionController:
     limits = (
         config_parser.get_config("llm_max_active", 4),
         config_parser.get_config("llm_max_pending", 32),
-        config_parser.get_config("llm_max_per_user", 2),
+        config_parser.get_config("llm_max_per_user", 1),
     )
     if _llm_controller is None or (
         (_llm_controller.active, _llm_controller.pending) == (0, 0)

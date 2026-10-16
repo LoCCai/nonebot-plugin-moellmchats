@@ -70,8 +70,10 @@ async def authorize_recovery(bot, record):
 
 async def resume_request(bot, event, record):
     from .chat_runtime import _handle_llm
+    from .conversation_slots import conversation_slots
     from .cooldowns import MemoryCooldownStore
     from .state_store import BoundedValueStore
+    from .usage_ledger import bind_usage_scope
 
     class RecoveryMatcher:
         async def send(self, message):
@@ -81,10 +83,14 @@ async def resume_request(bot, event, record):
             await self.send(message)
             raise FinishedException()
 
-    # The old request must not fail its own cooldown after startup.
-    event.time = time.time()
-    return await _handle_llm(bot, event, RecoveryMatcher(), record["formatted"], record["is_ai"],
-                             cooldown_store=MemoryCooldownStore(BoundedValueStore(lambda: 0)))
+    # Wait for an existing owner; a saved request must not be lost to a fresh
+    # request from the same QQ in another group or through another bot account.
+    async with conversation_slots.slot(event.user_id, wait=True):
+        with bind_usage_scope(bot, event):
+            # The old request must not fail its own cooldown after startup.
+            event.time = time.time()
+            return await _handle_llm(bot, event, RecoveryMatcher(), record["formatted"], record["is_ai"],
+                                     cooldown_store=MemoryCooldownStore(BoundedValueStore(lambda: 0)))
 
 
 def defer_shutdown(signum: int, forward) -> bool:

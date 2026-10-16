@@ -386,7 +386,7 @@ async def _(bot: Bot, event: MessageEvent):
 
     await acknowledge_mention(bot, event)
     if event_plain_text(event).strip():
-        format_message_dict = await format_message(event, bot)
+        await handle_llm(bot, event, llm_matcher, lambda: format_message(event, bot), is_ai=False)
     else:
         await llm_matcher.finish(
             make_text_message(
@@ -394,7 +394,6 @@ async def _(bot: Bot, event: MessageEvent):
                 random.choice(get_reply_messages("hello")),
             )
         )
-    await handle_llm(bot, event, llm_matcher, format_message_dict, is_ai=False)
 
 
 ai_matcher = on_command(
@@ -410,8 +409,7 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if not config_parser.get_config("fastai_enabled"):
         await ai_matcher.finish("快速 AI 助手当前未启用。")
     if args.extract_plain_text().strip():
-        format_message_dict = await format_message(event, bot)
-        await handle_llm(bot, event, ai_matcher, format_message_dict, is_ai=True)
+        await handle_llm(bot, event, ai_matcher, lambda: format_message(event, bot), is_ai=True)
     else:
         from .onebot_facade import make_text_message, onebot_protocol
 

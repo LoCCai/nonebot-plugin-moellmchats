@@ -103,7 +103,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pending_action_max_failure_keys": 4_096,
     "llm_max_active": 4,
     "llm_max_pending": 32,
-    "llm_max_per_user": 2,
+    "llm_max_per_user": 1,
     "legacy_dispatch_max_pending": 16,
     "legacy_dispatch_timeout_seconds": 180,
     "legacy_background_plugins": [],
