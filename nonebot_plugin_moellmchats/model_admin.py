@@ -129,6 +129,10 @@ def format_chain(selector, settings: Mapping) -> str:
     route("绘图/改图工具", "image_model")
     route("音视频/文件多模态工具", "multimodal_model")
     route("群聊总结工具", "chat_summary_model", "2")
+    from .model_selector import MEDIA_ROLES
+    for role, (label, _kind) in MEDIA_ROLES.items():
+        if role not in {"image_model", "multimodal_model", "chat_summary_model"}:
+            route(label + "工具", role)
     route("工具草稿复核", "summary_model", "category")
     lines.extend([
         "工具产图二次识图：" + ("开" if settings.get("tool_image_vision_enabled", True) else "关"),

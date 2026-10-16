@@ -34,6 +34,7 @@ from . import meme_tools as _meme_tools  # noqa: F401
 from . import moe_llm as llm
 from . import render_data as _render_data  # noqa: F401
 from . import render_tools as _render_tools  # noqa: F401
+from . import tokenhub_tools as _tokenhub_tools  # noqa: F401
 from .agent_context_runtime import runtime_resource_host
 from .chat_runtime import (
     acknowledge_mention,
@@ -49,6 +50,7 @@ from .generated_tools import generated_tool_store
 from .messages_handler import messages_dict
 from .model_admin import POOL_HELP, format_chain, format_pools, manage_pool, pool_role
 from .model_selector import model_selector
+from . import usage_admin as _usage_admin  # noqa: F401
 from .moe_llm import token_usage_history
 from .pending_actions import (
     PendingAction,
@@ -362,10 +364,11 @@ media_model_matcher = on_command(
 @media_model_matcher.handle()
 async def _(args: Message = CommandArg()):
     role, _, query = args.extract_plain_text().strip().partition(" ")
-    roles = {"绘图": "image_model", "多模态": "multimodal_model", "群聊总结": "chat_summary_model"}
+    from .model_selector import MEDIA_ROLES
+    roles = {label: key for key, (label, _kind) in MEDIA_ROLES.items()}
     if role not in roles or not query.strip():
         await media_model_matcher.finish(
-            "格式：!设置媒体模型 绘图 模型名；类型可选：绘图、多模态、群聊总结。模型名填 关闭 可停用。"
+            "格式：!设置媒体模型 类型 模型名；类型：" + "、".join(roles) + "。模型名填 关闭 可停用。"
         )
     await media_model_matcher.finish(model_selector.set_media_model(roles[role], query.strip()))
 
@@ -1088,7 +1091,22 @@ check_token_matcher = on_command(
 @check_token_matcher.handle()
 async def _(event: MessageEvent, args: Message = CommandArg()):
     arg = args.extract_plain_text().strip()
-    await check_token_matcher.finish(format_token_usage_history(arg, token_usage_history))
+    from .usage_reports import report_data, format_report
+    from .usage_ledger import get_ledger
+    if not arg or arg.isdecimal():
+        count = min(50, max(1, int(arg or 10)))
+        rows = await asyncio.to_thread(get_ledger().rows, limit=count, reverse=True)
+        text = "最近模型用量（持久记录）\n" + "\n".join(
+            f"{row['model']} ({row['provider']}) · QQ {row['user_id'] or '系统'} · "
+            f"{'群 '+row['group_id'] if row['group_id'] else row['scene']} · {row['total']:,} Token"
+            for row in rows)
+        text += "\n统计/图表：模型用量统计、模型用量图 [周|月|年|全部] [群 群号] [用户 QQ]\n完整历史：导出模型用量 全部"
+    else:
+        try:
+            text = format_report(await asyncio.to_thread(report_data, arg))
+        except ValueError as error:
+            text = str(error)
+    await check_token_matcher.finish(text)
 
 
 reload_llm_matcher = on_command(

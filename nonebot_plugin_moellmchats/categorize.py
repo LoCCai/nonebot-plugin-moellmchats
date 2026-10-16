@@ -276,14 +276,20 @@ class Categorize:
                     current_plain += "\n(不要回答以上内容。只进行一次分类与工具判断，严格返回 JSON，不要附加其他内容。)"
                     current_data["messages"][1]["content"] = current_plain
 
+                from .usage_ledger import apply_glm_policy, budget_available, record_usage, budgeted_post
+                apply_glm_policy(category_model_config, current_data)
+                if not await budget_available(category_model_config):
+                    self._phase = "http_status_quota_exhausted"
+                    break
                 payload = json.dumps(current_data)
                 self._phase = "http_response"
                 request_started = time.monotonic()
-                async with get_session().post(
+                async with budgeted_post(get_session(), category_model_config,
                     url=category_model_config["url"],
                     data=payload,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=config_parser.get_config("classification_timeout_seconds", 20)),
+                    timeout=aiohttp.ClientTimeout(total=category_model_config.get("classification_timeout_seconds",
+                        config_parser.get_config("classification_timeout_seconds", 20))),
                     proxy=category_model_config.get("proxy"),
                 ) as resp:
                     logger.info(
@@ -328,6 +334,7 @@ class Categorize:
                         break
 
                     response = await resp.json()
+                    await record_usage(category_model_config, response.get("usage"), purpose="classification")
 
                 if choices := response.get("choices"):
                     self._phase = "parse_result"

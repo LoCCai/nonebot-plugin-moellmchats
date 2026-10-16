@@ -103,10 +103,22 @@ async def _prepared_content(context: ToolContext, document: MessageDocument,
             total_bytes += len(asset.payload or b"")
             if total_bytes > 24 * 1024 * 1024:
                 raise MediaError("本次素材合计超过 24MiB。")
-            if asset.kind == "file" and not asset.mime.startswith(("image/", "audio/", "video/")):
+            if (asset.kind == "audio" or asset.mime.startswith("audio/")) and media_models_transcription_enabled():
+                from .tokenhub_tools import transcribe_asset
+                transcript = await transcribe_asset(asset)
+                text += f"\n[语音转写 {asset.name}]\n{transcript}"
+            elif asset.kind == "file" and not asset.mime.startswith(("image/", "audio/", "video/")):
                 extracted, pictures, notes = await extract_document(asset)
                 text += f"\n[文件 {asset.name}]\n{extracted}"
                 warnings.extend(notes)
+                from .model_selector import model_selector
+                model = model_selector.get_model("multimodal_model") or {}
+                url = asset.data.get("resolved_url") or asset.data.get("url") or asset.data.get("file_url", "")
+                if "file" in model.get("media_types", ()) and isinstance(url, str) and url.startswith("https://"):
+                    # The download above already applied the media URL policy.
+                    # Keep extracted text for fallback models without native files.
+                    parts.append({"type": "file", "file": {"file_url": url},
+                                  "_text_fallback": bool(extracted.strip())})
                 for picture in pictures:
                     parts.append(await media_part(MediaAsset("image", asset.name, payload=picture, mime="image/png")))
             else:
@@ -118,6 +130,11 @@ async def _prepared_content(context: ToolContext, document: MessageDocument,
     if len(parts) > 8:
         warnings.append("多模态素材超过8项，本次只分析前8项。")
     return text[:MAX_DOCUMENT_CHARS], parts[:8], warnings
+
+
+def media_models_transcription_enabled() -> bool:
+    from .model_selector import model_selector
+    return bool(model_selector.get_config_value("transcription_model"))
 
 
 async def analyze_media(*, _tool_context: ToolContext, question: str,

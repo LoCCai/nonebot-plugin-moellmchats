@@ -51,6 +51,7 @@ class ModelPoolMixin:
         for names in pools.values():
             if (not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 32
                     or not all(isinstance(name, str) and name in models for name in names)
+                    or any(models[name].get("model_type", "chat") != "chat" for name in names if name in models)
                     or len(set(names)) != len(names)):
                 raise ValueError("模型池必须包含 1 至 32 个存在且不重复的完整模型名")
 
@@ -61,7 +62,8 @@ class ModelPoolMixin:
         return store
 
     def is_model_exhausted(self, identity: str) -> bool:
-        return identity in self._quota_status().exhausted
+        from .usage_ledger import get_ledger
+        return identity in self._quota_status().exhausted or get_ledger().exhausted(identity)
 
     async def mark_model_exhausted(self, model: Mapping, status: int) -> None:
         identity = f"{model.get('model')} ({model.get('provider')})"
@@ -79,6 +81,9 @@ class ModelPoolMixin:
         name = self.resolve_model_name(query)
         if not name:
             return self._get_resolve_error_msg(query)
+        from .usage_ledger import get_ledger
+        if name in get_ledger().budgets:
+            return f"{name} 使用本地Token额度。补充后请执行：补充模型额度 {name} 20000000（保留历史用量）。"
         await asyncio.to_thread(self._quota_status().set, name, None)
         return f"已清除 {name} 的额度耗尽标记，下次请求可重新选择。"
 
@@ -91,6 +96,8 @@ class ModelPoolMixin:
             if (attempted is not None and name in attempted) or self.is_model_exhausted(name):
                 continue
             model = mutable_value(state.models[name])
+            if model.get("model_type", "chat") != "chat":
+                continue
             if (has_tools and model.get("no_tools")) or (has_images and not model.get("is_vision")):
                 continue
             key = self._get_random_key(model)
@@ -100,6 +107,9 @@ class ModelPoolMixin:
         if not eligible:
             return None
         offsets = getattr(self, "_pool_offsets", {})
+        priority = [entry for entry in eligible if entry[1].get("priority_consume")]
+        if priority:
+            eligible = priority
         index = offsets.get(role, 0) % len(eligible) if rotate else 0
         if rotate:
             self._pool_offsets = {**offsets, role: offsets.get(role, 0) + 1}

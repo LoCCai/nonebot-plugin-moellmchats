@@ -15,6 +15,7 @@ from .model_error_policy import (
     read_bounded_error,
 )
 from .request_manager import get_current_request_elapsed
+from .usage_ledger import record_usage, budget_available, budgeted_post
 
 
 class LlmApiMixin:
@@ -242,6 +243,11 @@ class LlmApiMixin:
     async def stream_llm_chat(
         self, session, url, headers, data, proxy, is_segment=False, timeout=None
     ) -> tuple[bool, str, list, str]:
+        accounting_model = getattr(self, "model_info", {})
+        if not await budget_available(accounting_model):
+            self._last_api_quota_exhausted = True
+            self._last_api_http_status = 403
+            return False, "模型额度已耗尽，将选择备用模型。", None, ""
         from .request_recovery import current_binding
         durable_stream = current_binding() is not None
         # Keep a durable answer atomic: a broken stream cannot replay a visible prefix.
@@ -267,7 +273,7 @@ class LlmApiMixin:
                     await asyncio.sleep(min(2.0, 0.5 + len(part) / 1200))
                 assistant_result.append(await self.send_emotion_message(part))
 
-        async with session.post(
+        async with budgeted_post(session, accounting_model,
             url, headers=headers, json=data, proxy=proxy, timeout=timeout
         ) as resp:
             self._last_api_http_status = resp.status
@@ -300,6 +306,7 @@ class LlmApiMixin:
                         continue
                     if usage := json_data.get("usage"):
                         self._record_token_usage(usage)
+                        await record_usage(accounting_model, usage, purpose="chat_stream")
                     content = ""
                     # 以此尝试获取完整消息或流式增量
                     choices = json_data.get("choices", [{}])
@@ -378,7 +385,12 @@ class LlmApiMixin:
     async def none_stream_llm_chat(
         self, session, url, headers, data, proxy, timeout=None
     ) -> tuple[bool, str, list, str]:
-        async with session.post(
+        accounting_model = getattr(self, "model_info", {})
+        if not await budget_available(accounting_model):
+            self._last_api_quota_exhausted = True
+            self._last_api_http_status = 403
+            return False, "模型额度已耗尽，将选择备用模型。", None, ""
+        async with budgeted_post(session, accounting_model,
             url=url, json=data, headers=headers, proxy=proxy, timeout=timeout
         ) as resp:
             self._last_api_http_status = resp.status
@@ -405,6 +417,9 @@ class LlmApiMixin:
                     )
                 return False, error_reply, None, ""
             response = await resp.json()
+            if response:
+                await record_usage(accounting_model, response.get("usage"),
+                                   purpose="chat_tools" if data.get("tools") else "chat")
             if not response:
                 logger.warning("API返回空响应")
                 return False, "API返回异常：响应体为空", None, ""

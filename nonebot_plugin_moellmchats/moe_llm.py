@@ -376,13 +376,13 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             # and completed tool results. A model switch never replays a tool.
             protected = {"messages", "tools", "tool_choice"}
             previous_extra = self.model_info.get("extra_payload") or {}
-            options = {"model", "max_tokens", "temperature", "top_p", "top_k", "stream", "stream_options"}
+            options = {"model", "max_tokens", "max_completion_tokens", "temperature", "top_p", "top_k", "stream", "stream_options"}
             if isinstance(previous_extra, dict):
                 options.update(set(previous_extra) - protected)
             for name in options:
                 data.pop(name, None)
             self.model_info = backup
-            for name in ("max_tokens", "temperature", "top_p", "top_k"):
+            for name in ("max_tokens", "max_completion_tokens", "temperature", "top_p", "top_k"):
                 if backup.get(name) is not None:
                     data[name] = backup[name]
             extra = backup.get("extra_payload")

@@ -58,6 +58,9 @@ def is_quota_exhaustion_error_info(status: int, payload: Mapping) -> bool:
         "freetierexhausted", "free_tier_exhausted", "quotaexhausted", "free_quota_exhausted",
         "quota_exhausted", "insufficient_quota", "insufficient_balance", "insufficientbalance",
         "arrearage", "billing_hard_limit_reached",
+        "codeendpointnofreepackage", "codeendpointfreequotaexhausted", "codeinsufficientbalance",
+        # TokenHub's documented HTTP 402 billing codes.
+        "401007", "401008", "403004",
     }
     if identifiers & quota_codes:
         return True

@@ -155,6 +155,34 @@ async def test_mention_ack_uses_configured_emoji(monkeypatch: pytest.MonkeyPatch
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original,to_me,expected", [
+    ("七七 查询造梦", True, True), ("七七，帮我看看", True, True),
+    ("七七你好", True, True), ("今天七七在线吗", True, False),
+    ("七七 查询造梦", False, False), ("@七七 查询造梦", True, False),
+])
+async def test_nickname_ack_follows_adapter_prefix_recognition(original, to_me, expected):
+    bot = SimpleNamespace(self_id="123", config=SimpleNamespace(nickname={"七七"}), call_api=AsyncMock())
+    event = _mention_event(Message(original))
+    event.message = Message("查询造梦")
+    event.to_me = to_me
+    await chat_runtime.acknowledge_mention(bot, event)
+    assert bot.call_api.await_count == int(expected)
+
+
+@pytest.mark.asyncio
+async def test_nickname_and_at_ack_only_once_and_obeys_switch(monkeypatch):
+    bot = SimpleNamespace(self_id="123", config=SimpleNamespace(nickname={"七七"}), call_api=AsyncMock())
+    event = _mention_event(Message("七七 ") + MessageSegment.at(123))
+    event.to_me = True
+    await chat_runtime.acknowledge_mention(bot, event)
+    bot.call_api.assert_awaited_once()
+    bot.call_api.reset_mock()
+    monkeypatch.setattr(chat_runtime.mention_ack_config, "moellm_mention_ack_enabled", False)
+    await chat_runtime.acknowledge_mention(bot, event)
+    bot.call_api.assert_not_awaited()
+
+
 def _event(*, user_id: int = 42, timestamp: int = 1_000):
     return SimpleNamespace(
         time=timestamp,

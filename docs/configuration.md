@@ -72,6 +72,22 @@ LOCALSTORE_USE_CWD=true
 
 确认普通聊天稳定后，再把 `use_tools` 改为 true。JSON 文件不允许 `//` 注释；本页的 `json5` 代码块只是为了讲解字段，不能原样带注释复制。
 
+需要为固定模型配置 HTTP 429 备用时，在 `model_config.json` 顶层添加：
+
+```json
+{
+  "model_fallbacks": {
+    "your-model (your-provider)": ["backup-model (your-provider)"]
+  }
+}
+```
+
+使用模型列表中的完整 ID，最多 32 组、每组 1～4 个备用，按顺序尝试。分类与聊天均支持；
+只有收到 HTTP 429 才切换，不把网络超时或内容拒绝当作切换理由。同一请求不会循环尝试已用过的模型；
+切换保留消息、工具 schema 和已完成工具的结果，重新使用备用模型自己的 URL、密钥和参数，
+不会重跑工具。分类仍受原整体时间预算约束，备用结果不写入主模型的成功缓存。
+该配置用于原有固定模型选择；启用高级 `capability_routing` 时不会绕过它的能力目录选择备用。
+
 ---
 
 ## 配置文件一览
@@ -127,9 +143,21 @@ LOCALSTORE_USE_CWD=true
 | `max_repeated_tool_calls` | `2` | 同一任务内同一工具使用同一组规范化参数最多调用几次 | 防止模型原样循环；不同实质参数仍受总工具轮次与 Agent 步数限制 |
 | `max_tool_result_chars` | `6000` | 没有独立 `result_limit` 时，工具文本最多交给模型多少字符 | 控制上下文与数据暴露面 |
 | `max_tool_images` | `4` | 一轮工具结果最多交给视觉模型多少张图 | 视觉模型能力明确时再增加 |
+| `tool_batch_sequential_fallback` | `false` | 显式并行批次不满足条件时，是否仍按每轮额度逐个执行多个工具 | 开启可跨插件、跨功能连续处理，逐项权限和确认检查仍生效 |
+| `tool_image_vision_enabled` | `true` | 工具产图后是否自动交给视觉模型再分析 | 关闭可节省识图 token；不影响图片投递或用户上传图片的识别 |
+| `tool_image_vision_excluded_tools` | `[]` | 不做二次识图的工具名列表 | 例如 `["qi_zmws", "generate_meme"]` |
 | `request_timeout_seconds` | `180` | 整个任务的单一墙钟预算，包含排队、分类、模型、工具和收尾 | 慢模型可增加，但队列会占更久 |
-| `classification_timeout_seconds` | `20` | 单次分类请求超时 | 分类服务慢且可靠时小幅增加 |
+| `classification_timeout_seconds` | `20` | 工具目录、缓存与分类请求的整体时间预算 | 超时保留常驻工具，并记录实际分类模型和耗时阶段 |
+| `classification_max_tokens` | `512` | 分类 JSON 的最大输出 token 数 | 分类同时透传该模型的 `extra_payload`，可按服务商配置关闭思考；固定为非流式 |
 | `tool_timeout_seconds` | `180` | 未在 ToolSpec 中单独声明时的可信工具超时；同时受请求剩余时间约束 | 慢查询可按需调整 |
+
+宿主可在 LLM 工具执行期间调用 `render_data.record_rendered_view(template, html, context)`，
+把卡片文字、DOM selector 和模板字段放入当前用户会话的内存缓存。插件回执会携带 `render_id`、
+文字摘要及 `/text`、`/nodes`、`/data` 路径；将 `read_rendered_view` 加入宿主插件的
+`tool_dependencies`，模型就能按 JSON Pointer 和 `next_offset` 继续读取，无需 OCR。
+记录最多64份、10分钟过期；不写磁盘，其他 Bot、用户或群不能读取。样式、素材引用及凭据字段会省略，
+较大数据有截断标记。获得文本回执的卡片会声明 `skip_image_vision=true`；普通可信工具也可通过
+`ToolResult.metadata` 声明该标志，使其图片正常投递而不触发二次识图。
 
 ### 冷却、准入、兼容投递与成员缓存
 

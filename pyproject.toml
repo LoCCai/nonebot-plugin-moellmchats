@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "nonebot-plugin-moellmchats"
-version = "0.26.5.post1"
+version = "0.26.5.post2"
 description = "A Nonebot plugin, Multi-Model Chat System | Hybrid Scheduling·Search Augmented·Persona Customization"
 license = "GPL"
 authors = ["Elflare", "LoCCai Maintainers"]
@@ -35,10 +35,12 @@ mcp = {extras = ["cli"], version = ">=1.28.1,<2.0.0"}
 nonebot-plugin-htmlrender = { version = ">=0.7.0,<0.8.0", optional = true }
 pillow = { version = ">=9.0.0", optional = true }
 pypdf = { version = ">=6.20.1,<7.0.0", optional = true }
+matplotlib = { version = ">=3.9,<4", optional = true }
 
 [tool.poetry.extras]
 render = ["nonebot-plugin-htmlrender", "pillow"]
 media = ["pillow", "pypdf"]
+statistics = ["matplotlib"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"

@@ -252,7 +252,7 @@ class LlmPayloadMixin:
             "messages": send_message_list,
         }
         # 处理可选的通用参数（避免把 None 传给 API 导致报错）
-        for key in ["max_tokens", "temperature", "top_p", "top_k"]:
+        for key in ["max_tokens", "max_completion_tokens", "temperature", "top_p", "top_k"]:
             if self.model_info.get(key) is not None:
                 data[key] = self.model_info[key]
 
@@ -344,6 +344,8 @@ class LlmPayloadMixin:
         data["stream"] = current_stream_flag
         if current_stream_flag:
             data["stream_options"] = {"include_usage": True}
+        from .usage_ledger import apply_glm_policy
+        apply_glm_policy(self.model_info, data)
         return data, current_stream_flag
 
     def _render_history_placeholders(self, text: str) -> str:

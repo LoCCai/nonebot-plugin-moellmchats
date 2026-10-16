@@ -14,6 +14,7 @@ except ImportError:
     import tomli as tomllib
 from collections import defaultdict
 import random
+import os
 
 import aiohttp
 from nonebot.log import logger
@@ -27,6 +28,15 @@ from .private_files import (
 )
 
 config_path: Path = store.get_plugin_config_dir()
+
+MEDIA_ROLES = {
+    "image_model": ("绘图", "image"), "multimodal_model": ("多模态", "chat"),
+    "chat_summary_model": ("群聊总结", "chat"), "embedding_model": ("文本向量", "embedding"),
+    "multimodal_embedding_model": ("多模态向量", "multimodal_embedding"),
+    "transcription_model": ("语音识别", "transcription"), "speech_model": ("语音合成", "speech"),
+    "video_model": ("视频生成", "video"), "model_3d": ("三维生成", "3d"),
+    "music_model": ("音乐生成", "music"),
+}
 
 
 @dataclass(frozen=True)
@@ -176,6 +186,17 @@ class ModelSelector(ModelPoolMixin):
         key = key.strip()
         return key if key.lower().startswith("bearer ") else f"Bearer {key}"
 
+    @staticmethod
+    def _provider_key(info: Mapping):
+        """Resolve a host secret by name; never persist the resolved value."""
+        if name := info.get("api_key_config"):
+            from nonebot import get_driver
+            if not isinstance(name, str) or not name.isidentifier():
+                raise ValueError("api_key_config 必须是配置项名称")
+            value = getattr(get_driver().config, name.lower(), None)
+            return value or os.environ.get(name.upper(), "")
+        return info.get("api_key", "")
+
     def _get_random_key(self, model_data: dict) -> str:
         """Key 提取与随机方法，保证只返回字符串"""
         pool = []
@@ -304,7 +325,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         # 2. 合并并加载 TOML 中的模型及配置
         for provider, p_info in self.providers.items():
             url = self._normalize_url(p_info.get("base_url", ""))
-            raw_key = p_info.get("api_key", "")
+            raw_key = self._provider_key(p_info)
             if isinstance(raw_key, list):
                 keys = [self._normalize_key(k) for k in raw_key if k]
             else:
@@ -321,8 +342,13 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             m_ids.update(model_configs.keys())
             for group in config_groups:
                 m_ids.update(group.get("models", []))
+            if "allowed_models" in p_info:
+                m_ids.intersection_update(p_info["allowed_models"])
 
             for mid in m_ids:
+                if mid in p_info.get("disabled_models", ()):
+                    self.models.pop(f"{mid} ({provider})", None)
+                    continue
                 unique_mid = f"{mid} ({provider})"
                 # 基础信息：注意 "model" 保留了 mid，这是发给 API 的真实名字
                 model_data = {
@@ -361,7 +387,9 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         async def _fetch_one(provider: str, info: dict):
             base_url = info.get("base_url")
-            raw_key = info.get("api_key")
+            raw_key = self._provider_key(info)
+            if info.get("discover_models") is False:
+                return provider, None
             if not base_url or not raw_key:
                 return provider, None
             api_key = random.choice(raw_key) if isinstance(raw_key, list) else raw_key
@@ -426,7 +454,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def validate_model_config(self, persist: bool = False) -> tuple[bool, list[str]]:
         warnings = []
         changed = False
-        available_models = self.get_sorted_model_names()
+        available_models = [name for name in self.get_sorted_model_names()
+                            if self.models[name].get("model_type", "chat") == "chat"]
 
         if not available_models:
             return False, [
@@ -440,6 +469,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             nonlocal changed, warnings
             current_val = self.model_config.get(key)
             resolved = self.resolve_model_name(current_val) if current_val else None
+            expected = MEDIA_ROLES.get(key, ("", "chat"))[1]
+            if resolved and self.models[resolved].get("model_type", "chat") != expected:
+                if not (key == "image_model" and "model_type" not in self.models[resolved]):
+                    resolved = None
 
             if not resolved:
                 if is_required:
@@ -466,13 +499,15 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         _check_config("category_model", fallback=self.model_config["selected_model"])
         _check_config("summary_model", fallback=self.model_config["selected_model"])
         _check_config("vision_model", is_required=False)
-        for media_role in ("image_model", "multimodal_model", "chat_summary_model"):
+        for media_role in MEDIA_ROLES:
             _check_config(media_role, is_required=False)
 
         moe_models = self.model_config.setdefault("moe_models", {})
         for difficulty in ["0", "1", "2"]:
             moe_model = moe_models.get(difficulty)
             resolved_moe = self.resolve_model_name(moe_model) if moe_model else None
+            if resolved_moe and self.models[resolved_moe].get("model_type", "chat") != "chat":
+                resolved_moe = None
             if not resolved_moe:
                 moe_models[difficulty] = self.model_config["selected_model"]
                 changed = True
@@ -540,6 +575,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             if name in attempted or self.is_model_exhausted(name):
                 continue
             model = mutable_value(state.models[name])
+            if model.get("model_type", "chat") != current.get("model_type", "chat"):
+                continue
             if has_tools and model.get("no_tools"):
                 continue
             if has_images and not model.get("is_vision"):
@@ -631,6 +668,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             from .runtime_snapshot import mutable_value
 
             model_data = mutable_value(state.models[selected_model])
+            expected = MEDIA_ROLES.get(key, ("", "chat"))[1]
+            if (model_data.get("model_type", "chat") != expected
+                    and not (key == "image_model" and "model_type" not in model_data)):
+                return None
             model_data["key"] = self._get_random_key(model_data)
             if (self.is_model_exhausted(selected_model)
                     or not model_data["key"]
@@ -719,6 +760,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             from .runtime_snapshot import mutable_value
 
             model_data = mutable_value(state.models[model_name])
+            if model_data.get("model_type", "chat") != "chat":
+                return None
             model_data["key"] = self._get_random_key(model_data)
             if self.is_model_exhausted(model_name):
                 return self.get_rate_limit_fallback(model_data, set(), has_tools=has_tools, has_images=has_images)
@@ -790,6 +833,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
+        if self.models[model_name].get("model_type", "chat") != "chat":
+            return "该模型不是对话模型，请使用 !设置媒体模型。"
 
         if difficulty not in ["0", "1", "2"]:
             return "difficulty只能是 0、1、2 中的一个"
@@ -808,6 +853,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
+        if self.models[model_name].get("model_type", "chat") != "chat":
+            return "该模型不是对话模型，不能用于分类。"
 
         self.model_config["category_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
@@ -838,6 +885,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
+        if self.models[model_name].get("model_type", "chat") != "chat":
+            return "该模型不是对话模型，请使用 !设置媒体模型。"
 
         self.model_config["selected_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
@@ -853,6 +902,8 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
+        if self.models[model_name].get("model_type", "chat") != "chat" or not self.models[model_name].get("is_vision"):
+            return "该模型不是声明支持识图的对话模型。"
 
         self.model_config["vision_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
@@ -862,13 +913,15 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
+        if self.models[model_name].get("model_type", "chat") != "chat":
+            return "该模型不是对话模型，不能用于总结。"
 
         self.model_config["summary_model"] = model_name
         self._write_config(self.model_config_file, self.model_config)
         return f"已切换工具草稿复核固定模型为 {model_name}" + self.pool_override_notice("category")
 
     def set_media_model(self, role: str, model_query: str) -> str:
-        labels = {"image_model": "绘图", "multimodal_model": "多模态", "chat_summary_model": "群聊总结"}
+        labels = {key: value[0] for key, value in MEDIA_ROLES.items()}
         if role not in labels:
             raise ValueError("未知媒体模型角色")
         if model_query in {"关闭", "off"}:
@@ -878,6 +931,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         model_name = self.resolve_model_name(model_query)
         if not model_name:
             return self._get_resolve_error_msg(model_query)
+        kind = self.models[model_name].get("model_type", "chat")
+        # Historical providers did not declare a type for image models.
+        if kind != MEDIA_ROLES[role][1] and not (role == "image_model" and "model_type" not in self.models[model_name]):
+            return f"模型类型为 {kind}，不能用于{labels[role]}。"
         if role == "multimodal_model" and not self.models[model_name].get("is_vision"):
             return "该模型未声明视觉能力，请先在 providers.toml 设置 is_vision=true。"
         self.model_config[role] = model_name
@@ -912,7 +969,9 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             lines.append(f"🔸 【{provider}】")
             # 这里的 umid 是唯一键，但在展示时提取原始的 model 字段，防止视觉冗余
             formatted_items = [
-                f"[{idx}] {state.models[umid]['model']}" + (" [额度耗尽，已移出池]" if self.is_model_exhausted(umid) else "")
+                f"[{idx}] {state.models[umid]['model']}"
+                + (f" [{state.models[umid]['model_type']}]" if state.models[umid].get('model_type', 'chat') != 'chat' else '')
+                + (" [额度耗尽，已移出池]" if self.is_model_exhausted(umid) else "")
                 for idx, umid in m_list
             ]
             lines.append("  " + ", ".join(formatted_items))

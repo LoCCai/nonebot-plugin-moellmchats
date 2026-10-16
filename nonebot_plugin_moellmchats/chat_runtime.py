@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 import time
+import re
 
 from nonebot.adapters import Bot
 from nonebot.adapters import Event as MessageEvent
@@ -49,7 +50,7 @@ _MENTION_ACK_TIMEOUT_SECONDS = 1.0
 
 
 async def acknowledge_mention(bot: Bot, event: MessageEvent) -> None:
-    """Acknowledge a real group mention without delaying or failing the chat."""
+    """Acknowledge group @ and adapter-recognized nickname calls equally."""
     if not mention_ack_config.moellm_mention_ack_enabled:
         return
     if event_scene(event) != "group" or onebot_protocol(bot, event) != "onebot_v11":
@@ -62,12 +63,22 @@ async def acknowledge_mention(bot: Bot, event: MessageEvent) -> None:
     message = getattr(event, "original_message", None)
     if message is None:
         message = event_message(event)
-    if not any(
+    mentioned = any(
         getattr(segment, "type", "") == "at"
         and isinstance(data := getattr(segment, "data", None), Mapping)
         and str(data.get("qq", "")) == self_id
         for segment in message
-    ):
+    )
+    # Nicknames have also been removed by the adapter. Use its to_me decision
+    # and the original leading text, so an embedded name or quoted reply does
+    # not acquire a reaction merely because it contains the bot's name.
+    nicknames = getattr(getattr(bot, "config", None), "nickname", ())
+    names = "|".join(re.escape(name) for name in nicknames if isinstance(name, str) and name)
+    first = next(iter(message), None)
+    text = getattr(first, "data", {}).get("text", "") if getattr(first, "type", "") == "text" else ""
+    nickname_call = bool(getattr(event, "to_me", False) and names
+                         and re.match(rf"^({names})([\s,，]*|$)", text, re.IGNORECASE))
+    if not mentioned and not nickname_call:
         return
     try:
         async with timeout_scope(_MENTION_ACK_TIMEOUT_SECONDS):
@@ -76,7 +87,7 @@ async def acknowledge_mention(bot: Bot, event: MessageEvent) -> None:
                 emoji_id=str(mention_ack_config.moellm_mention_ack_emoji_id), set=True,
             )
     except Exception as error:
-        logger.debug("LLM @反馈未完成，继续处理对话：error_type={}", type(error).__name__)
+        logger.debug("LLM 唤醒反馈未完成，继续处理对话：error_type={}", type(error).__name__)
 
 
 async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
@@ -151,8 +162,10 @@ async def _generation_redis_lease(
 async def handle_llm(
     bot: Bot, event: MessageEvent, matcher, format_message_dict: dict, is_ai=False, **kwargs,
 ):
-    return await recovery_service.run(bot, event, format_message_dict, is_ai,
-        lambda: _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs))
+    from .usage_ledger import bind_usage_scope
+    with bind_usage_scope(bot, event):
+        return await recovery_service.run(bot, event, format_message_dict, is_ai,
+            lambda: _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs))
 
 
 async def _handle_llm(

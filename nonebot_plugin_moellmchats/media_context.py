@@ -347,6 +347,7 @@ async def asset_bytes(context: ToolContext, reference: str) -> MediaAsset:
     if not url:
         raise MediaError("QQ 框架未返回可下载地址；该附件目前无法读取。")
     payload, mime = await download_media(str(url))
+    asset.data["resolved_url"] = str(url)
     if asset.kind == "audio" and (payload.startswith(b"#!SILK") or payload.startswith(b"\x02#!SILK")):
         raise MediaError("这条QQ语音仍为SILK格式，框架转码未成功；本次没有按MP3提交模型。")
     asset.payload = payload

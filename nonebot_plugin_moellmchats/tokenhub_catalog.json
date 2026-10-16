@@ -1,0 +1,627 @@
+{
+  "hy_image": {
+    "kind": "image",
+    "models": [
+      "hy-image-v3"
+    ],
+    "path": "/wand/hunyuan-image/v3-generation",
+    "doc": "135745",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "hy_image35": {
+    "kind": "image",
+    "models": [
+      "hy-image-v3.5-preview"
+    ],
+    "path": "/wand/hunyuan-image/v35-generation",
+    "doc": "135745",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "wand_image": {
+    "kind": "image",
+    "models": [
+      "wand-vega-image-lite",
+      "wand-vega-image-flash",
+      "wand-vega-image-pro",
+      "wand-vega-image-1.5-pro"
+    ],
+    "path": "/wand/vega-images/generations",
+    "doc": "137203",
+    "poll": "/wand/vega-images/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "seedream_image": {
+    "kind": "image",
+    "models": [
+      "seedream-image-v5.0-lite",
+      "seedream-image-v5.0-pro",
+      "seedream-image-v5.0-flash"
+    ],
+    "path": "/wand/si-image/generation",
+    "doc": "136609",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "vidu_image": {
+    "kind": "image",
+    "models": [
+      "vidu-image-q2"
+    ],
+    "path": "/wand/vidu-image/generation",
+    "doc": "135746",
+    "poll": "/wand/vidu-image/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "kling_image": {
+    "kind": "image",
+    "models": [
+      "kling-image-o1",
+      "kling-image-v3",
+      "kling-image-v3-omni"
+    ],
+    "path": "/wand/kling-image/generation",
+    "doc": "138803",
+    "poll": "/wand/kling-image/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "hy_video": {
+    "kind": "video",
+    "models": [
+      "hy-video-v1.5"
+    ],
+    "path": "/wand/hunyuan-video/generation",
+    "doc": "137202",
+    "poll": "/wand/hunyuan-video/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "wand_video": {
+    "kind": "video",
+    "models": [
+      "wand-vega-video-1.0-lite"
+    ],
+    "path": "/wand/vega-videos/tasks",
+    "doc": "138195",
+    "poll": "/wand/vega-videos/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "yt_actor": {
+    "kind": "video",
+    "models": [
+      "yt-video-humanactor"
+    ],
+    "path": "/api/video/submit",
+    "doc": "135716",
+    "poll": "/api/video/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "pixverse_text_to_video": {
+    "kind": "video",
+    "models": [
+      "pixverse-video-c1",
+      "pixverse-video-v6.0",
+      "pixverse-video-v5.6"
+    ],
+    "path": "/wand/pixverse/text-to-video",
+    "doc": "135325",
+    "poll": "/wand/pixverse/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "pixverse_image_to_video": {
+    "kind": "video",
+    "models": [
+      "pixverse-video-c1",
+      "pixverse-video-v6.0",
+      "pixverse-video-v5.6"
+    ],
+    "path": "/wand/pixverse/image-to-video",
+    "doc": "135325",
+    "poll": "/wand/pixverse/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "pixverse_start_end_to_video": {
+    "kind": "video",
+    "models": [
+      "pixverse-video-c1",
+      "pixverse-video-v6.0",
+      "pixverse-video-v5.6"
+    ],
+    "path": "/wand/pixverse/start-end-to-video",
+    "doc": "135325",
+    "poll": "/wand/pixverse/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "pixverse_reference_to_video": {
+    "kind": "video",
+    "models": [
+      "pixverse-video-c1",
+      "pixverse-video-v6.0",
+      "pixverse-video-v5.6"
+    ],
+    "path": "/wand/pixverse/reference-to-video",
+    "doc": "135325",
+    "poll": "/wand/pixverse/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "vidu_text_to_video": {
+    "kind": "video",
+    "models": [
+      "vidu-video-q3-turbo",
+      "vidu-video-q3-pro",
+      "vidu-video-q2"
+    ],
+    "path": "/wand/vidu/text-to-video",
+    "doc": "135756",
+    "poll": "/wand/vidu/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "vidu_image_to_video": {
+    "kind": "video",
+    "models": [
+      "vidu-video-q4-preview",
+      "vidu-video-q3-turbo",
+      "vidu-video-q3-pro",
+      "vidu-video-q2-pro",
+      "vidu-video-q2-turbo"
+    ],
+    "path": "/wand/vidu/image-to-video",
+    "doc": "135756",
+    "poll": "/wand/vidu/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "vidu_start_end_to_video": {
+    "kind": "video",
+    "models": [
+      "vidu-video-q3-turbo",
+      "vidu-video-q3-pro",
+      "vidu-video-q2-pro",
+      "vidu-video-q2-turbo"
+    ],
+    "path": "/wand/vidu/start-end-to-video",
+    "doc": "135756",
+    "poll": "/wand/vidu/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "vidu_reference_to_video": {
+    "kind": "video",
+    "models": [
+      "vidu-video-q4-preview",
+      "vidu-video-q3-turbo",
+      "vidu-video-q3",
+      "vidu-video-q2-pro",
+      "vidu-video-q2"
+    ],
+    "path": "/wand/vidu/reference-to-video",
+    "doc": "135756",
+    "poll": "/wand/vidu/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "kling_text_to_video": {
+    "kind": "video",
+    "models": [
+      "kling-video-v2.5-turbo",
+      "kling-video-v2.6",
+      "kling-video-v3",
+      "kling-video-v3-turbo"
+    ],
+    "path": "/wand/kling/text-to-video",
+    "doc": "135742",
+    "poll": "/wand/kling/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "kling_image_to_video": {
+    "kind": "video",
+    "models": [
+      "kling-video-v2.5-turbo",
+      "kling-video-v2.6",
+      "kling-video-v3",
+      "kling-video-v3-turbo"
+    ],
+    "path": "/wand/kling/image-to-video",
+    "doc": "135742",
+    "poll": "/wand/kling/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "kling_omni_video": {
+    "kind": "video",
+    "models": [
+      "kling-video-v3-omni",
+      "kling-video-o1"
+    ],
+    "path": "/wand/kling/omni-video",
+    "doc": "135742",
+    "poll": "/wand/kling/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "kling_motion_control": {
+    "kind": "video",
+    "models": [
+      "kling-video-motion-control-v2.6",
+      "kling-video-motion-control-v3.0"
+    ],
+    "path": "/wand/kling/motion-control",
+    "doc": "135742",
+    "poll": "/wand/kling/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "minimax_video": {
+    "kind": "video",
+    "models": [
+      "minimax-video-v2.3",
+      "minimax-video-v2.3-fast"
+    ],
+    "path": "/wand/minimax-video/generation",
+    "doc": "135737",
+    "poll": "/wand/minimax-video/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "minimax_video_h3": {
+    "kind": "video",
+    "models": [
+      "minimax-video-h3",
+      "minimax-video-h3-max"
+    ],
+    "path": "/wand/minimax-video-v2/generation",
+    "doc": "135737",
+    "poll": "/wand/minimax-video-v2/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "transcribe": {
+    "kind": "transcription",
+    "models": [
+      "hy-asr-3.0-preview",
+      "wand-asr-v1"
+    ],
+    "path": "/wand/asrproxy/sync_transcribe",
+    "doc": "135793",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "transcribe_async": {
+    "kind": "transcription",
+    "models": [
+      "wand-asr-v1"
+    ],
+    "path": "/wand/asrproxy/async_create",
+    "doc": "135794",
+    "poll": "/wand/asrproxy/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "speech": {
+    "kind": "speech",
+    "models": [
+      "minimax-speech-02-turbo",
+      "minimax-speech-02-hd",
+      "minimax-speech-2.6-turbo",
+      "minimax-speech-2.6-hd",
+      "minimax-speech-2.8-turbo",
+      "minimax-speech-2.8-hd"
+    ],
+    "path": "/wand/minimax-tts/sync_tts",
+    "doc": "135796",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "voice_design": {
+    "kind": "speech",
+    "models": [
+      "minimax-voice-design"
+    ],
+    "path": "/wand/minimax-tts/sync_design",
+    "doc": "135797",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "voice_clone": {
+    "kind": "speech",
+    "models": [
+      "minimax-voice-clone"
+    ],
+    "path": "/wand/minimax-tts/sync_clone",
+    "doc": "135798",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "dubbing": {
+    "kind": "speech",
+    "models": [
+      "wand-dubbing-clone-v1",
+      "wand-dubbing-clone-v2",
+      "wand-dubbing-sts-v1"
+    ],
+    "path": "/wand/dubbing/async_generation",
+    "doc": "135800",
+    "poll": "/wand/dubbing/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "minimax_music": {
+    "kind": "music",
+    "models": [
+      "minimax-music-v2.6",
+      "minimax-music-v3.0"
+    ],
+    "path": "/wand/minimax-music/generation",
+    "doc": "135323",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "mureka_music": {
+    "kind": "music",
+    "models": [
+      "mureka-music-v9"
+    ],
+    "path": "/wand/mureka-music/generation",
+    "doc": "138805",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "world_scene": {
+    "kind": "3d",
+    "models": [
+      "hy-world2-scene"
+    ],
+    "path": "/wand/hunyuan-video/world2-scene",
+    "doc": "136578",
+    "poll": "/wand/hunyuan-video/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "world_panorama": {
+    "kind": "image",
+    "models": [
+      "hy-world2-panorama"
+    ],
+    "path": "/wand/hunyuan-image/world2-panorama",
+    "doc": "136578",
+    "poll": "/wand/hunyuan-video/tasks/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "hy_3d_3_0": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-3.0",
+      "hy-3d-3.1"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137181",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_express": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-express"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137175",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_component": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-component"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137176",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_format": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-format"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137182",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_texture": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-texture"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137183",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_uv": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-uv"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137777",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_retopology": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-retopology"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137778",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_rigging": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-rigging"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137779",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_motion": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-motion"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137780",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_polygen_image": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-polygen-image"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "138193",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hy_3d_polygen_mesh": {
+    "kind": "3d",
+    "models": [
+      "hy-3d-polygen-mesh"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "138194",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "tripo_3d_3_1": {
+    "kind": "3d",
+    "models": [
+      "tripo-3d-3.1",
+      "tripo-3d-p1",
+      "tripo-3d-p2"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137074",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "tripo_3d_rigging_check": {
+    "kind": "3d",
+    "models": [
+      "tripo-3d-rigging-check"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137073",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "tripo_3d_rigging": {
+    "kind": "3d",
+    "models": [
+      "tripo-3d-rigging"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137072",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "tripo_3d_animation": {
+    "kind": "3d",
+    "models": [
+      "tripo-3d-animation"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137071",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "tripo_3d_format": {
+    "kind": "3d",
+    "models": [
+      "tripo-3d-format"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137070",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "hi3d_2_1": {
+    "kind": "3d",
+    "models": [
+      "hi3d-2.1",
+      "hi3d-3.0"
+    ],
+    "path": "/api/3d/submit",
+    "doc": "137207",
+    "poll": "/api/3d/query",
+    "poll_method": "POST",
+    "poll_field": "id"
+  },
+  "embed_text": {
+    "kind": "embedding",
+    "models": [
+      "kinfra-text-embedding-0.6b",
+      "kinfra-text-embedding-4b"
+    ],
+    "path": "/embeddings",
+    "doc": "133515",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "embed_media": {
+    "kind": "multimodal_embedding",
+    "models": [
+      "kinfra-vl-embedding-2b",
+      "kinfra-vl-embedding-8b"
+    ],
+    "path": "/embeddings/multimodal",
+    "doc": "133515",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  }
+}
