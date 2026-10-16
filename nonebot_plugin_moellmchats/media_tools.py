@@ -39,7 +39,10 @@ _previous_images: dict[tuple[str, str, str], str] = {}
 _drawing_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
 _drawing_requests: dict[tuple, str] = {}
 _drawing_gate = asyncio.Semaphore(2)
-DRAWING_ACCESS_DENIED = "AI 生图模型和改图当前仅限授权用户使用（由管理员手动授权）；攻略、表格、流程图和思维导图的排版成图无需绘图授权。"
+DRAWING_ACCESS_DENIED = (
+    "AI 生图模型和改图当前仅限授权用户使用（由管理员手动授权）；"
+    "攻略、表格、流程图和思维导图的排版成图无需绘图授权。"
+)
 _image_generation_authorizer: Callable[[ToolContext], Awaitable[bool]] | None = None
 
 
@@ -99,6 +102,11 @@ async def _prepared_content(context: ToolContext, document: MessageDocument,
     total_bytes = 0
     for reference in references:
         try:
+            cached = media_store.get(context, reference, MediaAsset)
+            if cached.rendered_data:
+                # Exact host text is already in document.text; retain the
+                # original asset for editing tools without sending it to OCR.
+                continue
             asset = await asset_bytes(context, reference)
             total_bytes += len(asset.payload or b"")
             if total_bytes > 24 * 1024 * 1024:
@@ -267,8 +275,9 @@ def _spec(name: str, description: str, properties: dict, required: list[str], ha
     return ToolSpec(name=name, description=description, parameters={"type": "object", "properties": properties,
         "required": required, "additionalProperties": False}, handler=handler, effect=ToolEffect.READ_ONLY,
         permission="user", timeout_seconds=180, result_limit=16_000,
-        dependencies=("get_render_theme", "render_markdown", "render_html")
-            if name in {"summarize_chat", "analyze_media", "generate_image"} else (),
+        dependencies=(("get_render_theme", "render_markdown", "render_html")
+            if name in {"summarize_chat", "analyze_media", "generate_image"} else ())
+            + (("read_rendered_view",) if name != "generate_image" else ()),
         policy=ToolPolicy.configured(ToolCapabilityV2(network_allow=("*",))))
 
 

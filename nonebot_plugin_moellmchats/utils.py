@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Mapping
 import inspect
+import json
 from os import listdir
 from pathlib import Path
 from random import choice
@@ -320,6 +321,7 @@ async def format_message(event, bot) -> dict:
     image_segments = []
     mentions = []
     reply_user = None
+    rendered_views = []
     current_user_id = event_user_id(event)
     current_user = {
         "qq": current_user_id,
@@ -328,6 +330,11 @@ async def format_message(event, bot) -> dict:
 
     # 1. 处理回复消息
     if reply := await _message_reply(event, bot):
+        from .render_data import rendered_views_for_message
+
+        reply_id = getattr(reply, "message_id", None) or event_reply_message_id(event)
+        if reply_id is not None:
+            rendered_views = rendered_views_for_message(bot, event, reply_id)
         reply_segments = []
         reply_message = getattr(reply, "message", None)
         if reply_message is not None:
@@ -349,6 +356,10 @@ async def format_message(event, bot) -> dict:
             if reply_id is not None:
                 reply_segments.append(f"[回复消息 {reply_id}]")
         reply_text = "".join(reply_segments).strip()
+        if rendered_views:
+            reply_text += ("\n[本条引用卡片的原始渲染数据；数字和人物信息以此为准，无需识图。"
+                           "text_truncated=true 时必须调用 read_rendered_view 继续读取，不得推测省略内容。]\n"
+                           + json.dumps(rendered_views, ensure_ascii=False))
         reply_sender = getattr(reply, "sender", None)
         reply_user_id = str(getattr(reply_sender, "user_id", None) or getattr(reply, "user_id", ""))
         reply_name = getattr(reply_sender, "card", None) or getattr(reply_sender, "nickname", None)
@@ -394,7 +405,8 @@ async def format_message(event, bot) -> dict:
     resolved = await asyncio.gather(*(_image_url(seg, bot, event) for _, seg in image_segments[:8]))
     for (origin, segment), url in zip(image_segments[:8], resolved):
         if url:
-            image_urls.append(url)
+            if origin != "reply" or not rendered_views:
+                image_urls.append(url)
             image_sources.append({"source": origin, "url": url})
         elif file_id := segment.data.get("file_id"):
             image_file_ids.append(str(file_id))
@@ -408,6 +420,8 @@ async def format_message(event, bot) -> dict:
         "mentions": mentions,
         "reply_user": reply_user,
         "current_user": current_user,
+        "rendered_views": rendered_views,
+        "images_have_rendered_data": bool(rendered_views and all(origin == "reply" for origin, _ in image_segments)),
     }
 
 

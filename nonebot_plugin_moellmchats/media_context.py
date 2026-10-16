@@ -48,6 +48,7 @@ class MediaAsset:
     data: dict[str, Any] = field(default_factory=dict)
     payload: bytes | None = None
     mime: str = ""
+    rendered_data: bool = False
 
 
 @dataclass
@@ -149,7 +150,7 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
     seen: set[tuple[str, str]] = set()
     calls = 0
 
-    async def walk(raw: Any, depth: int = 0, label: str = "") -> None:
+    async def walk(raw: Any, depth: int = 0, label: str = "", rendered_data: bool = False) -> None:
         nonlocal calls
         if depth > 8 or document.nodes >= 1000 or document.chars >= MAX_DOCUMENT_CHARS:
             document.partial = True
@@ -178,16 +179,17 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 # A gateway file value may itself be a URL or path. Never use
                 # it as a model-facing display name.
                 name = name.replace("\\", "/").rsplit("/", 1)[-1].split("?", 1)[0][:120]
-                asset = MediaAsset("audio" if kind == "record" else kind, name, data)
+                asset = MediaAsset("audio" if kind == "record" else kind, name, data,
+                                   rendered_data=rendered_data and kind == "image")
                 reference = media_store.put(context, asset)
                 document.assets.append(reference)
                 document.append(f"[{asset.kind} 素材 {reference} · {name}]")
             elif kind == "node" or (kind == "forward" and data.get("content")):
                 content = data.get("content") or data.get("message") or []
                 if kind == "node":
-                    await walk(content, depth + 1, f"[转发者 {data.get('name', data.get('uin', '未知'))}]")
+                    await walk(content, depth + 1, f"[转发者 {data.get('name', data.get('uin', '未知'))}]", rendered_data)
                 else:
-                    await containers(content, depth + 1)
+                    await containers(content, depth + 1, rendered_data)
             elif kind in {"forward", "json"}:
                 forward_id = str(data.get("id") or data.get("resid") or "") if kind == "forward" else _forward_id(data)
                 if not forward_id or ("forward", forward_id) in seen:
@@ -199,12 +201,12 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 calls += 1
                 try:
                     response = await _call(context, "get_forward_msg", id=forward_id)
-                    await containers(response.get("messages", response.get("message", [])), depth + 1)
+                    await containers(response.get("messages", response.get("message", [])), depth + 1, rendered_data)
                 except Exception:
                     document.warnings.append("一部分合并转发未能读取。")
                     document.partial = True
 
-    async def containers(rows: Any, depth: int) -> None:
+    async def containers(rows: Any, depth: int, rendered_data: bool = False, *, lookup_rendered: bool = False) -> None:
         if depth > 8:
             document.partial = True
             return
@@ -213,7 +215,17 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 continue
             sender = row.get("sender") or {}
             label = f"[{row.get('time', '')} {sender.get('card') or sender.get('nickname') or sender.get('user_id') or '未知'}]"
-            await walk(row.get("message", row.get("content", [row])), depth, label)
+            known_card = lookup_rendered and append_rendered_data(row.get("message_id"))
+            await walk(row.get("message", row.get("content", [row])), depth, label, rendered_data or known_card)
+
+    def append_rendered_data(message_id) -> bool:
+        from .render_data import rendered_views_for_message
+
+        views = rendered_views_for_message(context.bot, context.event, message_id) if message_id is not None else []
+        if views:
+            document.append("[卡片原始数据，无需识图；未展示字段请用read_rendered_view继续读取]\n"
+                            + json.dumps(views, ensure_ascii=False))
+        return bool(views)
 
     if source == "group_history":
         group_id = getattr(context.event, "group_id", None)
@@ -243,7 +255,7 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 break
             seq = next_seq
         ordered = sorted(history.values(), key=lambda row: (int(row.get("time", 0)), int(row.get("message_seq", 0))))
-        await containers(ordered[-max_messages:], 0)
+        await containers(ordered[-max_messages:], 0, lookup_rendered=True)
         if len(history) < max_messages:
             document.warnings.append(f"本次实际取得 {len(history)} 条群消息，不能据此声称覆盖整天。")
     else:
@@ -260,6 +272,11 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 document.warnings.append("引用消息未能读取。")
                 document.partial = True
         if raw is not None:
+            reply_id = getattr(reply, "message_id", None) or event_reply_message_id(context.event)
+            if append_rendered_data(reply_id):
+                # Do not recursively OCR forwarded native card pages either.
+                await walk(raw, label="[引用消息]", rendered_data=True)
+                return document
             await walk(raw, label="[引用消息]")
     return document
 

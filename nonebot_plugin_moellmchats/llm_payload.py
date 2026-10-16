@@ -23,6 +23,8 @@ class LlmPayloadMixin:
         selected_plugins = (
             set(getattr(self, "required_plugins", [])) | resident_plugins
         )
+        if getattr(self, "format_message_dict", {}).get("rendered_views"):
+            selected_plugins.add("read_rendered_view")
         model_supports_tools = (
             model_selector.get_use_tools()
             and not self.model_info.get("no_tools", False)
@@ -112,7 +114,9 @@ class LlmPayloadMixin:
                     f"需要插件：{required_plugins}, 选择来源：{self.tool_selection_source}"
                 )
                 self.required_plugins = required_plugins
-                has_image = has_image or vision_required
+                has_image = has_image or (
+                    vision_required and not getattr(self, "format_message_dict", {}).get("images_have_rendered_data")
+                )
 
         requires_tools = bool(
             model_selector.get_use_tools()
@@ -120,6 +124,7 @@ class LlmPayloadMixin:
                 self.required_plugins
                 or model_selector.get_resident_plugins()
                 or model_selector.get_web_search()
+                or getattr(self, "format_message_dict", {}).get("rendered_views")
             )
         )
         required_capabilities = ModelCapability(
@@ -334,8 +339,10 @@ class LlmPayloadMixin:
                 + "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
                 "自动且连续地调用下一个工具，直至彻底完成要求。"
                 "可以跨插件调用多个功能；互不依赖的查询可以在同一轮提出，后续参数应基于前置结果。"
-                "3. 优先使用工具返回的文字和结构化字段。存在render_id时，可用read_rendered_view"
+                "3. 造梦卡片的数字、角色和装备信息必须以原始文字及结构化字段为准。"
+                "存在render_id且text_truncated=true或所需字段未展示时，必须用read_rendered_view"
                 "按pointer读取原卡片文字、字段及位置；分页未读全应继续读取，不要凭图片猜数字。"
+                "原始数据过期或缺少时重新查询对应功能，不能编造未读取的值。"
                 "向用户解释时引用准确数据和关键结论，已发送的图片无需再次投递。"
             )
 

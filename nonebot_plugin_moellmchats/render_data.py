@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+import hashlib
 from html.parser import HTMLParser
 import math
 import re
@@ -17,6 +21,9 @@ from .tool_contracts import ToolContext, ToolEffect, ToolResult, ToolSpec, regis
 _TTL = 600
 _MAX_VIEWS = 64
 _views: OrderedDict[str, tuple[float, tuple[str, str], dict]] = OrderedDict()
+_local_capture: ContextVar[dict | None] = ContextVar("rendered_card_capture", default=None)
+_pending: OrderedDict[tuple, tuple[float, tuple[dict, ...]]] = OrderedDict()
+_published: OrderedDict[tuple, tuple[float, tuple[dict, ...]]] = OrderedDict()
 _OMIT = re.compile(r"css|style|(?:^|_)(?:icon|image|avatar|portrait|font|url|uri|token|password|secret|cookie)(?:_|$)", re.I)
 
 
@@ -34,7 +41,96 @@ def _capture():
     from .event_simulator import _capture_key, _captures
 
     capture = _captures.get(_capture_key.get())
-    return capture if capture and capture.get("render_scope") else None
+    return capture if capture and capture.get("render_scope") else _local_capture.get()
+
+
+@contextmanager
+def capture_rendered_views(bot, event):
+    """Allow native host queries to retain the same evidence as AI queries."""
+    existing = _capture()
+    if existing is not None:
+        yield existing
+        return
+    scope = render_scope(bot, event)
+    capture = {"render_scope": scope} if scope else None
+    token = _local_capture.set(capture)
+    try:
+        yield capture
+    finally:
+        _local_capture.reset(token)
+
+
+def _message_scope(bot, event):
+    if render_scope(bot, event) is None:
+        return None
+    group = getattr(event, "group_id", None)
+    channel = getattr(event, "channel_id", None)
+    scene = ("group", str(group)) if group is not None else (
+        ("channel", str(channel)) if channel else ("private", event.get_user_id())
+    )
+    return str(bot.self_id), *scene
+
+
+def _picture_key(bot, event, pictures):
+    scope = render_scope(bot, event)
+    if scope is None:
+        return None
+    digest = hashlib.sha256()
+    for picture in pictures if isinstance(pictures, list) else [pictures]:
+        digest.update(len(picture).to_bytes(8, "big"))
+        digest.update(picture)
+    return (*scope, digest.hexdigest())
+
+
+async def remember_rendered_result(bot, event, pictures, capture):
+    """Keep only a digest, never image bytes; publication needs a send receipt."""
+    refs = tuple((capture or {}).get("rendered_views", ()))
+    key = await asyncio.to_thread(_picture_key, bot, event, pictures)
+    if key is not None and refs:
+        _expire()
+        _pending[key] = (time.monotonic() + _TTL, refs)
+        while len(_pending) > 128:
+            _pending.popitem(last=False)
+
+
+async def bind_rendered_message(bot, event, pictures, receipt):
+    message_id = receipt.get("message_id") if isinstance(receipt, Mapping) else receipt
+    if isinstance(message_id, bool) or not isinstance(message_id, (int, str)) or not str(message_id):
+        return
+    key = await asyncio.to_thread(_picture_key, bot, event, pictures)
+    record = _pending.pop(key, None)
+    if record is not None and record[0] > time.monotonic():
+        _published[(*_message_scope(bot, event), str(message_id))] = (time.monotonic() + 3600, record[1])
+        while len(_published) > 256:
+            _published.popitem(last=False)
+
+
+def rendered_views_for_message(bot, event, message_id):
+    """A confirmed public card can be read by its chat's quoting user only.
+
+    Rebind fresh read handles to that user's existing strict render scope.
+    Knowing a render ID never grants access to another user or conversation.
+    """
+    _expire()
+    scope = _message_scope(bot, event)
+    record = _published.get((*scope, str(message_id))) if scope else None
+    if record is None:
+        return []
+    refs = []
+    for original in record[1]:
+        view = _views.get(original["render_id"])
+        if view is None:
+            refs.append({"template": original["template"], "expired": True,
+                         "text": "原始卡片数据已过期，请重新查询原功能；不要从图片猜测数值。"})
+            continue
+        ref = dict(original)
+        if view[1] != render_scope(bot, event):
+            ref["render_id"] = uuid.uuid4().hex
+            _views[ref["render_id"]] = (view[0], render_scope(bot, event), view[2])
+        refs.append(ref)
+    while len(_views) > _MAX_VIEWS:
+        _views.popitem(last=False)
+    return refs
 
 
 def is_render_capture_active() -> bool:
@@ -49,6 +145,7 @@ class _TextNodes(HTMLParser):
         self.nodes = []
         self.text = []
         self.remaining = 24_000
+        self.node_remaining = 16_000
         self.truncated = False
         self.nodes_truncated = False
 
@@ -101,7 +198,7 @@ class _TextNodes(HTMLParser):
         if self.remaining <= 0:
             self.truncated = True
             return
-        chunk = text[: min(self.remaining, 2048)]
+        chunk = text[: self.remaining]
         self.truncated |= len(chunk) < len(text)
         self.remaining -= len(chunk)
         self.text.append(chunk)
@@ -112,7 +209,13 @@ class _TextNodes(HTMLParser):
         if len(selector) > 2048:
             self.nodes_truncated = True
             return
-        self.nodes.append({"selector": selector, "text": chunk})
+        node_size = len(selector) + min(len(chunk), 2048)
+        if node_size > self.node_remaining:
+            self.nodes_truncated = True
+            return
+        self.node_remaining -= node_size
+        self.nodes_truncated |= len(chunk) > 2048
+        self.nodes.append({"selector": selector, "text": chunk[:2048]})
 
 
 def _clean(value, budget, depth=0):
@@ -158,22 +261,30 @@ def _expire():
     for key, (expires, _, _) in list(_views.items()):
         if expires <= now:
             _views.pop(key, None)
+    for store in (_pending, _published):
+        for key, (expires, _) in list(store.items()):
+            if expires <= now:
+                store.pop(key, None)
 
 
 def record_rendered_view(template: str, html: str, data: Mapping) -> str | None:
-    """Hosts call this after rendering; only an active tool dispatch records it."""
+    """Record text during a scoped host render or active tool dispatch."""
     capture = _capture()
     if capture is None:
         return None
     parser = _TextNodes()
     parser.feed(html[:2_000_000])
+    text = "\n".join(parser.text)
+    # Share a bounded text budget with location summaries; ordinary cards
+    # retain the existing field budget, including when one text node is long.
+    field_budget = min(64_000, 80_000 - len(text) - (16_000 - parser.node_remaining))
     payload = {
         "template": template,
-        "text": "\n".join(parser.text),
+        "text": text,
         "nodes": parser.nodes,
         "text_truncated": parser.truncated or len(html) > 2_000_000,
         "nodes_truncated": parser.nodes_truncated or len(html) > 2_000_000,
-        "data": _clean(data, [64_000]),
+        "data": _clean(data, [max(0, field_budget)]),
     }
     _expire()
     render_id = uuid.uuid4().hex
@@ -185,8 +296,8 @@ def record_rendered_view(template: str, html: str, data: Mapping) -> str | None:
         {
             "render_id": render_id,
             "template": template,
-            "text": payload["text"][:1200],
-            "text_truncated": payload["text_truncated"] or len(payload["text"]) > 1200,
+            "text": payload["text"][:4000],
+            "text_truncated": payload["text_truncated"] or len(payload["text"]) > 4000,
             "locations": {"text": "/text", "text_nodes_with_selectors": "/nodes", "fields": "/data"},
             "read_tool": "read_rendered_view",
         }
