@@ -409,14 +409,24 @@ class LlmToolsMixin:
         if not self._progress_messages_enabled():
             self._set_tool_progress_status(call, "disabled")
             return
-        if getattr(self, "_tool_progress_attempted", False):
+        attempted = getattr(self, "_tool_progress_attempted", False)
+        command_key = None
+        if view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN:
+            command = " ".join(str(arguments.get("command", "")).split())
+            command_key = hashlib.sha256(command.encode()).hexdigest()
+        commands = getattr(self, "_tool_progress_commands", None)
+        if commands is None:
+            commands = self._tool_progress_commands = set()
+        if attempted and (command_key is None or command_key in commands):
             self._set_tool_progress_status(call, "suppressed")
             return
-        # Claim before awaiting: all tools and model rounds share one request.
-        # An uncertain acknowledgement must never cause another notice.
+        # Claim before awaiting, including uncertain receipts. Plugin commands
+        # with different arguments each get their own copyable notice.
+        if command_key is not None:
+            commands.add(command_key)
         self._tool_progress_attempted = True
         model_preface = ""
-        if include_model_preface and self._progress_model_preface_enabled():
+        if not attempted and include_model_preface and self._progress_model_preface_enabled():
             model_preface = self._safe_progress_preface(result_text)
         message = self._build_tool_progress_message(
             view,
@@ -459,12 +469,21 @@ class LlmToolsMixin:
             if isinstance(message_id, str) and re.fullmatch(r"-?\d+", message_id):
                 message_id = int(message_id)
             if isinstance(message_id, int) and not isinstance(message_id, bool) and message_id:
+                ids = getattr(self, "_tool_progress_message_ids", None)
+                if ids is None:
+                    ids = self._tool_progress_message_ids = set()
+                ids.add(message_id)
                 self._tool_progress_message_id = message_id
                 if getattr(self, "_tool_progress_finished", False):
                     await self._recall_tool_progress()
                 else:
-                    timer = asyncio.create_task(self._expire_tool_progress(), name="llm_tool_progress_recall")
+                    timer = asyncio.create_task(self._expire_tool_progress(message_id), name="llm_tool_progress_recall")
                     self._tool_progress_recall_timer = timer
+                    timers = getattr(self, "_tool_progress_recall_timers", None)
+                    if timers is None:
+                        timers = self._tool_progress_recall_timers = {}
+                    timers[message_id] = timer
+                    timer.add_done_callback(lambda _, mid=message_id: timers.pop(mid, None))
                     self._track_progress_task(timer)
         except asyncio.CancelledError:
             self._set_tool_progress_status(call, "cancelled")
@@ -489,16 +508,26 @@ class LlmToolsMixin:
             error_type=error_type,
         )
 
-    async def _expire_tool_progress(self) -> None:
+    async def _expire_tool_progress(self, message_id=None) -> None:
         await asyncio.sleep(_PROGRESS_RECALL_DELAY_SECONDS)
-        await self._recall_tool_progress()
+        await self._recall_tool_progress(message_id)
 
-    async def _recall_tool_progress(self) -> None:
-        message_id = getattr(self, "_tool_progress_message_id", None)
+    async def _recall_tool_progress(self, message_id=None) -> None:
+        ids = getattr(self, "_tool_progress_message_ids", set())
+        if message_id is None and ids:
+            for pending_id in tuple(ids):
+                await self._recall_tool_progress(pending_id)
+            return
+        message_id = message_id if message_id is not None else getattr(self, "_tool_progress_message_id", None)
         if message_id is None:
             return
         # Clear before awaiting so completion and the timer cannot both recall.
-        self._tool_progress_message_id = None
+        if hasattr(self, '_tool_progress_message_ids'):
+            if message_id not in ids:
+                return
+            ids.discard(message_id)
+        if getattr(self, '_tool_progress_message_id', None) == message_id:
+            self._tool_progress_message_id = None
         try:
             try:
                 from src.utils.onebot_recall import recall_message
@@ -517,6 +546,9 @@ class LlmToolsMixin:
 
     async def _finish_tool_progress(self) -> None:
         self._tool_progress_finished = True
+        for pending_id, pending_timer in tuple(getattr(self, '_tool_progress_recall_timers', {}).items()):
+            if pending_id in getattr(self, '_tool_progress_message_ids', ()):
+                pending_timer.cancel()
         timer = getattr(self, "_tool_progress_recall_timer", None)
         if timer is not None and getattr(self, "_tool_progress_message_id", None) is not None:
             # Cancel only a sleeping timer, never an already-started recall.

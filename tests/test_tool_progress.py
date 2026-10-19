@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock
@@ -13,6 +14,7 @@ from nonebot_plugin_moellmchats import llm_tools as module
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
 from nonebot_plugin_moellmchats.tool_contracts import ToolSpec
 from nonebot_plugin_moellmchats.tool_providers import ToolSource
+from nonebot_plugin_moellmchats.tool_manager import LlmToolExecutionRoute
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -42,6 +44,35 @@ async def progress(harness, identifier=1):
         view=_source_progress_view(ToolSource.REGISTERED),
         arguments={}, result_text="",
     )
+
+
+@pytest.mark.asyncio
+async def test_each_distinct_plugin_command_gets_notice_and_independent_recall(recall):
+    harness = Harness({})
+    harness.bot.send = AsyncMock(side_effect=[{'message_id': -501}, {'message_id': -502}])
+    view = replace(_source_progress_view(ToolSource.REGISTERED), route=LlmToolExecutionRoute.NONEBOT_PLUGIN, source=ToolSource.NONEBOT_PLUGIN)
+    for i, command in enumerate(['/demo 1区', '/demo 2区', '/demo   2区'], 1):
+        await harness._send_tool_progress(call=_call(i, 'demo'), view=view,
+            arguments={'command': command}, result_text='前置说明')
+    assert harness.bot.send.await_count == 2
+    assert '七七正在帮你投递：/demo 1区' in harness.bot.send.call_args_list[0].args[1]
+    assert harness.bot.send.call_args_list[1].args[1] == '七七正在帮你投递：/demo 2区'
+    assert harness._tool_progress_status(_call(3, 'demo')) == 'suppressed'
+    await harness._finish_tool_progress()
+    assert {call.kwargs['message_id'] for call in recall.await_args_list} == {-501, -502}
+
+
+@pytest.mark.asyncio
+async def test_uncertain_plugin_notice_is_suppressed_only_for_same_command(recall):
+    harness = Harness({})
+    harness.bot.send = AsyncMock(return_value={})
+    view = replace(_source_progress_view(ToolSource.REGISTERED), route=LlmToolExecutionRoute.NONEBOT_PLUGIN, source=ToolSource.NONEBOT_PLUGIN)
+    for i, command in enumerate(['/demo 1区', '/demo 1区', '/demo 2区'], 1):
+        await harness._send_tool_progress(call=_call(i, 'demo'), view=view,
+            arguments={'command': command}, result_text='')
+    assert harness.bot.send.await_count == 2
+    await harness._finish_tool_progress()
+    recall.assert_not_awaited()
 
 
 @pytest.mark.asyncio
