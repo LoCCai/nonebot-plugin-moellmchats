@@ -314,6 +314,8 @@ class RecoveryService:
     async def run(self, bot, event, formatted: dict, is_ai: bool, operation):
         if self.stopping:
             raise RestartDeferred()
+        if current_binding() is not None:
+            return await operation()
         if not self.enabled or onebot_protocol(bot, event) is None or event_message_id(event) is None:
             return await operation()
         identity = [onebot_protocol(bot, event), bot_self_id(bot, event), event.get_session_id(), event_message_id(event)]
@@ -352,7 +354,7 @@ class RecoveryService:
             await binding.save()
             raise
         except FinishedException:
-            binding.record["state"] = "complete"
+            binding.record["state"] = "failed" if binding.record.get("model_failed") else "complete"
             await binding.save()
             raise
         except Exception:
@@ -360,7 +362,7 @@ class RecoveryService:
             await binding.save()
             raise
         else:
-            binding.record["state"] = "complete"
+            binding.record["state"] = "failed" if binding.record.get("model_failed") else "complete"
             await binding.save()
             return result
         finally:

@@ -333,18 +333,26 @@ class LlmPayloadMixin:
                     "1. 调用工具时不要输出执行前话术，直接在同一次回复中发起 tool_calls；"
                     "固定进度提示由运行时按配置发送，工具结果和最终总结仍须正常输出。"
                 )
+            from .delivery_policy import POLICY_PROMPT, single_delivery_enabled
+            multi_rule = (POLICY_PROMPT if single_delivery_enabled() else
+                "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
+                "自动且连续地调用下一个工具，直至彻底完成要求。"
+                "可以跨插件调用多个功能；互不依赖的查询可以在同一轮提出，后续参数应基于前置结果。")
             send_message_list[0]["content"] += (
                 "。特别注意："
                 + progress_rule
-                + "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
-                "自动且连续地调用下一个工具，直至彻底完成要求。"
-                "可以跨插件调用多个功能；互不依赖的查询可以在同一轮提出，后续参数应基于前置结果。"
-                "3. 造梦卡片的数字、角色和装备信息必须以原始文字及结构化字段为准。"
+                + multi_rule
+                + "3. 造梦卡片的数字、角色和装备信息必须以原始文字及结构化字段为准。"
                 "存在render_id且text_truncated=true或所需字段未展示时，必须用read_rendered_view"
                 "按pointer读取原卡片文字、字段及位置；分页未读全应继续读取，不要凭图片猜数字。"
                 "原始数据过期或缺少时重新查询对应功能，不能编造未读取的值。"
                 "向用户解释时引用准确数据和关键结论，已发送的图片无需再次投递。"
             )
+            if config_parser.get_config("skip_self_image_vision", True):
+                send_message_list[0]["content"] += (
+                    "除用户明确引用的消息外，不要对七七自己生成或投递的图片进行二次识图。"
+                    "优先读取工具文字回执和原始渲染数据；用户自己上传的图片仍可正常分析。"
+                )
 
             if mention_hint:
                 send_message_list[0]["content"] += " 4. " + mention_hint

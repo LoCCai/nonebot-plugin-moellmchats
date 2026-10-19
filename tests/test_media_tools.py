@@ -53,6 +53,26 @@ def _clear_media_state():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('quoted,enabled,expected', [(False, True, 0), (True, True, 1), (False, False, 1)])
+async def test_self_images_from_history_skip_vision_unless_quoted_or_switch_off(monkeypatch, quoted, enabled, expected):
+    context = _context()
+    image = [_segment('image', url='https://example.org/image.png')]
+    if quoted:
+        context.event.reply = SimpleNamespace(message=image)
+        document = await collect_message_context(context)
+    else:
+        context.bot.call_api.return_value = {'messages': [
+            {'message_id': 80001, 'time': 100, 'sender': {'user_id': '42'}, 'message': image}]}
+        document = await collect_message_context(context, source='group_history', max_messages=1)
+        assert media_store.get(context, document.assets[0], MediaAsset).self_generated
+    monkeypatch.setattr(tools.config_parser, 'get_config', lambda key, default=None: enabled if key == 'skip_self_image_vision' else default)
+    download = AsyncMock(return_value=MediaAsset('image', 'image', payload=_png(), mime='image/png'))
+    monkeypatch.setattr(tools, 'asset_bytes', download)
+    _, parts, _ = await tools._prepared_content(context, document, document.assets)
+    assert len(parts) == expected and download.await_count == expected
+
+
+@pytest.mark.asyncio
 async def test_nested_reply_forward_json_keeps_sources_deduplicates_cycles_and_hides_urls():
     context = _context([_segment("text", text="总结这个记录")],
         reply=SimpleNamespace(message=[_segment("forward", id="one")]))

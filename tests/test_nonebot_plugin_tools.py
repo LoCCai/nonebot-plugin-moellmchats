@@ -7,6 +7,14 @@ import random
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def enabled_legacy_image_feedback(monkeypatch):
+    from nonebot_plugin_moellmchats.config import config_parser
+    original = config_parser.get_config
+    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
+                        False if key == 'skip_self_image_vision' else original(key, default))
+
 from nonebot_plugin_moellmchats import nonebot_plugin_tools as module
 from nonebot_plugin_moellmchats.event_simulator import (
     PluginDispatchResult,
@@ -21,6 +29,49 @@ from nonebot_plugin_moellmchats.tool_discovery import (
     COMPAT_COMMAND_PREFIXES_KEY,
 )
 from nonebot_plugin_moellmchats.tool_manager import ToolManager, tool_manager
+
+
+@pytest.mark.asyncio
+async def test_default_skip_switch_never_decodes_other_plugin_images(monkeypatch):
+    from nonebot_plugin_moellmchats.config import DEFAULT_CONFIG, config_parser
+    assert DEFAULT_CONFIG['skip_self_image_vision'] is True
+    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None: DEFAULT_CONFIG.get(key, default))
+    monkeypatch.setattr(module, '_normalize_dispatch_images', lambda *args: pytest.fail('must not decode'))
+    receipt = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+        text='已发送', images=('data:image/png;base64,not-decoded',), successful_captures=1)
+    result = await module.plugin_dispatch_tool_result(receipt, plugin_name='other_plugin')
+    assert not result.images and result.metadata['delivered_images'] == 1
+    assert '已确认向用户发送图片 1 张' in result.text
+
+
+@pytest.mark.asyncio
+async def test_game_compatibility_dispatches_native_card_and_returns_text_without_images(monkeypatch):
+    calls = []
+    view = {'template': 'player.j2', 'text': '玩家甲 战力123456', 'render_id': 'a' * 32}
+    async def dispatch(bot, event, command, source, **kwargs):
+        calls.append((bot, event, command, source, kwargs))
+        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text='[图片]', images=('https://example.org/card.png',), rendered_views=(view,),
+            successful_captures=1, api_succeeded=1)
+    monkeypatch.setattr(module.event_simulator, 'dispatch_event', dispatch)
+    result = await module.execute_nonebot_plugin('/造梦资料', plugin_name='qi_zmws', bot='bot', event='event')
+    assert calls == [('bot', 'event', '/造梦资料', None, {'plugin_name': 'qi_zmws', 'wait_for_result': True})]
+    assert result.metadata['skip_image_vision']
+    assert result.metadata['delivered_images'] == 1
+    assert not result.metadata.get('data_only')
+    assert list(result.structured['rendered_views']) == [view]
+    assert result.images == ()
+
+
+@pytest.mark.asyncio
+async def test_game_receipt_never_decodes_images_even_without_render_evidence(monkeypatch):
+    def forbidden(*args):
+        pytest.fail('Game image previews must not be decoded')
+    monkeypatch.setattr(module, '_normalize_dispatch_images', forbidden)
+    dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+        text='已发送游戏卡片', images=('data:image/png;base64,large',), successful_captures=1)
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name='qi_zmws')
+    assert result.images == () and result.metadata['skip_image_vision']
 
 
 @pytest.mark.asyncio
@@ -44,7 +95,7 @@ async def test_oversized_png_receipt_becomes_valid_preview_without_redispatch(mo
             successful_captures=1, api_succeeded=1)
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
-    result = await module.execute_nonebot_plugin("/造梦排行 蟠桃", plugin_name="qi_zmws", bot=object(), event=object())
+    result = await module.execute_nonebot_plugin("/测试排行", plugin_name="demo", bot=object(), event=object())
     assert len(calls) == 1
     assert result.metadata["plugin_dispatch"]["status"] == "matched_with_output"
     assert result.metadata["output_image_normalization"]["resized"] == 1
@@ -62,7 +113,7 @@ async def test_missing_preview_decoder_preserves_confirmed_image_success(monkeyp
     dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
         text="[图片]", images=("data:image/png;base64," + "A" * TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,),
         matcher_matched=1, successful_captures=1, api_succeeded=1)
-    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="qi_zmws")
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="demo")
     assert result.images == ()
     assert result.metadata["plugin_dispatch"]["status"] == "matched_with_output"
     assert result.metadata["output_image_normalization"]["omitted"] == 1
@@ -76,7 +127,7 @@ async def test_multiple_image_receipts_obey_total_payload_bound():
     reference = "https://example.org/" + "a" * 3_999_980
     dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
         text="图片已发出", images=(reference,) * 6, successful_captures=6, api_succeeded=6)
-    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="qi_zmws")
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="demo")
     assert result.metadata["output_image_normalization"]["confirmed_images"] == 6
     assert result.metadata["output_image_normalization"]["omitted"] > 0
     assert len(result.canonical_json().encode("utf-8")) < TOOL_RESULT_MAX_PAYLOAD_BYTES
@@ -87,7 +138,7 @@ async def test_unsafe_preview_reference_does_not_undo_confirmed_send():
     dispatch = PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
         text="[图片]", images=("https://example.org/\x00x", "https://example.org/valid.png"),
         successful_captures=1, api_succeeded=1)
-    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="qi_zmws")
+    result = await module.plugin_dispatch_tool_result(dispatch, plugin_name="demo")
     assert result.images == ("https://example.org/valid.png",)
     assert result.metadata["output_image_normalization"]["omitted"] == 1
 
@@ -377,7 +428,7 @@ async def test_nonebot_plugin_adapter_preserves_background_notice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _legacy, specs = build_nonebot_plugin_candidate(
-        {"qi_zmws": {"description": "造梦资料"}}
+        {"demo": {"description": "资料"}}
     )
     notice = "任务仍在后台运行，资料将稍后发送，无需再次调用。"
 

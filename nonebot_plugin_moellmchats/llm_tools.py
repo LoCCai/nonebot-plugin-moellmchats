@@ -17,6 +17,7 @@ from .agent_runtime import AgentRunState, ToolCallStatus
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .request_budget import budget_limit, request_config
 from .event_simulator import (
     PluginDispatchResult,
     PluginDispatchStatus,
@@ -329,8 +330,11 @@ class LlmToolsMixin:
             heading = f"正在调用协议接口：{view.tool_name}"
             heading += f"｜功能：{cls._protocol_progress_feature(view)}"
         elif view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN:
-            heading = f"正在投递插件：{view.tool_name}"
-            heading += f"｜功能：{cls._nonebot_progress_feature(arguments)}"
+            command = arguments.get("command", "")
+            # Keep the full command/parameters copyable, but treat CQ as text.
+            command = str(command).replace("[CQ:", "［CQ:")
+            command = " ".join(command.split())
+            heading = f"七七正在帮你投递：{command}"
         else:
             source_labels = {
                 ToolSource.REGISTERED: "注册工具",
@@ -536,7 +540,9 @@ class LlmToolsMixin:
     def _tool_vision_images(result: ToolResult, tool_name: str) -> tuple[str, ...]:
         """Image delivery is independent of optional model reinspection."""
         if (
-            not config_parser.get_config("tool_image_vision_enabled", True)
+            tool_name == "qi_zmws" or tool_name.startswith("zmws_")
+            or config_parser.get_config("skip_self_image_vision", True)
+            or not config_parser.get_config("tool_image_vision_enabled", True)
             or tool_name in config_parser.get_config("tool_image_vision_excluded_tools", [])
             or result.metadata.get("skip_image_vision") is True
         ):
@@ -972,6 +978,8 @@ class LlmToolsMixin:
         send_message_list: list,
         reasoning_content: str,
     ) -> list | None:
+        if len(tool_calls) > budget_limit("max_tool_calls_per_round", len(tool_calls)):
+            return None
         batch = self._prepare_read_only_parallel_batch(tool_calls)
         if batch is None:
             return None
@@ -1315,7 +1323,17 @@ class LlmToolsMixin:
                 phase="tools", calls=tool_calls)
         self._recovery_messages = send_message_list
         try:
-            result = await self._execute_tools_inner(tool_calls, result_text, send_message_list, reasoning_content)
+            from .request_budget import authorized_request
+            if authorized_request() and hasattr(self, "_remaining_request_seconds"):
+                async with timeout_scope(self._remaining_request_seconds()):
+                    result = await self._execute_tools_inner(tool_calls, result_text, send_message_list, reasoning_content)
+            else:
+                result = await self._execute_tools_inner(tool_calls, result_text, send_message_list, reasoning_content)
+            from .delivery_policy import pending_commands
+            if notice := pending_commands(self):
+                from .request_recovery import durable_send
+                # This is always plain text, independent of AI rendering tools.
+                await durable_send(self.bot, self.event, notice)
             if recovery is not None:
                 recovery.record["blocked_tools"] = sorted(getattr(self, "_tool_retry_blocked_tools", set()))
                 await recovery.checkpoint(result, phase="model")
@@ -1335,16 +1353,14 @@ class LlmToolsMixin:
             if not call.get("function", {}).get("arguments") or not str(call["function"]["arguments"]).strip():
                 call["function"]["arguments"] = "{}"
 
-        parallel_result = await self._try_execute_read_only_parallel_tools(
-            tool_calls,
-            result_text,
-            send_message_list,
-            reasoning_content,
-        )
+        from .delivery_policy import reserve_deliveries
+        deferred = reserve_deliveries(self, tool_calls)
+        parallel_result = None if deferred else await self._try_execute_read_only_parallel_tools(
+            tool_calls, result_text, send_message_list, reasoning_content)
         if parallel_result is not None:
             return parallel_result
 
-        max_tool_calls_per_round = config_parser.get_config("max_tool_calls_per_round", 4)
+        max_tool_calls_per_round = request_config("max_tool_calls_per_round", 4)
         if (
             not isinstance(max_tool_calls_per_round, int)
             or isinstance(max_tool_calls_per_round, bool)
@@ -1360,8 +1376,10 @@ class LlmToolsMixin:
             # A rejected explicit graph batch must retain its existing
             # one-call fallback, including conflicts and confirmation gates.
             max_tool_calls_per_round = 1
-        executable_tool_calls = tool_calls[:max_tool_calls_per_round]
-        skipped_tool_calls = tool_calls[max_tool_calls_per_round:]
+        executable_tool_calls = [call for index, call in enumerate(tool_calls)
+                                 if index < max_tool_calls_per_round or str(call.get("id", "")) in deferred]
+        skipped_tool_calls = [call for index, call in enumerate(tool_calls)
+                              if index >= max_tool_calls_per_round and str(call.get("id", "")) not in deferred]
         if skipped_tool_calls:
             logger.warning(f"本轮工具调用数量为 {len(tool_calls)}，超过上限 {max_tool_calls_per_round}，将跳过超出的调用")
 
@@ -1391,6 +1409,13 @@ class LlmToolsMixin:
                 func_name,
                 is_superuser=is_superuser,
             )
+            if reason := deferred.get(str(call.get("id", ""))):
+                send_message_list.append({"role": "tool", "tool_call_id": call["id"], "content": reason})
+                await self._record_agent_tool_outcome(
+                    call=call, tool_view=tool_view, arguments={}, status=ToolCallStatus.REJECTED,
+                    created_at=trace_created_at, started_monotonic=trace_started_monotonic,
+                    error_type="OrdinarySingleDelivery", result_preview=reason)
+                continue
             if not hasattr(self, "_current_tool_usage"):
                 self._current_tool_usage = Counter()
 
@@ -2080,6 +2105,15 @@ class LlmToolsMixin:
                         "仅可选择不同工具或实质不同参数继续未完成步骤。若任务已完成，"
                         "请直接做一两句话的简短总结，严禁重复上述已发送结果。"
                     )
+                    if func_name == "qi_zmws":
+                        _PLUGIN_SYSTEM_HINT += (
+                            "造梦原生结果已发送；卡片内容以 rendered_views 的实际渲染文字为准，"
+                            "需补读字段或截断文字时使用 read_rendered_view。"
+                            "不要识图、重新排版或逐项复述已发送卡片。"
+                        )
+                    if plugin_result.metadata.get("data_only"):
+                        _PLUGIN_SYSTEM_HINT = ("\n\n[系统提示]：这是供模型读取的接口信息，尚未向用户发送游戏结果。"
+                                               "请按工具指引继续查询并根据文字数据回答原问题，自行选择文字、表格或普通渲染。")
                     self._pending_vision_images.extend(
                         self._tool_vision_images(plugin_result, func_name)
                     )
@@ -2100,8 +2134,9 @@ class LlmToolsMixin:
                         visible_plugin_result
                     )
                     if rendered_plugin_result:
-                        if plugin_images:
-                            rendered_plugin_result += f"\nBot 已确认发送图片 {len(plugin_images)} 张；出图已完成。"
+                        delivered_images = plugin_result.metadata.get("delivered_images", len(plugin_images))
+                        if delivered_images:
+                            rendered_plugin_result += f"\nBot 已确认发送图片 {delivered_images} 张；出图已完成。"
                         tool_result = f"插件执行返回结果：\n{rendered_plugin_result}{_PLUGIN_SYSTEM_HINT}"
                     else:
                         trace_status = ToolCallStatus.FAILED

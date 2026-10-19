@@ -55,6 +55,24 @@ class ModelPoolMixin:
                     or len(set(names)) != len(names)):
                 raise ValueError("模型池必须包含 1 至 32 个存在且不重复的完整模型名")
 
+    @staticmethod
+    def validate_ordinary_model_pools(pools, models) -> None:
+        if not isinstance(pools, Mapping) or any(role not in {"category", "0", "1", "2", "vision", "summary"} for role in pools):
+            raise ValueError("ordinary_model_pools 仅支持 category、0、1、2、vision、summary")
+        if pools and not {"category", "0", "1", "2", "summary"} <= set(pools):
+            raise ValueError("普通免费模型池须覆盖 category、0、1、2、summary；vision 可选")
+        for role, names in pools.items():
+            ModelPoolMixin.validate_model_pools({"0": names}, models)
+            if any(models[name].get("billing_type") != "free" for name in names):
+                raise ValueError("普通模型池只能使用明确标记 billing_type=free 的模型")
+            if role == "vision" and any(not models[name].get("is_vision") for name in names):
+                raise ValueError("普通视觉模型池须声明 is_vision=true")
+
+    def _ordinary_pool(self, state):
+        from .request_budget import ordinary_request
+
+        return state.model_config.get("ordinary_model_pools", {}) if ordinary_request() else {}
+
     def _quota_status(self) -> ModelQuotaStatus:
         store = getattr(self, "_quota_store", None)
         if store is None:
@@ -87,15 +105,21 @@ class ModelPoolMixin:
         await asyncio.to_thread(self._quota_status().set, name, None)
         return f"已清除 {name} 的额度耗尽标记，下次请求可重新选择。"
 
-    def _select_pool_model(self, state, role, *, has_tools=False, has_images=False, attempted=None, rotate=False):
+    def _select_pool_model(self, state, role, *, has_tools=False, has_images=False, attempted=None, rotate=False,
+                           ordinary=False):
         from .runtime_snapshot import mutable_value
 
-        names = state.model_config.get("model_pools", {}).get(role, ())
+        pool_key = "ordinary_model_pools" if ordinary else "model_pools"
+        if ordinary and has_images:
+            role = "vision"
+        names = state.model_config.get(pool_key, {}).get(role, ())
         eligible = []
         for name in names:
             if (attempted is not None and name in attempted) or self.is_model_exhausted(name):
                 continue
             model = mutable_value(state.models[name])
+            if ordinary and model.get("billing_type") != "free":
+                continue
             if model.get("model_type", "chat") != "chat":
                 continue
             if (has_tools and model.get("no_tools")) or (has_images and not model.get("is_vision")):
@@ -103,6 +127,8 @@ class ModelPoolMixin:
             key = self._get_random_key(model)
             if key:
                 model.update(key=key, _model_pool=role)
+                if ordinary:
+                    model["_ordinary_model_pool"] = role
                 eligible.append((name, model))
         if not eligible:
             return None
@@ -110,9 +136,10 @@ class ModelPoolMixin:
         priority = [entry for entry in eligible if entry[1].get("priority_consume")]
         if priority:
             eligible = priority
-        index = offsets.get(role, 0) % len(eligible) if rotate else 0
+        offset_key = f"ordinary:{role}" if ordinary else role
+        index = offsets.get(offset_key, 0) % len(eligible) if rotate else 0
         if rotate:
-            self._pool_offsets = {**offsets, role: offsets.get(role, 0) + 1}
+            self._pool_offsets = {**offsets, offset_key: offsets.get(offset_key, 0) + 1}
         name, model = eligible[index]
         if attempted is not None:
             attempted.add(name)

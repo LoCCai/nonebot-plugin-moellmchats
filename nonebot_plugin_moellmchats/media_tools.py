@@ -10,7 +10,7 @@ from typing import Any
 from nonebot import get_driver
 from nonebot.log import logger
 
-from .config import image_generation_config
+from .config import config_parser, image_generation_config
 from .media_context import (
     MAX_DOCUMENT_CHARS,
     MediaAsset,
@@ -103,6 +103,10 @@ async def _prepared_content(context: ToolContext, document: MessageDocument,
     for reference in references:
         try:
             cached = media_store.get(context, reference, MediaAsset)
+            if (cached.kind == 'image' and cached.self_generated and not cached.explicit_quote
+                    and config_parser.get_config('skip_self_image_vision', True)):
+                warnings.append('按配置跳过七七自己产生的图片；需要分析时请引用原消息。')
+                continue
             if cached.rendered_data:
                 # Exact host text is already in document.text; retain the
                 # original asset for editing tools without sending it to OCR.
@@ -254,7 +258,7 @@ async def generate_image(*, _tool_context: ToolContext, prompt: str, image_refs:
                 picture, model = await generate_picture(prompt, references, size=size)
             picture = guarded_image_bytes(picture)
             reference = media_store.put(_tool_context,
-                MediaAsset("image", "七七绘图", payload=picture, mime=sniff_image_mime(picture)))
+                MediaAsset("image", "七七绘图", payload=picture, mime=sniff_image_mime(picture), self_generated=True))
             _previous_images[scope] = reference
             if _tool_context.request_id is not None:
                 _drawing_requests[request_key] = reference

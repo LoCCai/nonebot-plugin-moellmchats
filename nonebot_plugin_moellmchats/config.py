@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
+import re
 from types import MappingProxyType
 from typing import Any
 
@@ -31,6 +33,16 @@ class MentionAckConfig(BaseModel):
 
 
 mention_ack_config = get_plugin_config(MentionAckConfig)
+
+
+class UsageDisplayConfig(BaseModel):
+    moellm_usd_cny_rate: Decimal = Field(default=Decimal("7.2"), gt=0, le=100)
+    moellm_glm_free_tokens: int = Field(default=40_000_000, ge=0)
+    moellm_glm_promo_exhausted: bool = False
+    moellm_glm_reported_spend_cny: Decimal = Field(default=Decimal("0.33"), ge=0)
+
+
+usage_display_config = get_plugin_config(UsageDisplayConfig)
 
 
 class RecoveryConfig(BaseModel):
@@ -90,6 +102,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_tool_images": 4,
     "tool_batch_sequential_fallback": False,
     "tool_image_vision_enabled": True,
+    "skip_self_image_vision": True,
+    "ordinary_single_delivery": True,
+    "abuse_guard_enabled": True,
     "tool_image_vision_excluded_tools": [],
     "request_timeout_seconds": 180,
     "classification_timeout_seconds": 20,
@@ -128,13 +143,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "tool_progress_messages_enabled": True,
     "tool_progress_model_preface_enabled": False,
     "user_history_expire_seconds": 600,
-    "cd_seconds": 120,
+    "cd_seconds": 30,
     "search_api": "your api",
     "fastai_enabled": False,
     "emotions_enabled": False,
     "emotion_rate": 0.1,
     "emotions_dir": "absolute path",
     "private_chat_enabled": False,
+    "group_chat_policy": {"default_enabled": True, "groups": {}},
     "show_datetime": False,
     "poke_llm_rate": 0.3,
     "generated_tools_enabled": True,
@@ -257,6 +273,13 @@ class ConfigParser:
 
     @staticmethod
     def _validate(candidate: dict[str, Any]) -> None:
+        policy = candidate.get("group_chat_policy")
+        if (not isinstance(policy, dict) or set(policy) != {"default_enabled", "groups"}
+                or type(policy.get("default_enabled")) is not bool
+                or not isinstance(policy.get("groups"), dict)
+                or any(not isinstance(key, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", key)
+                       or type(value) is not bool for key, value in policy["groups"].items())):
+            raise ValueError("config.json: group_chat_policy 必须包含布尔默认值及群号到布尔值的映射")
         cooldown_seconds = candidate.get("cd_seconds")
         if (
             not isinstance(cooldown_seconds, int)
@@ -314,6 +337,9 @@ class ConfigParser:
             "tool_progress_model_preface_enabled",
             "tool_batch_sequential_fallback",
             "tool_image_vision_enabled",
+            "skip_self_image_vision",
+            "ordinary_single_delivery",
+            "abuse_guard_enabled",
             "runtime_watch_enabled",
             "generated_tools_enabled",
             "fastai_enabled",

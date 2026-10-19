@@ -23,6 +23,7 @@ from .llm_api import LlmApiMixin
 from .llm_payload import LlmPayloadMixin
 from .llm_state import context_dict, token_usage_history
 from .llm_tools import LlmToolsMixin
+from .math_response import PLOT_PROMPT, SOLUTION_PROMPT, solution_first_tools
 from .mention_context import mention_scope
 from .messages_handler import MessagesHandler
 from .model_capabilities import ModelCapability
@@ -36,6 +37,7 @@ from .onebot_facade import (
     onebot_protocol,
 )
 from .request_recovery import current_binding, durable_reply, resume_checkpoint
+from .request_budget import authorized_request, budget_limit, request_config
 from .runtime_snapshot import runtime_snapshots
 from .temperament_manager import temperament_manager
 from .tool_manager import tool_manager
@@ -44,6 +46,7 @@ from .utils import get_emotion, get_emotions_names, get_session, parse_emotion
 __all__ = ["MoeLlm", "context_dict", "token_usage_history"]
 
 _PROGRESS_NOTICE_TIMEOUT_SECONDS = 1.0
+_MODEL_RESPONSE_TIMEOUT_SECONDS = 180.0
 
 
 class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
@@ -130,8 +133,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 if context_dict[group_id]:
                     dynamic_context_parts.append("Recent_Chat_Log:")
                     context_items = list(context_dict[group_id])[:-1]
-                    max_chars = config_parser.get_config("max_history_chars", 16_000)
-                    max_tokens = config_parser.get_config("max_history_tokens", 4_000)
+                    max_chars = request_config("max_history_chars", 16_000)
+                    max_tokens = request_config("max_history_tokens", 4_000)
                     selected: list[str] = []
                     chars = 0
                     tokens = 0
@@ -216,15 +219,21 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
 
     def _remaining_request_seconds(self) -> float:
         if self.agent_runtime is None:
-            value = config_parser.get_config("request_timeout_seconds", 180)
-            return float(value)
-        remaining = self.agent_runtime.deadline.remaining()
+            remaining = float(budget_limit("request_timeout_seconds", config_parser.get_config("request_timeout_seconds", 180)))
+        else:
+            remaining = self.agent_runtime.deadline.remaining()
+        if round_deadline := getattr(self, "_round_deadline", None):
+            remaining = min(remaining, round_deadline - time.monotonic())
         if remaining <= 0:
             raise TimeoutError
         return remaining
 
     def _llm_request_timeout(self) -> aiohttp.ClientTimeout:
-        return aiohttp.ClientTimeout(total=self._remaining_request_seconds())
+        # Leave room for a configured backup, tools and the final reply. A
+        # single stalled completion must not consume the entire agent budget.
+        remaining = self._remaining_request_seconds()
+        return aiohttp.ClientTimeout(total=min(budget_limit(
+            "model_timeout_seconds", _MODEL_RESPONSE_TIMEOUT_SECONDS), remaining if authorized_request() else remaining / 2))
 
     async def _send_retry_notice(self, retry_times: int) -> None:
         try:
@@ -329,6 +338,14 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         return result
 
     async def _request_with_rate_limit_fallback(self, session, headers, data, stream):
+        from .vision_input import inline_qq_images
+        if data.get("messages"):
+            cache = getattr(self, "_vision_input_cache", None)
+            if cache is None:
+                cache = self._vision_input_cache = {}
+            data["messages"] = await inline_qq_images(
+                data["messages"], cache, timeout=min(12.0, self._remaining_request_seconds() / 4),
+            )
         attempted = getattr(self, "_rate_limit_attempted_models", None)
         if attempted is None:
             attempted = self._rate_limit_attempted_models = set()
@@ -338,25 +355,45 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             self._last_api_http_status = None
             self._last_api_quota_exhausted = False
             self._last_api_error_non_retryable = False
+            self._last_api_output_started = False
+            self._last_api_provider_rejected = False
+            request_timeout = self._llm_request_timeout()
 
             async def model_operation():
-                if stream:
-                    return await self.stream_llm_chat(
+                async with timeout_scope(request_timeout.total):
+                    if stream:
+                        return await self.stream_llm_chat(
+                            session, self.model_info["url"], headers, data,
+                            self.model_info.get("proxy"), self.model_info.get("is_segment"),
+                            request_timeout,
+                        )
+                    return await self.none_stream_llm_chat(
                         session, self.model_info["url"], headers, data,
-                        self.model_info.get("proxy"), self.model_info.get("is_segment"),
-                        self._llm_request_timeout(),
+                        self.model_info.get("proxy"), request_timeout,
                     )
-                return await self.none_stream_llm_chat(
-                    session, self.model_info["url"], headers, data,
-                    self.model_info.get("proxy"), self._llm_request_timeout(),
-                )
 
-            result = await self._call_model_with_trace(
-                model_operation,
-                input_preview=f"chat model request with {len(data.get('messages', []))} messages",
-            )
-            transient = self._last_api_http_status in TRANSIENT_HTTP_STATUSES
-            if result[0] or (self._last_api_http_status != 429 and not self._last_api_quota_exhausted and not transient):
+            transport_failure = False
+            try:
+                result = await self._call_model_with_trace(
+                    model_operation,
+                    input_preview=f"chat model request with {len(data.get('messages', []))} messages",
+                )
+            except (TimeoutError, aiohttp.ClientConnectionError) as error:
+                logger.warning(
+                    "模型请求超时或连接中断：model={} budget_seconds={} error_type={}",
+                    self.model_info.get("model"), request_timeout.total, type(error).__name__,
+                )
+                result = (False, "模型响应超时或连接中断，请稍后再试。", None, "")
+                transport_failure = True
+                if self._last_api_output_started:
+                    # A visible prefix or an uncertain delivery cannot safely
+                    # be replayed through a second provider.
+                    self._last_api_error_non_retryable = True
+                    return (*result, stream)
+            transient = transport_failure or self._last_api_http_status in TRANSIENT_HTTP_STATUSES
+            provider_rejected = self._last_api_provider_rejected
+            if result[0] or (self._last_api_http_status != 429 and not self._last_api_quota_exhausted
+                             and not transient and not provider_rejected):
                 return (*result, stream)
             if self._last_api_quota_exhausted:
                 await model_selector.mark_model_exhausted(self.model_info, self._last_api_http_status)
@@ -369,14 +406,17 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 # available chain was tried, do not repeatedly hit its last model.
                 self._last_api_error_non_retryable = not transient or len(attempted) > 1
                 return (*result, stream)
-            reason = "服务临时不可用" if transient else "配额不足或限流"
+            reason = ("图片请求格式被服务拒绝" if provider_rejected else
+                      "超时或连接中断" if transport_failure else ("服务临时不可用" if transient else "配额不足或限流"))
             logger.info("回答模型{}，切换已配置备用: status={} from={} to={}",
                         reason, self._last_api_http_status, self.model_info["model"], backup["model"])
             # Replace transport options while preserving messages, tool schemas
             # and completed tool results. A model switch never replays a tool.
             protected = {"messages", "tools", "tool_choice"}
             previous_extra = self.model_info.get("extra_payload") or {}
-            options = {"model", "max_tokens", "max_completion_tokens", "temperature", "top_p", "top_k", "stream", "stream_options"}
+            options = {
+                "model", "max_tokens", "max_completion_tokens", "temperature", "top_p", "top_k", "stream", "stream_options",
+            }
             if isinstance(previous_extra, dict):
                 options.update(set(previous_extra) - protected)
             for name in options:
@@ -391,7 +431,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                              if name not in protected | {"model", "stream", "stream_options"}})
             data["model"] = backup["model"]
             headers["Authorization"] = backup["key"]
-            stream = bool(backup.get("stream", False) and not data.get("tools"))
+            stream = bool(backup.get("stream", False) and not data.get("tools")
+                          and not getattr(self, "_defer_model_output", False))
             data["stream"] = stream
             if stream:
                 data["stream_options"] = {"include_usage": True}
@@ -408,7 +449,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         resuming = recovery is not None and recovery.record["state"] == "recovering"
         self.messages_handler = MessagesHandler(self.user_id)
         if self.agent_runtime is not None:
-            history_exchanges = config_parser.get_config("max_user_history", 8)
+            history_exchanges = request_config("max_user_history", 8)
             if not isinstance(history_exchanges, int) or isinstance(history_exchanges, bool):
                 history_exchanges = 8
             committed = await self.agent_runtime.load_committed_context(
@@ -525,6 +566,17 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 m for m in send_message_list if m.get("role") in {"assistant", "tool"}]
         # 2. 构建 Payload
         data, current_stream_flag = self._build_payload(send_message_list)
+        math_plots = [] if resuming else solution_first_tools(data.get("tools", []), plain)
+        math_solution_pending = bool(math_plots)
+        if math_solution_pending:
+            # Solve with a text completion first. No plotting/tool execution can
+            # delay the solution, and partial streams cannot expose raw LaTeX.
+            data.pop("tools", None)
+            data.pop("tool_choice", None)
+            data.pop("stream_options", None)
+            data["stream"] = current_stream_flag = False
+            self._defer_model_output = True
+            send_message_list[0]["content"] += SOLUTION_PROMPT
         # DEBUG
         logger.debug(
             f"LLM payload: model={data.get('model')} messages={len(data.get('messages', []))} "
@@ -540,15 +592,18 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         }
 
         max_tool_rounds = min(
-            config_parser.get_config("max_tool_rounds", 6),
-            config_parser.get_config("max_agent_steps", 6),
+            request_config("max_tool_rounds", 6),
+            request_config("max_agent_steps", 6),
         )
-        max_retry_times = config_parser.get_config("max_retry_times") or 3
+        max_retry_times = request_config("max_retry_times", 3) or 3
 
         session = get_session()
         self._waiting_confirmation = False
+        tools_executed = False
         # 修改：增加上限至 max_tool_rounds + 1，以容纳最后一次强制总结
         for tool_round in range(max_tool_rounds + 1):
+            if authorized_request():
+                self._round_deadline = time.monotonic() + budget_limit("model_timeout_seconds", 360)
             if recovery is not None:
                 await recovery.checkpoint(send_message_list, phase="model")
                 recovery.pause_if_stopping()
@@ -582,6 +637,17 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                     )
                     if self.agent_runtime is not None:
                         await self.agent_runtime.flush_usage()
+                    if success and not tool_calls and not (result_text or "").strip() and not tools_executed:
+                        # A provider can return HTTP 200 with reasoning only.
+                        # Nothing was delivered or executed, so bounded model
+                        # retries are safe; never record that as a completed answer.
+                        logger.warning(
+                            "模型未返回正文或工具调用，进入有限重试：model={} attempt={} finish_reason={}",
+                            self.model_info.get("model"), retry_times + 1,
+                            getattr(self, "_last_completion_finish_reason", None),
+                        )
+                        success = False
+                        result_text = "模型未返回可展示的解答，已重试；请稍后再试。"
                     if success:
                         break
                     if self._last_api_error_non_retryable:
@@ -598,9 +664,35 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             if not success:
                 return result_text or "api寄！"
 
+            if math_solution_pending:
+                if tool_calls or not (result_text or "").strip():
+                    return "模型未返回完整的 Markdown 解答，请稍后再试。"
+                solution = result_text
+                call = {"id": "math-solution-" + str(time.time_ns()), "type": "function",
+                        "function": {"name": "render_markdown", "arguments": json.dumps(
+                            {"markdown": solution}, ensure_ascii=False)}}
+                send_message_list = await self._execute_tools([call], solution, send_message_list, reasoning_content)
+                tools_executed = True
+                # Renderer replies only claim success after the adapter accepted
+                # its send. An uncertain delivery must never be sent again.
+                outcome = str(send_message_list[-1].get("content", ""))
+                if "已完成渲染并把图片发送到当前会话" not in outcome:
+                    if any(word in outcome for word in ("发送失败", "结果未确认", "结果未知", "执行超时", "执行出错")):
+                        return "解答已生成，图片发送结果未确认；请先检查会话，避免重复发送。"
+                    await self.send_emotion_message(solution)
+                self._pending_vision_images = []
+                math_solution_pending = False
+                self._defer_model_output = False
+                data["tools"] = math_plots
+                data["messages"] = send_message_list
+                send_message_list.append({"role": "user", "content": PLOT_PROMPT})
+                logger.info("数学 Markdown 解答已交付，开始辅助图阶段")
+                continue
+
             # 3. 执行工具调用（非总结轮次才执行）
             if tool_calls and tool_round < max_tool_rounds and not getattr(self, "_recovery_no_tools", False):
                 send_message_list = await self._execute_tools(tool_calls, result_text, send_message_list, reasoning_content)
+                tools_executed = True
 
                 if self._waiting_confirmation:
                     # The nonce notice is already delivered. Another model
@@ -618,7 +710,8 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
 
                 # User-uploaded images are handled at preparation; this switch
                 # only controls reinspection of tool output images.
-                if not config_parser.get_config("tool_image_vision_enabled", True):
+                if (config_parser.get_config("skip_self_image_vision", True)
+                        or not config_parser.get_config("tool_image_vision_enabled", True)):
                     self._pending_vision_images = []
                 if self._pending_vision_images:
                     vision_model_info = model_selector.get_model_for_capabilities(

@@ -208,9 +208,11 @@ class ToolAuthoringService:
             )
         )
         attempt_data = data
+        from .usage_ledger import budgeted_post, record_usage
+
         compatibility_retried = False
         while True:
-            async with get_session().post(
+            async with budgeted_post(get_session(), model,
                 model["url"],
                 headers=headers,
                 json=attempt_data,
@@ -219,6 +221,12 @@ class ToolAuthoringService:
             ) as response:
                 if response.status == 200:
                     body = await response.text()
+                    try:
+                        usage_body = json.loads(body)
+                    except (ValueError, TypeError):
+                        usage_body = {}
+                    await record_usage(model, usage_body.get("usage") if isinstance(usage_body, dict) else None,
+                                       purpose="tool_authoring")
                     break
                 if response.status == 429:
                     error_body, truncated, read_bytes = "", False, 0

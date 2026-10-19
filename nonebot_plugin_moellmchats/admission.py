@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Hashable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -11,6 +11,25 @@ from .runtime_metrics import runtime_metrics
 
 class AdmissionRejected(RuntimeError):
     pass
+
+
+class AdmissionQueueTimeout(AdmissionRejected):
+    pass
+
+
+@asynccontextmanager
+async def queued_slot(gate, key, *, timeout_seconds: float) -> AsyncIterator[None]:
+    """Time only acquisition; both memory and Redis gates retain their cleanup."""
+    from .compat import TimeoutError, timeout
+
+    async with AsyncExitStack() as stack:
+        try:
+            async with timeout(timeout_seconds):
+                await stack.enter_async_context(gate.slot(key))
+        except TimeoutError as error:
+            runtime_metrics.llm_rejected += 1
+            raise AdmissionQueueTimeout("LLM queue wait timed out") from error
+        yield
 
 
 class AdmissionGateProtocol(Protocol):

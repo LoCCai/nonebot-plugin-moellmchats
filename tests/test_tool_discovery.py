@@ -14,6 +14,7 @@ from nonebot_plugin_moellmchats.tool_discovery import (
     MAX_DISCOVERY_FEATURES,
     PicMenuProjectionSnapshot,
     build_intent_owner_index,
+    build_compatibility_description,
     build_plugin_catalog_entries,
     discovery_directory_identity,
     finalize_discovery_catalog,
@@ -269,6 +270,20 @@ def test_plugin_tool_dependencies_survive_both_discovery_sources(monkeypatch) ->
     assert candidate["qi_zmws"]["tool_dependencies"] == metadata_info["tool_dependencies"]
     monkeypatch.setattr(manager, "_load_custom_plugin_info", lambda: {"qi_zmws": {"name": "自定义"}})
     assert "tool_dependencies" not in manager.build_plugin_info(picmenu_projection=projection)["qi_zmws"]
+
+
+def test_game_discovery_preserves_native_menu_and_scopes_data_tools_to_analysis():
+    info = with_menu_discovery({'name': '造梦无双', 'usage': '/造梦资料 [UID]'}, [
+        {'func': '造梦技能', 'trigger_method': '指令', 'trigger_condition': '/造梦技能 <名字>',
+         'brief_des': '技能原生卡片'},
+    ])
+    catalog = '\n'.join(build_plugin_catalog_entries('qi_zmws', info))
+    description = build_compatibility_description('qi_zmws', info)
+    assert '/造梦技能' in catalog
+    assert '优先调用原生命令' in catalog
+    assert '/造梦资料 [UID]' in description and '/造梦技能' in description
+    assert '复杂统计' in description and 'read_rendered_view' in description
+    assert '不执行原生命令' not in description
 
 
 def test_custom_info_can_explicitly_supply_menu_data() -> None:

@@ -47,10 +47,12 @@ from .chat_runtime import (
 from .config import MAX_CD_SECONDS, config_parser
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import generated_tool_store
+from .group_switch import COMMAND_PATTERN as GROUP_SWITCH_PATTERN, group_llm_enabled, manage_group_llm
 from .messages_handler import messages_dict
 from .model_admin import POOL_HELP, format_chain, format_pools, manage_pool, pool_role
 from .model_selector import model_selector
 from . import usage_admin as _usage_admin  # noqa: F401
+from . import policy_admin as _policy_admin  # noqa: F401
 from .moe_llm import token_usage_history
 from .pending_actions import (
     PendingAction,
@@ -126,6 +128,8 @@ __plugin_meta__ = PluginMetadata(
 4.超级管理员限定：用"查看配置"、"查看模型"、"刷新模型"、"切换模型"、
   "切换moe"、"设置联网"、"设置视觉模型"、"设置分类模型"、"设置工具调用"进行系统管理
 5.超级管理员限定：用"添加/移除插件黑名单"来禁用bot的特定工具调用
+普通用户默认每30秒一次；多功能仅投递第一项，其余提供可复制指令。
+超级管理员可用"查看LLM失败请求"、"重试LLM请求 编号"、"查看LLM警告 QQ号"、"解除LLM拉黑 QQ号"。
 6.超级管理员限定：用"刷新工具/重载工具"来热重载新增的函数
 7.超级管理员限定：用"查看插件黑名单/插件黑名单"来查看插件的黑名单列表
 8.超级管理员限定：用"设置私聊 开/关"来开启/关闭超级管理员私聊对话模式
@@ -141,6 +145,7 @@ __plugin_meta__ = PluginMetadata(
 18.超级管理员限定：用"设置LLM冷却 <秒数>"直接调整对话冷却；设为 0 可关闭冷却
 19.超级管理员限定：用"设置工具进度 开/关"控制是否向当前会话发送工具调用前的进度提示
 20.超级管理员限定：用"!查看LLM链路"查询实际模型与思考参数；用"!模型池帮助"查看分类/三档池的设置、增删、关闭命令
+21.超级管理员限定：用"开启LLM/关闭LLM/查看LLM [群号或全部]"管理群聊开关；群内可省略群号
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
@@ -161,7 +166,7 @@ message_matcher = on_message(rule=_is_group_message, priority=1, block=False)
 async def context_dict_func(bot: Bot, event: MessageEvent):
     from .event_simulator import is_synthetic_event
 
-    if is_synthetic_event():
+    if is_synthetic_event() or not group_llm_enabled(event):
         return
     from .onebot_facade import (
         event_group_id,
@@ -373,6 +378,26 @@ async def _(args: Message = CommandArg()):
     await media_model_matcher.finish(model_selector.set_media_model(roles[role], query.strip()))
 
 
+group_llm_switch_matcher = on_regex(
+    GROUP_SWITCH_PATTERN, flags=re.IGNORECASE,
+    permission=SUPERUSER, priority=10, block=True,
+)
+
+
+@group_llm_switch_matcher.handle()
+async def group_llm_switch_command(event: MessageEvent):
+    try:
+        result = manage_group_llm(event.get_plaintext(), event)
+    except ValueError as error:
+        await group_llm_switch_matcher.finish(str(error))
+        return
+    except Exception as error:
+        logger.warning("群聊 LLM 开关保存失败：error_type={}", type(error).__name__)
+        await group_llm_switch_matcher.finish("LLM 开关保存失败，原配置继续使用，请检查后台日志。")
+        return
+    await group_llm_switch_matcher.finish(result)
+
+
 llm_matcher = on_message(
     rule=to_me() & chat_rule,
     priority=99,
@@ -430,6 +455,11 @@ cancel_action_matcher = confirm_action_matcher
 
 
 async def _run_confirmation_code(action_name: str, code: str, bot: Bot, event: MessageEvent) -> str:
+    if action_name != "取消执行" and not group_llm_enabled(event):
+        raise PendingActionError("本群 LLM 功能已关闭，不能执行待确认操作")
+    from .chat_policy import user_blocked
+    if action_name != "取消执行" and await user_blocked(bot, event):
+        raise PendingActionError("AI 使用权限已停用，不能执行待确认操作")
     snapshot = runtime_snapshots.current()
     if snapshot is None:
         raise PendingActionError("LLM 运行快照尚未就绪，操作已拒绝")
@@ -1519,6 +1549,7 @@ async def _poke_event(bot: Bot, event: PokeNotifyEvent):
     if (
         poke_llm_rate
         and group_id
+        and group_llm_enabled(event)
         and random.random() < poke_llm_rate
         # cd中直接走默认回复，避免触发handle_llm的排队等待逻辑
         and event.time - cd.get(event.user_id, 0) >= (config_parser.get_config("cd_seconds") or 0)

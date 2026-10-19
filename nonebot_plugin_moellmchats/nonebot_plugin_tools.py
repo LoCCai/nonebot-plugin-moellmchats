@@ -283,6 +283,10 @@ async def plugin_dispatch_tool_result(
             "兼容插件回执文本已规范化 plugin={} details={}", plugin_name, normalization
         )
     metadata: dict[str, Any] = {"plugin_dispatch": _dispatch_metadata(dispatch)}
+    from .config import config_parser
+    omit_game_images = plugin_name == "qi_zmws" or config_parser.get_config("skip_self_image_vision", True)
+    if omit_game_images:
+        metadata["skip_image_vision"] = True
     if normalization:
         metadata["output_text_normalization"] = normalization
     structured = None
@@ -290,7 +294,14 @@ async def plugin_dispatch_tool_result(
         structured = {"rendered_views": list(dispatch.rendered_views)}
         metadata["skip_image_vision"] = True
     if dispatch.status is PluginDispatchStatus.MATCHED_WITH_OUTPUT:
-        images, image_normalization = await asyncio.to_thread(_normalize_dispatch_images, dispatch.images)
+        # The native card was delivered to QQ. The model reads its render
+        # evidence without receiving or decoding the generated image.
+        images, image_normalization = ((), {}) if omit_game_images else await asyncio.to_thread(_normalize_dispatch_images, dispatch.images)
+        if omit_game_images:
+            metadata["delivered_images"] = len(dispatch.images)
+            if dispatch.images:
+                note = f"\n已确认向用户发送图片 {len(dispatch.images)} 张；已提供文字回执，不要重复调用。"
+                text, _ = _normalize_dispatch_text(text[:TOOL_RESULT_MAX_TEXT_CHARS - len(note)] + note)
         if image_normalization:
             metadata["output_image_normalization"] = image_normalization
             note = (f"\n已确认向用户发送图片 {len(dispatch.images)} 张；"

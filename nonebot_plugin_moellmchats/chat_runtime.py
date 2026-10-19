@@ -11,7 +11,7 @@ from nonebot.log import logger
 
 from . import full_metrics as _full_metrics
 from . import moe_llm as llm
-from .admission import AdmissionGateProtocol, AdmissionRejected, get_llm_controller
+from .admission import AdmissionGateProtocol, AdmissionRejected, AdmissionQueueTimeout, get_llm_controller, queued_slot
 from .agent_context_runtime import (
     AgentGenerationCoordinator,
     AgentRequestIdentity,
@@ -26,6 +26,7 @@ from .config import config_parser, mention_ack_config
 from .conversation_slots import conversation_slots
 from .cooldowns import CooldownError, CooldownLease, CooldownStoreProtocol, MemoryCooldownStore
 from .delivery_errors import reply_delivery_failure
+from .group_switch import group_llm_enabled
 from .onebot_facade import (
     bot_self_id,
     event_message,
@@ -39,6 +40,8 @@ from .onebot_facade import (
 from .protocol_context import protocol_request_scope
 from .request_manager import register_request, unregister_request
 from .request_recovery import recovery_service, restarting
+from .request_budget import budget_authorized, budget_config, budget_limit, budget_tier, request_budget_scope
+from .request_budget import authorized_request, ordinary_request
 from .runtime_snapshot import runtime_snapshots
 from .state_store import BoundedValueStore
 from .temperament_manager import temperament_manager
@@ -98,7 +101,7 @@ async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
         return False
     scene = event_scene(event)
     if scene in {"group", "channel"}:
-        return True
+        return group_llm_enabled(event)
     if scene == "private":
         bot_config = getattr(bot, "config", None)
         return bool(
@@ -109,7 +112,7 @@ async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
 
 
 def reset_user_runtime_state(user_id: int | str) -> None:
-    default_cooldown_store.reset_user(user_id)
+    default_cooldown_store.reset_user(str(user_id))
     is_repeat_ask_dict[user_id] = False
 
 
@@ -123,8 +126,9 @@ async def _release_cooldown(
     lease: CooldownLease | None,
     *,
     user_id: int | str,
+    not_admitted: bool = False,
 ) -> None:
-    if lease is not None:
+    if lease is not None and (not_admitted or not ordinary_request()):
         await store.release(lease)
     is_repeat_ask_dict[user_id] = False
 
@@ -165,23 +169,28 @@ async def handle_llm(
     format_message_dict: dict | Callable[[], Awaitable[dict]], is_ai=False, **kwargs,
 ):
     from .usage_ledger import bind_usage_scope
+    if not group_llm_enabled(event):
+        await matcher.finish("本群 LLM 功能已关闭，请联系超级管理员开启。")
+        return None
+    authorized = await budget_authorized(bot, event)
+    from .chat_policy import enforce_conduct
+    if not await enforce_conduct(bot, event, matcher, authorized=authorized):
+        return None
     async with conversation_slots.slot(event_user_id(event)) as acquired:
         if not acquired:
             from .runtime_metrics import runtime_metrics
             runtime_metrics.llm_rejected += 1
             await matcher.finish("七七正在思考你的上一个问题，请耐心等待。")
             return None
-        with bind_usage_scope(bot, event):
-            formatted = await format_message_dict() if callable(format_message_dict) else format_message_dict
-            return await recovery_service.run(bot, event, formatted, is_ai,
-                                              lambda: _handle_llm(bot, event, matcher, formatted, is_ai, **kwargs))
+        with request_budget_scope(authorized=authorized), bind_usage_scope(bot, event):
+            return await _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs)
 
 
 async def _handle_llm(
     bot: Bot,
     event: MessageEvent,
     matcher,
-    format_message_dict: dict,
+    format_message_dict: dict | Callable[[], Awaitable[dict]],
     is_ai=False,
     *,
     cooldown_store: CooldownStoreProtocol | None = None,
@@ -198,8 +207,9 @@ async def _handle_llm(
         getattr(sender, "user_id", normalized_user_id),
     )
     user_id: int | str = raw_user_id if isinstance(raw_user_id, (int, str)) else normalized_user_id
-    cooldown_seconds = int(config_parser.get_config("cd_seconds", 120) or 0)
-    deadline = DeadlineContext.from_timeout(config_parser.get_config("request_timeout_seconds", 180))
+    cooldown_seconds = 0 if authorized_request() else int(config_parser.get_config("cd_seconds", 30) or 0)
+    deadline = DeadlineContext.from_timeout(budget_limit(
+        "request_timeout_seconds", config_parser.get_config("request_timeout_seconds", 180)))
     selected_host = runtime_resource_host if resource_host is None else resource_host
     use_generation_cooldown = (
         resource_host is not None and cooldown_store is None and selected_host.settings.redis_cooldowns is not None
@@ -209,8 +219,25 @@ async def _handle_llm(
     )
     is_finished: str | bool = False
     agent_request: AgentRequestRuntime | None = None
+    admission_wait_seconds = 0.0
 
     async def execute_bound_agent(
+        coordinator: AgentGenerationCoordinator,
+    ) -> None:
+        nonlocal format_message_dict
+        if not group_llm_enabled(event):
+            await matcher.finish("本群 LLM 功能已关闭，请联系超级管理员开启。")
+            return
+        # Waiting requests must not download/parse attachments or write a
+        # recovery record until there is capacity to process them.
+        if callable(format_message_dict):
+            format_message_dict = await format_message_dict()
+        await recovery_service.run(
+            bot, event, format_message_dict, is_ai,
+            lambda: execute_recoverable_agent(coordinator),
+        )
+
+    async def execute_recoverable_agent(
         coordinator: AgentGenerationCoordinator,
     ) -> None:
         nonlocal agent_request, is_finished
@@ -219,11 +246,14 @@ async def _handle_llm(
             await matcher.finish("出错了，赶快喊机器人主人来修复一下吧~")
 
         request_id = register_request(event, format_message_dict, is_ai)
+        execution_started = time.monotonic()
+        logger.info("LLM 请求开始：request={} tier={} queue_ms={}",
+                    request_id, budget_tier(), int(admission_wait_seconds * 1000))
         try:
             try:
                 coordinator.resources.metrics.observe_duration(
                     _full_metrics.FullDurationMetric.QUEUE_DURATION,
-                    max(0.0, time.monotonic() - admission_started_at),
+                    admission_wait_seconds,
                 )
             except Exception:
                 pass
@@ -245,6 +275,10 @@ async def _handle_llm(
             )
             try:
                 is_finished = await llm_chat.get_llm_chat()
+                if isinstance(is_finished, str) or not is_finished:
+                    from .request_recovery import current_binding
+                    if binding := current_binding():
+                        binding.record["model_failed"] = True
                 if (isinstance(is_finished, str) or not is_finished) and not agent_request.run.is_terminal:
                     await agent_request.finish_exception(AgentRunState.FAILED)
                 elif is_finished and not agent_request.run.is_terminal:
@@ -269,6 +303,9 @@ async def _handle_llm(
                     )
                 raise
         finally:
+            state = agent_request.run.state if agent_request is not None else "not_started"
+            logger.info("LLM 请求结束：request={} tier={} execution_ms={} state={}",
+                        request_id, budget_tier(), int((time.monotonic() - execution_started) * 1000), state)
             unregister_request(request_id)
 
     async def execute_agent(coordinator: AgentGenerationCoordinator) -> None:
@@ -295,13 +332,13 @@ async def _handle_llm(
         else:
             action_store = default_cooldown_store if cooldown_store is None else cooldown_store
         cooldown_claim = await action_store.claim(
-            user_id=user_id,
-            event_time=event_time_seconds(event),
+            user_id=str(user_id),
+            event_time=time.time(),
             cooldown_seconds=cooldown_seconds,
         )
         if cooldown_claim.retry_after_seconds:
-            sender_name = event_sender_name(event)
-            await matcher.finish(f"{sender_name}的 LLM 对话冷却中，请在 {cooldown_claim.retry_after_seconds} 秒后重试。")
+            await matcher.finish(f"每人 {cooldown_seconds} 秒只能唤醒七七一次，请在 {cooldown_claim.retry_after_seconds} 秒后再试；这条请求已忽略。")
+            return None
 
         admission_started_at = time.monotonic()
         try:
@@ -314,7 +351,8 @@ async def _handle_llm(
                         raise RuntimeError("LLM generation admission 未组合")
                 else:
                     admission_gate = get_llm_controller() if admission_controller is None else admission_controller
-                async with admission_gate.slot(user_id):
+                async with queued_slot(admission_gate, user_id, timeout_seconds=budget_config.moellm_queue_wait_seconds):
+                    admission_wait_seconds = max(0.0, time.monotonic() - admission_started_at)
                     if generation_coordinator is not None:
                         await execute_agent(generation_coordinator)
                     else:
@@ -324,11 +362,17 @@ async def _handle_llm(
                         with runtime_snapshots.bind(snapshot):
                             async with selected_host.lease(snapshot) as coordinator:
                                 await execute_agent(coordinator)
+        except AdmissionQueueTimeout:
+            logger.warning("LLM 排队超时：tier={} queue_ms={}", budget_tier(),
+                           int((time.monotonic() - admission_started_at) * 1000))
+            await _release_cooldown(action_store, cooldown_claim.lease, user_id=user_id, not_admitted=True)
+            await matcher.finish("当前多个群正在使用 AI，七七暂时没有空闲处理名额，请稍后再试。")
         except AdmissionRejected:
             await _release_cooldown(
                 action_store,
                 cooldown_claim.lease,
                 user_id=user_id,
+                not_admitted=True,
             )
             await matcher.finish("当前 LLM 请求较多，队列已满或你已有等待中的请求，请稍后再试。")
         except TimeoutError:

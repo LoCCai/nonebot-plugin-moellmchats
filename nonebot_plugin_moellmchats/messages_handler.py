@@ -4,6 +4,7 @@ import time
 
 from .chat_history import MessageRecord, mutable_history_json
 from .config import config_parser
+from .request_budget import request_config
 from .mention_context import HISTORY_TARGET_LIMIT, historical_targets, verified_mention_context
 from .state_store import BoundedDequeStore
 
@@ -264,10 +265,10 @@ class MessagesHandler:
         current_user_message = self.messages_entity.get_user_msg()
         if current_user_message is not None:
             result.append(current_user_message)
-        max_chars = config_parser.get_config("max_history_chars", 16_000)
+        max_chars = request_config("max_history_chars", 16_000)
         # Deterministic conservative estimate for multilingual OpenAI-compatible
         # models. Exact tokenizer packages are intentionally not required.
-        max_tokens = config_parser.get_config("max_history_tokens", 4_000)
+        max_tokens = request_config("max_history_tokens", 4_000)
         total = 0
         total_tokens = 0
         bounded = []

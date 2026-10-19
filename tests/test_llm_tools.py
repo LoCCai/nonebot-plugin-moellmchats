@@ -24,6 +24,14 @@ from nonebot_plugin_moellmchats.agent_runtime import (
 )
 from nonebot_plugin_moellmchats.builtin_tools import builtin_tool_specs
 from nonebot_plugin_moellmchats.config import config_parser
+
+
+@pytest.fixture(autouse=True)
+def enabled_legacy_image_feedback(monkeypatch):
+    # Transport/preview regressions explicitly exercise the opt-in path.
+    original = config_parser.get_config
+    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
+                        False if key == 'skip_self_image_vision' else original(key, default))
 from nonebot_plugin_moellmchats.event_simulator import (
     PluginDispatchResult,
     PluginDispatchStatus,
@@ -139,6 +147,35 @@ def _call(identifier: int, name: str, arguments: str = "{}") -> dict:
         "type": "function",
         "function": {"name": name, "arguments": arguments},
     }
+
+
+@pytest.mark.asyncio
+async def test_ordinary_batch_dispatches_first_card_only_and_sends_copyable_followups(monkeypatch):
+    from nonebot_plugin_moellmchats import llm_tools as module
+    from nonebot_plugin_moellmchats.request_budget import request_budget_scope
+
+    legacy, _ = build_nonebot_plugin_candidate({'card_demo': {
+        'description': 'cards', 'usage': '/造梦资料 我的\n/造梦排行 蟠桃\n/蟠桃趋势'}})
+    sent = []
+    async def dispatch(_bot, _event, command, _source, **kwargs):
+        sent.append(command)
+        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text='已发送卡片', images=('private-image',), successful_captures=1, api_succeeded=1)
+    monkeypatch.setattr(module.event_simulator, 'dispatch_event', dispatch)
+    original = config_parser.get_config
+    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
+                        True if key == 'skip_self_image_vision' else original(key, default))
+    harness = Harness({}, plugins=legacy)
+    harness.is_superuser = False
+    commands = ['/造梦资料 我的', '/造梦排行 蟠桃', '/蟠桃趋势']
+    with request_budget_scope(authorized=False):
+        messages = await harness._execute_tools([_call(index, 'card_demo', json.dumps({'command': command}))
+                                               for index, command in enumerate(commands, 1)], '', [], '')
+    assert sent == commands[:1]
+    assert not harness._pending_vision_images
+    assert len([row for row in messages if row['role'] == 'tool']) == 3
+    assert any('七七正在帮你投递：/造梦资料 我的' in row for row in harness.bot.sent)
+    assert any('/造梦排行 蟠桃\n/蟠桃趋势' in row and '复制粘贴' in row for row in harness.bot.sent)
 
 
 async def _agent_request_runtime(*, executing: bool = True) -> AgentRequestRuntime:
@@ -364,6 +401,38 @@ async def test_tool_image_vision_policy_preserves_results(monkeypatch, enabled, 
     assert harness._pending_vision_images == expected
     assert "战力12345" in messages[-1]["content"]
     assert result.images == ("https://example.com/result.png",)
+
+
+@pytest.mark.parametrize('tool', ['qi_zmws', 'zmws_player_query', 'zmws_data_query'])
+def test_game_tools_never_queue_images_for_vision(tool):
+    assert LlmToolsMixin._tool_vision_images(ToolResult(images=('https://example.org/game.png',)), tool) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider', [False, True])
+async def test_game_native_route_delivers_card_for_both_provider_generations(monkeypatch, provider):
+    from nonebot_plugin_moellmchats import llm_tools as module
+    from nonebot_plugin_moellmchats import nonebot_plugin_tools
+    legacy, specs = build_nonebot_plugin_candidate({'qi_zmws': {'description': '游戏数据'}})
+    snapshot = ToolSnapshot(generation=2, plugin_info=legacy, custom_tools={}, tool_dependencies={}, mcp_tool_names=set(),
+                            provider_catalog=_complete_catalog(2, nonebot_plugins=specs) if provider else None)
+    calls = []
+    async def dispatch(bot, event, command, source, **kwargs):
+        calls.append((command, kwargs))
+        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text='[图片]', images=('https://example.org/card.png',),
+            rendered_views=({'template': 'player.j2', 'text': '玩家甲 战力123456'},),
+            matcher_matched=1, successful_captures=1, api_succeeded=1)
+    monkeypatch.setattr(module.event_simulator, 'dispatch_event', dispatch)
+    monkeypatch.setattr(nonebot_plugin_tools.event_simulator, 'dispatch_event', dispatch)
+    harness = Harness({}, snapshot=snapshot)
+    messages = await harness._execute_tools([_call(1, 'qi_zmws', '{"command":"/造梦资料"}')], '', [], '')
+    assert calls == [('/造梦资料', {'plugin_name': 'qi_zmws', 'wait_for_result': True})]
+    assert '123456' in messages[-1]['content']
+    assert '造梦原生结果已发送' in messages[-1]['content']
+    assert '不要识图、重新排版或逐项复述' in messages[-1]['content']
+    assert 'example.org' not in messages[-1]['content']
+    assert not harness._pending_vision_images
 
 
 @pytest.mark.asyncio
@@ -1795,7 +1864,7 @@ async def test_nonebot_plugin_legacy_branch_preserves_background_notice(
     from nonebot_plugin_moellmchats import llm_tools as module
 
     legacy, _specs = build_nonebot_plugin_candidate(
-        {"qi_zmws": {"description": "造梦资料", "usage": "/造梦资料"}}
+        {"image_demo": {"description": "资料", "usage": "/造梦资料"}}
     )
     notice = "任务仍在后台运行，资料将稍后发送，无需再次调用。"
 
@@ -1809,7 +1878,7 @@ async def test_nonebot_plugin_legacy_branch_preserves_background_notice(
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     harness = Harness({}, plugins=legacy)
     messages = await harness._execute_tools(
-        [_call(1, "qi_zmws", '{"command":"/造梦资料 我的 完整"}')],
+        [_call(1, "image_demo", '{"command":"/造梦资料 我的 完整"}')],
         "", [], "",
     )
     assert notice in messages[-1]["content"]
@@ -1872,7 +1941,7 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
         )
     ]
     assert harness.bot.sent == [
-        "正在投递插件：plugin_demo｜功能：demo"
+        "七七正在帮你投递：/demo"
     ]
     assert "visible output" in messages[-1]["content"]
 
@@ -1999,7 +2068,7 @@ async def test_completed_image_command_blocks_equivalent_replays_and_keeps_visio
     from nonebot_plugin_moellmchats import llm_tools as module
 
     legacy, specs = build_nonebot_plugin_candidate(
-        {"qi_zmws": {"description": "peach boards", "usage": "/造梦排行 蟠桃\n/蟠桃趋势"}}
+        {"image_demo": {"description": "image boards", "usage": "/造梦排行 蟠桃\n/蟠桃趋势"}}
     )
     calls: list[str] = []
 
@@ -2020,21 +2089,21 @@ async def test_completed_image_command_blocks_equivalent_replays_and_keeps_visio
     )
     harness = Harness({}, snapshot=snapshot)
     first = await harness._execute_tools(
-        [_call(1, "qi_zmws", '{"command":"/造梦排行 蟠桃"}')], "", [], "",
+        [_call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}')], "", [], "",
     )
     for index, command in enumerate(("/造梦排行 蟠桃", "造梦排行   蟠桃", "!造梦排行 蟠桃"), start=2):
         repeated = await harness._execute_tools(
-            [_call(index, "qi_zmws", json.dumps({"command": command}, ensure_ascii=False))], "", [], "",
+            [_call(index, "image_demo", json.dumps({"command": command}, ensure_ascii=False))], "", [], "",
         )
         assert "已执行成功" in repeated[-1]["content"]
     assert calls == ["/造梦排行 蟠桃"]
     assert "已确认发送图片 1 张" in first[-1]["content"]
     assert "private-image-reference" not in first[-1]["content"]
     assert harness._pending_vision_images == ["private-image-reference"]
-    await harness._execute_tools([_call(5, "qi_zmws", '{"command":"/蟠桃趋势"}')], "", [], "")
+    await harness._execute_tools([_call(5, "image_demo", '{"command":"/蟠桃趋势"}')], "", [], "")
     assert calls == ["/造梦排行 蟠桃", "/蟠桃趋势"]
     fresh = Harness({}, snapshot=snapshot)
-    await fresh._execute_tools([_call(6, "qi_zmws", '{"command":"/造梦排行 蟠桃"}')], "", [], "")
+    await fresh._execute_tools([_call(6, "image_demo", '{"command":"/造梦排行 蟠桃"}')], "", [], "")
     assert len(calls) == 3  # A new user request can deliberately query again.
 
 
@@ -2045,7 +2114,7 @@ async def test_slow_native_image_waits_for_result_and_duplicate_batch_sends_once
     from nonebot_plugin_moellmchats import llm_tools as module
 
     legacy, _specs = build_nonebot_plugin_candidate(
-        {"qi_zmws": {"description": "peach", "usage": "/造梦排行 蟠桃"}}
+        {"image_demo": {"description": "image", "usage": "/造梦排行 蟠桃"}}
     )
     entered, release = asyncio.Event(), asyncio.Event()
     calls = 0
@@ -2062,8 +2131,8 @@ async def test_slow_native_image_waits_for_result_and_duplicate_batch_sends_once
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     harness = Harness({}, plugins=legacy)
     task = asyncio.create_task(harness._execute_tools([
-        _call(1, "qi_zmws", '{"command":"/造梦排行 蟠桃"}'),
-        _call(2, "qi_zmws", '{"command":"/造梦排行 蟠桃"}'),
+        _call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}'),
+        _call(2, "image_demo", '{"command":"/造梦排行 蟠桃"}'),
     ], "", [], ""))
     try:
         await asyncio.wait_for(entered.wait(), timeout=1)
@@ -2929,7 +2998,7 @@ async def test_legacy_plugin_oversized_image_receipt_reports_success(monkeypatch
     from nonebot_plugin_moellmchats import nonebot_plugin_tools as receipt_module
     from nonebot_plugin_moellmchats.tool_contracts import TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS
 
-    legacy, _ = build_nonebot_plugin_candidate({"qi_zmws": {"description": "造梦", "usage": "/造梦排行"}})
+    legacy, _ = build_nonebot_plugin_candidate({"image_demo": {"description": "图片", "usage": "/造梦排行"}})
     calls = []
 
     async def dispatch(*args, **kwargs):
@@ -2941,7 +3010,7 @@ async def test_legacy_plugin_oversized_image_receipt_reports_success(monkeypatch
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     monkeypatch.setattr(receipt_module, "_image_preview", lambda *args: None)
     harness = Harness({}, plugins=legacy)
-    messages = await harness._execute_tools([_call(1, "qi_zmws", '{"command":"/造梦排行 蟠桃"}')], "", [], "")
+    messages = await harness._execute_tools([_call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}')], "", [], "")
     assert len(calls) == 1
     assert "已确认向用户发送图片 1 张" in messages[-1]["content"]
     assert "函数执行出错" not in messages[-1]["content"]

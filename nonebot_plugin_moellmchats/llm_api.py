@@ -15,7 +15,7 @@ from .model_error_policy import (
     read_bounded_error,
 )
 from .request_manager import get_current_request_elapsed
-from .usage_ledger import record_usage, budget_available, budgeted_post
+from .usage_ledger import budget_available, budgeted_post, record_usage
 
 
 class LlmApiMixin:
@@ -210,6 +210,16 @@ class LlmApiMixin:
             # such as "audit" or "safety" are ordinary provider errors.
             if is_content_policy_error_info(error_info):
                 return "图片或内容可能包含敏感信息"
+            has_images = request_data is not None and self._payload_contains_image(request_data)
+            # This exact provider error also occurs for unsupported image URLs
+            # and dimensions. It is not evidence of a safety block or depletion.
+            self._last_api_provider_rejected = bool(
+                has_images and str(error_info.get("code")) == "400001"
+                and error_info.get("type") == "invalid_request_error"
+                and "internal MaaS component" in detail_msg
+            )
+            logger.warning("LLM 400 请求特征：images={} provider_rejected={}",
+                           has_images, self._last_api_provider_rejected)
             if request_data is not None:
                 logger.warning(
                     "LLM 请求返回 400；为保护群聊内容和密钥，已省略完整 Payload。"
@@ -219,8 +229,8 @@ class LlmApiMixin:
 
             # 4. 组装更详细的聊天回复文本
             error_reply = "API请求被拒绝 (400)"
-            if request_data is not None and self._payload_contains_image(request_data):
-                error_reply += "\n提示：本次请求包含图片，具体原因请参考下方错误信息或后台日志。"
+            if has_images:
+                error_reply += "\n提示：请求包含图片；此提示不代表图片是错误原因。"
             if code := error_info.get("code"):
                 error_reply += f"\n错误码：{code}"
             if error_type := error_info.get("type"):
@@ -271,6 +281,7 @@ class LlmApiMixin:
                 part = text[start : start + 1200]
                 if assistant_result:
                     await asyncio.sleep(min(2.0, 0.5 + len(part) / 1200))
+                self._last_api_output_started = True
                 assistant_result.append(await self.send_emotion_message(part))
 
         async with budgeted_post(session, accounting_model,
@@ -361,6 +372,7 @@ class LlmApiMixin:
                 await send_text(remaining)
                 if assistant_result:
                     if durable_stream:
+                        self._last_api_output_started = True
                         assistant_result = [await self.send_emotion_message("".join(assistant_result))]
                     return (
                         True,
@@ -425,6 +437,7 @@ class LlmApiMixin:
                 return False, "API返回异常：响应体为空", None, ""
 
         if choices := response.get("choices"):
+            self._last_completion_finish_reason = choices[0].get("finish_reason")
             if usage := response.get("usage"):
                 self._record_token_usage(usage)
             message = choices[0]["message"]

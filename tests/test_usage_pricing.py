@@ -105,6 +105,24 @@ def test_chart_shows_single_multi_and_empty_data(ledger):
         assert reports.draw_report(reports.report_data('周')).startswith(b'\x89PNG')
 
 
+def test_report_converts_each_model_and_marks_partial_prices(ledger, monkeypatch):
+    monkeypatch.setattr(reports.usage_display_config, 'moellm_usd_cny_rate', Decimal('7'))
+    ledger.put_prices({'usd-model': {'input': '1', 'output': '2', 'cached': '0.1', 'currency': 'USD'},
+                       'cny-model': {'input': '3', 'output': '6', 'cached': '1', 'currency': 'CNY'}})
+    ledger.record({'model': 'usd-model'}, {'prompt_tokens': 1000000})
+    ledger.record({'model': 'usd-model'}, None)
+    ledger.record({'model': 'cny-model'}, {'prompt_tokens': 1000000})
+    ledger.record({'model': 'unpriced'}, {'prompt_tokens': 1000000})
+    data = reports.report_data('全部')
+    assert data['cost_cny'] == Decimal('10')
+    assert reports.model_cost_label(data, ['usd-model']) == '¥7.0000（部分）'
+    assert reports.model_cost_label(data, ['cny-model']) == '¥3.0000'
+    assert reports.model_cost_label(data, ['unpriced']) == '缺价'
+    rendered = reports.format_report(data)
+    assert '$1.428571 USD / ¥10.0000 人民币' in rendered
+    assert '40,000,000' in reports.glm_note() and '0.33' in reports.glm_note()
+
+
 def test_refresh_downloads_and_reuses_snapshot_without_network_on_startup(ledger, monkeypatch):
     from nonebot_plugin_moellmchats import usage_admin as admin
     monkeypatch.setattr(admin.usage_config, 'moellm_newapi_prices_file', '')

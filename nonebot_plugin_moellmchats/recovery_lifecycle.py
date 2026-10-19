@@ -30,6 +30,13 @@ async def authorize_recovery(bot, record):
         from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent
     data = deepcopy(record["event"])
     group = data.get("group_id")
+    from types import SimpleNamespace
+    from .group_switch import group_llm_enabled
+    if not group_llm_enabled(SimpleNamespace(**data)):
+        return None
+    from .chat_policy import user_blocked
+    if await user_blocked(bot, SimpleNamespace(**data)):
+        return None
     # Permissions from an old event are never trusted after a restart.
     async with timeout(10):
         if group is not None:
@@ -74,6 +81,12 @@ async def resume_request(bot, event, record):
     from .cooldowns import MemoryCooldownStore
     from .state_store import BoundedValueStore
     from .usage_ledger import bind_usage_scope
+    from .group_switch import group_llm_enabled
+    from .chat_policy import user_blocked
+    from .request_budget import budget_authorized, request_budget_scope
+
+    if not group_llm_enabled(event) or await user_blocked(bot, event):
+        return None
 
     class RecoveryMatcher:
         async def send(self, message):
@@ -86,7 +99,9 @@ async def resume_request(bot, event, record):
     # Wait for an existing owner; a saved request must not be lost to a fresh
     # request from the same QQ in another group or through another bot account.
     async with conversation_slots.slot(event.user_id, wait=True):
-        with bind_usage_scope(bot, event):
+        if not group_llm_enabled(event):
+            return None
+        with request_budget_scope(authorized=await budget_authorized(bot, event)), bind_usage_scope(bot, event):
             # The old request must not fail its own cooldown after startup.
             event.time = time.time()
             return await _handle_llm(bot, event, RecoveryMatcher(), record["formatted"], record["is_ai"],

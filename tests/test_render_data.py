@@ -117,7 +117,8 @@ async def test_long_card_keeps_full_text_when_node_location_budget_is_exhausted(
 
 
 @pytest.mark.asyncio
-async def test_real_plugin_dispatch_returns_text_data_beside_delivered_image(monkeypatch):
+@pytest.mark.parametrize('plugin_name', ['host', 'qi_zmws'])
+async def test_real_plugin_dispatch_returns_text_data_beside_delivered_image(monkeypatch, plugin_name):
     matcher = on_command("rendered_card_test", priority=20, block=True)
 
     @matcher.handle()
@@ -125,19 +126,24 @@ async def test_real_plugin_dispatch_returns_text_data_beside_delivered_image(mon
         module.record_rendered_view("player.j2", "<h1>玩家甲</h1><p>战力 123456</p>", {"power": 123456})
         await matcher.finish(MessageSegment.image("https://example.com/card.png"))
 
+    sends = []
+
     class Adapter:
         @staticmethod
         def get_name():
             return "OneBot V11"
 
         async def _call_api(self, bot, api, **data):
+            sends.append((api, data))
             return {"message_id": 12345}
 
     monkeypatch.setattr(simulator, "get_plugin", lambda name: SimpleNamespace(matcher={matcher}))
     bot = Bot(Adapter(), "10000")
     try:
-        result = await execute_nonebot_plugin("/rendered_card_test", plugin_name="host", bot=bot, event=_event(1))
-        assert result.images == ("https://example.com/card.png",)
+        result = await execute_nonebot_plugin("/rendered_card_test", plugin_name=plugin_name, bot=bot, event=_event(1))
+        assert result.images == (() if plugin_name == 'qi_zmws' else ("https://example.com/card.png",))
+        assert len(sends) == 1
+        assert 'https://example.com/card.png' in str(sends[0][1]['message'])
         assert result.metadata["skip_image_vision"] is True
         view = result.structured["rendered_views"][0]
         assert "123456" in view["text"]

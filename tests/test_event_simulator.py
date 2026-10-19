@@ -216,6 +216,16 @@ def _event(message_id: int, text: str = "original") -> GroupMessageEvent:
     )
 
 
+def test_v11_synthetic_event_has_its_own_original_message():
+    original = _event(100, "用户原问题")
+    event, message_id = simulator_module._build_event(original, "/测试查询", {})
+    assert event.original_message.extract_plain_text() == "/测试查询"
+    assert event.original_message is not event.message
+    assert original.original_message.extract_plain_text() == "用户原问题"
+    assert event.message_id == message_id != original.message_id
+    assert event.user_id == original.user_id and event.group_id == original.group_id
+
+
 def _v12_event(message_id: str, text: str = "original") -> V12GroupMessageEvent:
     message = V12Message(
         [

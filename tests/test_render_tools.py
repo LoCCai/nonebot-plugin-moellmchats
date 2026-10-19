@@ -13,6 +13,14 @@ from typing import Any
 from pydantic import ValidationError
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def enabled_legacy_image_feedback(monkeypatch):
+    from nonebot_plugin_moellmchats.config import config_parser
+    original = config_parser.get_config
+    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
+                        False if key == 'skip_self_image_vision' else original(key, default))
+
 from nonebot_plugin_moellmchats import render_tools as module
 from nonebot_plugin_moellmchats.config import RenderToolsConfig
 from nonebot_plugin_moellmchats.render_tools import (
@@ -251,6 +259,48 @@ def test_render_theme_standalone_fallback(monkeypatch):
     result = module.render_theme_reference()
     assert result["source"] == "standalone"
     assert result["palette"]["surface"]
+
+
+@pytest.mark.parametrize("card,slot", [("general", "post/post.css"), ("zmws", "zmws/zmws.css")])
+def test_render_theme_uses_published_slot_and_design_tokens(monkeypatch, card, slot):
+    from types import ModuleType, SimpleNamespace
+    utils = ModuleType("src.utils")
+    calls = []
+    def context(value):
+        calls.append(value)
+        return {"theme_family": "candy", "theme": "night", "theme_css": (
+            ':root[data-theme="light"]{--accent-color:#000000;}'
+            ':root[data-theme="dark"]{--accent-color:#cbb0ff;--menu-radius:26px;'
+            '--background-image:linear-gradient(#2a2140,#3b2d5e);'
+            '--card-shadow:0 14px 32px #10082250;}')}
+    utils.render_theme = SimpleNamespace(stylesheet_context=context)
+    monkeypatch.setitem(sys.modules, "src", ModuleType("src"))
+    monkeypatch.setitem(sys.modules, "src.utils", utils)
+    result = module._render_theme(card)
+    assert calls == [slot]
+    assert result["theme"] == "candy" and result["mode"] == "night"
+    assert result["palette"]["radius"] == "26px"
+    assert result["palette"]["background-image"] == "linear-gradient(#2a2140,#3b2d5e)"
+    assert "#cbb0ff !important" in result["css"]
+
+
+def test_render_theme_failure_keeps_rendering_available(monkeypatch):
+    def broken(*args, **kwargs):
+        if kwargs.get("use_host") is not False:
+            raise OSError("unreadable theme")
+        return {"theme": "default"}
+    monkeypatch.setattr(module, "render_theme_reference", broken)
+    assert module._render_theme("general")["theme"] == "default"
+    with pytest.raises(module.RenderToolError):
+        module._render_theme("invalid")
+
+
+def test_html_theme_preserves_content_and_follows_authored_styles():
+    html = '<html><HEAD><style>body{background:red}</style></HEAD><body>{{ plain_text }}</body></html>'
+    themed = module.themed_html(html, {"css": "body{background:blue!important}"})
+    assert themed.index("background:blue") > themed.index("background:red")
+    assert themed.index("background:blue") < themed.index("</HEAD>")
+    assert "{{ plain_text }}" in themed
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +748,8 @@ async def test_render_html_tool_happy_path(monkeypatch: pytest.MonkeyPatch, avai
     assert len(bot.sent) == 1
     # SSTI posture: content rides in ContentConfig.html and renders offline.
     call = renderer.html_calls[0]
-    assert call["request"].content.html == "<p>你好</p>"
+    assert call["request"].content.html.endswith("<p>你好</p>")
+    assert 'data-llm-theme="auto"' in call["request"].content.html
     assert call["request"].content.wait_until == "domcontentloaded"
     assert call["kwargs"]["offline"] is True
 
@@ -798,7 +849,8 @@ async def test_render_markdown_tool_happy_path(monkeypatch: pytest.MonkeyPatch, 
     # Real htmlrender 0.7.2 contract: markdown rides the positional
     # markdown_text parameter, never an ``md`` keyword (see the live smoke
     # test below, which exercises the same shape against the real library).
-    assert call["args"] == ("# 标题\n正文",)
+    assert call["args"][0].endswith("# 标题\n正文")
+    assert 'data-llm-theme="auto"' in call["args"][0]
     assert "md" not in call["kwargs"]
     assert call["kwargs"]["width"] == 800
 

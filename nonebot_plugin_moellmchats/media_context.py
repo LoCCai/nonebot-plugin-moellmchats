@@ -17,7 +17,7 @@ import aiohttp
 
 from .compat import timeout as timeout_scope
 from .network_safety import validate_public_url
-from .onebot_facade import event_message, event_reply_message_id
+from .onebot_facade import bot_self_id, event_message, event_reply_message_id
 
 if TYPE_CHECKING:
     from .tool_contracts import ToolContext
@@ -49,6 +49,8 @@ class MediaAsset:
     payload: bytes | None = None
     mime: str = ""
     rendered_data: bool = False
+    self_generated: bool = False
+    explicit_quote: bool = False
 
 
 @dataclass
@@ -150,7 +152,8 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
     seen: set[tuple[str, str]] = set()
     calls = 0
 
-    async def walk(raw: Any, depth: int = 0, label: str = "", rendered_data: bool = False) -> None:
+    async def walk(raw: Any, depth: int = 0, label: str = "", rendered_data: bool = False,
+                   self_generated: bool = False, explicit_quote: bool = False) -> None:
         nonlocal calls
         if depth > 8 or document.nodes >= 1000 or document.chars >= MAX_DOCUMENT_CHARS:
             document.partial = True
@@ -180,16 +183,19 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 # it as a model-facing display name.
                 name = name.replace("\\", "/").rsplit("/", 1)[-1].split("?", 1)[0][:120]
                 asset = MediaAsset("audio" if kind == "record" else kind, name, data,
-                                   rendered_data=rendered_data and kind == "image")
+                                   rendered_data=rendered_data and kind == "image",
+                                   self_generated=self_generated, explicit_quote=explicit_quote)
                 reference = media_store.put(context, asset)
                 document.assets.append(reference)
                 document.append(f"[{asset.kind} 素材 {reference} · {name}]")
             elif kind == "node" or (kind == "forward" and data.get("content")):
                 content = data.get("content") or data.get("message") or []
                 if kind == "node":
-                    await walk(content, depth + 1, f"[转发者 {data.get('name', data.get('uin', '未知'))}]", rendered_data)
+                    own = self_generated or str(data.get('uin', data.get('user_id', ''))) == bot_self_id(context.bot, context.event)
+                    await walk(content, depth + 1, f"[转发者 {data.get('name', data.get('uin', '未知'))}]",
+                               rendered_data, own, explicit_quote)
                 else:
-                    await containers(content, depth + 1, rendered_data)
+                    await containers(content, depth + 1, rendered_data, self_generated=self_generated, explicit_quote=explicit_quote)
             elif kind in {"forward", "json"}:
                 forward_id = str(data.get("id") or data.get("resid") or "") if kind == "forward" else _forward_id(data)
                 if not forward_id or ("forward", forward_id) in seen:
@@ -201,12 +207,14 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 calls += 1
                 try:
                     response = await _call(context, "get_forward_msg", id=forward_id)
-                    await containers(response.get("messages", response.get("message", [])), depth + 1, rendered_data)
+                    await containers(response.get("messages", response.get("message", [])), depth + 1, rendered_data,
+                                     self_generated=self_generated, explicit_quote=explicit_quote)
                 except Exception:
                     document.warnings.append("一部分合并转发未能读取。")
                     document.partial = True
 
-    async def containers(rows: Any, depth: int, rendered_data: bool = False, *, lookup_rendered: bool = False) -> None:
+    async def containers(rows: Any, depth: int, rendered_data: bool = False, *, lookup_rendered: bool = False,
+                         self_generated: bool = False, explicit_quote: bool = False) -> None:
         if depth > 8:
             document.partial = True
             return
@@ -216,7 +224,9 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
             sender = row.get("sender") or {}
             label = f"[{row.get('time', '')} {sender.get('card') or sender.get('nickname') or sender.get('user_id') or '未知'}]"
             known_card = lookup_rendered and append_rendered_data(row.get("message_id"))
-            await walk(row.get("message", row.get("content", [row])), depth, label, rendered_data or known_card)
+            own = self_generated or str(sender.get('user_id', row.get('user_id', ''))) == bot_self_id(context.bot, context.event)
+            await walk(row.get("message", row.get("content", [row])), depth, label, rendered_data or known_card,
+                       own, explicit_quote)
 
     def append_rendered_data(message_id) -> bool:
         from .render_data import rendered_views_for_message
@@ -275,9 +285,9 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
             reply_id = getattr(reply, "message_id", None) or event_reply_message_id(context.event)
             if append_rendered_data(reply_id):
                 # Do not recursively OCR forwarded native card pages either.
-                await walk(raw, label="[引用消息]", rendered_data=True)
+                await walk(raw, label="[引用消息]", rendered_data=True, explicit_quote=True)
                 return document
-            await walk(raw, label="[引用消息]")
+            await walk(raw, label="[引用消息]", explicit_quote=True)
     return document
 
 

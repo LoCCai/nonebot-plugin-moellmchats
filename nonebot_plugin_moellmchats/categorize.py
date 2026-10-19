@@ -21,6 +21,7 @@ from .classification_cache import (
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .request_budget import classification_budget_scope, request_config
 from .image_output_policy import DOCUMENT_IMAGE_GUIDANCE
 from .model_capabilities import ModelCapability
 from .model_error_policy import TRANSIENT_HTTP_STATUSES
@@ -106,28 +107,64 @@ class Categorize:
         started = time.monotonic()
         runtime_metrics.classification_count += 1
         try:
-            async with timeout_scope(config_parser.get_config("classification_timeout_seconds", 20)):
-                return await self._get_category()
+            with classification_budget_scope():
+                async with timeout_scope(request_config("classification_timeout_seconds", 20)):
+                    return await self._get_budgeted_category()
         except TimeoutError:
             self.selection_source = "classification_timeout_fallback"
             logger.warning(
-                "分类模型超过时间预算，按中等难度继续，仅使用已配置的常驻工具: "
+                "分类模型超过时间预算，按中等难度继续，保留常驻和明确数学绘图工具: "
                 "model={} phase={} elapsed_ms={} prompt_chars={}",
                 self._classifier_model,
                 self._phase,
                 int((time.monotonic() - started) * 1000),
                 self._prompt_chars,
             )
-            return "1", "[图片]" in self.plain, []
+            return self._fallback_category()
         except (ClassificationCacheError, ToolCatalogCacheUnavailableError) as error:
             self.selection_source = "classification_cache_fallback"
             logger.warning(
-                "分类缓存不可用，按中等难度继续，仅使用已配置的常驻工具: error_type={}",
+                "分类缓存不可用，按中等难度继续，保留常驻和明确数学绘图工具: error_type={}",
                 type(error).__name__,
             )
-            return "1", "[图片]" in self.plain, []
+            return self._fallback_category()
         finally:
             runtime_metrics.classification_seconds += time.monotonic() - started
+
+    async def _get_budgeted_category(self) -> _CategoryResult:
+        result = await self._get_category()
+        if isinstance(result, tuple) and model_selector.get_use_tools():
+            difficulty, vision, selected = result
+            available = getattr(self.tool_snapshot, "custom_tools", {})
+            if (any(name.startswith("plot_") for name in selected)
+                    and "render_markdown" in available and "render_markdown" not in selected):
+                result = difficulty, vision, [*selected, "render_markdown"]
+        return result
+
+    def _fallback_category(self) -> tuple[str, bool, list[str]]:
+        """Keep explicit local math drawing available if classification times out.
+
+        Only select registered read-only tool names. Normal payload permission,
+        feature and blacklist checks still run after this selection.
+        """
+        selected = []
+        text = self.plain.lower()
+        drawing = re.search(r"画图|绘图|绘制|图像|图象|plot|graph|sketch", text)
+        mathematics = re.search(
+            r"函数|椭圆|双曲线|抛物线|方程|曲线|极坐标|参数|向量|数学|\\frac|sin\(|cos\(|x\s*(?:\*\*|\^)",
+            text,
+        )
+        available = getattr(self.tool_snapshot, "custom_tools", {})
+        if drawing and mathematics and model_selector.get_use_tools():
+            candidates = ["plot_function", "plot_multiple", "plot_implicit", "plot_parametric"]
+            if "极坐标" in text or "polar" in text:
+                candidates.append("plot_polar")
+            if "三维" in text or "3d" in text:
+                candidates.extend(["plot_3d_function", "plot_3d_parametric"])
+            selected = [name for name in candidates if name in available]
+            if selected:
+                selected.extend(name for name in ["render_markdown", "render_html"] if name in available)
+        return "1", "[图片]" in self.plain, selected
 
     async def _resolve_catalog(self) -> tuple[str, ToolCatalogRecord | None]:
         if self.tool_catalog_cache is None:
@@ -280,7 +317,7 @@ class Categorize:
                     current_plain += "\n(不要回答以上内容。只进行一次分类与工具判断，严格返回 JSON，不要附加其他内容。)"
                     current_data["messages"][1]["content"] = current_plain
 
-                from .usage_ledger import apply_glm_policy, budget_available, record_usage, budgeted_post
+                from .usage_ledger import apply_glm_policy, budget_available, budgeted_post, record_usage
                 apply_glm_policy(category_model_config, current_data)
                 if not await budget_available(category_model_config):
                     self._phase = "http_status_quota_exhausted"
@@ -480,7 +517,7 @@ class Categorize:
         logger.info(
             "分类请求准备: model={} budget_seconds={} prompt_chars={}",
             self._classifier_model,
-            config_parser.get_config("classification_timeout_seconds", 20),
+            request_config("classification_timeout_seconds", 20),
             self._prompt_chars,
         )
         if self.classification_cache is None:

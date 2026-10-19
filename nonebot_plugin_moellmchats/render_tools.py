@@ -511,7 +511,9 @@ def _finish_image_result(
     capability_note: str,
     extra_metadata: Mapping[str, Any] | None = None,
 ) -> ToolResult:
-    vision = vision_data_uri(payload)
+    from .config import config_parser
+    skip_vision = config_parser.get_config("skip_self_image_vision", True)
+    vision = None if skip_vision else vision_data_uri(payload)
     metadata: dict[str, Any] = {
         "bytes": len(payload),
         "mime": sniff_image_mime(payload),
@@ -520,7 +522,7 @@ def _finish_image_result(
     if extra_metadata:
         metadata.update(extra_metadata)
     text = "✅ 已完成渲染并把图片发送到当前会话。"
-    if vision is None:
+    if vision is None and not skip_vision:
         text += "（图片体积较大，未附加视觉回传）"
     return ToolResult(
         text=text,
@@ -551,6 +553,7 @@ async def render_html_image(
     html: str,
     width: int | None = None,
     full_page: bool = True,
+    card: str = "general",
 ) -> ToolResult:
     """Render one LLM-authored HTML document offline and send it as a picture."""
 
@@ -560,6 +563,7 @@ async def render_html_image(
         return ToolResult(text=f"HTML 内容必须是 1～{_HTML_MAX_CHARS} 字的字符串。")
     try:
         render_width = _normalize_width(width)
+        theme = await asyncio.to_thread(_render_theme, card)
     except RenderToolError as error:
         return ToolResult(text=str(error))
 
@@ -578,7 +582,7 @@ async def render_html_image(
         # page.set_content with it, it is never Jinja-compiled.
         request = HtmlRenderRequest(
             content=ContentConfig(
-                html=html,
+                html=themed_html(html, theme),
                 wait_until="domcontentloaded",
                 additional_wait=300,
             ),
@@ -615,7 +619,9 @@ async def render_html_image(
     except Exception as error:
         logger.warning("render_html 工具失败：error_type={}", type(error).__name__)
         return ToolResult(text="❌ HTML 渲染失败，请简化内容后重试。")
-    return _finish_image_result(payload, capability_note=RENDER_CAPABILITY.reason)
+    return _finish_image_result(payload, capability_note=RENDER_CAPABILITY.reason,
+                                extra_metadata={"skip_image_vision": True, "theme": theme["theme"],
+                                                "theme_mode": theme["mode"]})
 
 
 async def render_markdown_image(
@@ -623,6 +629,7 @@ async def render_markdown_image(
     _tool_context: ToolContext,
     markdown: str,
     width: int | None = None,
+    card: str = "general",
 ) -> ToolResult:
     """Render one LLM-authored Markdown document and send it as a picture."""
 
@@ -632,6 +639,7 @@ async def render_markdown_image(
         return ToolResult(text=f"Markdown 内容必须是 1～{_MARKDOWN_MAX_CHARS} 字的字符串。")
     try:
         render_width = _normalize_width(width)
+        theme = await asyncio.to_thread(_render_theme, card)
         await check_markdown_links_public(markdown)
     except RenderToolError as error:
         return ToolResult(text=f"❌ {error}")
@@ -642,7 +650,7 @@ async def render_markdown_image(
         # its own ``md`` parameter, so a kwarg named ``md`` here would ride a
         # less obvious path through the forwarding chain.
         return await renderer.render_markdown(
-            markdown,
+            _theme_style(theme) + "\n\n" + markdown,
             width=render_width,
             image_type="jpeg",
             quality=85,
@@ -661,7 +669,9 @@ async def render_markdown_image(
     except Exception as error:
         logger.warning("render_markdown 工具失败：error_type={}", type(error).__name__)
         return ToolResult(text="❌ Markdown 渲染失败，请精简内容后重试。")
-    return _finish_image_result(payload, capability_note=RENDER_CAPABILITY.reason)
+    return _finish_image_result(payload, capability_note=RENDER_CAPABILITY.reason,
+                                extra_metadata={"skip_image_vision": True, "theme": theme["theme"],
+                                                "theme_mode": theme["mode"]})
 
 
 async def screenshot_public_url(
@@ -756,45 +766,112 @@ async def screenshot_public_url(
 
 _NETWORK_POLICY = ToolPolicy.configured(ToolCapabilityV2(network_allow=("*",)))
 
-def render_theme_reference(card: str = "general") -> dict[str, Any]:
+
+# Only published design tokens are imported. Host selectors, artwork and local
+# file URLs never become part of a model-authored document.
+_THEME_TOKENS = {
+    "background": "background-color", "surface": "card-background-color",
+    "text": "font-color-main", "muted": "font-color-sub", "accent": "accent-color",
+    "secondary": "accent-secondary", "border": "border-color",
+    "background-image": "background-image", "shadow": "card-shadow",
+    "radius": "menu-radius", "surface-muted": "surface-muted",
+    "surface-accent": "surface-accent", "code-background": "code-background",
+}
+
+
+def _theme_style(theme: dict[str, Any]) -> str:
+    return '<style data-llm-theme="auto">' + theme["css"] + '</style>'
+
+
+def themed_html(html: str, theme: dict[str, Any]) -> str:
+    """Append theme rules after authored styles without templating the input."""
+    style = _theme_style(theme)
+    closing_head = re.search(r"</head\s*>", html, re.IGNORECASE)
+    if closing_head:
+        return html[:closing_head.start()] + style + html[closing_head.start():]
+    return style + html
+
+
+def _render_theme(card: str) -> dict[str, Any]:
+    if card not in {"general", "zmws"}:
+        raise RenderToolError("主题类型应为 general 或 zmws。")
+    try:
+        return render_theme_reference(card)
+    except Exception as error:
+        logger.warning("读取渲染主题失败，使用默认样式：error_type={}", type(error).__name__)
+        return render_theme_reference(card, use_host=False)
+
+
+def render_theme_reference(card: str = "general", *, use_host: bool = True) -> dict[str, Any]:
     """Read the host's published theme without importing any game plugin."""
     if card not in {"general", "zmws"}:
         raise RenderToolError("主题类型应为 general 或 zmws。")
     palette = {"background": "#f5f6fa", "surface": "#ffffff", "text": "#242841",
-               "muted": "#58627c", "accent": "#65429a", "border": "#d7d6e8"}
+               "muted": "#58627c", "accent": "#65429a", "border": "#d7d6e8",
+               "secondary": "#286491", "background-image": "none", "radius": "16px",
+               "shadow": "0 8px 24px #24284114", "surface-muted": "#f4f2fa",
+               "surface-accent": "#ede5f8", "code-background": "#f4f2fa"}
     family, mode, source = "default", "day", "standalone"
     try:
-        from src.utils import render_theme, report_theme
+        if not use_host:
+            raise ModuleNotFoundError(name="src")
+        from src.utils import render_theme
     except ModuleNotFoundError as error:
         if error.name not in {"src", "src.utils", "src.utils.render_theme", "src.utils.report_theme"}:
             raise
     else:
-        if card == "zmws":
-            context = render_theme.stylesheet_context("zmws/zmws.css")
-            family, mode = context["theme_family"], context.get("palette_mode", context["theme"])
-            selector = "light" if mode == "day" else "dark"
-            match = re.search(r':root\[data-theme=[\"\']' + selector + r'[\"\']\]\s*\{([^}]+)', context["theme_css"])
-            variables = dict(re.findall(r"--([\w-]+)\s*:\s*([^;{}]+)\s*;", match[1] if match else ""))
-            names = {"background": "background-color", "surface": "card-background-color", "text": "font-color-main",
-                     "muted": "font-color-sub", "accent": "accent-color", "border": "border-color"}
-            palette.update({key: variables[name].strip() for key, name in names.items() if name in variables})
-        else:
-            context = report_theme.post_theme_context()
-            family, mode = context["post_theme"], context["post_mode"]
-            palette = report_theme.graph_palette(context)
+        context = render_theme.stylesheet_context("zmws/zmws.css" if card == "zmws" else "post/post.css")
+        family, mode = context["theme_family"], context["theme"]
+        selector = "light" if mode == "day" else "dark"
+        match = re.search(r':root\[data-theme=[\"\']' + selector + r'[\"\']\]\s*\{([^}]+)', context["theme_css"])
+        variables = dict(re.findall(r"--([\w-]+)\s*:\s*([^;{}]+)\s*;", match[1] if match else ""))
+        palette.update({key: variables[name].strip() for key, name in _THEME_TOKENS.items()
+                        if name in variables and not re.search(r"url\s*\(|[<>]", variables[name], re.I)})
+        if "code-background" not in variables:
+            palette["code-background"] = palette["surface-muted"]
         source = "host"
-    css = ":root{" + ";".join(f"--{key}:{value}" for key, value in palette.items()) + "}"
-    css += ("body{margin:0;padding:24px;background:var(--background);color:var(--text);"
-            "font-family:Arial,'Noto Sans CJK SC',sans-serif} "
-            ".panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px}")
+    css = ":root{" + ";".join(f"--{key}:{value} !important" for key, value in palette.items()) + "}"
+    css += """
+html{background:var(--background)!important}
+html body{box-sizing:border-box;margin:0;padding:28px;background-color:var(--background)!important;
+ background-image:var(--background-image)!important;color:var(--text)!important;
+ font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;font-size:16px;line-height:1.75}
+body .markdown-body{box-sizing:border-box;min-width:0;max-width:none;margin:0;padding:28px;
+ background:var(--surface)!important;color:var(--text)!important;border:1px solid var(--border);
+ border-radius:var(--radius);box-shadow:var(--shadow)}
+body :is(.panel,.card,.info-card,.stat-card){background:var(--surface)!important;
+ color:var(--text)!important;border:1px solid var(--border)!important;
+ border-radius:var(--radius);box-shadow:var(--shadow)}
+body .panel{padding:20px}
+body :is(h1,h2,h3,h4,h5,h6){color:var(--text)!important;line-height:1.4;border-color:var(--border)!important}
+body :is(h1,h2){padding-bottom:.4em;border-bottom:1px solid var(--border)}
+body :is(a,.accent){color:var(--accent)!important}
+body :is(.muted,.subtitle,figcaption){color:var(--muted)!important}
+body table{border-collapse:collapse;width:100%!important;display:table!important;font-variant-numeric:tabular-nums}
+body :is(th,td){padding:10px 14px;border:1px solid var(--border)!important;color:var(--text)!important}
+body th{background:var(--surface-accent)!important}
+body td{background:var(--surface)!important}
+body tr:nth-child(even) td{background:var(--surface-muted)!important}
+body :is(pre,.codehilite){background:var(--code-background)!important;color:var(--text)!important;
+ border-radius:10px;overflow-wrap:anywhere;white-space:pre-wrap}
+body code{background:var(--code-background)!important;color:var(--text)!important;overflow-wrap:anywhere}
+body .codehilite span{color:var(--text)!important;background:transparent!important}
+body pre{padding:16px}body pre code{padding:0}
+body blockquote{margin-left:0;padding:10px 18px;color:var(--muted)!important;
+ background:var(--surface-muted);border-left:4px solid var(--accent)!important}
+body hr{border:0;border-top:1px solid var(--border);background:var(--border)!important}
+body img,body svg{max-width:100%}body .markdown-body>:first-child{margin-top:0}
+body .markdown-body>:last-child{margin-bottom:0}
+"""
     return {"theme": family, "mode": mode, "source": source, "palette": palette, "css": css,
-            "guidance": ("这是当前主题参考，可自行调整 HTML、CSS 和布局。根据用户需要选择文字、图片或其他已授权工具；"
+            "guidance": ("渲染器自动应用当前主题与昼夜模式。HTML 请使用这些 CSS 变量，保留布局、图表和语义颜色；"
+                         "造梦内容传 card=zmws 继承造梦主题覆盖。根据用户需要选择文字、图片或其他已授权工具；"
                          "简短回复可直接用文字，表格和图表可选图片。")}
 
 
 async def get_render_theme(*, _tool_context: ToolContext, card: str = "general") -> ToolResult:
     try:
-        reference = await asyncio.to_thread(render_theme_reference, card)
+        reference = await asyncio.to_thread(_render_theme, card)
     except Exception as error:
         logger.warning("读取渲染主题失败：error_type={}", type(error).__name__)
         return ToolResult(text="当前主题暂不可读，可以自行选择样式与回复形式。")
@@ -803,8 +880,8 @@ async def get_render_theme(*, _tool_context: ToolContext, card: str = "general")
 
 RENDER_THEME_TOOL = ToolSpec(
     name="get_render_theme",
-    description=("读取当前会话宿主的已发布主题、昼夜模式、配色与基础 CSS，供你自主设计 HTML。"
-                 "文字或图片由你按用户需求选择；主题是参考，可自由调整布局和样式。"),
+    description=("读取宿主已发布主题、昼夜模式与 CSS 变量，供设计 HTML 图表。"
+                 "HTML 和 Markdown 渲染会自动应用主题，无需先调用本工具；可自主安排内容和布局。"),
     parameters={"type": "object", "properties": {"card": {"type": "string", "enum": ["general", "zmws"],
                 "description": "通用卡或造梦游戏卡，默认 general。"}}, "additionalProperties": False},
     handler=get_render_theme, effect=ToolEffect.READ_ONLY, permission="user", timeout_seconds=10, result_limit=4000,
@@ -815,7 +892,8 @@ RENDER_HTML_TOOL = ToolSpec(
     description=(
         "普通用户可用，无需绘图授权。把攻略、资料卡、表格、流程图或思维导图用 HTML/CSS/内联 SVG 排版成图片并发送。"
         "HTML 必须自包含（内联 CSS，不引用外部资源），不会发起任何网络请求。"
-        "可先调用 get_render_theme 读取当前主题，自由编写与调整 CSS；简短内容也可直接文字回复。"
+        "自动继承七七当前主题与昼夜模式。请用 var(--text)、var(--surface)、var(--accent) 等主题变量，"
+        "布局与图表可自主编写；造梦内容设置 card=zmws。简短内容也可直接文字回复。"
     ),
     parameters={
         "type": "object",
@@ -836,6 +914,8 @@ RENDER_HTML_TOOL = ToolSpec(
                 "type": "boolean",
                 "description": "是否截取整个页面，默认 true。",
             },
+            "card": {"type": "string", "enum": ["general", "zmws"],
+                     "description": "主题域，普通内容 general（默认），造梦数据与攻略使用 zmws。"},
         },
         "required": ["html"],
         "additionalProperties": False,
@@ -850,6 +930,7 @@ RENDER_HTML_TOOL = ToolSpec(
 RENDER_MARKDOWN_TOOL = ToolSpec(
     name="render_markdown",
     description=("普通用户可用，无需绘图授权。把攻略、文章、笔记、清单、表格和代码块整理为 Markdown 后渲染成图片并发送。"
+                 "自动继承七七当前主题与昼夜模式；造梦内容设置 card=zmws。"
                  "用户说绘制攻略图、做图、表格转图片等可直接使用；流程图和思维导图可改用 render_html 排版。"),
     parameters={
         "type": "object",
@@ -866,6 +947,8 @@ RENDER_MARKDOWN_TOOL = ToolSpec(
                 "minimum": _WIDTH_MIN,
                 "maximum": _WIDTH_MAX,
             },
+            "card": {"type": "string", "enum": ["general", "zmws"],
+                     "description": "主题域，普通内容 general（默认），造梦数据与攻略使用 zmws。"},
         },
         "required": ["markdown"],
         "additionalProperties": False,

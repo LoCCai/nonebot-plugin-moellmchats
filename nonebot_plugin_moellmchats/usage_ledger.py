@@ -245,9 +245,12 @@ async def record_usage(model, usage, *, purpose="chat", attempt_id=None, status=
 class _BudgetResponse:
     status = 403
     headers = {}
-    def __init__(self, status=403):
+    def __init__(self, status=403, *, policy_blocked=False):
         self.status = status
+        self.policy_blocked = policy_blocked
     async def text(self):
+        if self.policy_blocked:
+            return '{"error":{"code":"free_route_unavailable","message":"free route unavailable"}}'
         return '{"error":{"code":"insufficient_quota","message":"quota exhausted"}}'
     async def json(self):
         return json.loads(await self.text())
@@ -269,6 +272,35 @@ async def budgeted_post(session, model, *args, **kwargs):
     The final in-flight response can cross the boundary; no subsequent request is
     sent after that response is counted. Limits apply across every user and group.
 """
+    # This is the last shared boundary before every provider request. Copies
+    # prevent one user's limits from leaking into shared model configuration.
+    from .free_tier import free_transport_allowed, ordinary_free_only
+
+    if ordinary_free_only() and not free_transport_allowed(model, args[0] if args else kwargs.get("url")):
+        yield _BudgetResponse(503, policy_blocked=True)
+        return
+    payload = kwargs.get("json")
+    encoded_payload = False
+    if payload is None and isinstance(kwargs.get("data"), (str, bytes)):
+        try:
+            payload = json.loads(kwargs["data"])
+            encoded_payload = True
+        except (TypeError, ValueError):
+            pass
+    if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+        from .request_budget import apply_payload_budget
+
+        payload = dict(payload)
+        apply_glm_policy(model, payload)
+        apply_payload_budget(model, payload)
+        if ordinary_free_only() and (
+            payload.get("model", model.get("model")) != model.get("model")
+            or any(payload.get(key) for key in ("web_search_options", "web_search", "retrieval"))
+            or any(tool.get("type") != "function" for tool in payload.get("tools", ()))
+        ):
+            yield _BudgetResponse(503, policy_blocked=True)
+            return
+        kwargs["data" if encoded_payload else "json"] = json.dumps(payload) if encoded_payload else payload
     identity = f"{model.get('model')} ({model.get('provider')})"
     ledger = get_ledger()
     lock = _budget_locks.setdefault(identity, asyncio.Lock()) if identity in ledger.budgets else None
@@ -326,8 +358,25 @@ async def budgeted_post(session, model, *args, **kwargs):
 def apply_glm_policy(model, payload):
     if model.get("provider") != "bigmodel":
         return
-    if model.get("model") != "glm-5.3-flash":
-        raise ValueError("BigModel仅允许glm-5.3-flash")
+    name = model.get("model")
+    if name in {"glm-4-flash-250414", "glm-4.7-flash", "glm-4.6v-flash"}:
+        # These documented free models do not share 5.3's mandatory thinking
+        # contract. Disable optional reasoning for bounded interactive tasks.
+        payload.pop("reasoning_effort", None)
+        payload.pop("tool_stream", None)
+        payload.pop("thinking", None)
+        if name != "glm-4-flash-250414":
+            payload["thinking"] = {"type": "disabled"}
+        for key in ("web_search_options", "web_search", "retrieval"):
+            payload.pop(key, None)
+        if "tools" in payload:
+            payload["tools"] = [tool for tool in payload["tools"] if tool.get("type") == "function"]
+            if not payload["tools"]:
+                payload.pop("tools")
+                payload.pop("tool_choice", None)
+        return
+    if name != "glm-5.3-flash":
+        raise ValueError("BigModel模型尚未适配")
     payload.update(temperature=1, top_p=0.95, reasoning_effort="max",
                    thinking={"type": "enabled", "clear_thinking": False})
     if payload.get("stream"):

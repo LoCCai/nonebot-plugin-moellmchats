@@ -96,6 +96,9 @@ def endpoint(model, path):
 
 
 async def request(model, path, payload=None, *, method='POST', timeout=150, usage_id=None, is_poll=False):
+    from .free_tier import ordinary_free_only
+    if ordinary_free_only():
+        raise MediaError("免费模型链路未启用腾讯付费扩展能力。")
     if recovery := current_binding():
         recovery.pause_if_stopping()
     try:

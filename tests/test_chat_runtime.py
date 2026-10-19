@@ -11,7 +11,7 @@ from nonebot.adapters.onebot.v11.exception import ActionFailed, ApiNotAvailable,
 import pytest
 
 from nonebot_plugin_moellmchats import chat_runtime
-from nonebot_plugin_moellmchats.admission import AdmissionRejected
+from nonebot_plugin_moellmchats.admission import AdmissionController, AdmissionRejected, queued_slot
 from nonebot_plugin_moellmchats.admission_store import AdmissionStoreError
 from nonebot_plugin_moellmchats.agent_context_runtime import (
     AgentRequestRuntime,
@@ -331,7 +331,8 @@ def _generation_redis_host(
 @pytest.mark.asyncio
 async def test_cooldown_rejects_before_entering_admission_queue(monkeypatch) -> None:
     chat_runtime.reset_all_runtime_state()
-    chat_runtime.cd[42] = 990
+    chat_runtime.cd['42'] = 990
+    monkeypatch.setattr(chat_runtime.time, 'time', lambda: 1000)
     _config(monkeypatch, cooldown=120, timeout=180)
     entered = False
 
@@ -349,7 +350,7 @@ async def test_cooldown_rejects_before_entering_admission_queue(monkeypatch) -> 
         await chat_runtime.handle_llm(object(), _event(), matcher, {})
 
     assert not entered
-    assert matcher.messages == ["测试用户的 LLM 对话冷却中，请在 110 秒后重试。"]
+    assert matcher.messages == ["每人 120 秒只能唤醒七七一次，请在 110 秒后再试；这条请求已忽略。"]
 
 
 @pytest.mark.asyncio
@@ -374,6 +375,94 @@ async def test_total_budget_includes_admission_queue_wait(monkeypatch) -> None:
     assert entered.is_set()
     assert matcher.messages == ["本次 LLM 任务已超过总时间预算，已安全终止。"]
     assert chat_runtime.cd[42] == 0
+
+
+@pytest.mark.asyncio
+async def test_fifteen_groups_wait_briefly_without_formatting_or_leaking_slots(monkeypatch):
+    from nonebot_plugin_moellmchats import request_budget
+
+    chat_runtime.reset_all_runtime_state()
+    _config(monkeypatch, cooldown=120, timeout=10)
+    _publish_snapshot()
+    gate = AdmissionController(name="llm", max_active=4, max_pending=32, max_per_key=1)
+    monkeypatch.setattr(chat_runtime, "get_llm_controller", lambda: gate)
+    monkeypatch.setattr(request_budget.budget_config, "moellm_queue_wait_seconds", 0.05)
+    monkeypatch.setattr(request_budget, "_authorizer", AsyncMock(return_value=False))
+    monkeypatch.setattr(chat_runtime.temperament_manager, "get_temperament", lambda _: "默认")
+    release = asyncio.Event()
+    full = asyncio.Event()
+    started = []
+
+    class Chat:
+        def __init__(self, _bot, event, _formatted, **_kwargs):
+            self.user_id = event.user_id
+            self.runtime = _kwargs["agent_runtime"]
+
+        async def get_llm_chat(self):
+            await self.runtime.advance(AgentRunState.PLANNING, model="test-model")
+            await self.runtime.advance(AgentRunState.EXECUTING)
+            started.append(self.user_id)
+            if len(started) == 4:
+                full.set()
+            await release.wait()
+            return True
+
+    monkeypatch.setattr(chat_runtime.llm, "MoeLlm", Chat)
+    formatters, matchers, tasks = [], [], []
+    host = RuntimeResourceHost()
+    for index in range(15):
+        event = _runtime_event(user_id=90000 + index)
+        event.group_id = 80000 + index
+        formatter, matcher = AsyncMock(return_value={}), FakeMatcher()
+        formatters.append(formatter)
+        matchers.append(matcher)
+        tasks.append(asyncio.create_task(chat_runtime.handle_llm(
+            object(), event, matcher, formatter, resource_host=host)))
+    try:
+        await asyncio.wait_for(full.wait(), 1)
+        pending = [task for index, task in enumerate(tasks) if 90000 + index not in started]
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 1)
+        assert gate.active == 4 and gate.pending == 0
+        assert sum(formatter.await_count for formatter in formatters) == 4
+        for index, matcher in enumerate(matchers):
+            if 90000 + index not in started:
+                assert matcher.messages == ["当前多个群正在使用 AI，七七暂时没有空闲处理名额，请稍后再试。"]
+                assert chat_runtime.cd[90000 + index] == 0
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 1)
+        assert sum(isinstance(result, MatcherFinished) for result in results) == 11
+        assert sum(result is None for result in results) == 4, results
+        assert gate.active == gate.pending == 0
+        # A rejected QQ may retry immediately; its conversation lease is gone.
+        retry_index = next(i for i in range(15) if 90000 + i not in started)
+        await chat_runtime.handle_llm(object(), _runtime_event(user_id=90000 + retry_index),
+                                     FakeMatcher(), {}, resource_host=host)
+        assert gate.active == gate.pending == 0
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_deadline_does_not_cancel_running_work_and_cancellation_unreserves():
+    gate = AdmissionController(name="llm", max_active=1, max_pending=4, max_per_key=1)
+    async with queued_slot(gate, "running", timeout_seconds=0.01):
+        async def wait():
+            async with queued_slot(gate, "waiting", timeout_seconds=1):
+                pytest.fail("no capacity")
+
+        waiter = asyncio.create_task(wait())
+        await asyncio.sleep(0)
+        assert gate.active == gate.pending == 1
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        await asyncio.sleep(0.02)
+        assert gate.active == 1 and gate.pending == 0
+    assert gate.active == gate.pending == 0
+    async with queued_slot(gate, "waiting", timeout_seconds=0.1):
+        assert gate.active == 1
 
 
 @pytest.mark.asyncio

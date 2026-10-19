@@ -635,14 +635,18 @@ def build_plugin_catalog_entries(
 
     if type(is_superuser) is not bool:
         raise TypeError("is_superuser 必须是布尔值")
-
     display_name = str(info.get("name") or plugin_id)
     description = str(info.get("description") or "无描述")
     features = discovery_features(info)
-    if not features:
-        return [f"- {plugin_id} | {display_name} | {description[:160]}"]
-
     entries: list[str] = []
+    if plugin_id == "qi_zmws":
+        entries.append(
+            '- qi_zmws | 造梦原生卡片与数据分析 | 图鉴、技能、角色面板/资料、玩家检索、蟠桃排行等已有功能优先调用原生命令出主题图片；'
+            'AI读取实际渲染文字，不识图。复杂统计及尚未实现的功能才使用zmws_*数据接口；参数不明读zmws_api_guide。'
+        )
+    if not features:
+        return entries + [f"- {plugin_id} | {display_name} | {description[:160]}"]
+
     for feature in features:
         if feature.get("hidden") is True and not is_superuser:
             continue
@@ -711,6 +715,14 @@ def build_compatibility_description(
     description = str(info.get("description") or "无描述")
     usage = str(info.get("usage") or "无用法说明")
     base = f"插件名称：{display_name}。功能描述：{description}。原始用法说明：{usage}"
+    if plugin_id == "qi_zmws":
+        base = (
+            "造梦已有功能优先执行下列原生命令：图鉴、技能、角色面板/资料、玩家检索、蟠桃排行、趋势等，"
+            "由插件发送现有主题卡片；返回给AI的是实际渲染文字及read_rendered_view数据句柄，不含图片。"
+            "卡片已发送时不要重复查询、重新排版或逐项复述。只有复杂统计、跨榜分析或尚未实现的功能才用"
+            "zmws_data_query/zmws_data_analyze等接口，按zmws_api_guide读取参数和口径；"
+            "卡片后续分析优先读取已有rendered_views，证据不足再查所需字段。不要调用/造梦问答递归启动LLM。\n"
+        ) + base
     features = discovery_features(info)
     if not features:
         return render_command_prefix_contract(

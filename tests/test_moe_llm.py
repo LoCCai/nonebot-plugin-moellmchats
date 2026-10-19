@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+import sys
 from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11.exception import (
@@ -14,6 +15,82 @@ import pytest
 from nonebot_plugin_moellmchats import moe_llm as module
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
 from nonebot_plugin_moellmchats.tool_manager import ToolSnapshot
+
+
+def _empty_reply_chat(monkeypatch, responses):
+    from unittest.mock import AsyncMock
+
+    values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 3}
+    monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
+    monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
+    chat = object.__new__(MoeLlm)
+    chat.bot = _ScriptedBot([None])
+    chat.event, chat.user_id = object(), "10001"
+    chat.agent_runtime = None
+    chat.is_objective, chat.emotion_flag, chat.is_superuser = True, False, False
+    chat.format_message_dict = {"text": ["绘制椭圆并解释"]}
+    chat.prompt, chat.dynamic_context = "system", ""
+    chat.model_info = {"model": "fake", "url": "https://model.invalid", "key": "test-only-key", "stream": False}
+    chat.tool_snapshot = ToolSnapshot(generation=1, custom_tools={}, plugin_info={}, tool_dependencies={}, mcp_tool_names=set())
+    chat._current_tool_usage, chat._pending_vision_images = Counter(), []
+    entity = SimpleNamespace(tool_messages=[], mention_context=None)
+    monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(
+        messages_entity=entity, pre_process=lambda message, **kwargs: "绘制椭圆并解释",
+        get_send_message_list=lambda **kwargs: [],
+    ))
+    monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
+    monkeypatch.setattr(module, "get_session", object)
+    chat._validate_runtime_model_config = AsyncMock(return_value=None)
+    chat._prepare_model_info = AsyncMock(return_value=None)
+    chat.prompt_handler = lambda: None
+    chat._build_payload = lambda history: ({"messages": history, "stream": False}, False)
+    chat.none_stream_llm_chat = AsyncMock(side_effect=responses)
+    chat._send_retry_notice = AsyncMock()
+    return chat, entity
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_completion_cannot_finish_silently(monkeypatch):
+    chat, _ = _empty_reply_chat(monkeypatch, [(True, "", None, "private reasoning")] * 3)
+    result = await chat.get_llm_chat()
+    assert isinstance(result, str)
+    assert "未返回可展示的解答" in result
+    assert "private reasoning" not in result
+    assert chat.none_stream_llm_chat.await_count == 3
+    assert chat._send_retry_notice.await_count == 2
+    assert chat.bot.sent == []  # chat_runtime delivers the returned failure text.
+
+
+@pytest.mark.asyncio
+async def test_empty_completion_retries_then_delivers_exactly_one_answer(monkeypatch):
+    chat, _ = _empty_reply_chat(monkeypatch, [
+        (True, "  ", [], ""), (True, "计算结论与证明", None, ""),
+    ])
+    assert await chat.get_llm_chat() is True
+    assert chat.none_stream_llm_chat.await_count == 2
+    assert chat.bot.sent == ["计算结论与证明"]
+
+
+@pytest.mark.asyncio
+async def test_empty_summary_after_current_tools_uses_summary_without_replaying_tools(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    calls = [{"id": "plot", "type": "function", "function": {"name": "plot_function", "arguments": "{}"}}]
+    chat, entity = _empty_reply_chat(monkeypatch, [
+        (True, "", calls, ""), (True, "", None, "private reasoning"),
+    ])
+
+    async def execute(*args):
+        entity.tool_messages = [{"role": "tool", "content": "图像已生成"}]
+        return list(entity.tool_messages)
+
+    chat._execute_tools = AsyncMock(side_effect=execute)
+    chat._request_tool_summary_retry = AsyncMock(return_value="结合图像的证明")
+    assert await chat.get_llm_chat() is True
+    chat._execute_tools.assert_awaited_once()
+    chat._request_tool_summary_retry.assert_awaited_once()
+    assert chat.none_stream_llm_chat.await_count == 2
+    assert chat.bot.sent == ["结合图像的证明"]
 
 
 @pytest.mark.asyncio
@@ -156,7 +233,7 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch, t
     chat._sanitize_tool_calls_for_history = lambda calls: calls
 
     async def model(session, url, headers, data, proxy, timeout):
-        assert timeout.total == 180
+        assert timeout.total == 90  # Half of the default 180-second task budget.
         observations.append([message["content"] for message in data["messages"] if message["role"] == "tool"])
         if len(observations) <= 2:
             name = "first" if len(observations) == 1 else "second"
@@ -174,7 +251,8 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch, t
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("vision_available", [True, False])
-async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vision_available):
+@pytest.mark.parametrize("skip_self", [True, False])
+async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vision_available, skip_self):
     from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
     from nonebot.adapters.onebot.v11.event import Sender
 
@@ -182,7 +260,8 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     from nonebot_plugin_moellmchats.admission import AdmissionController
 
     values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 1,
-              "tool_progress_messages_enabled": False, "legacy_background_plugins": ["qi_zmws"]}
+              "tool_progress_messages_enabled": False, "legacy_background_plugins": ["example_game"],
+              "skip_self_image_vision": skip_self}
     monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
     gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
     monkeypatch.setattr(simulator, "get_dispatch_controller", lambda: gate)
@@ -217,7 +296,7 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     chat.prompt, chat.dynamic_context = "system", ""
     chat.model_info = {"model": "text-model", "url": "https://text.invalid", "key": "text-test-key", "stream": False}
     chat.tool_snapshot = ToolSnapshot(generation=1, custom_tools={},
-        plugin_info={"qi_zmws": {"name": "造梦", "description": "查询资料"}},
+        plugin_info={"example_game": {"name": "示例游戏", "description": "查询资料"}},
         tool_dependencies={}, mcp_tool_names=set())
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
@@ -246,8 +325,12 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
         observations.append(data["model"])
         if len(observations) == 1:
             return True, "", [{"id": "profile", "type": "function", "function": {
-                "name": "qi_zmws", "arguments": '{"command":"/造梦资料 123|4399|26"}'}}], ""
+                "name": "example_game", "arguments": '{"command":"/资料 123|test|26"}'}}], ""
         assert finished.is_set()
+        if skip_self:
+            assert data['model'] == 'text-model'
+            assert not any(isinstance(message['content'], list) for message in data['messages'])
+            return True, '资料卡已发送。', None, ''
         assert url == "https://vision.invalid"
         assert headers["Authorization"] == "vision-test-key"
         assert "tools" not in data
@@ -262,7 +345,11 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     assert finished.is_set()
     assert simulator._captures == {}
     assert simulator._BACKGROUND_TASKS == set()
-    if vision_available:
+    if skip_self:
+        assert result is True
+        assert observations == ['text-model', 'text-model']
+        assert chat.bot.sent == ['资料卡已发送。']
+    elif vision_available:
         assert result is True
         assert observations == ["text-model", "vision-model"]
         assert chat.bot.sent == ["根据资料图，装备还可以继续强化。"]
@@ -330,6 +417,7 @@ def _llm(bot: _ScriptedBot) -> MoeLlm:
 async def test_retry_notice_failure_is_bounded_and_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setitem(sys.modules, 'src.utils.message_fx', None)
     records: list[str] = []
 
     class Recorder:
@@ -351,7 +439,8 @@ async def test_retry_notice_failure_is_bounded_and_sanitized(
 
 
 @pytest.mark.asyncio
-async def test_retry_notice_preserves_cancellation() -> None:
+async def test_retry_notice_preserves_cancellation(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, 'src.utils.message_fx', None)
     class CancelBot:
         async def send(self, _event, _message) -> None:
             raise asyncio.CancelledError
