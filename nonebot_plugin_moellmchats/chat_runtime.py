@@ -53,7 +53,7 @@ _CANCEL_NOTICE_TIMEOUT_SECONDS = 1.0
 _MENTION_ACK_TIMEOUT_SECONDS = 1.0
 
 
-async def acknowledge_mention(bot: Bot, event: MessageEvent) -> None:
+async def acknowledge_mention(bot: Bot, event: MessageEvent, *, rejected: bool = False) -> None:
     """Acknowledge group @ and adapter-recognized nickname calls equally."""
     if not mention_ack_config.moellm_mention_ack_enabled:
         return
@@ -88,7 +88,7 @@ async def acknowledge_mention(bot: Bot, event: MessageEvent) -> None:
         async with timeout_scope(_MENTION_ACK_TIMEOUT_SECONDS):
             await bot.call_api(
                 "set_msg_emoji_like", message_id=int(message_id),
-                emoji_id=str(mention_ack_config.moellm_mention_ack_emoji_id), set=True,
+                emoji_id="10060" if rejected else str(mention_ack_config.moellm_mention_ack_emoji_id), set=True,
             )
     except Exception as error:
         logger.debug("LLM 唤醒反馈未完成，继续处理对话：error_type={}", type(error).__name__)
@@ -180,8 +180,10 @@ async def handle_llm(
         if not acquired:
             from .runtime_metrics import runtime_metrics
             runtime_metrics.llm_rejected += 1
+            await acknowledge_mention(bot, event, rejected=True)
             await matcher.finish("七七正在思考你的上一个问题，请耐心等待。")
             return None
+        await acknowledge_mention(bot, event)
         with request_budget_scope(authorized=authorized), bind_usage_scope(bot, event):
             return await _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs)
 

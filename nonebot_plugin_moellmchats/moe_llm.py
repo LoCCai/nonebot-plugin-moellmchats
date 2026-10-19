@@ -19,6 +19,7 @@ from .agent_runtime import AgentRunState, AgentStepStatus, AgentStepType
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .image_output_policy import should_render_markdown
 from .llm_api import LlmApiMixin
 from .llm_payload import LlmPayloadMixin
 from .llm_state import context_dict, token_usage_history
@@ -164,10 +165,41 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         dynamic_context_parts.append("</meta_info>\n")
         self.dynamic_context = "\n".join(dynamic_context_parts)
 
+    def _buffer_structured_reply(self) -> bool:
+        if not config_parser.get_config("auto_render_markdown", True):
+            return False
+        if onebot_protocol(self.bot, self.event) not in {None, "onebot_v11"}:
+            return False
+        from .render_tools import RENDER_CAPABILITY
+        return RENDER_CAPABILITY.available
+
     async def send_emotion_message(self, content: str) -> str:
         """处理和发送表情包
         Returns: str: 替换表情之后的内容
         """
+        if (not getattr(self, "_defer_model_output", False)
+                and not getattr(self, "_deferred_commands", [])
+                and should_render_markdown(content) and self._buffer_structured_reply()):
+            from .render_tools import MessageSegment, markdown_image_payload
+
+            markdown = parse_emotion(content)[0] if self.emotion_flag else content
+            source = " ".join(getattr(self, "format_message_dict", {}).get("text", []))
+            card = "zmws" if "造梦" in source or "造梦" in markdown else "general"
+            try:
+                remaining = self._remaining_request_seconds()
+                if remaining <= 2:
+                    raise TimeoutError
+                async with timeout_scope(min(45.0, remaining - 2)):
+                    payload, _theme = await markdown_image_payload(markdown=markdown, card=card)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning("最终回复 Markdown 渲染失败，改发文字：error_type={}", type(error).__name__)
+            else:
+                # Delivery is outside the render fallback: an uncertain send
+                # must never trigger a second copy of the answer as text.
+                await durable_reply(self.bot, self.event, [MessageSegment.image(payload)])
+                return markdown
         if current_binding() is not None:
             protocol = onebot_protocol(self.bot, self.event) or "onebot_v11"
             messages = []

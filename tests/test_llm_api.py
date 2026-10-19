@@ -46,8 +46,9 @@ class _StreamResponse:
         return False
 
 
-async def _stream(monkeypatch, chunks, *, max_segments=5, is_segment=True, temperament="七七"):
+async def _stream(monkeypatch, chunks, *, max_segments=5, is_segment=True, temperament="七七", render_buffer=False):
     api = _Api()
+    api._buffer_structured_reply = lambda: render_buffer
     api.model_info = {"max_segments": max_segments}
     api.temperament = temperament
     api.send_emotion_message = AsyncMock(side_effect=lambda text: text)
@@ -62,6 +63,27 @@ async def _stream(monkeypatch, chunks, *, max_segments=5, is_segment=True, tempe
     )
     sent = [call.args[0] for call in api.send_emotion_message.await_args_list]
     return result, sent, usage, pacing, response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", [
+    "方向对照：\n|方程|方向|\n|---|---|\n|$r=a(1+\\sin\\theta)$|朝下|\n面积 $A=3\\pi/2$。",
+    "公式：\\[A=3\\pi/2\\]。\n\n" + "说明。\n" * 400,
+])
+async def test_stream_keeps_complete_formulas_and_tables_for_rendering(monkeypatch, text):
+    result, sent, _, _, response = await _stream(monkeypatch, list(text), render_buffer=True)
+    assert result[1] == text
+    assert sent == [text]
+    assert response.consumed == len(text)
+
+
+@pytest.mark.asyncio
+async def test_buffered_plain_stream_still_uses_bounded_text_messages(monkeypatch):
+    text = "普通文字。\n" * 400
+    result, sent, _, _, _ = await _stream(monkeypatch, [text], render_buffer=True)
+    assert result[1] == text
+    assert "".join(sent) == text
+    assert all(len(part) <= 1200 for part in sent)
 
 
 @pytest.mark.asyncio

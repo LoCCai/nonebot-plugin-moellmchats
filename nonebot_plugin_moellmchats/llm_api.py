@@ -260,6 +260,8 @@ class LlmApiMixin:
             return False, "模型额度已耗尽，将选择备用模型。", None, ""
         from .request_recovery import current_binding
         durable_stream = current_binding() is not None
+        render_buffer = getattr(self, "_buffer_structured_reply", lambda: False)()
+        buffer_reply = durable_stream or render_buffer
         # Keep a durable answer atomic: a broken stream cannot replay a visible prefix.
         buffer = []
         assistant_result = []  # 后处理助手回复
@@ -272,7 +274,7 @@ class LlmApiMixin:
         async def send_text(text: str) -> None:
             if not text.strip():
                 return
-            if durable_stream:
+            if buffer_reply:
                 assistant_result.append(text)
                 return
             # max_segments limits sentence fragmentation, not answer length.
@@ -371,9 +373,18 @@ class LlmApiMixin:
                     remaining += tag_buffer
                 await send_text(remaining)
                 if assistant_result:
-                    if durable_stream:
+                    if buffer_reply:
+                        from .image_output_policy import should_render_markdown
+                        complete = "".join(assistant_result)
                         self._last_api_output_started = True
-                        assistant_result = [await self.send_emotion_message("".join(assistant_result))]
+                        if durable_stream or should_render_markdown(complete):
+                            assistant_result = [await self.send_emotion_message(complete)]
+                        else:
+                            assistant_result = []
+                            for start in range(0, len(complete), 1200):
+                                if assistant_result:
+                                    await asyncio.sleep(min(2.0, 0.5 + len(complete[start:start + 1200]) / 1200))
+                                assistant_result.append(await self.send_emotion_message(complete[start:start + 1200]))
                     return (
                         True,
                         "".join(assistant_result),

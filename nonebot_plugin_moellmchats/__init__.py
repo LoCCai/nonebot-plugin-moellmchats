@@ -409,10 +409,10 @@ llm_matcher = on_message(
 async def _(bot: Bot, event: MessageEvent):
     from .onebot_facade import event_plain_text, make_text_message, onebot_protocol
 
-    await acknowledge_mention(bot, event)
     if event_plain_text(event).strip():
         await handle_llm(bot, event, llm_matcher, lambda: format_message(event, bot), is_ai=False)
     else:
+        await acknowledge_mention(bot, event)
         await llm_matcher.finish(
             make_text_message(
                 onebot_protocol(bot, event) or "onebot_v11",

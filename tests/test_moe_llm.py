@@ -615,3 +615,70 @@ async def test_v12_body_succeeds_and_local_optional_emotion_is_skipped(
     assert result == "正文"
     assert protocols == ["onebot_v12"]
     assert bot.sent == ["正文"]
+
+
+@pytest.mark.parametrize("content,expected", [
+    ("方向：$r=a(1+\\sin\\theta)$，面积 $A=\\frac32\\pi a^2$。", True),
+    ("## 心形曲线\n\n### 面积\n$$A=3\\pi/2$$", True),
+    ("$$A=\\frac32\\pi a^2$$", True),
+    (r"面积 \(A=3\pi/2\)，周长 \[L=8a\]", True),
+    ("|方程|方向|\n|---|---|\n|sin|朝下|", True),
+    ("```python\nprint(1)\n```", True),
+    ("**收到啦**，可以继续查询。", False),
+    ("价格 $10，另一个 $20。", False),
+    ("可复制：\n/造梦资料 我的\n\n$A=3$", False),
+    ("```text\n/造梦蟠桃 我的\n```", False),
+])
+def test_structured_reply_detection_preserves_copyable_commands(content, expected):
+    from nonebot_plugin_moellmchats.image_output_policy import should_render_markdown
+
+    assert should_render_markdown(content) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, RuntimeError("renderer unavailable"), _action_failed()])
+async def test_structured_final_reply_renders_once_and_never_replays_uncertain_send(monkeypatch, failure):
+    from unittest.mock import AsyncMock
+
+    from nonebot_plugin_moellmchats import render_tools
+
+    text = "**方向对照表**\n\n|方程|心尖|\n|---|---|\n|$r=a(1+\\sin\\theta)$|朝下|\n\n$$A=\\frac32\\pi a^2$$"
+    send_failure = isinstance(failure, ActionFailed)
+    bot = _ScriptedBot([failure if send_failure else None])
+    llm = _llm(bot)
+    llm.agent_runtime, llm.emotion_flag = None, False
+    monkeypatch.setattr(llm, "_buffer_structured_reply", lambda: True)
+    renderer = AsyncMock(return_value=(b"test-image", {}), side_effect=failure if isinstance(failure, RuntimeError) else None)
+    monkeypatch.setattr(render_tools, "markdown_image_payload", renderer)
+    if send_failure:
+        with pytest.raises(ActionFailed):
+            await llm.send_emotion_message(text)
+    else:
+        assert await llm.send_emotion_message(text) == text
+    renderer.assert_awaited_once_with(markdown=text, card="general")
+    assert len(bot.sent) == 1
+    if isinstance(failure, RuntimeError):
+        assert str(bot.sent[0]) == text
+    else:
+        assert bot.sent[0].type == "image"
+
+
+@pytest.mark.asyncio
+async def test_deferred_commands_and_math_text_fallback_do_not_trigger_extra_render(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from nonebot_plugin_moellmchats import render_tools
+
+    bot = _ScriptedBot([None, None])
+    llm = _llm(bot)
+    llm.emotion_flag = False
+    renderer = AsyncMock()
+    monkeypatch.setattr(llm, "_buffer_structured_reply", lambda: True)
+    monkeypatch.setattr(render_tools, "markdown_image_payload", renderer)
+    llm._deferred_commands = ["/造梦资料 我的"]
+    await llm.send_emotion_message("下一条可复制：\n/造梦资料 我的\n$A=3$")
+    llm._deferred_commands = []
+    llm._defer_model_output = True
+    await llm.send_emotion_message("$A=3$")
+    renderer.assert_not_awaited()
+    assert len(bot.sent) == 2

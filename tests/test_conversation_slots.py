@@ -33,6 +33,40 @@ def event(user_id=42, group_id=100):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("nickname", [False, True])
+@pytest.mark.parametrize("busy", [False, True])
+async def test_busy_question_gets_only_error_reaction(monkeypatch, nickname, busy):
+    from nonebot.adapters.onebot.v11 import Message, MessageSegment
+    from test_chat_runtime import _mention_event
+
+    slots = ConversationSlots()
+    monkeypatch.setattr(chat_runtime, "conversation_slots", slots)
+    monkeypatch.setattr(chat_runtime, "budget_authorized", AsyncMock(return_value=False))
+    monkeypatch.setattr("nonebot_plugin_moellmchats.chat_policy.enforce_conduct", AsyncMock(return_value=True))
+    work = AsyncMock()
+    monkeypatch.setattr(chat_runtime, "_handle_llm", work)
+    bot = SimpleNamespace(self_id="123", config=SimpleNamespace(nickname={"七七"}), call_api=AsyncMock())
+    message = Message("七七 问题") if nickname else Message(MessageSegment.at(123)) + "问题"
+    current = _mention_event(message)
+    current.to_me = True
+    current.message = Message("问题")
+    matcher = Matcher()
+    if busy:
+        async with slots.slot(42):
+            with pytest.raises(Finished):
+                await chat_runtime.handle_llm(bot, current, matcher, {})
+        work.assert_not_awaited()
+        assert matcher.messages == ["七七正在思考你的上一个问题，请耐心等待。"]
+    else:
+        await chat_runtime.handle_llm(bot, current, matcher, {})
+        work.assert_awaited_once()
+    bot.call_api.assert_awaited_once_with(
+        "set_msg_emoji_like", message_id=current.message_id,
+        emoji_id="10060" if busy else "282", set=True,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("user_id", "group_id", "is_ai"), [(42, 200, False), ("42", None, True), ("00042", 100, True)])
 async def test_same_qq_is_rejected_before_formatting_and_recovery(monkeypatch, user_id, group_id, is_ai):
     monkeypatch.setattr(chat_runtime, "conversation_slots", ConversationSlots())

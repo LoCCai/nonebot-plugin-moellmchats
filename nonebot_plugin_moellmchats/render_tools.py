@@ -624,25 +624,21 @@ async def render_html_image(
                                                 "theme_mode": theme["mode"]})
 
 
-async def render_markdown_image(
+async def markdown_image_payload(
     *,
-    _tool_context: ToolContext,
     markdown: str,
     width: int | None = None,
     card: str = "general",
-) -> ToolResult:
-    """Render one LLM-authored Markdown document and send it as a picture."""
+) -> tuple[bytes, dict]:
+    """Render with the shared theme and browser budget, without sending."""
 
     if not RENDER_CAPABILITY.available:
-        return ToolResult(text=f"渲染工具未启用：{RENDER_CAPABILITY.hint}")
+        raise RenderToolError(f"渲染工具未启用：{RENDER_CAPABILITY.hint}")
     if not isinstance(markdown, str) or not markdown.strip() or len(markdown) > _MARKDOWN_MAX_CHARS:
-        return ToolResult(text=f"Markdown 内容必须是 1～{_MARKDOWN_MAX_CHARS} 字的字符串。")
-    try:
-        render_width = _normalize_width(width)
-        theme = await asyncio.to_thread(_render_theme, card)
-        await check_markdown_links_public(markdown)
-    except RenderToolError as error:
-        return ToolResult(text=f"❌ {error}")
+        raise RenderToolError(f"Markdown 内容必须是 1～{_MARKDOWN_MAX_CHARS} 字的字符串。")
+    render_width = _normalize_width(width)
+    theme = await asyncio.to_thread(_render_theme, card)
+    await check_markdown_links_public(markdown)
 
     async def operation() -> bytes:
         renderer = await get_shared_renderer()
@@ -658,9 +654,23 @@ async def render_markdown_image(
             screenshot_timeout=_SCREENSHOT_TIMEOUT_MS,
         )
 
+    payload = await run_browser_task(operation, budget_seconds=_RENDER_BUDGET_SECONDS)
+    return guarded_image_bytes(payload), theme
+
+
+async def render_markdown_image(
+    *,
+    _tool_context: ToolContext,
+    markdown: str,
+    width: int | None = None,
+    card: str = "general",
+) -> ToolResult:
+    """Render one LLM-authored Markdown document and send it as a picture."""
+
+    if not RENDER_CAPABILITY.available:
+        return ToolResult(text=f"渲染工具未启用：{RENDER_CAPABILITY.hint}")
     try:
-        payload = await run_browser_task(operation, budget_seconds=_RENDER_BUDGET_SECONDS)
-        payload = guarded_image_bytes(payload)
+        payload, theme = await markdown_image_payload(markdown=markdown, width=width, card=card)
         await deliver_image(_tool_context, payload)
     except RenderToolError as error:
         return ToolResult(text=f"❌ {error}")

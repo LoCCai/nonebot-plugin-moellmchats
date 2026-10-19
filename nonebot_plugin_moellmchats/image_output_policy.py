@@ -1,10 +1,29 @@
 """Guidance shared by classification and the answering model's tool view."""
 
+import re
+
+_COPYABLE_COMMAND = re.compile(r"(?m)^\s*(?:(?:[-*+] |\d+[.)、]\s*))?`?[/!！#](?![/!！#])[^\s`]+")
+_STRUCTURED_MARKDOWN = re.compile(
+    r"(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$"
+    r"|(?<![\\$])\$(?![\s$])[^$\n]+?(?<![\s\\])\$(?!\$)"
+    r"|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]"
+    r"|^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$"
+    r"|^\s*(?:```|~~~)[\s\S]+?^\s*(?:```|~~~)\s*$",
+    re.MULTILINE,
+)
+
+
+def should_render_markdown(content: str) -> bool:
+    """Render structured answers while leaving executable commands copyable."""
+    return bool(_STRUCTURED_MARKDOWN.search(content)) and not _COPYABLE_COMMAND.search(content)
+
 DOCUMENT_IMAGE_GUIDANCE = (
     "攻略图、资料卡、表格、清单、流程图、思维导图、代码截图等以文字和数据为主体的图片，"
     "优先整理准确内容，再用 render_markdown 或 render_html 排版成图；这些工具面向普通用户，"
     "无需绘图授权。思维导图和流程图可用自包含 HTML/CSS/内联 SVG 绘制，代码可用 Markdown 代码块；"
     "render_markdown 支持 $...$、$$...$$、\\(...\\)、\\[...\\] 公式；"
+    "最终回答包含数学公式、Markdown 表格或代码块时，主动用 render_markdown 排版成图片，"
+    "不要把未渲染的公式或表格直接发到 QQ；供用户复制的指令仍用普通文字发送。"
     "不会自动执行 Mermaid/Markmap 代码块，导图请用 render_html 的内联 SVG。"
     "数学题先用 Markdown 与 LaTeX 写出完整推导和答案，调用 render_markdown 渲染解答，"
     "解答交付后再调用 plot_* 数学工具绘制辅助示意图，不要让绘图阻塞解答。"
