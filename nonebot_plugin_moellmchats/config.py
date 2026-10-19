@@ -153,6 +153,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "private_chat_enabled": False,
     "group_chat_policy": {"default_enabled": True, "groups": {}},
     "show_datetime": False,
+    "owner_user_id": "",
+    "owner_name": "",
     "poke_llm_rate": 0.3,
     "generated_tools_enabled": True,
     "generated_tool_max_pending": 4,
@@ -274,6 +276,13 @@ class ConfigParser:
 
     @staticmethod
     def _validate(candidate: dict[str, Any]) -> None:
+        owner_id = candidate.get("owner_user_id")
+        if not isinstance(owner_id, str) or (owner_id and not re.fullmatch(r"[1-9][0-9]{0,19}", owner_id)):
+            raise ValueError("config.json: owner_user_id 必须是单个QQ号字符串或空字符串")
+        owner_name = candidate.get("owner_name")
+        if (not isinstance(owner_name, str) or len(owner_name) > 80
+                or any(ord(char) < 32 or ord(char) == 127 for char in owner_name)):
+            raise ValueError("config.json: owner_name 必须是不含控制字符的短名称")
         policy = candidate.get("group_chat_policy")
         if (not isinstance(policy, dict) or set(policy) != {"default_enabled", "groups"}
                 or type(policy.get("default_enabled")) is not bool
