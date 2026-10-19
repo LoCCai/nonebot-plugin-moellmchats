@@ -449,6 +449,17 @@ class Categorize:
         return False
 
     async def _get_category(self) -> _CategoryResult:
+        from .usage_tools import is_usage_request
+
+        if model_selector.get_use_tools() and is_usage_request(self.plain):
+            if not self.is_superuser:
+                return "模型消耗统计仅限超级管理员查看。"
+            available = getattr(self.tool_snapshot, "custom_tools", {})
+            info = available.get("query_model_usage")
+            if info is None or tool_manager.is_tool_blacklisted("query_model_usage"):
+                return "模型消耗统计工具当前不可用，请直接使用「/模型消耗图 本月」，或请管理员检查工具配置。"
+            self.selection_source = "usage_accounting"
+            return "0", False, ["query_model_usage"]
         if model_selector.get_use_tools() and self.tool_snapshot is not None:
             resolution = self.tool_snapshot.resolve_business_intent(
                 self.plain,

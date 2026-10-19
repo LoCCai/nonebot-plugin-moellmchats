@@ -18,17 +18,22 @@ from .usage_pricing import newapi_prices
 from .config import usage_display_config
 _chart_lock = threading.Lock()
 
-HELP = ("用法：模型用量统计 / 模型用量图 / 导出模型用量 [周|月|年|全部] "
+HELP = ("用法：模型用量统计 / 模型用量图 / 导出模型用量 [本月|周|月|年|全部] "
         "[群 群号] [用户 QQ] [模型 模型名]\n"
-        "周为近7天，月为近30天，年为近365天；时间统一UTC。导出默认全部。\n"
+        "本月为自然月截至当前，周为近7天，月为近30天，年为近365天；时间统一UTC。导出默认全部。\n"
         "补充模型额度 <模型名或编号> <Token数>；刷新模型价格。仅超级管理员可用。")
 
 
 def parse_filters(text, *, export=False):
     words = shlex.split(text)
-    period = words.pop(0) if words and words[0] in {"周", "月", "年", "全部"} else "全部" if export else "月"
-    filters = {"since": 0 if period == "全部" else time.time() - {"周": 7, "月": 30, "年": 365}[period] * 86400,
-               "until": time.time()}
+    period = words.pop(0) if words and words[0] in {"本月", "这个月", "周", "月", "年", "全部"} else "全部" if export else "月"
+    period = "本月" if period == "这个月" else period
+    now = time.time()
+    if period == "本月":
+        since = datetime.fromtimestamp(now, timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    else:
+        since = 0 if period == "全部" else now - {"周": 7, "月": 30, "年": 365}[period] * 86400
+    filters = {"since": since, "until": now}
     while words:
         key = words.pop(0)
         if key not in {"群", "用户", "QQ", "模型"} or not words:

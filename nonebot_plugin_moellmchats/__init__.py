@@ -35,6 +35,7 @@ from . import moe_llm as llm
 from . import render_data as _render_data  # noqa: F401
 from . import render_tools as _render_tools  # noqa: F401
 from . import tokenhub_tools as _tokenhub_tools  # noqa: F401
+from . import usage_tools as _usage_tools  # noqa: F401
 from .agent_context_runtime import runtime_resource_host
 from .chat_runtime import (
     acknowledge_mention,
@@ -146,6 +147,7 @@ __plugin_meta__ = PluginMetadata(
 19.超级管理员限定：用"设置工具进度 开/关"控制是否向当前会话发送工具调用前的进度提示
 20.超级管理员限定：用"!查看LLM链路"查询实际模型与思考参数；用"!模型池帮助"查看分类/三档池的设置、增删、关闭命令
 21.超级管理员限定：用"开启LLM/关闭LLM/查看LLM [群号或全部]"管理群聊开关；群内可省略群号
+22.超级管理员限定：用"模型消耗图 本月"、"模型用量统计 本月"查看自然月统计；AI 可直接调用 query_model_usage 获取图表与账本文字
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
