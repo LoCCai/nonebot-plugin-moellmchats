@@ -52,10 +52,6 @@ class Search:
         return "extract_webpage" in tools
 
     async def get_search(self) -> str | bool | None:
-        from .free_tier import ordinary_free_only
-
-        if ordinary_free_only():
-            return "当前使用免费模型链路，未启用付费联网搜索。"
         api_key = str(config_parser.get_config("search_api") or "").strip()
         if not api_key or api_key.casefold() in {
             "your api",

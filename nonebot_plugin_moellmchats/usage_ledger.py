@@ -245,12 +245,9 @@ async def record_usage(model, usage, *, purpose="chat", attempt_id=None, status=
 class _BudgetResponse:
     status = 403
     headers = {}
-    def __init__(self, status=403, *, policy_blocked=False):
+    def __init__(self, status=403):
         self.status = status
-        self.policy_blocked = policy_blocked
     async def text(self):
-        if self.policy_blocked:
-            return '{"error":{"code":"free_route_unavailable","message":"free route unavailable"}}'
         return '{"error":{"code":"insufficient_quota","message":"quota exhausted"}}'
     async def json(self):
         return json.loads(await self.text())
@@ -274,11 +271,6 @@ async def budgeted_post(session, model, *args, **kwargs):
 """
     # This is the last shared boundary before every provider request. Copies
     # prevent one user's limits from leaking into shared model configuration.
-    from .free_tier import free_transport_allowed, ordinary_free_only
-
-    if ordinary_free_only() and not free_transport_allowed(model, args[0] if args else kwargs.get("url")):
-        yield _BudgetResponse(503, policy_blocked=True)
-        return
     payload = kwargs.get("json")
     encoded_payload = False
     if payload is None and isinstance(kwargs.get("data"), (str, bytes)):
@@ -293,13 +285,6 @@ async def budgeted_post(session, model, *args, **kwargs):
         payload = dict(payload)
         apply_glm_policy(model, payload)
         apply_payload_budget(model, payload)
-        if ordinary_free_only() and (
-            payload.get("model", model.get("model")) != model.get("model")
-            or any(payload.get(key) for key in ("web_search_options", "web_search", "retrieval"))
-            or any(tool.get("type") != "function" for tool in payload.get("tools", ()))
-        ):
-            yield _BudgetResponse(503, policy_blocked=True)
-            return
         kwargs["data" if encoded_payload else "json"] = json.dumps(payload) if encoded_payload else payload
     identity = f"{model.get('model')} ({model.get('provider')})"
     ledger = get_ledger()

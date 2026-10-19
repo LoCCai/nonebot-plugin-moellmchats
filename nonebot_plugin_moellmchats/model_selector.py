@@ -525,7 +525,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             self._validate_fallbacks(self.model_config.get("model_fallbacks", {}), self.models)
             pools = self.model_config.get("model_pools", {})
             self.validate_model_pools(pools, self.models)
-            self.validate_ordinary_model_pools(self.model_config.get("ordinary_model_pools", {}), self.models)
             if pools and self.model_config.get("capability_routing", {}).get("enabled"):
                 raise ValueError("model_pools 与 capability_routing 不能同时启用")
         except ValueError as error:
@@ -553,15 +552,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         from .runtime_snapshot import mutable_value
 
         state = self._active_state()
-        ordinary = self._ordinary_pool(state)
-        if ordinary or current.get("_ordinary_model_pool"):
-            identity = f"{current.get('model')} ({current.get('provider')})"
-            attempted.add(identity)
-            role = current.get("_ordinary_model_pool")
-            if role not in ordinary:
-                return None
-            return self._select_pool_model(state, role, has_tools=has_tools, has_images=has_images,
-                                           attempted=attempted, ordinary=True)
         # Capability routing has its own trusted selection contract. Do not
         # bypass it with the legacy model-pair configuration.
         routing = state.model_config.get("capability_routing", {})
@@ -658,8 +648,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def get_web_search(self):
         # 获取当前是否使用联网
-        if self._ordinary_pool(self._active_state()):
-            return False
         return self._active_state().model_config["use_web_search"]
 
     def get_use_tools(self):
@@ -671,13 +659,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def get_model(self, key: str, *, has_tools=False, has_images=False) -> dict:
         # 获取单个模型的配置
         state = self._active_state()
-        if self._ordinary_pool(state):
-            role = {"category_model": "category", "summary_model": "summary", "selected_model": "0",
-                    "vision_model": "vision", "multimodal_model": "vision", "chat_summary_model": "summary"}.get(key)
-            if role is None:
-                return None
-            return self._select_pool_model(state, role, has_tools=has_tools, has_images=has_images,
-                                           rotate=True, ordinary=True)
         role = {"category_model": "category", "summary_model": "category",
                 "selected_model": "0", "chat_summary_model": "2"}.get(key)
         if role in state.model_config.get("model_pools", {}):
@@ -730,8 +711,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             raise ValueError("key 不是可路由的模型角色")
 
         state = self._active_state()
-        if self._ordinary_pool(state):
-            return self.get_model(key, has_tools=capabilities.tools, has_images=capabilities.vision)
         snapshot = runtime_snapshots.active()
         generation = (
             snapshot.generation
@@ -773,9 +752,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def get_moe_current_model(self, difficulty: str, *, has_tools=False, has_images=False) -> dict:
         # 获取当前MOE模型的配置
         state = self._active_state()
-        if self._ordinary_pool(state):
-            return self._select_pool_model(state, difficulty, has_tools=has_tools, has_images=has_images,
-                                           rotate=True, ordinary=True)
         if difficulty in state.model_config.get("model_pools", {}):
             return self._select_pool_model(state, difficulty, has_tools=has_tools, has_images=has_images, rotate=True)
         moe_models = state.model_config["moe_models"]
@@ -812,8 +788,6 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         if role is None:
             raise ValueError("difficulty 必须是 0、1、2")
         state = self._active_state()
-        if self._ordinary_pool(state):
-            return self.get_moe_current_model(difficulty, has_tools=capabilities.tools, has_images=capabilities.vision)
         snapshot = runtime_snapshots.active()
         generation = (
             snapshot.generation

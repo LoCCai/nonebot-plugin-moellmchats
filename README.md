@@ -133,14 +133,12 @@ COMMAND_START=["/",""]   # 可选
 
 [模型池与额度退池](docs/model-pools.md) · [重启任务保留与结果补发](docs/request-recovery.md)
 
-普通用户可在 `model_config.json` 配置独立的 `ordinary_model_pools`，角色为
-`category`、`0`、`1`、`2`、`summary` 和可选的 `vision`，每个角色填写完整模型名数组。
-启用时前五个角色必须全部配置，成员须在 `providers.toml` 的模型配置中明确设置
-`billing_type = "free"`；视觉模型还须设置 `is_vision = true`。免费池不可用时停止，
-分类、回答、总结、识图和重试均不会进入付费备用链，付费搜索及未配置的媒体能力也会停止。
-未配置此项时沿用原有模型路由；授权用户继续使用原模型池，授权来源由宿主回调或超级管理员配置决定。
-智谱已适配免费模型 `glm-4-flash-250414`、`glm-4.7-flash`、`glm-4.6v-flash`，
-后两者关闭可选思考。`glm-5.3-flash` 属于付费模型，活动赠送额度不能视为长期免费；
+普通用户与授权用户均使用现有模型池。免费模型可加入分类、简单任务等对应模型池，
+并在 `providers.toml` 的模型配置中设置 `billing_type = "free"`、`priority_consume = true`；
+限流、超时或额度不可用时继续尝试同池其他模型，仍按工具和视觉能力筛选。
+普通用户的请求预算与思考深度限制独立于模型池，不限制其使用池内其他模型。
+智谱已适配 `glm-4-flash-250414`、`glm-4.7-flash`、`glm-4.6v-flash`，后两者关闭可选思考。
+`glm-5.3-flash` 属于付费模型，活动赠送额度不能视为长期免费；
 `moellm_glm_promo_exhausted=true` 可在统计说明中标注历史赠额已用尽，实际停用仍由模型配置和额度状态控制。
 
 文档导航：[安装与验收](docs/installation.md) · [依赖与运行前提](docs/dependencies.md) · [调度链路与架构](docs/runtime-architecture.md) · [自定义工具开发](docs/custom-tools.md) · [NoneBot 插件与 ToolSpec 接入](docs/plugin-integration.md) · [故障排查](docs/troubleshooting.md) · [性格系统](docs/personality.md) · [完整指令表](docs/commands.md)

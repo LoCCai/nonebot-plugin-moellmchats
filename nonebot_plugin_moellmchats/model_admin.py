@@ -100,13 +100,6 @@ def format_chain(selector, settings: Mapping) -> str:
     if snapshot is not None:
         lines.append(f"运行资源版本：{snapshot.generation}")
     used = []
-    ordinary = cfg.get("ordinary_model_pools", {})
-    if ordinary:
-        lines.append("普通用户：独立免费模型池；付费搜索关闭，免费池失败不会切换付费模型。")
-        for key, names in ordinary.items():
-            lines.append(f"  免费 {key}：" + " → ".join(names))
-            used.extend(name for name in names if name not in used)
-        lines.append("以下为授权用户及系统任务的原有链路：")
 
     def route(label, key, role=None, fallback=None):
         if routing and key in {"selected_model", "category_model", "vision_model", "summary_model"}:
