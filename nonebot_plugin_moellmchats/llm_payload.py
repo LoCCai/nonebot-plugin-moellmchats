@@ -85,7 +85,7 @@ class LlmPayloadMixin:
 
         use_moe = (
             model_selector.get_moe()
-            if personal_billing.active()
+            if personal_billing.active() and not personal_billing.config("administrator_default", False)
             else (getattr(self, "is_superuser", False) is True and model_selector.get_moe())
         )
         # 1. 绝对的客观事实：只要真实提取到了图片URL，就必定触发视觉处理，不再完全依赖大模型分类判断

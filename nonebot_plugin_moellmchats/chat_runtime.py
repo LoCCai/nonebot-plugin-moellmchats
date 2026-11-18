@@ -226,11 +226,18 @@ async def handle_llm(
             await matcher.finish(conversation_slots.busy_message(event_user_id(event)))
             return None
         await acknowledge_mention(bot, event)
-        from .personal_billing import event_scope
+        from .personal_billing import error_message, event_scope
 
-        async with event_scope(bot, event):
-            with request_budget_scope(authorized=authorized), bind_usage_scope(bot, event):
-                return await _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs)
+        try:
+            async with event_scope(bot, event):
+                with request_budget_scope(authorized=authorized), bind_usage_scope(bot, event):
+                    return await _handle_llm(bot, event, matcher, format_message_dict, is_ai, **kwargs)
+        except Exception as error:
+            message = error_message(error)
+            if message:
+                await matcher.finish(message)
+                return None
+            raise
 
 
 async def _handle_llm(

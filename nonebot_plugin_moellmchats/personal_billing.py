@@ -28,6 +28,11 @@ def snapshot():
     return _adapter.snapshot() if _adapter is not None else None
 
 
+def error_message(error):
+    handler = getattr(_adapter, "error_message", None)
+    return handler(error) if handler else None
+
+
 def model(key, *, has_tools=False, has_images=False):
     return _adapter.model(key, has_tools=has_tools, has_images=has_images)
 

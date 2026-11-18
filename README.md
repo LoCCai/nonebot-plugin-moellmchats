@@ -2,6 +2,12 @@
 
 # nonebot-plugin-moellmchats
 
+> **当前分支：`qiqi`（七七 / QWeb 专用版）。**
+> 普通 NoneBot2 项目请使用 [`main`](https://github.com/LoCCai/nonebot-plugin-moellmchats/tree/main)。
+> 本分支维护七七的 QWeb 管理、管理员默认模型、New API 个人计费与表情图库接入；
+> 宿主登录、权限和结算实现由 QWeb 提供，插件仓库不包含站点配置或凭据。
+> 分支用途、适配接口与安装方式见 [七七分支说明](docs/qiqi-branch.md)。
+
 > 本项目现由 LoCCai 继续维护。感谢 Elflare 与历史贡献者完成原始设计；包名、
 > LocalStore 配置目录和用户命令保持兼容。
 
