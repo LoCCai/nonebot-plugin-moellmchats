@@ -35,5 +35,8 @@ pip install 'nonebot-plugin-moellmchats @ git+https://github.com/LoCCai/nonebot-
 - `emotion_source="meme_manager"` 使用表情管理器当前选中的资源包和分类词库；
   表情资源管理由 QWeb 管理员入口承载，
   不要求用户另行登录表情管理器，也不在插件仓库保存站点密钥。
+- `qweb_resources.emotion_settings()` / `save_emotion_settings()` 提供严格限定的
+  表情开关、概率、来源与版本号。QWeb 负责管理员鉴权、CSRF 和审计；保存采用
+  原有原子配置写入并更新运行快照，旧版本提交拒绝覆盖新设置。
 
 通用修复应单独回移到 `main` 并通过独立插件测试；七七宿主专用功能留在 `qiqi`。
