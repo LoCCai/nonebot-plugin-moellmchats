@@ -1073,7 +1073,9 @@ class LlmToolsMixin:
 
         content_for_history = str(result_text) if result_text else ""
         if self.emotion_flag and content_for_history:
-            content_for_history, _ = parse_emotion(content_for_history)
+            names = getattr(self, "_manager_emotion_names", None)
+            content_for_history, _ = (parse_emotion(content_for_history, names=names)
+                                      if names is not None else parse_emotion(content_for_history))
         tool_names = tuple(prepared.tool_name for prepared in batch.calls)
         assistant_msg = {
             "role": "assistant",
@@ -1491,7 +1493,9 @@ class LlmToolsMixin:
 
         content_for_history = str(result_text) if result_text else ""
         if self.emotion_flag and content_for_history:
-            content_for_history, _ = parse_emotion(content_for_history)
+            names = getattr(self, "_manager_emotion_names", None)
+            content_for_history, _ = (parse_emotion(content_for_history, names=names)
+                                      if names is not None else parse_emotion(content_for_history))
         # 提取本次调用的所有工具名称
         called_func_names = [call.get("function", {}).get("name", "未知插件") for call in executable_tool_calls]
         func_names_str = ", ".join(called_func_names)

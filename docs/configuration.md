@@ -279,6 +279,7 @@ LOCALSTORE_USE_CWD=true
 | `search_api` | `"your api"` | Tavily 的完整 `Authorization` 值，例如 `Bearer tvly-...` | 仅在开启联网前填写 |
 | `fastai_enabled` | `false` | 是否开放 `ai <内容>` 快速助手 | 需要无角色、无表情快速问答时开启 |
 | `emotions_enabled` | `false` | 是否让普通角色回复可使用表情包 | 配好目录后再开启 |
+| `emotion_source` | `"directory"` | `directory` 使用本地目录；`meme_manager` 使用表情管理器的会话图库和分类词库 | 后者需加载插件并启用资源包，无额外模型请求，暂支持 OneBot v11 |
 | `emotion_rate` | `0.1` | 每轮启用表情包提示的概率，范围 0～1 | 控制出现频率 |
 | `emotions_dir` | `"absolute path"` | 表情包根目录，必须是 Bot 可读的绝对路径 | 开启表情包前填写 |
 | `private_chat_enabled` | `false` | 是否允许超级管理员私聊 Bot；普通用户私聊仍不开放 | 需要管理私聊时开启 |

@@ -154,18 +154,21 @@ def load_replies_candidate() -> dict[str, tuple[str, ...]]:
 def load_emotions_candidate(config: dict) -> tuple[str, ...]:
     if not config.get("emotions_enabled"):
         return ()
+    if config.get("emotion_source") == "meme_manager":
+        # Resolve session-specific packs at request time, after plugin startup.
+        return ()
     directory = Path(str(config.get("emotions_dir") or ""))
     if not directory.is_dir():
         raise ValueError(f"表情目录不可用: {directory}")
     return tuple(sorted(item.name for item in directory.iterdir()))
 
 
-def parse_emotion(text: str) -> tuple:
+def parse_emotion(text: str, *, names=None) -> tuple:
     """
     解析并剥离文本中的有效表情包，保留非表情包的中括号内容。
     """
     # 1. 获取当前系统真实存在的表情包名称列表
-    valid_emotions = get_emotions_names()
+    valid_emotions = get_emotions_names() if names is None else names
     extracted_emotions = []
 
     # 2. 定义替换回调函数
@@ -188,6 +191,10 @@ def parse_emotion(text: str) -> tuple:
 
 # 获取表情包名字列表
 def get_emotions_names() -> list:
+    from . import emotion_library
+
+    if emotion_library.enabled():
+        return list(emotion_library.catalog()["categories"])
     from .runtime_snapshot import runtime_snapshots
 
     snapshot = runtime_snapshots.active()

@@ -89,6 +89,12 @@
 
 ### LLM 贴表情配置
 
+随文图片支持 `emotion_source: "directory"`（默认本地目录）或 `"meme_manager"`。
+后者需要加载 `nonebot_plugin_meme_manager` 并安装、启用资源包：聊天模型直接使用
+当前会话的分类描述与词库选择 `[分类名]`，本地随机选图；不额外调用分类、视觉或向量模型。
+仍由 `emotions_enabled` / `emotion_rate` 控制，整轮最多附一张；图库不可用则跳过附件。
+目前该图片接入支持 OneBot v11。与生成模板用的 `meme_search` / `generate_meme` 独立。
+
 在插件的 `config.json` 中设置，沿用运行快照热加载：
 
 ```json

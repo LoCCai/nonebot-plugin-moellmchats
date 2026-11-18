@@ -185,6 +185,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "search_api": "your api",
     "fastai_enabled": False,
     "emotions_enabled": False,
+    "emotion_source": "directory",
     "emotion_rate": 0.1,
     "emotions_dir": "absolute path",
     "private_chat_enabled": False,
@@ -317,6 +318,8 @@ class ConfigParser:
         from .request_budget import validate_ordinary_request_budget
 
         validate_ordinary_request_budget(candidate.get("ordinary_request_budget", {}))
+        if candidate.get("emotion_source", "directory") not in {"directory", "meme_manager"}:
+            raise ValueError("config.json: emotion_source 必须为 directory 或 meme_manager")
         reactions = candidate.get("message_reactions")
         if (
             not isinstance(reactions, dict)
