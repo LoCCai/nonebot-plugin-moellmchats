@@ -1,17 +1,20 @@
 from types import SimpleNamespace
 
 import pytest
+from test_moe_llm import _empty_reply_chat
 
 from nonebot_plugin_moellmchats import identity_policy, moe_llm
-from nonebot_plugin_moellmchats.config import ConfigParser, DEFAULT_CONFIG
-from test_moe_llm import _empty_reply_chat
+from nonebot_plugin_moellmchats.config import DEFAULT_CONFIG, ConfigParser
 
 
 def configure(monkeypatch, owner="10001"):
     original = identity_policy.config_parser.get_config
     values = {"owner_user_id": owner, "owner_name": "Owner"}
-    monkeypatch.setattr(identity_policy.config_parser, "get_config",
-                        lambda key, default=None: values[key] if key in values else original(key, default))
+    monkeypatch.setattr(
+        identity_policy.config_parser,
+        "get_config",
+        lambda key, default=None: values[key] if key in values else original(key, default),
+    )
 
 
 @pytest.mark.parametrize("value", [10001, True, None, "0", "-1", "*", "10001,10002", " 10001", "1\n"])
@@ -31,11 +34,12 @@ def test_optional_owner_binding_config_is_valid(value):
     ConfigParser._validate(dict(DEFAULT_CONFIG, owner_user_id=value, owner_name="Owner"))
 
 
-@pytest.mark.parametrize("sender,is_owner", [(10001, True), (10002, False), (None, False)])
+@pytest.mark.parametrize(("sender", "is_owner"), [(10001, True), (10002, False), (None, False)])
 def test_owner_identity_uses_real_sender_and_fails_closed(monkeypatch, sender, is_owner):
     configure(monkeypatch)
-    event = SimpleNamespace(user_id=sender, sender=SimpleNamespace(nickname="Owner"),
-                            reply=SimpleNamespace(sender=SimpleNamespace(user_id=10001)))
+    event = SimpleNamespace(
+        user_id=sender, sender=SimpleNamespace(nickname="Owner"), reply=SimpleNamespace(sender=SimpleNamespace(user_id=10001))
+    )
     text = identity_policy.identity_prompt(event)
     assert f'"current_sender_is_owner": {str(is_owner).lower()}' in text
     assert '"owner_qq": "10001"' in text

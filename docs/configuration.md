@@ -83,10 +83,25 @@ LOCALSTORE_USE_CWD=true
 ```
 
 使用模型列表中的完整 ID，最多 32 组、每组 1～4 个备用，按顺序尝试。分类与聊天均支持；
-只有收到 HTTP 429 才切换，不把网络超时或内容拒绝当作切换理由。同一请求不会循环尝试已用过的模型；
+收到 HTTP 429、明确额度耗尽、HTTP 500/502/503/504 或发生超时、连接中断时可切换；
+已经发出部分回复时不会因超时重放，内容安全拒绝也不会触发切换。同一请求不会循环尝试已用过的模型；
 切换保留消息、工具 schema 和已完成工具的结果，重新使用备用模型自己的 URL、密钥和参数，
 不会重跑工具。分类仍受原整体时间预算约束，备用结果不写入主模型的成功缓存。
 该配置用于原有固定模型选择；启用高级 `capability_routing` 时不会绕过它的能力目录选择备用。
+
+如需管理员和宿主授权用户使用不同的聊天首选模型，可在 `model_config.json` 添加：
+
+```json
+{
+  "authorized_chat_model": "backup-model (your-provider)"
+}
+```
+
+必须填写可用聊天模型的完整 ID；省略此字段则保持原有选择。身份由宿主通过
+`register_budget_authorizer` 核验；未接入宿主时仅超级管理员享有该首选，群管理员身份或聊天文字不能授予权限。
+该设置优先于授权请求的聊天、视觉、多模态聊天、群聊总结和 MoE 模型池；分类、上下文压缩及绘图、语音等专项模型保持原配置。
+普通请求仍按原配置选模型，失败后依照 `model_fallbacks` 切换，切换不重放已执行的工具。
+此字段不能与高级 `capability_routing` 同时启用。首次安装此功能需加载新代码，后续修改模型 ID 可热加载。
 
 ---
 
@@ -148,8 +163,48 @@ LOCALSTORE_USE_CWD=true
 | `tool_image_vision_excluded_tools` | `[]` | 不做二次识图的工具名列表 | 例如 `["qi_zmws", "generate_meme"]` |
 | `request_timeout_seconds` | `180` | 整个任务的单一墙钟预算，包含排队、分类、模型、工具和收尾 | 慢模型可增加，但队列会占更久 |
 | `classification_timeout_seconds` | `20` | 工具目录、缓存与分类请求的整体时间预算 | 超时保留常驻工具，并记录实际分类模型和耗时阶段 |
-| `classification_max_tokens` | `512` | 分类 JSON 的最大输出 token 数 | 分类同时透传该模型的 `extra_payload`，可按服务商配置关闭思考；固定为非流式 |
+| `classification_build_timeout_seconds` | `25` | 共享分类构建自身的总期限，包含重试；单个等待者取消不会取消其他等待者共用的请求 | 有限非负秒数，`0` 关闭；此期限还约束所有等待者离开后继续运行的构建 |
+| `classification_max_tokens` | `512` | 分类 JSON 的最大输出 token 数 | 分类同时透传该模型的 `extra_payload`，可按服务商配置关闭思考；按模型的 `stream` 配置接收响应 |
 | `tool_timeout_seconds` | `180` | 未在 ToolSpec 中单独声明时的可信工具超时；同时受请求剩余时间约束 | 慢查询可按需调整 |
+
+`ordinary_request_budget` 用于普通用户预算与思考深度的热调整。默认 `{}`，未填写的项沿用
+`MOELLM_ORDINARY_*` 启动默认值；支持自动 watcher 或 `重载LLM`，无需修改 `.env`。
+已经开始执行的请求保持入场时的配置快照，新请求使用新一代配置。
+它只控制普通用户的预算，不改变授权身份、工具权限或二阶段确认。
+
+```json
+{
+  "ordinary_request_budget": {
+    "request_seconds": 360,
+    "model_seconds": 90,
+    "output_tokens": 8192,
+    "tool_rounds": 6,
+    "tools_per_round": 2,
+    "model_attempts": 2,
+    "history_tokens": 4000,
+    "history_exchanges": 8,
+    "reasoning_effort": "high"
+  }
+}
+```
+
+| 子字段 | 启动默认值 | 允许范围 |
+| --- | ---: | --- |
+| `request_seconds` | `180` | 整数 30～600 |
+| `model_seconds` | `45` | 整数 5～180 |
+| `output_tokens` | `4096` | 整数 2048～32768 |
+| `tool_rounds` | `4` | 整数 1～12 |
+| `tools_per_round` | `2` | 整数 1～8 |
+| `model_attempts` | `2` | 整数 1～3 |
+| `history_tokens` | `2000` | 整数 256～16000 |
+| `history_exchanges` | `4` | 整数 1～20 |
+| `reasoning_effort` | `"low"` | `"low"`、`"medium"`、`"high"` |
+
+工具轮次、请求时间和历史量仍与对应全局配置取较小值；输出 tokens 仍受模型自己的上限约束。
+只覆盖服务商原本支持的思考字段；`thinking_budget` / `reasoning_budget` 在 low/medium/high
+下分别最多 1024/2048/4096，且不超过输出上限。分类请求继续使用小预算，授权用户预算独立。
+未知子字段、布尔值充整数、越界数值会使整个候选加载失败并保留上一代配置。
+首次安装此支持代码需要正常加载插件；后续改这个 JSON 对象即可热调参。
 
 宿主可在 LLM 工具执行期间调用 `render_data.record_rendered_view(template, html, context)`，
 把卡片文字、DOM selector 和模板字段放入当前用户会话的内存缓存。插件回执会携带 `render_id`、
@@ -218,7 +273,8 @@ LOCALSTORE_USE_CWD=true
 
 | 字段 | 默认值 | 通俗含义 | 何时调整 |
 | --- | ---: | --- | --- |
-| `tool_progress_messages_enabled` | `true` | 工具进度总开关；每个通过 Schema、权限、信任和重复检查的调用各发送一条可信固定提示 | 希望群里更安静时由超管发送 `/设置工具进度 关`；确认、插件结果、最终总结和后台日志仍保留 |
+| `plugin_command_progress_enabled` | `true` | 独立显示插件完整指令和参数，保留可复制文字；贴表情和关闭工具进度不隐藏它 | 仅在明确不需要指令投递文字时关闭 |
+| `tool_progress_messages_enabled` | `true` | 其他工具的固定进度提示；不影响插件指令提示 | 希望群里更安静时由超管发送 `/设置工具进度 关`；确认、插件结果、最终总结和后台日志仍保留 |
 | `tool_progress_model_preface_enabled` | `false` | 是否把当前工具决策响应中的一句自然话术附在固定提示后；不增加模型请求，只在总开关开启时生效 | 希望提示更拟人时由超管发送 `/设置工具自然话术 开`；默认关闭可避免模型提前下结论 |
 | `search_api` | `"your api"` | Tavily 的完整 `Authorization` 值，例如 `Bearer tvly-...` | 仅在开启联网前填写 |
 | `fastai_enabled` | `false` | 是否开放 `ai <内容>` 快速助手 | 需要无角色、无表情快速问答时开启 |
@@ -229,15 +285,17 @@ LOCALSTORE_USE_CWD=true
 | `show_datetime` | `false` | 是否在 system prompt 注入当前时间 | 需要时间感知时开启，会让缓存更易变化 |
 | `poke_llm_rate` | `0.3` | 群聊戳一戳走 LLM 的概率；0 表示关闭 | 控制成本和打扰程度 |
 
-`tool_progress_messages_enabled=true` 时，运行时为每个真正获准的调用单独生成一条提示。例如 NoneBot 为 `正在投递插件：bread_shop｜功能：抢面包`，搜索为 `正在调用搜索工具：web_search`，协议为 `正在调用协议接口：napcat_v11__send_like｜功能：发送点赞`。Registered、Custom File、Generated 和 MCP 也会显示固定来源与工具名。并行批次逐项发送；二阶段动作只显示“正在准备工具确认”，不会冒充已执行。未知工具、参数错误、越权、策略拒绝和重复受限调用不会发送“正在执行”。
+`plugin_command_progress_enabled=true`（默认）独立控制 NoneBot 插件投递提示。执行插件指令时显示完整文字，例如 `七七正在帮你投递：/造梦资料 我的`，保留全部参数和参数内空格，便于复制；相同指令的不同参数分别显示。贴表情及关闭普通工具进度均不隐藏插件指令；插件投递提示保留在会话中，不自动撤回。
 
-固定提示只使用可信工具身份、协议摘要或 NoneBot 指令首词，不显示完整参数。发送有 1 秒预算；失败或超时只写安全状态和异常类型，不阻断工具，也不会重试副作用。提示本身不是成功证据，最终仍以 Adapter 成功回调和类型化工具结果为准。
+`tool_progress_messages_enabled=true` 控制其他工具的进度文字：搜索为 `正在调用搜索工具：web_search`，协议为 `正在调用协议接口：napcat_v11__send_like｜功能：发送点赞`。Registered、Custom File、Generated 和 MCP 也会显示固定来源与工具名。二阶段动作只显示“正在准备工具确认”，不会冒充已执行。未知工具、参数错误、越权、策略拒绝和重复受限调用不会发送“正在执行”。七七部署保持此项关闭，只显示插件指令投递。
+
+其他工具的固定提示使用可信工具身份或协议摘要，不显示参数。发送失败或超时只写安全状态和异常类型，不阻断工具，也不会重试副作用。提示本身不是成功证据，最终仍以 Adapter 成功回调和类型化工具结果为准。
 
 `tool_progress_model_preface_enabled=true` 时，当前工具决策响应可以同时给出一句自然话术；运行时会折叠空白、截断并脱敏 QQ 号、URL、本地路径、Token、Cookie、Authorization 和 Base64，再把它合并到同一条固定提示中。它不会额外调用模型；并行批次只把话术附在第一项。空白话术按空处理，绝不会压掉固定提示。
 
-`tool_progress_messages_enabled=false` 不会跳过分类、工具调用、Matcher、权限检查、二阶段确认或结果回填，也不会把失败变成静默成功。无论自然话术开关是什么，模型工具消息、最终失败说明和安全审计照常产生；只有用户可见的进度提示被隐藏。需要确认的协议工具和自定义 `mutating` 工具仍会直接向原会话发送确认指令。
+`tool_progress_messages_enabled=false` 不会跳过分类、工具调用、Matcher、权限检查、二阶段确认或结果回填，也不会把失败变成静默成功。插件投递提示由独立开关控制；需要确认的协议工具和自定义 `mutating` 工具仍会直接向原会话发送确认指令。
 
-超级管理员可以使用 `/设置工具进度 关`（别名 `设置调用进度`、`设置工具提示`）即时关闭这些提示，使用 `/设置工具进度 开` 恢复。该固定指令接受可选 `/`、`!`、`！` 前缀及 `开/关/1/0`，不经过 LLM 或工具调用链，写入后立即更新当前运行快照。
+超级管理员可以使用 `/设置工具进度 关`（别名 `设置调用进度`、`设置工具提示`）即时关闭其他工具的进度提示，使用 `/设置工具进度 开` 恢复。插件指令提示不受此命令影响。该固定指令接受可选 `/`、`!`、`！` 前缀及 `开/关/1/0`，不经过 LLM 或工具调用链，写入后立即更新当前运行快照。
 
 自然话术使用 `/设置工具自然话术 开|关|1|0`，别名为 `设置工具话术`、`设置调用话术`。它同样是优先级 0 的全文固定 `SUPERUSER` 命令，不经过 LLM；总开关关闭时，即使自然话术设置为开也不会发送进度。
 
@@ -375,7 +433,7 @@ no_tools = true
 
 | 字段 | 含义 | 注意事项 |
 | --- | --- | --- |
-| `stream` | 是否请求流式响应 | 工具调用时会临时切成非流式；能力路由也会关闭不支持 streaming 的模型 |
+| `stream` | 是否请求流式响应 | 支持流式工具调用；工具参数收齐后执行，能力路由会关闭不支持 streaming 的模型 |
 | `is_segment` | 流式文本是否分段发送 | 只影响消息呈现，不改变模型能力 |
 | `max_segments` | 最多发送多少段 | 防止过度刷屏 |
 | `max_tokens` | 请求的最大输出 token | 必须符合服务商接口约束 |

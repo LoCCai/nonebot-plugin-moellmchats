@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -98,6 +100,7 @@ class _FakeResponse:
     ) -> None:
         self.payload = payload
         self.status = status
+        self.headers: dict[str, str] = {}
         self.enter_delay = enter_delay
 
     async def __aenter__(self):
@@ -168,6 +171,14 @@ def _model_response(
 
 
 def _configure_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    from nonebot_plugin_moellmchats import classifier_cooldown, usage_ledger
+
+    monkeypatch.setattr(classifier_cooldown, "_cooldowns", {})
+    # These tests exercise routing, cache and transport deadlines. Real SQLite
+    # accounting can exhaust their 10ms budgets before the fake HTTP starts.
+    monkeypatch.setattr(usage_ledger, "budget_available", AsyncMock(return_value=True))
+    monkeypatch.setattr(usage_ledger, "record_usage", AsyncMock())
+    monkeypatch.setattr(usage_ledger, "get_ledger", lambda: SimpleNamespace(budgets={}, exhausted=lambda _: False))
     state: dict[str, Any] = {
         "classification_timeout_seconds": 1,
         "resident_plugins": [],
@@ -217,6 +228,53 @@ def _configure_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         lambda _name, _capabilities: model_info,
     )
     return state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moe_enabled", [False, True])
+@pytest.mark.parametrize("authorized", [False, True])
+async def test_workbuddy_classifier_uses_own_role_and_low_without_changing_chat(
+    monkeypatch,
+    moe_enabled,
+    authorized,
+):
+    from nonebot_plugin_moellmchats import request_budget
+
+    _configure_runtime(monkeypatch)
+    monkeypatch.setattr(model_selector, "get_moe", lambda: moe_enabled)
+    shared_model = {
+        "model": "deepseek-v4.1-flash-workbuddy",
+        "provider": "workbuddy",
+        "url": "https://workbuddy.invalid/v1/chat/completions",
+        "key": "test-only-key",
+        "extra_payload": {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+    }
+    original = deepcopy(shared_model)
+    roles = []
+
+    def select_role(role, capabilities):
+        roles.append(role)
+        assert capabilities.json_schema
+        assert not capabilities.vision
+        assert role == "category_model", "classifier must not rotate through the chat pool"
+        return shared_model
+
+    monkeypatch.setattr(model_selector, "get_model_for_capabilities", select_role)
+    session = _FakeSession([_model_response()])
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+
+    with request_budget.request_budget_scope(authorized=authorized):
+        result = await Categorize("hello", _snapshot()).get_category()
+
+    assert result == ("1", False, ["alpha"])
+    assert roles == ["category_model"]
+    assert session.call_count == 1
+    payload = json.loads(session.requests[0]["data"])
+    assert payload["model"] == shared_model["model"]
+    assert payload["reasoning_effort"] == "low"
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["stream"] is True
+    assert shared_model == original
 
 
 def _categorizer(
@@ -369,7 +427,7 @@ async def test_schema_consumer_miss_publish_hit_and_detached_materialize(
 
     assert snapshot.schema_builds == 1
     assert snapshot.legacy_schema_calls == 0
-    assert first_stream is second_stream is False
+    assert first_stream is second_stream is True
     assert second_data["tools"][0]["function"]["name"] == "alpha"
     assert second_data["tools"][0]["function"]["description"] != "tampered"
 
@@ -478,9 +536,7 @@ async def test_unique_business_owner_bypasses_wrong_classifier_selection(
             mcp_tool_names=set(),
         )
     )
-    session = _FakeSession(
-        [_model_response(required_plugins=["qi_db_analytics"])]
-    )
+    session = _FakeSession([_model_response(required_plugins=["qi_db_analytics"])])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
 
     variants = [
@@ -733,22 +789,57 @@ async def test_transport_timeout_does_not_consume_parse_retry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["", None])
+async def test_reasoning_only_length_switches_backup_without_identical_retry_or_cache(monkeypatch, content):
+    _configure_runtime(monkeypatch)
+    session = _FakeSession(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": content}}]},
+            _model_response(),
+        ]
+    )
+    monkeypatch.setattr(categorize_module, "get_session", lambda: session)
+    backup = {"model": "classifier-backup", "url": "https://backup.invalid/chat", "key": "test-only-key"}
+    monkeypatch.setattr(model_selector, "get_rate_limit_fallback", lambda *_: backup)
+    cache = _RecordingClassificationCache()
+    category = _categorizer(
+        "reasoning budget", _CountingSnapshot(_snapshot()), catalog_cache=MemoryToolCatalogCache(), classification_cache=cache
+    )
+    assert await category.get_category() == ("1", False, ["alpha"])
+    models = [json.loads(request["data"])["model"] for request in session.requests]
+    assert models == ["classifier-v1", "classifier-backup"]
+    assert category.selection_source == "classification_service_fallback"
+    assert cache.publish_count == 0
+
+
+@pytest.mark.asyncio
 async def test_classifier_preserves_provider_options_but_keeps_bounded_json_input(monkeypatch):
     state = _configure_runtime(monkeypatch)
     state["classification_max_tokens"] = 256
     session = _FakeSession([_model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
     category = Categorize("当前真实输入")
-    result = await category._request_category_model({
-        "model": "classifier-v1", "url": "https://classifier.invalid/chat", "key": "test-only-key",
-        "json_mode": True, "extra_payload": {"thinking": {"type": "disabled"}, "stream": True,
-                                              "model": "wrong", "messages": [], "max_tokens": 99999},
-    }, "分类提示")
+    result = await category._request_category_model(
+        {
+            "model": "classifier-v1",
+            "url": "https://classifier.invalid/chat",
+            "key": "test-only-key",
+            "json_mode": True,
+            "extra_payload": {
+                "thinking": {"type": "disabled"},
+                "stream": True,
+                "model": "wrong",
+                "messages": [],
+                "max_tokens": 99999,
+            },
+        },
+        "分类提示",
+    )
     payload = categorize_module.json.loads(session.requests[0]["data"])
     assert result == ("1", False, ["alpha"])
     assert payload["thinking"] == {"type": "disabled"}
     assert payload["max_tokens"] == 256
-    assert payload["stream"] is False
+    assert payload["stream"] is True
     assert payload["model"] == "classifier-v1"
     assert payload["messages"][1]["content"] == "当前真实输入"
     assert payload["response_format"] == {"type": "json_object"}
@@ -790,8 +881,9 @@ async def test_classifier_http_failure_falls_back_without_reading_body_or_retry(
     cache = _RecordingClassificationCache() if cached else None
     session = _FakeSession([_UnreadableBodyResponse({}, status=status)])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
-    category = _categorizer("upstream unavailable", _CountingSnapshot(_snapshot()),
-                            catalog_cache=MemoryToolCatalogCache(), classification_cache=cache)
+    category = _categorizer(
+        "upstream unavailable", _CountingSnapshot(_snapshot()), catalog_cache=MemoryToolCatalogCache(), classification_cache=cache
+    )
     assert await category.get_category() is False
     assert category.selection_source == "classification_http_fallback"
     assert category._phase == f"http_status_{status}"
@@ -813,8 +905,9 @@ async def test_classifier_uses_backup_without_publishing_under_primary_identity(
     session = _FakeSession([failure, _model_response()])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
     cache = _RecordingClassificationCache() if cached else None
-    category = _categorizer("choose tool", _CountingSnapshot(_snapshot()),
-                            catalog_cache=MemoryToolCatalogCache(), classification_cache=cache)
+    category = _categorizer(
+        "choose tool", _CountingSnapshot(_snapshot()), catalog_cache=MemoryToolCatalogCache(), classification_cache=cache
+    )
     assert await category.get_category() == ("1", False, ["alpha"])
     assert category.selection_source == (
         "classification_rate_limit_fallback" if status in {429, 403} else "classification_service_fallback"
@@ -833,8 +926,10 @@ class _QuotaResponse(_FakeResponse):
 @pytest.mark.asyncio
 async def test_classifier_permission_403_does_not_switch_models(monkeypatch):
     _configure_runtime(monkeypatch)
+
     def fallback(*args):
         pytest.fail("permission errors must not trigger a fallback")
+
     monkeypatch.setattr(categorize_module.model_selector, "get_rate_limit_fallback", fallback)
     session = _FakeSession([_FakeResponse({}, status=403)])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
@@ -844,15 +939,20 @@ async def test_classifier_permission_403_does_not_switch_models(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("plain", "model_vision", "expected"), [
-    ("用我的头像制作拍头图", True, False), ("[图片]帮我认一下", False, True),
-])
+@pytest.mark.parametrize(
+    ("plain", "model_vision", "expected"),
+    [
+        ("用我的头像制作拍头图", True, False),
+        ("[图片]帮我认一下", False, True),
+    ],
+)
 async def test_classifier_vision_depends_on_actual_input_images(monkeypatch, plain, model_vision, expected):
     _configure_runtime(monkeypatch)
     session = _FakeSession([_model_response(vision_required=model_vision)])
     monkeypatch.setattr(categorize_module, "get_session", lambda: session)
     result = await Categorize(plain)._request_category_model(
-        {"model": "test", "url": "https://test.invalid", "key": "test"}, "prompt")
+        {"model": "test", "url": "https://test.invalid", "key": "test"}, "prompt"
+    )
     assert result[1] is expected
 
 

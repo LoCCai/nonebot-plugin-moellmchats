@@ -961,16 +961,9 @@ class MemoryClassificationCache:
                 # than turning a benign race into a failed chat request.
                 published = await self.lookup(key)
                 if published is None:
-                    raise ClassificationCacheUnavailableError(
-                        "classification cache 发布冲突后无法读取精确记录"
-                    ) from None
-            if (
-                not isinstance(published, ClassificationCacheRecord)
-                or published.key != key
-            ):
-                raise ClassificationCacheUnavailableError(
-                    "classification cache 未确认精确发布结果"
-                )
+                    raise ClassificationCacheUnavailableError("classification cache 发布冲突后无法读取精确记录") from None
+            if not isinstance(published, ClassificationCacheRecord) or published.key != key:
+                raise ClassificationCacheUnavailableError("classification cache 未确认精确发布结果")
             return published
         finally:
             async with self._lock:
@@ -987,6 +980,39 @@ class MemoryClassificationCache:
             task.exception()
         except BaseException:
             return
+
+    async def _build_with_deadline(
+        self,
+        key: ClassificationCacheKey,
+        builder: ClassificationBuilder,
+    ) -> ClassificationCacheRecord:
+        """Bound the shared build itself, not just each waiting request.
+
+        Without this, a waiter's own deadline leaves the single-flight task
+        burning up to two full per-attempt HTTP timeouts after everyone
+        stopped waiting.  The deadline applies to the build globally, so all
+        waiters observe the same terminal outcome; an individual waiter still
+        never cancels the shared request.
+        """
+
+        from .compat import timeout as timeout_scope
+        from .config import config_parser
+
+        current_task = asyncio.current_task()
+        try:
+            value = config_parser.get_config("classification_build_timeout_seconds", 25.0)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ClassificationCacheUnavailableError("classification build timeout 配置无效")
+            if value == 0:
+                return await self._build_and_publish(key, builder)
+            async with timeout_scope(value):
+                return await self._build_and_publish(key, builder)
+        finally:
+            # Cover configuration failure and cancellation before the builder
+            # starts as well; never retain a failed flight for this identity.
+            async with self._lock:
+                if self._flights.get(key) is current_task:
+                    self._flights.pop(key, None)
 
     async def resolve_exact(
         self,
@@ -1008,7 +1034,7 @@ class MemoryClassificationCache:
             flight = self._flights.get(key)
             if flight is None:
                 flight = asyncio.create_task(
-                    self._build_and_publish(key, builder),
+                    self._build_with_deadline(key, builder),
                     name=f"moellm-classification-{key.identity_digest[:12]}",
                 )
                 flight.add_done_callback(self._consume_flight_result)
@@ -1044,9 +1070,7 @@ async def resolve_classification(
         try:
             record = await exact_resolver(key, builder)
         except TimeoutError:
-            raise ClassificationCacheUnavailableError(
-                "classification cache resolve_exact 超时"
-            ) from None
+            raise ClassificationCacheUnavailableError("classification cache resolve_exact 超时") from None
     else:
         # Transitional compatibility for third-party/test cache ports created
         # before resolve_exact existed.  Runtime-owned memory caches always use
@@ -1054,26 +1078,17 @@ async def resolve_classification(
         try:
             cached = await cache.lookup(key)
         except TimeoutError:
-            raise ClassificationCacheUnavailableError(
-                "classification cache lookup 超时"
-            ) from None
+            raise ClassificationCacheUnavailableError("classification cache lookup 超时") from None
         if cached is not None:
-            if (
-                not isinstance(cached, ClassificationCacheRecord)
-                or cached.key != key
-            ):
-                raise ClassificationCacheUnavailableError(
-                    "classification cache 返回了错误 identity"
-                )
+            if not isinstance(cached, ClassificationCacheRecord) or cached.key != key:
+                raise ClassificationCacheUnavailableError("classification cache 返回了错误 identity")
             return cached
         pending = builder()
         if not inspect.isawaitable(pending):
             raise TypeError("classification builder 必须返回 awaitable")
         built = await pending
         if not isinstance(built, ClassificationCacheRecord):
-            raise TypeError(
-                "classification builder 必须返回 ClassificationCacheRecord"
-            )
+            raise TypeError("classification builder 必须返回 ClassificationCacheRecord")
         if built.key != key:
             raise ValueError("classification builder 返回了错误 identity")
         conflicted = False
@@ -1083,19 +1098,9 @@ async def resolve_classification(
             conflicted = True
             record = await cache.lookup(key)
         except TimeoutError:
-            raise ClassificationCacheUnavailableError(
-                "classification cache publish 超时"
-            ) from None
-        if (
-            not isinstance(record, ClassificationCacheRecord)
-            or record.key != key
-            or (not conflicted and record != built)
-        ):
-            raise ClassificationCacheUnavailableError(
-                "classification cache 未确认精确发布结果"
-            )
+            raise ClassificationCacheUnavailableError("classification cache publish 超时") from None
+        if not isinstance(record, ClassificationCacheRecord) or record.key != key or (not conflicted and record != built):
+            raise ClassificationCacheUnavailableError("classification cache 未确认精确发布结果")
     if not isinstance(record, ClassificationCacheRecord) or record.key != key:
-        raise ClassificationCacheUnavailableError(
-            "classification cache resolve_exact 返回了错误 identity"
-        )
+        raise ClassificationCacheUnavailableError("classification cache resolve_exact 返回了错误 identity")
     return record

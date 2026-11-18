@@ -34,10 +34,15 @@ def _empty_reply_chat(monkeypatch, responses):
     chat.tool_snapshot = ToolSnapshot(generation=1, custom_tools={}, plugin_info={}, tool_dependencies={}, mcp_tool_names=set())
     chat._current_tool_usage, chat._pending_vision_images = Counter(), []
     entity = SimpleNamespace(tool_messages=[], mention_context=None)
-    monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(
-        messages_entity=entity, pre_process=lambda message, **kwargs: "绘制椭圆并解释",
-        get_send_message_list=lambda **kwargs: [],
-    ))
+    monkeypatch.setattr(
+        module,
+        "MessagesHandler",
+        lambda user: SimpleNamespace(
+            messages_entity=entity,
+            pre_process=lambda message, **kwargs: "绘制椭圆并解释",
+            get_send_message_list=lambda **kwargs: [],
+        ),
+    )
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
     monkeypatch.setattr(module, "get_session", object)
     chat._validate_runtime_model_config = AsyncMock(return_value=None)
@@ -47,6 +52,25 @@ def _empty_reply_chat(monkeypatch, responses):
     chat.none_stream_llm_chat = AsyncMock(side_effect=responses)
     chat._send_retry_notice = AsyncMock()
     return chat, entity
+
+
+@pytest.mark.asyncio
+async def test_cumulative_tool_limit_forces_summary_before_round_limit(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    chat, _ = _empty_reply_chat(monkeypatch, [(True, "已完成查询，这是总结。", None, "")])
+    chat._request_tool_calls_used = 15
+    chat._build_payload = lambda history: (
+        {"messages": history, "stream": False, "tools": [{"type": "function"}], "tool_choice": "auto"},
+        False,
+    )
+    chat._execute_tools = AsyncMock(side_effect=AssertionError("spent request must not execute tools"))
+    assert await chat.get_llm_chat() is True
+    payload = chat.none_stream_llm_chat.await_args.args[3]
+    assert "tools" not in payload
+    assert "tool_choice" not in payload
+    chat._execute_tools.assert_not_awaited()
+    assert chat.bot.sent == ["已完成查询，这是总结。"]
 
 
 @pytest.mark.asyncio
@@ -63,12 +87,88 @@ async def test_reasoning_only_completion_cannot_finish_silently(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_empty_completion_retries_then_delivers_exactly_one_answer(monkeypatch):
-    chat, _ = _empty_reply_chat(monkeypatch, [
-        (True, "  ", [], ""), (True, "计算结论与证明", None, ""),
-    ])
+    chat, _ = _empty_reply_chat(
+        monkeypatch,
+        [
+            (True, "  ", [], ""),
+            (True, "计算结论与证明", None, ""),
+        ],
+    )
     assert await chat.get_llm_chat() is True
     assert chat.none_stream_llm_chat.await_count == 2
     assert chat.bot.sent == ["计算结论与证明"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["speak_text", "qiqi_voice"])
+@pytest.mark.parametrize("succeeded", [True, False])
+async def test_voice_tool_finishes_without_text_postscript_but_failure_keeps_text_fallback(
+    monkeypatch,
+    tool_name,
+    succeeded,
+):
+    from unittest.mock import AsyncMock, Mock
+
+    from nonebot_plugin_moellmchats import speech_library, speech_tools
+    from nonebot_plugin_moellmchats.tool_contracts import ToolContext
+
+    spoken = "这是测试语音。"
+    calls = [{"id": "voice", "type": "function", "function": {"name": tool_name, "arguments": "{}"}}]
+    chat, entity = _empty_reply_chat(
+        monkeypatch,
+        [
+            (True, "", calls, ""),
+            (True, "语音不可用，改用文字回答。", None, ""),
+        ],
+    )
+    chat.bot.adapter = SimpleNamespace(get_name=lambda: "OneBot V11")
+    chat.bot.send = AsyncMock(return_value={"message_id": "789"})
+    chat.is_objective = False
+    history = Mock()
+    handler_factory = module.MessagesHandler
+
+    def handler(user):
+        value = handler_factory(user)
+        value.post_process = history
+        return value
+
+    monkeypatch.setattr(module, "MessagesHandler", handler)
+    monkeypatch.setattr(speech_tools, "speech_available", lambda: True)
+    monkeypatch.setattr(speech_library, "speech_enabled", lambda: True)
+    monkeypatch.setattr(speech_tools, "try_voice_reply", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        speech_tools,
+        "synthesize",
+        AsyncMock(return_value=b"synthetic-audio", side_effect=None if succeeded else speech_tools.SpeechError("test")),
+    )
+    monkeypatch.setattr(speech_library, "_library", lambda: (None, [{"title": "测试", "text": spoken}]))
+
+    def audio(*_args):
+        if not succeeded:
+            raise OSError("test")
+        return b"synthetic-audio"
+
+    monkeypatch.setattr(speech_library, "_audio", audio)
+
+    async def execute(_calls, _text, _history, _reasoning):
+        context = ToolContext(chat.bot, chat.event)
+        result = (
+            await speech_tools.speak_text(_tool_context=context, text=spoken)
+            if tool_name == "speak_text"
+            else await speech_library.qiqi_voice(_tool_context=context, action="play", query="测试")
+        )
+        entity.tool_messages = [{"role": "tool", "content": result.text}]
+        return entity.tool_messages
+
+    chat._execute_tools = AsyncMock(side_effect=execute)
+    assert await chat.get_llm_chat() is True
+    assert chat.none_stream_llm_chat.await_count == (1 if succeeded else 2)
+    history.assert_called_once()
+    assert history.call_args.kwargs["assistant_msg"] == (spoken if succeeded else "语音不可用，改用文字回答。")
+    if succeeded:
+        assert chat.bot.send.await_count == 1
+        assert chat.bot.send.await_args.args[1].type == "record"
+    assert speech_tools.tool_voice_reply() is None  # No leakage to the next request.
 
 
 @pytest.mark.asyncio
@@ -76,9 +176,13 @@ async def test_empty_summary_after_current_tools_uses_summary_without_replaying_
     from unittest.mock import AsyncMock
 
     calls = [{"id": "plot", "type": "function", "function": {"name": "plot_function", "arguments": "{}"}}]
-    chat, entity = _empty_reply_chat(monkeypatch, [
-        (True, "", calls, ""), (True, "", None, "private reasoning"),
-    ])
+    chat, entity = _empty_reply_chat(
+        monkeypatch,
+        [
+            (True, "", calls, ""),
+            (True, "", None, "private reasoning"),
+        ],
+    )
 
     async def execute(*args):
         entity.tool_messages = [{"role": "tool", "content": "图像已生成"}]
@@ -114,8 +218,11 @@ async def test_pending_confirmation_releases_request_without_followup_model(monk
         return "updated"
 
     spec = ToolSpec(
-        name="update_schedule", description="update schedule",
-        parameters={"type": "object", "properties": {}}, handler=mutate, effect=ToolEffect.MUTATING,
+        name="update_schedule",
+        description="update schedule",
+        parameters={"type": "object", "properties": {}},
+        handler=mutate,
+        effect=ToolEffect.MUTATING,
     )
     chat = object.__new__(MoeLlm)
     chat.bot = _ScriptedBot([None])
@@ -131,14 +238,21 @@ async def test_pending_confirmation_releases_request_without_followup_model(monk
     chat.prompt, chat.dynamic_context = "system", ""
     chat.model_info = {"model": "fake", "url": "https://model.invalid", "key": "test-only-key", "stream": False}
     chat.tool_snapshot = ToolSnapshot(
-        generation=1, custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
-        plugin_info={}, tool_dependencies={}, mcp_tool_names=set(),
+        generation=1,
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
+        plugin_info={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
     )
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
     entity = SimpleNamespace(tool_messages=[], mention_context=None, add_used_plugins=lambda value: None)
-    messages = SimpleNamespace(messages_entity=entity, pre_process=lambda message, **kwargs: "加一个预测",
-        get_send_message_list=lambda **kwargs: [], post_process=Mock())
+    messages = SimpleNamespace(
+        messages_entity=entity,
+        pre_process=lambda message, **kwargs: "加一个预测",
+        get_send_message_list=lambda **kwargs: [],
+        post_process=Mock(),
+    )
     monkeypatch.setattr(module, "MessagesHandler", lambda user: messages)
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
     monkeypatch.setattr(module, "get_session", object)
@@ -183,8 +297,9 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch, t
     values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 1, "tool_progress_messages_enabled": False}
     if tool_image:
         values["tool_image_vision_enabled"] = False
-        monkeypatch.setattr(module.model_selector, "get_model_for_capabilities",
-                            lambda *a, **k: pytest.fail("关闭工具识图后不应切换视觉模型"))
+        monkeypatch.setattr(
+            module.model_selector, "get_model_for_capabilities", lambda *a, **k: pytest.fail("关闭工具识图后不应切换视觉模型")
+        )
     monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
     executed, observations = [], []
 
@@ -192,6 +307,7 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch, t
         executed.append("first")
         if tool_image:
             from nonebot_plugin_moellmchats.tool_contracts import ToolResult
+
             return ToolResult(text="first-result", images=("https://example.com/tool.png",))
         return "first-result"
 
@@ -211,15 +327,24 @@ async def test_model_can_use_followup_tool_round_then_send_answer(monkeypatch, t
     chat.prompt, chat.dynamic_context = "system", ""
     chat.model_info = {"model": "fake", "url": "https://model.invalid", "key": "test-only-key", "stream": False}
     chat.tool_snapshot = ToolSnapshot(
-        generation=1, custom_tools={"first": {"func": first}, "second": {"func": second}},
-        plugin_info={}, tool_dependencies={}, mcp_tool_names=set(),
+        generation=1,
+        custom_tools={"first": {"func": first}, "second": {"func": second}},
+        plugin_info={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
     )
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
     entity = SimpleNamespace(tool_messages=[], mention_context=None, add_used_plugins=lambda value: None)
-    monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(
-        messages_entity=entity, pre_process=lambda message, **kwargs: "做两个步骤", get_send_message_list=lambda **kwargs: [],
-    ))
+    monkeypatch.setattr(
+        module,
+        "MessagesHandler",
+        lambda user: SimpleNamespace(
+            messages_entity=entity,
+            pre_process=lambda message, **kwargs: "做两个步骤",
+            get_send_message_list=lambda **kwargs: [],
+        ),
+    )
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
     monkeypatch.setattr(module, "get_session", object)
 
@@ -259,9 +384,15 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     from nonebot_plugin_moellmchats import event_simulator as simulator
     from nonebot_plugin_moellmchats.admission import AdmissionController
 
-    values = {"max_tool_rounds": 6, "max_agent_steps": 6, "max_retry_times": 1,
-              "tool_progress_messages_enabled": False, "legacy_background_plugins": ["example_game"],
-              "skip_self_image_vision": skip_self}
+    values = {
+        "max_tool_rounds": 6,
+        "max_agent_steps": 6,
+        "max_retry_times": 1,
+        "tool_progress_messages_enabled": False,
+        "plugin_command_progress_enabled": False,
+        "legacy_background_plugins": ["example_game"],
+        "skip_self_image_vision": skip_self,
+    }
     monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: values.get(key, default))
     gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
     monkeypatch.setattr(simulator, "get_dispatch_controller", lambda: gate)
@@ -283,10 +414,21 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     chat.bot = _ScriptedBot([None])
     chat.bot.self_id = "10000"
     chat.bot.adapter = SimpleNamespace(get_name=lambda: "OneBot V11")
-    chat.event = GroupMessageEvent(time=1, self_id=10000, post_type="message", sub_type="normal",
-        user_id=123, message_type="group", group_id=456, message_id=200, message=Message("分析角色装备"),
-        original_message=Message("分析角色装备"), raw_message="分析角色装备", font=0,
-        sender=Sender(user_id=123, nickname="tester"))
+    chat.event = GroupMessageEvent(
+        time=1,
+        self_id=10000,
+        post_type="message",
+        sub_type="normal",
+        user_id=123,
+        message_type="group",
+        group_id=456,
+        message_id=200,
+        message=Message("分析角色装备"),
+        original_message=Message("分析角色装备"),
+        raw_message="分析角色装备",
+        font=0,
+        sender=Sender(user_id=123, nickname="tester"),
+    )
     chat.user_id = "123"
     chat.agent_runtime = None
     chat.is_objective = True
@@ -295,18 +437,33 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     chat.format_message_dict = {"text": ["分析角色装备"]}
     chat.prompt, chat.dynamic_context = "system", ""
     chat.model_info = {"model": "text-model", "url": "https://text.invalid", "key": "text-test-key", "stream": False}
-    chat.tool_snapshot = ToolSnapshot(generation=1, custom_tools={},
+    chat.tool_snapshot = ToolSnapshot(
+        generation=1,
+        custom_tools={},
         plugin_info={"example_game": {"name": "示例游戏", "description": "查询资料"}},
-        tool_dependencies={}, mcp_tool_names=set())
+        tool_dependencies={},
+        mcp_tool_names=set(),
+    )
     chat._current_tool_usage = Counter()
     chat._pending_vision_images = []
     entity = SimpleNamespace(tool_messages=[], mention_context=None, add_used_plugins=lambda value: None)
-    monkeypatch.setattr(module, "MessagesHandler", lambda user: SimpleNamespace(messages_entity=entity,
-        pre_process=lambda message, **kwargs: "分析角色装备",
-        get_send_message_list=lambda **kwargs: [{"role": "user", "content": "分析角色装备"}]))
+    monkeypatch.setattr(
+        module,
+        "MessagesHandler",
+        lambda user: SimpleNamespace(
+            messages_entity=entity,
+            pre_process=lambda message, **kwargs: "分析角色装备",
+            get_send_message_list=lambda **kwargs: [{"role": "user", "content": "分析角色装备"}],
+        ),
+    )
     monkeypatch.setattr(module.model_selector, "get_use_tools", lambda: True)
-    vision = {"model": "vision-model", "url": "https://vision.invalid", "key": "vision-test-key",
-              "stream": False, "no_tools": True}
+    vision = {
+        "model": "vision-model",
+        "url": "https://vision.invalid",
+        "key": "vision-test-key",
+        "stream": False,
+        "no_tools": True,
+    }
     monkeypatch.setattr(module.model_selector, "get_model_for_capabilities", lambda *args: vision if vision_available else None)
     monkeypatch.setattr(module, "get_session", object)
 
@@ -316,21 +473,33 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     chat._validate_runtime_model_config = prepare
     chat._prepare_model_info = prepare
     chat.prompt_handler = lambda: None
-    chat._build_payload = lambda history: ({"messages": history, "model": "text-model", "stream": False,
-                                           "tools": [{"type": "function"}]}, False)
+    chat._build_payload = lambda history: (
+        {"messages": history, "model": "text-model", "stream": False, "tools": [{"type": "function"}]},
+        False,
+    )
     chat._sanitize_tool_calls_for_history = lambda calls: calls
     observations = []
 
     async def model(session, url, headers, data, proxy, timeout):
         observations.append(data["model"])
         if len(observations) == 1:
-            return True, "", [{"id": "profile", "type": "function", "function": {
-                "name": "example_game", "arguments": '{"command":"/资料 123|test|26"}'}}], ""
+            return (
+                True,
+                "",
+                [
+                    {
+                        "id": "profile",
+                        "type": "function",
+                        "function": {"name": "example_game", "arguments": '{"command":"/资料 123|test|26"}'},
+                    }
+                ],
+                "",
+            )
         assert finished.is_set()
         if skip_self:
-            assert data['model'] == 'text-model'
-            assert not any(isinstance(message['content'], list) for message in data['messages'])
-            return True, '资料卡已发送。', None, ''
+            assert data["model"] == "text-model"
+            assert not any(isinstance(message["content"], list) for message in data["messages"])
+            return True, "资料卡已发送。", None, ""
         assert url == "https://vision.invalid"
         assert headers["Authorization"] == "vision-test-key"
         assert "tools" not in data
@@ -347,8 +516,8 @@ async def test_plugin_progress_then_image_reaches_vision_answer(monkeypatch, vis
     assert simulator._BACKGROUND_TASKS == set()
     if skip_self:
         assert result is True
-        assert observations == ['text-model', 'text-model']
-        assert chat.bot.sent == ['资料卡已发送。']
+        assert observations == ["text-model", "text-model"]
+        assert chat.bot.sent == ["资料卡已发送。"]
     elif vision_available:
         assert result is True
         assert observations == ["text-model", "vision-model"]
@@ -417,7 +586,7 @@ def _llm(bot: _ScriptedBot) -> MoeLlm:
 async def test_retry_notice_failure_is_bounded_and_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(sys.modules, 'src.utils.message_fx', None)
+    monkeypatch.setitem(sys.modules, "src.utils.message_fx", None)
     records: list[str] = []
 
     class Recorder:
@@ -440,7 +609,8 @@ async def test_retry_notice_failure_is_bounded_and_sanitized(
 
 @pytest.mark.asyncio
 async def test_retry_notice_preserves_cancellation(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, 'src.utils.message_fx', None)
+    monkeypatch.setitem(sys.modules, "src.utils.message_fx", None)
+
     class CancelBot:
         async def send(self, _event, _message) -> None:
             raise asyncio.CancelledError
@@ -617,18 +787,21 @@ async def test_v12_body_succeeds_and_local_optional_emotion_is_skipped(
     assert bot.sent == ["正文"]
 
 
-@pytest.mark.parametrize("content,expected", [
-    ("方向：$r=a(1+\\sin\\theta)$，面积 $A=\\frac32\\pi a^2$。", True),
-    ("## 心形曲线\n\n### 面积\n$$A=3\\pi/2$$", True),
-    ("$$A=\\frac32\\pi a^2$$", True),
-    (r"面积 \(A=3\pi/2\)，周长 \[L=8a\]", True),
-    ("|方程|方向|\n|---|---|\n|sin|朝下|", True),
-    ("```python\nprint(1)\n```", True),
-    ("**收到啦**，可以继续查询。", False),
-    ("价格 $10，另一个 $20。", False),
-    ("可复制：\n/造梦资料 我的\n\n$A=3$", False),
-    ("```text\n/造梦蟠桃 我的\n```", False),
-])
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("方向：$r=a(1+\\sin\\theta)$，面积 $A=\\frac32\\pi a^2$。", True),
+        ("## 心形曲线\n\n### 面积\n$$A=3\\pi/2$$", True),
+        ("$$A=\\frac32\\pi a^2$$", True),
+        (r"面积 \(A=3\pi/2\)，周长 \[L=8a\]", True),
+        ("|方程|方向|\n|---|---|\n|sin|朝下|", True),
+        ("```python\nprint(1)\n```", True),
+        ("**收到啦**，可以继续查询。", False),
+        ("价格 $10，另一个 $20。", False),
+        ("可复制：\n/造梦资料 我的\n\n$A=3$", False),
+        ("```text\n/造梦蟠桃 我的\n```", False),
+    ],
+)
 def test_structured_reply_detection_preserves_copyable_commands(content, expected):
     from nonebot_plugin_moellmchats.image_output_policy import should_render_markdown
 

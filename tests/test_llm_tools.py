@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from nonebot.adapters.onebot.v11 import Message
 import pytest
@@ -30,8 +31,13 @@ from nonebot_plugin_moellmchats.config import config_parser
 def enabled_legacy_image_feedback(monkeypatch):
     # Transport/preview regressions explicitly exercise the opt-in path.
     original = config_parser.get_config
-    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
-                        False if key == 'skip_self_image_vision' else original(key, default))
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: False if key == "skip_self_image_vision" else original(key, default),
+    )
+
+
 from nonebot_plugin_moellmchats.event_simulator import (
     PluginDispatchResult,
     PluginDispatchStatus,
@@ -154,28 +160,38 @@ async def test_ordinary_batch_dispatches_first_card_only_and_sends_copyable_foll
     from nonebot_plugin_moellmchats import llm_tools as module
     from nonebot_plugin_moellmchats.request_budget import request_budget_scope
 
-    legacy, _ = build_nonebot_plugin_candidate({'card_demo': {
-        'description': 'cards', 'usage': '/造梦资料 我的\n/造梦排行 蟠桃\n/蟠桃趋势'}})
+    legacy, _ = build_nonebot_plugin_candidate(
+        {"card_demo": {"description": "cards", "usage": "/造梦资料 我的\n/造梦排行 蟠桃\n/蟠桃趋势"}}
+    )
     sent = []
+
     async def dispatch(_bot, _event, command, _source, **kwargs):
         sent.append(command)
-        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
-            text='已发送卡片', images=('private-image',), successful_captures=1, api_succeeded=1)
-    monkeypatch.setattr(module.event_simulator, 'dispatch_event', dispatch)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="已发送卡片",
+            images=("private-image",),
+            successful_captures=1,
+            api_succeeded=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     original = config_parser.get_config
-    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
-                        True if key == 'skip_self_image_vision' else original(key, default))
+    monkeypatch.setattr(
+        config_parser, "get_config", lambda key, default=None: True if key == "skip_self_image_vision" else original(key, default)
+    )
     harness = Harness({}, plugins=legacy)
     harness.is_superuser = False
-    commands = ['/造梦资料 我的', '/造梦排行 蟠桃', '/蟠桃趋势']
+    commands = ["/造梦资料 我的", "/造梦排行 蟠桃", "/蟠桃趋势"]
     with request_budget_scope(authorized=False):
-        messages = await harness._execute_tools([_call(index, 'card_demo', json.dumps({'command': command}))
-                                               for index, command in enumerate(commands, 1)], '', [], '')
+        messages = await harness._execute_tools(
+            [_call(index, "card_demo", json.dumps({"command": command})) for index, command in enumerate(commands, 1)], "", [], ""
+        )
     assert sent == commands[:1]
     assert not harness._pending_vision_images
-    assert len([row for row in messages if row['role'] == 'tool']) == 3
-    assert any('七七正在帮你投递：/造梦资料 我的' in row for row in harness.bot.sent)
-    assert any('/造梦排行 蟠桃\n/蟠桃趋势' in row and '复制粘贴' in row for row in harness.bot.sent)
+    assert len([row for row in messages if row["role"] == "tool"]) == 3
+    assert any("七七正在帮你投递：/造梦资料 我的" in row for row in harness.bot.sent)
+    assert any("/造梦排行 蟠桃\n/蟠桃趋势" in row and "复制粘贴" in row for row in harness.bot.sent)
 
 
 async def _agent_request_runtime(*, executing: bool = True) -> AgentRequestRuntime:
@@ -264,10 +280,7 @@ def _complete_catalog(
     )
     registrations = {
         registration.provider_id: registration
-        for registration in (
-            ProviderRegistration.from_provider(provider)
-            for provider in providers
-        )
+        for registration in (ProviderRegistration.from_provider(provider) for provider in providers)
     }
     records: dict[str, DiscoveredTool] = {}
     for provider, specs in (
@@ -302,6 +315,32 @@ def _registered_tool_snapshot(
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(generation, registered=specs),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["speak_text", "qiqi_voice"])
+async def test_package_speech_executes_through_complete_llm_tool_chain(monkeypatch, name):
+    from unittest.mock import AsyncMock
+
+    from nonebot_plugin_moellmchats import speech_library as library
+    from nonebot_plugin_moellmchats import speech_tools as speech
+
+    spec = speech.SPEAK_TOOL if name == "speak_text" else library.QIQI_VOICE_TOOL
+    monkeypatch.setattr(speech, "speech_available", lambda: True)
+    monkeypatch.setattr(library, "speech_enabled", lambda: True)
+    monkeypatch.setattr(speech, "synthesize", AsyncMock(return_value=b"synthetic-audio"))
+    monkeypatch.setattr(library, "_library", lambda: (None, [{"title": "测试台词", "text": "测试内容"}]))
+    monkeypatch.setattr(library, "_audio", lambda *_: b"synthetic-audio")
+    harness = Harness({}, snapshot=_registered_tool_snapshot(77, (spec,)))
+    harness.event.user_id = 12345
+    harness.is_superuser = False
+    harness.bot.adapter = SimpleNamespace(get_name=lambda: "OneBot V11")
+    harness.bot.send = AsyncMock(return_value={"message_id": 1})
+    arguments = {"text": "测试内容"} if name == "speak_text" else {"action": "play", "query": "测试台词"}
+    result = await harness._execute_tools([_call(1, name, json.dumps(arguments))], "", [], "")
+    assert any("投递" in item.get("content", "") for item in result)
+    assert not getattr(harness, "_waiting_confirmation", False)
+    assert any(getattr(call.args[1], "type", None) == "record" for call in harness.bot.send.await_args_list)
 
 
 def _parallel_graph(*tool_names: str) -> ToolGraph:
@@ -340,9 +379,7 @@ async def test_multiple_tools_execute_in_order_without_parallel_side_effects() -
             "second": {"func": second},
         }
     )
-    messages = await harness._execute_tools(
-        [_call(1, "first"), _call(2, "second")], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "first"), _call(2, "second")], "", [], "")
     assert calls == {"first": 1, "second": 1}
     assert order == ["first:start", "first:end", "second"]
     assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == ["1", "2"]
@@ -351,8 +388,11 @@ async def test_multiple_tools_execute_in_order_without_parallel_side_effects() -
 @pytest.mark.asyncio
 async def test_enabled_sequential_fallback_executes_all_tools_without_parallel_eligibility(monkeypatch):
     original_get = config_parser.get_config
-    monkeypatch.setattr(config_parser, "get_config", lambda key, default=None:
-        True if key == "tool_batch_sequential_fallback" else original_get(key, default))
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: True if key == "tool_batch_sequential_fallback" else original_get(key, default),
+    )
     order = []
 
     async def first():
@@ -363,11 +403,14 @@ async def test_enabled_sequential_fallback_executes_all_tools_without_parallel_e
         order.append("second")
         return "second-result"
 
-    specs = tuple(ToolSpec(name=name, description=name, handler=handler,
-        parameters={"type": "object", "properties": {}}) for name, handler in [("first", first), ("second", second)])
+    specs = tuple(
+        ToolSpec(name=name, description=name, handler=handler, parameters={"type": "object", "properties": {}})
+        for name, handler in [("first", first), ("second", second)]
+    )
     snapshot = _registered_tool_snapshot(41, specs)
     runtime, resources = await _parallel_agent_request_runtime(
-        snapshot, _parallel_graph("first", "second"), runner_tools=("first",))
+        snapshot, _parallel_graph("first", "second"), runner_tools=("first",)
+    )
     harness = Harness({}, snapshot=snapshot)
     harness.agent_runtime = runtime
     try:
@@ -381,16 +424,21 @@ async def test_enabled_sequential_fallback_executes_all_tools_without_parallel_e
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("enabled", "excluded", "metadata", "expected"), [
-    (False, [], {}, []), (True, ["picture"], {}, []),
-    (True, [], {"skip_image_vision": True}, []),
-    (True, [], {}, ["https://example.com/result.png"]),
-])
+@pytest.mark.parametrize(
+    ("enabled", "excluded", "metadata", "expected"),
+    [
+        (False, [], {}, []),
+        (True, ["picture"], {}, []),
+        (True, [], {"skip_image_vision": True}, []),
+        (True, [], {}, ["https://example.com/result.png"]),
+    ],
+)
 async def test_tool_image_vision_policy_preserves_results(monkeypatch, enabled, excluded, metadata, expected):
     original_get = config_parser.get_config
     values = {"tool_image_vision_enabled": enabled, "tool_image_vision_excluded_tools": excluded}
-    monkeypatch.setattr(config_parser, "get_config", lambda key, default=None:
-                        values[key] if key in values else original_get(key, default))
+    monkeypatch.setattr(
+        config_parser, "get_config", lambda key, default=None: values[key] if key in values else original_get(key, default)
+    )
     result = ToolResult(text="已发送图片；战力12345", images=("https://example.com/result.png",), metadata=metadata)
 
     async def picture():
@@ -403,42 +451,57 @@ async def test_tool_image_vision_policy_preserves_results(monkeypatch, enabled, 
     assert result.images == ("https://example.com/result.png",)
 
 
-@pytest.mark.parametrize('tool', ['qi_zmws', 'zmws_player_query', 'zmws_data_query'])
+@pytest.mark.parametrize("tool", ["qi_zmws", "zmws_player_query", "zmws_data_query"])
 def test_game_tools_never_queue_images_for_vision(tool):
-    assert LlmToolsMixin._tool_vision_images(ToolResult(images=('https://example.org/game.png',)), tool) == ()
+    assert LlmToolsMixin._tool_vision_images(ToolResult(images=("https://example.org/game.png",)), tool) == ()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', [False, True])
+@pytest.mark.parametrize("provider", [False, True])
 async def test_game_native_route_delivers_card_for_both_provider_generations(monkeypatch, provider):
     from nonebot_plugin_moellmchats import llm_tools as module
     from nonebot_plugin_moellmchats import nonebot_plugin_tools
-    legacy, specs = build_nonebot_plugin_candidate({'qi_zmws': {'description': '游戏数据'}})
-    snapshot = ToolSnapshot(generation=2, plugin_info=legacy, custom_tools={}, tool_dependencies={}, mcp_tool_names=set(),
-                            provider_catalog=_complete_catalog(2, nonebot_plugins=specs) if provider else None)
+
+    legacy, specs = build_nonebot_plugin_candidate({"qi_zmws": {"description": "游戏数据"}})
+    snapshot = ToolSnapshot(
+        generation=2,
+        plugin_info=legacy,
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
+        provider_catalog=_complete_catalog(2, nonebot_plugins=specs) if provider else None,
+    )
     calls = []
+
     async def dispatch(bot, event, command, source, **kwargs):
         calls.append((command, kwargs))
-        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
-            text='[图片]', images=('https://example.org/card.png',),
-            rendered_views=({'template': 'player.j2', 'text': '玩家甲 战力123456'},),
-            matcher_matched=1, successful_captures=1, api_succeeded=1)
-    monkeypatch.setattr(module.event_simulator, 'dispatch_event', dispatch)
-    monkeypatch.setattr(nonebot_plugin_tools.event_simulator, 'dispatch_event', dispatch)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="[图片]",
+            images=("https://example.org/card.png",),
+            rendered_views=({"template": "player.j2", "text": "玩家甲 战力123456"},),
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=1,
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    monkeypatch.setattr(nonebot_plugin_tools.event_simulator, "dispatch_event", dispatch)
     harness = Harness({}, snapshot=snapshot)
-    messages = await harness._execute_tools([_call(1, 'qi_zmws', '{"command":"/造梦资料"}')], '', [], '')
-    assert calls == [('/造梦资料', {'plugin_name': 'qi_zmws', 'wait_for_result': True})]
-    assert '123456' in messages[-1]['content']
-    assert '造梦原生结果已发送' in messages[-1]['content']
-    assert '不要识图、重新排版或逐项复述' in messages[-1]['content']
-    assert 'example.org' not in messages[-1]['content']
+    messages = await harness._execute_tools([_call(1, "qi_zmws", '{"command":"/造梦资料"}')], "", [], "")
+    assert calls == [("/造梦资料", {"plugin_name": "qi_zmws", "wait_for_result": True})]
+    assert "123456" in messages[-1]["content"]
+    assert "造梦原生结果已发送" in messages[-1]["content"]
+    assert "不要识图、重新排版或逐项复述" in messages[-1]["content"]
+    assert "example.org" not in messages[-1]["content"]
     assert not harness._pending_vision_images
 
 
 @pytest.mark.asyncio
 async def test_configured_round_call_limit_keeps_every_tool_observation(monkeypatch) -> None:
-    monkeypatch.setattr(config_parser, "get_config",
-        lambda key, default=None: 1 if key == "max_tool_calls_per_round" else default)
+    monkeypatch.setattr(
+        config_parser, "get_config", lambda key, default=None: 1 if key == "max_tool_calls_per_round" else default
+    )
     calls = []
 
     async def tool():
@@ -451,6 +514,58 @@ async def test_configured_round_call_limit_keeps_every_tool_observation(monkeypa
     observations = [message for message in messages if message["role"] == "tool"]
     assert len(observations) == 2
     assert "已跳过" in observations[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_request_tool_count_is_cumulative_across_rounds_and_isolated_by_request(monkeypatch):
+    original = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser, "get_config", lambda key, default=None: 3 if key == "max_tool_calls_per_round" else original(key, default)
+    )
+    executed = []
+
+    async def lookup(index: int):
+        executed.append(index)
+        return str(index)
+
+    harness = Harness({"lookup": {"func": lookup}})
+    for start in range(0, 18, 3):
+        messages = await harness._execute_tools(
+            [_call(i, "lookup", json.dumps({"index": i})) for i in range(start, start + 3)], "", [], ""
+        )
+    assert executed == list(range(15))
+    assert harness._remaining_tool_call_budget() == 0
+    observations = [message for message in messages if message["role"] == "tool"]
+    assert len(observations) == 3
+    assert all("累计工具调用已达上限" in message["content"] for message in observations)
+    assert Harness({})._remaining_tool_call_budget() == 15
+
+
+@pytest.mark.asyncio
+async def test_request_tool_count_survives_durable_resume():
+    from copy import deepcopy
+
+    from nonebot_plugin_moellmchats.request_recovery import RecoveryBinding, bind_recovery
+
+    record = {"tool_calls_used": 13}
+    with bind_recovery(RecoveryBinding(None, record)):
+        harness = Harness({})
+        assert harness._remaining_tool_call_budget() == 2
+        assert harness._reserve_request_tool_calls(3) == 2
+    # Simulate reloading the saved checkpoint into a fresh engine.
+    with bind_recovery(RecoveryBinding(None, deepcopy(record))):
+        assert Harness({})._remaining_tool_call_budget() == 0
+
+
+@pytest.mark.asyncio
+async def test_parallel_preflight_cannot_spend_more_than_request_remainder(monkeypatch):
+    harness = Harness({})
+    harness._request_tool_calls_used = 14
+    prepare = AsyncMock(side_effect=AssertionError("over-budget parallel graph must not start"))
+    monkeypatch.setattr(harness, "_prepare_read_only_parallel_batch", prepare)
+    assert await harness._try_execute_read_only_parallel_tools([{}, {}], "", [], "") is None
+    prepare.assert_not_called()
+    assert harness._request_tool_calls_used == 14
 
 
 def test_default_tool_timeout_is_180_and_respects_remaining_deadline(monkeypatch) -> None:
@@ -519,6 +634,7 @@ async def test_explicit_trusted_read_only_graph_uses_real_parallel_path() -> Non
         )
 
         assert max_active == 2
+        assert harness._request_tool_calls_used == 2
         assert entered == {"first", "second"}
         assert harness.bot.sent == [
             "正在调用注册工具：second",
@@ -1309,8 +1425,12 @@ async def test_parallel_caller_cancellation_propagates_after_full_drain() -> Non
 @pytest.mark.asyncio
 async def test_real_tool_path_records_completed_rejected_and_round_limit_calls(monkeypatch) -> None:
     original_get_config = config_parser.get_config
-    monkeypatch.setattr(config_parser, "get_config",
-        lambda key, default=None: 1 if key == "max_tool_calls_per_round" else original_get_config(key, default))
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: 1 if key == "max_tool_calls_per_round" else original_get_config(key, default),
+    )
+
     async def tool() -> str:
         return "ok"
 
@@ -1356,10 +1476,7 @@ async def test_real_tool_path_records_completed_rejected_and_round_limit_calls(m
         "skipped",
         "skipped",
     ]
-    assert all(
-        call.tool_source.value == "registered"
-        for call in runtime.tool_calls
-    )
+    assert all(call.tool_source.value == "registered" for call in runtime.tool_calls)
 
 
 @pytest.mark.asyncio
@@ -1427,7 +1544,7 @@ async def test_custom_tool_failure_records_failed_trace_without_secret_log(
     monkeypatch.setattr(
         module.logger,
         "error",
-        lambda message: logs.append(str(message)),
+        lambda message, *args: logs.append(str(message).format(*args)),
     )
 
     messages = await harness._execute_tools(
@@ -1442,7 +1559,10 @@ async def test_custom_tool_failure_records_failed_trace_without_secret_log(
     assert runtime.tool_calls[-1].status is ToolCallStatus.FAILED
     assert runtime.steps[-1].status.value == "failed"
     assert "private tool credential" not in messages[-1]["content"]
-    assert logs == ["自定义工具执行失败，异常详情已安全省略"]
+    assert len(logs) == 1
+    assert logs[0].startswith("自定义工具执行失败: tool=failing_tool details=")
+    assert "RuntimeError" in logs[0]
+    assert "private tool credential" not in logs[0]
 
 
 @pytest.mark.asyncio
@@ -1576,17 +1696,13 @@ async def test_mutating_tool_always_requires_separate_nonce_confirmation() -> No
         {"mutate": spec.as_legacy_schema()},
         "不要确认执行，也不要改任何东西",
     )
-    messages = await harness._execute_tools(
-        [_call(1, "mutate", '{"confirm": true}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "mutate", '{"confirm": true}')], "", [], "")
     assert executions == []
     assert "尚未执行" in messages[-1]["content"]
     assert "确认执行" in messages[-1]["content"]
 
     harness = Harness({"mutate": spec.as_legacy_schema()}, "确认执行")
-    messages = await harness._execute_tools(
-        [_call(2, "mutate", '{"confirm": true}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(2, "mutate", '{"confirm": true}')], "", [], "")
     assert executions == []
     assert "尚未执行" in messages[-1]["content"]
     await pending_action_store.clear()
@@ -1621,9 +1737,7 @@ async def test_generation_redis_pending_failure_rejects_without_memory_fallback(
     )
     resources = RuntimeResourceBuilder(
         RuntimeResourceSettings(
-            redis=RedisClientSettings(
-                redis_url="redis://user:private-secret@redis.invalid/0"
-            ),
+            redis=RedisClientSettings(redis_url="redis://user:private-secret@redis.invalid/0"),
             redis_pending_actions=RedisPendingActionSettings(),
         ),
         redis_manager_factory=lambda settings: RedisClientManager(
@@ -1655,9 +1769,7 @@ async def test_generation_redis_pending_failure_rejects_without_memory_fallback(
     tool_snapshot = ToolSnapshot(
         generation=1,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(1, registered=(spec,)),
@@ -1720,10 +1832,7 @@ async def test_duplicate_mutating_prompt_uses_remaining_ttl(monkeypatch) -> None
         "",
     )
 
-    assert duplicate.bot.sent[-1] == (
-        "工具 mutate 会修改外部状态，尚未执行。\n"
-        "请在 1 秒内单独发送：确认执行 ABC123"
-    )
+    assert duplicate.bot.sent[-1] == ("工具 mutate 会修改外部状态，尚未执行。\n请在 1 秒内单独发送：确认执行 ABC123")
     assert "请在 1 秒内" in messages[-1]["content"]
 
 
@@ -1796,17 +1905,13 @@ async def test_structured_tool_result_uses_one_model_and_history_rendering() -> 
     assert '"image_count":1' in content
     assert "private-image-reference" not in content
     assert harness._pending_vision_images == ["private-image-reference"]
-    assert harness.messages_handler.messages_entity.tool_messages[-1][
-        "content"
-    ] == content[:300]
+    assert harness.messages_handler.messages_entity.tool_messages[-1]["content"] == content[:300]
 
 
 @pytest.mark.asyncio
 async def test_non_object_tool_arguments_become_tool_error() -> None:
     harness = Harness({})
-    messages = await harness._execute_tools(
-        [_call(1, "web_search", "[]")], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "web_search", "[]")], "", [], "")
     assert "必须是 JSON 对象" in messages[-1]["content"]
     assert harness.bot.sent == []
 
@@ -1814,9 +1919,7 @@ async def test_non_object_tool_arguments_become_tool_error() -> None:
 @pytest.mark.asyncio
 async def test_missing_required_argument_becomes_tool_error() -> None:
     harness = Harness({})
-    messages = await harness._execute_tools(
-        [_call(1, "web_search", "{}")], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "web_search", "{}")], "", [], "")
     assert "缺少必填参数" in messages[-1]["content"]
     assert harness.bot.sent == []
 
@@ -1863,9 +1966,7 @@ async def test_nonebot_plugin_legacy_branch_preserves_background_notice(
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
-    legacy, _specs = build_nonebot_plugin_candidate(
-        {"image_demo": {"description": "资料", "usage": "/造梦资料"}}
-    )
+    legacy, _specs = build_nonebot_plugin_candidate({"image_demo": {"description": "资料", "usage": "/造梦资料"}})
     notice = "任务仍在后台运行，资料将稍后发送，无需再次调用。"
 
     async def dispatch(*_args, **_kwargs):
@@ -1879,7 +1980,9 @@ async def test_nonebot_plugin_legacy_branch_preserves_background_notice(
     harness = Harness({}, plugins=legacy)
     messages = await harness._execute_tools(
         [_call(1, "image_demo", '{"command":"/造梦资料 我的 完整"}')],
-        "", [], "",
+        "",
+        [],
+        "",
     )
     assert notice in messages[-1]["content"]
     assert "副作用动作" not in messages[-1]["content"]
@@ -1940,9 +2043,7 @@ async def test_nonebot_plugin_legacy_branch_keeps_bounded_dispatch_consumer(
             "plugin_demo",
         )
     ]
-    assert harness.bot.sent == [
-        "七七正在帮你投递：/demo"
-    ]
+    assert harness.bot.sent == ["七七正在帮你投递：/demo"]
     assert "visible output" in messages[-1]["content"]
 
 
@@ -2018,9 +2119,7 @@ async def test_plugin_failure_fingerprint_blocks_only_identical_retry(
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
-    legacy, _specs = build_nonebot_plugin_candidate(
-        {"plugin_demo": {"description": "demo", "usage": "/demo"}}
-    )
+    legacy, _specs = build_nonebot_plugin_candidate({"plugin_demo": {"description": "demo", "usage": "/demo"}})
     commands: list[str] = []
 
     async def dispatch(_bot, _event, command, _source, *, plugin_name, wait_for_result):
@@ -2063,7 +2162,8 @@ async def test_plugin_failure_fingerprint_blocks_only_identical_retry(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", [False, True])
 async def test_completed_image_command_blocks_equivalent_replays_and_keeps_vision(
-    monkeypatch: pytest.MonkeyPatch, provider: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: bool,
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
@@ -2078,22 +2178,34 @@ async def test_completed_image_command_blocks_equivalent_replays_and_keeps_visio
         return PluginDispatchResult(
             status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
             images=("private-image-reference",),
-            matcher_matched=1, successful_captures=1, api_succeeded=1,
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=1,
         )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     monkeypatch.setattr(module, "configured_command_prefixes", lambda: ("", "/", "!"))
     snapshot = ToolSnapshot(
-        generation=2, plugin_info=legacy, custom_tools={}, tool_dependencies={}, mcp_tool_names=set(),
+        generation=2,
+        plugin_info=legacy,
+        custom_tools={},
+        tool_dependencies={},
+        mcp_tool_names=set(),
         provider_catalog=_complete_catalog(2, nonebot_plugins=specs) if provider else None,
     )
     harness = Harness({}, snapshot=snapshot)
     first = await harness._execute_tools(
-        [_call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}')], "", [], "",
+        [_call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}')],
+        "",
+        [],
+        "",
     )
     for index, command in enumerate(("/造梦排行 蟠桃", "造梦排行   蟠桃", "!造梦排行 蟠桃"), start=2):
         repeated = await harness._execute_tools(
-            [_call(index, "image_demo", json.dumps({"command": command}, ensure_ascii=False))], "", [], "",
+            [_call(index, "image_demo", json.dumps({"command": command}, ensure_ascii=False))],
+            "",
+            [],
+            "",
         )
         assert "已执行成功" in repeated[-1]["content"]
     assert calls == ["/造梦排行 蟠桃"]
@@ -2113,9 +2225,7 @@ async def test_slow_native_image_waits_for_result_and_duplicate_batch_sends_once
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
-    legacy, _specs = build_nonebot_plugin_candidate(
-        {"image_demo": {"description": "image", "usage": "/造梦排行 蟠桃"}}
-    )
+    legacy, _specs = build_nonebot_plugin_candidate({"image_demo": {"description": "image", "usage": "/造梦排行 蟠桃"}})
     entered, release = asyncio.Event(), asyncio.Event()
     calls = 0
 
@@ -2125,15 +2235,23 @@ async def test_slow_native_image_waits_for_result_and_duplicate_batch_sends_once
         calls += 1
         entered.set()
         await release.wait()
-        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
-                                    images=("completed-image",), successful_captures=1)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT, images=("completed-image",), successful_captures=1
+        )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     harness = Harness({}, plugins=legacy)
-    task = asyncio.create_task(harness._execute_tools([
-        _call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}'),
-        _call(2, "image_demo", '{"command":"/造梦排行 蟠桃"}'),
-    ], "", [], ""))
+    task = asyncio.create_task(
+        harness._execute_tools(
+            [
+                _call(1, "image_demo", '{"command":"/造梦排行 蟠桃"}'),
+                _call(2, "image_demo", '{"command":"/造梦排行 蟠桃"}'),
+            ],
+            "",
+            [],
+            "",
+        )
+    )
     try:
         await asyncio.wait_for(entered.wait(), timeout=1)
         assert not task.done()
@@ -2174,9 +2292,7 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
 ) -> None:
     from nonebot_plugin_moellmchats import llm_tools as module
 
-    legacy, _specs = build_nonebot_plugin_candidate(
-        {"plugin_demo": {"description": "demo", "usage": "/demo"}}
-    )
+    legacy, _specs = build_nonebot_plugin_candidate({"plugin_demo": {"description": "demo", "usage": "/demo"}})
     calls = 0
 
     async def dispatch(*_args, **_kwargs):
@@ -2188,13 +2304,9 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
             matcher_matched=1,
             api_failed=1,
             api_unknown=(1 if status is PluginDispatchStatus.RESULT_UNKNOWN else 0),
-            successful_captures=(
-                1 if status is PluginDispatchStatus.PARTIAL_SUCCESS else 0
-            ),
+            successful_captures=(1 if status is PluginDispatchStatus.PARTIAL_SUCCESS else 0),
             text=("已发送部分内容" if status is PluginDispatchStatus.PARTIAL_SUCCESS else ""),
-            images=("private-image-reference",)
-            if status is PluginDispatchStatus.PARTIAL_SUCCESS
-            else (),
+            images=("private-image-reference",) if status is PluginDispatchStatus.PARTIAL_SUCCESS else (),
         )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
@@ -2213,10 +2325,7 @@ async def test_uncertain_or_partial_plugin_result_blocks_whole_tool(
     )
 
     assert calls == 1
-    assert (
-        "结果不确定" in first[-1]["content"]
-        or "这部分执行成功" in first[-1]["content"]
-    )
+    assert "结果不确定" in first[-1]["content"] or "这部分执行成功" in first[-1]["content"]
     if status is PluginDispatchStatus.PARTIAL_SUCCESS:
         assert "已发送部分内容" in first[-1]["content"]
         assert "已确认发送图片 1 张" in first[-1]["content"]
@@ -2270,6 +2379,79 @@ async def test_progress_switch_hides_only_pre_execution_messages(
 
 
 @pytest.mark.asyncio
+async def test_native_command_notices_survive_reactions_and_hidden_tool_progress(monkeypatch):
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    original = config_parser.get_config
+    settings = {
+        "tool_progress_messages_enabled": False,
+        "plugin_command_progress_enabled": True,
+        "tool_progress_model_preface_enabled": True,
+        "message_reactions": {"enabled": True, "started": "282"},
+    }
+    monkeypatch.setattr(
+        config_parser, "get_config", lambda key, default=None: settings[key] if key in settings else original(key, default)
+    )
+    legacy, _ = build_nonebot_plugin_candidate({"plugin_demo": {"description": "native cards", "usage": "/demo <name> <rank>"}})
+    dispatched = []
+
+    async def dispatch(_bot, _event, command, _source, **_kwargs):
+        dispatched.append(command)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT, text="已发送卡片", successful_captures=1, api_succeeded=1
+        )
+
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+
+    async def send(_event, message):
+        harness.bot.sent.append(str(message))
+        return {"message_id": -12345 - len(harness.bot.sent)}
+
+    harness.bot.send = send
+    harness.bot.delete_msg = AsyncMock()
+    commands = ['/demo "昵称  含空格" 1-100', '/demo "昵称  含空格" 101-200']
+    for index, command in enumerate(commands):
+        await harness._execute_tools(
+            [_call(index + 1, "plugin_demo", json.dumps({"command": command}))], "模型的多余前言", [], ""
+        )
+    assert dispatched == commands
+    assert harness.bot.sent == [f"七七正在帮你投递：{command}" for command in commands]
+    await harness._finish_tool_progress()
+    harness.bot.delete_msg.assert_not_awaited()
+    assert not getattr(harness, "_tool_progress_recall_timers", {})
+
+
+@pytest.mark.asyncio
+async def test_native_command_progress_has_its_own_disable_switch(monkeypatch):
+    from nonebot_plugin_moellmchats import llm_tools as module
+
+    original = config_parser.get_config
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: (
+            False
+            if key == "plugin_command_progress_enabled"
+            else True
+            if key == "tool_progress_messages_enabled"
+            else original(key, default)
+        ),
+    )
+    legacy, _ = build_nonebot_plugin_candidate({"plugin_demo": {"description": "demo", "usage": "/demo"}})
+    dispatch = AsyncMock(
+        return_value=PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT, text="ok", successful_captures=1, api_succeeded=1
+        )
+    )
+    monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
+    harness = Harness({}, plugins=legacy)
+    await harness._execute_tools([_call(1, "plugin_demo", '{"command":"/demo"}')], "", [], "")
+    dispatch.assert_awaited_once()
+    assert harness.bot.sent == []
+
+
+@pytest.mark.asyncio
 async def test_progress_message_combines_optional_model_preface_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2305,9 +2487,7 @@ async def test_progress_message_combines_optional_model_preface_once(
         "",
     )
 
-    assert harness.bot.sent == [
-        "正在调用工具：query_once\n说明：我来查询一下 不会提前下结论"
-    ]
+    assert harness.bot.sent == ["正在调用工具：query_once\n说明：我来查询一下 不会提前下结论"]
 
 
 @pytest.mark.asyncio
@@ -2409,15 +2589,16 @@ def test_protocol_progress_uses_trusted_action_summary() -> None:
         {},
         confirmation_required=False,
         model_preface="",
-    ) == (
-        "正在调用协议接口：napcat_v11__send_like｜功能：发送点赞"
+    ) == ("正在调用协议接口：napcat_v11__send_like｜功能：发送点赞")
+    assert (
+        LlmToolsMixin._build_tool_progress_message(
+            view,
+            {},
+            confirmation_required=True,
+            model_preface="",
+        )
+        == "正在准备工具确认：napcat_v11__send_like"
     )
-    assert LlmToolsMixin._build_tool_progress_message(
-        view,
-        {},
-        confirmation_required=True,
-        model_preface="",
-    ) == "正在准备工具确认：napcat_v11__send_like"
 
 
 def test_progress_model_preface_redacts_sensitive_values() -> None:
@@ -2548,19 +2729,13 @@ async def test_progress_cancellation_propagates_before_tool_execution() -> None:
 
 
 def test_command_audit_preview_never_exposes_arguments_or_locations() -> None:
-    preview = LlmToolsMixin._safe_command_preview(
-        "/排行 123456 https://example.invalid/path?token=secret"
-    )
+    preview = LlmToolsMixin._safe_command_preview("/排行 123456 https://example.invalid/path?token=secret")
     assert preview.startswith("/排行 <args> [tokens=3,chars=")
     assert "123456" not in preview
     assert "example.invalid" not in preview
     assert "secret" not in preview
-    assert "secret" not in LlmToolsMixin._safe_command_preview(
-        "Authorization secret-token"
-    )
-    assert LlmToolsMixin._safe_command_preview(
-        "/var/private/config.json token"
-    ).startswith("<redacted>")
+    assert "secret" not in LlmToolsMixin._safe_command_preview("Authorization secret-token")
+    assert LlmToolsMixin._safe_command_preview("/var/private/config.json token").startswith("<redacted>")
 
 
 @pytest.mark.asyncio
@@ -2581,9 +2756,7 @@ async def test_hallucinated_superuser_tool_is_rejected_without_breaking_reply() 
     )
     harness = Harness({"admin_only": spec.as_legacy_schema()})
     harness.event.user_id = 2
-    messages = await harness._execute_tools(
-        [_call(1, "admin_only")], "normal answer", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "admin_only")], "normal answer", [], "")
     assert executions == 0
     assert "仅允许超级用户" in messages[-1]["content"]
     assert harness.sent == []
@@ -2613,9 +2786,7 @@ async def test_nested_argument_type_error_becomes_tool_error() -> None:
         handler=nested,
     )
     harness = Harness({"nested": spec.as_legacy_schema()})
-    messages = await harness._execute_tools(
-        [_call(1, "nested", '{"payload":{"count":"bad"}}')], "", [], ""
-    )
+    messages = await harness._execute_tools([_call(1, "nested", '{"payload":{"count":"bad"}}')], "", [], "")
     assert "类型错误" in messages[-1]["content"]
 
 
@@ -2734,9 +2905,7 @@ async def test_provider_catalog_execution_enforces_trust_permission() -> None:
     snapshot = ToolSnapshot(
         generation=3,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(3, registered=(spec,)),
@@ -2768,11 +2937,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     monkeypatch.setattr(
         config_parser,
         "get_config",
-        lambda key, default=None: (
-            False
-            if key == "tool_progress_messages_enabled"
-            else original_get_config(key, default)
-        ),
+        lambda key, default=None: False if key == "tool_progress_messages_enabled" else original_get_config(key, default),
     )
 
     async def mutate() -> str:
@@ -2791,9 +2956,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     snapshot = ToolSnapshot(
         generation=4,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_complete_catalog(4, registered=(spec,)),
@@ -2815,9 +2978,7 @@ async def test_provider_mutating_confirmation_remains_visible_when_progress_is_o
     assert runtime is not None
     assert runtime.tool_calls[-1].status is ToolCallStatus.WAITING_CONFIRMATION
     assert runtime.tool_calls[-1].confirmation_id is not None
-    assert AgentRunState.WAITING_CONFIRMATION in {
-        run.state for run in runtime.run_history
-    }
+    assert AgentRunState.WAITING_CONFIRMATION in {run.state for run in runtime.run_history}
     assert runtime.run.state is AgentRunState.EXECUTING
     assert harness.sent == []
     assert len(harness.bot.sent) == 1
@@ -3003,9 +3164,14 @@ async def test_legacy_plugin_oversized_image_receipt_reports_success(monkeypatch
 
     async def dispatch(*args, **kwargs):
         calls.append(kwargs)
-        return PluginDispatchResult(status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
-            text="[图片]", images=("data:image/png;base64," + "A" * TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,),
-            matcher_matched=1, successful_captures=1, api_succeeded=1)
+        return PluginDispatchResult(
+            status=PluginDispatchStatus.MATCHED_WITH_OUTPUT,
+            text="[图片]",
+            images=("data:image/png;base64," + "A" * TOOL_RESULT_MAX_IMAGE_REFERENCE_CHARS,),
+            matcher_matched=1,
+            successful_captures=1,
+            api_succeeded=1,
+        )
 
     monkeypatch.setattr(module.event_simulator, "dispatch_event", dispatch)
     monkeypatch.setattr(receipt_module, "_image_preview", lambda *args: None)

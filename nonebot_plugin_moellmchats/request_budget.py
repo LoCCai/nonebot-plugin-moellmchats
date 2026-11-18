@@ -1,14 +1,15 @@
 """Request-local limits, selected by the host from the real caller identity."""
+
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Literal
 
 from nonebot import get_plugin_config, logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 
 class RequestBudgetConfig(BaseModel):
@@ -20,7 +21,7 @@ class RequestBudgetConfig(BaseModel):
     moellm_ordinary_model_attempts: int = Field(default=2, ge=1, le=3)
     moellm_ordinary_history_tokens: int = Field(default=2000, ge=256, le=16000)
     moellm_ordinary_history_exchanges: int = Field(default=4, ge=1, le=20)
-    moellm_ordinary_reasoning_effort: Literal["low", "medium"] = "low"
+    moellm_ordinary_reasoning_effort: Literal["low", "medium", "high"] = "low"
     moellm_queue_wait_seconds: float = Field(default=15, ge=0.1, le=60)
     moellm_authorized_request_seconds: int = Field(default=3600, ge=360, le=3600)
     moellm_authorized_model_seconds: int = Field(default=360, ge=30, le=360)
@@ -28,10 +29,33 @@ class RequestBudgetConfig(BaseModel):
 
 
 budget_config = get_plugin_config(RequestBudgetConfig)
+_ORDINARY_BUDGET_FIELDS = frozenset(
+    name.removeprefix("moellm_ordinary_") for name in RequestBudgetConfig.model_fields if name.startswith("moellm_ordinary_")
+)
 _ordinary: ContextVar[bool] = ContextVar("moellm_ordinary_budget", default=False)
 _authorized: ContextVar[bool] = ContextVar("moellm_authorized_budget", default=False)
 _stage: ContextVar[str] = ContextVar("moellm_budget_stage", default="chat")
 _authorizer: Callable[[Any, Any], Awaitable[bool]] | None = None
+
+
+def validate_ordinary_request_budget(overrides: Any) -> RequestBudgetConfig:
+    """Validate only ordinary caps; omitted fields retain legacy env defaults."""
+    if not isinstance(overrides, Mapping) or set(overrides) - _ORDINARY_BUDGET_FIELDS:
+        raise ValueError("config.json: ordinary_request_budget 必须是普通用户预算配置对象，且不能包含未知项")
+    values = budget_config.model_dump()
+    values.update({f"moellm_ordinary_{key}": value for key, value in overrides.items()})
+    try:
+        return RequestBudgetConfig.model_validate(values, strict=True)
+    except ValidationError as error:
+        raise ValueError(f"config.json: ordinary_request_budget 配置无效：{error}") from error
+
+
+def _ordinary_policy() -> RequestBudgetConfig:
+    # ConfigParser resolves against the request's pinned RuntimeSnapshot.
+    # Reloads affect subsequent requests, including final transport caps.
+    from .config import config_parser
+
+    return validate_ordinary_request_budget(config_parser.get_config("ordinary_request_budget", {}))
 
 
 def register_budget_authorizer(authorizer: Callable[[Any, Any], Awaitable[bool]]) -> None:
@@ -75,7 +99,7 @@ def classification_budget_scope() -> Iterator[None]:
         _stage.reset(token)
 
 
-def budget_limit(key: str, configured: int | float) -> int | float:
+def budget_limit(key: str, configured: float) -> int | float:
     if _authorized.get():
         limits = {
             "request_timeout_seconds": budget_config.moellm_authorized_request_seconds,
@@ -86,17 +110,18 @@ def budget_limit(key: str, configured: int | float) -> int | float:
         return limits.get(key, configured)
     if not _ordinary.get():
         return configured
+    ordinary = _ordinary_policy()
     limits = {
-        "request_timeout_seconds": budget_config.moellm_ordinary_request_seconds,
-        "model_timeout_seconds": budget_config.moellm_ordinary_model_seconds,
+        "request_timeout_seconds": ordinary.moellm_ordinary_request_seconds,
+        "model_timeout_seconds": ordinary.moellm_ordinary_model_seconds,
         "classification_timeout_seconds": 8,
-        "max_tool_rounds": budget_config.moellm_ordinary_tool_rounds,
-        "max_agent_steps": budget_config.moellm_ordinary_tool_rounds,
-        "max_tool_calls_per_round": budget_config.moellm_ordinary_tools_per_round,
-        "max_retry_times": budget_config.moellm_ordinary_model_attempts,
-        "max_history_tokens": budget_config.moellm_ordinary_history_tokens,
-        "max_history_chars": budget_config.moellm_ordinary_history_tokens * 3,
-        "max_user_history": budget_config.moellm_ordinary_history_exchanges,
+        "max_tool_rounds": ordinary.moellm_ordinary_tool_rounds,
+        "max_agent_steps": ordinary.moellm_ordinary_tool_rounds,
+        "max_tool_calls_per_round": ordinary.moellm_ordinary_tools_per_round,
+        "max_retry_times": ordinary.moellm_ordinary_model_attempts,
+        "max_history_tokens": ordinary.moellm_ordinary_history_tokens,
+        "max_history_chars": ordinary.moellm_ordinary_history_tokens * 3,
+        "max_user_history": ordinary.moellm_ordinary_history_exchanges,
     }
     return min(configured, limits[key]) if key in limits else configured
 
@@ -124,8 +149,9 @@ def apply_payload_budget(model: dict, payload: dict) -> None:
     classification = _stage.get() == "classification"
     if not _ordinary.get() and not classification:
         return
+    ordinary = budget_config if classification else _ordinary_policy()
     glm = model.get("provider") == "bigmodel" and model.get("model") == "glm-5.3-flash"
-    output_limit = (2048 if glm else 512) if classification else budget_config.moellm_ordinary_output_tokens
+    output_limit = (2048 if glm else 512) if classification else ordinary.moellm_ordinary_output_tokens
     field = model.get("token_limit_field", "max_tokens")
     if field not in {"max_tokens", "max_completion_tokens"}:
         field = "max_tokens"
@@ -133,14 +159,22 @@ def apply_payload_budget(model: dict, payload: dict) -> None:
     for key in present or [field]:
         value = payload.get(key)
         payload[key] = min(value, output_limit) if type(value) is int and value > 0 else output_limit
-    effort = "low" if classification else budget_config.moellm_ordinary_reasoning_effort
+    effort = "low" if classification else ordinary.moellm_ordinary_reasoning_effort
     if glm or "reasoning_effort" in payload:
         payload["reasoning_effort"] = effort
     reasoning = payload.get("reasoning")
     if isinstance(reasoning, dict) and "effort" in reasoning:
         payload["reasoning"] = {**reasoning, "effort": effort}
     # Only narrow fields already supported by the configured provider.
+    thinking_limit = (
+        1024
+        if classification
+        else min(
+            output_limit,
+            {"low": 1024, "medium": 2048, "high": 4096}[effort],
+        )
+    )
     for key in ("thinking_budget", "reasoning_budget"):
         value = payload.get(key)
         if type(value) is int and value > 0:
-            payload[key] = min(value, 1024)
+            payload[key] = min(value, thinking_limit)

@@ -3,6 +3,7 @@
 Never replay an in-flight tool batch or an uncertain adapter send. No provider
 configuration, model headers or authentication keys belong in this journal.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -77,13 +78,24 @@ class RecoveryStore:
             return None
         if not isinstance(record, dict) or record.get("version") != 1 or record.get("key") != key:
             raise RecoveryStorageError("任务记录格式错误")
-        for field, kind in (("event", dict), ("formatted", dict), ("outbox", list), ("checkpoint", list),
-                            ("inflight_tools", list), ("created_at", (int, float)), ("attempts", int),
-                            ("state", str), ("protocol", str), ("bot_id", str)):
+        for field, kind in (
+            ("event", dict),
+            ("formatted", dict),
+            ("outbox", list),
+            ("checkpoint", list),
+            ("inflight_tools", list),
+            ("created_at", (int, float)),
+            ("attempts", int),
+            ("state", str),
+            ("protocol", str),
+            ("bot_id", str),
+        ):
             if not isinstance(record.get(field), kind):
                 raise RecoveryStorageError("任务记录字段错误")
-        if any(not isinstance(entry, dict) or entry.get("state") not in
-               {"pending", "sending", "sent", "unknown", "cancelled"} for entry in record["outbox"]):
+        if any(
+            not isinstance(entry, dict) or entry.get("state") not in {"pending", "sending", "sent", "unknown", "cancelled"}
+            for entry in record["outbox"]
+        ):
             raise RecoveryStorageError("任务发件箱格式错误")
         return record
 
@@ -118,8 +130,11 @@ class RecoveryStore:
             for candidate in sorted(self.records(), key=lambda r: r["created_at"]):
                 if candidate["key"] == record["key"] or candidate["state"] in {"running", "pending", "recovering"}:
                     continue
-                if any(e["state"] == "pending" or (e["state"] in {"unknown", "sending"}
-                       and not candidate.get("uncertainty_notified")) for e in candidate["outbox"]):
+                if any(
+                    e["state"] == "pending"
+                    or (e["state"] in {"unknown", "sending"} and not candidate.get("uncertainty_notified"))
+                    for e in candidate["outbox"]
+                ):
                     continue
                 path = self.path(candidate["key"])
                 total -= path.stat().st_size
@@ -180,8 +195,13 @@ def resume_checkpoint(record: dict) -> tuple[list, list, bool]:
         nonlocal unsafe
         for call in pending.values():
             unsafe = True
-            messages.append({"role": "tool", "tool_call_id": call["id"],
-                "content": "重启打断了结果确认；此操作可能已经执行，不得自动重放。请提示用户核对。"})
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": "重启打断了结果确认；此操作可能已经执行，不得自动重放。请提示用户核对。",
+                }
+            )
         pending.clear()
 
     for message in deepcopy(record["checkpoint"]):
@@ -215,9 +235,7 @@ def _message_json(bot, message) -> list:
         from nonebot.adapters.onebot.v11 import Message, MessageSegment
     if isinstance(message, list):
         message = [MessageSegment(**segment) if isinstance(segment, dict) else segment for segment in message]
-    return [
-        {"type": segment.type, "data": segment.data} for segment in Message(message)
-    ]
+    return [{"type": segment.type, "data": segment.data} for segment in Message(message)]
 
 
 async def durable_send(bot, event, message, **kwargs):
@@ -333,12 +351,27 @@ class RecoveryService:
         if existing is not None:
             return None
         dump = event.model_dump(mode="json") if hasattr(event, "model_dump") else json.loads(event.json())
-        record = {"version": 1, "key": key, "protocol": identity[0], "bot_id": identity[1],
-                  "created_at": time.time(), "event": dump, "formatted": formatted, "is_ai": bool(is_ai),
-                  "state": "running", "phase": "input", "checkpoint": [], "inflight_tools": [],
-                  "outbox": [], "attempts": 0}
+        record = {
+            "version": 1,
+            "key": key,
+            "protocol": identity[0],
+            "bot_id": identity[1],
+            "created_at": time.time(),
+            "event": dump,
+            "formatted": formatted,
+            "is_ai": bool(is_ai),
+            "state": "running",
+            "phase": "input",
+            "checkpoint": [],
+            "inflight_tools": [],
+            "outbox": [],
+            "attempts": 0,
+        }
         binding = RecoveryBinding(self, record)
         # Admission is durable before any model or tool work starts.
+        from .personal_billing import snapshot
+
+        record["billing_payer"] = snapshot()
         await binding.save()
         return await self.execute(binding, operation)
 
@@ -348,7 +381,10 @@ class RecoveryService:
         try:
             with bind_recovery(binding):
                 binding.pause_if_stopping()
-                result = await operation()
+                from .personal_billing import recovery_scope
+
+                async with recovery_scope(binding.record):
+                    result = await operation()
         except asyncio.CancelledError:
             binding.record["state"] = "pending" if self.stopping else "cancelled"
             await binding.save()
@@ -397,6 +433,10 @@ class RecoveryService:
                 continue
             unfinished = record["state"] in {"running", "pending", "recovering"}
             deliveries = [e for e in record["outbox"] if e["state"] == "pending"]
+            # Historical external API attempts are audit evidence, not a new
+            # request. Completed work with no pending output must stay silent.
+            if record["state"] == "complete" and not deliveries:
+                continue
             if deliveries_only and not deliveries:
                 continue
             uncertain = any(e["state"] in {"unknown", "sending"} for e in record["outbox"])
@@ -426,10 +466,18 @@ class RecoveryService:
                     if not record.get("recovery_notice") or (uncertain and not record.get("uncertainty_notified")):
                         record["recovery_notice"] = True
                         from .onebot_facade import make_mention_message
+
                         user = str(event.user_id)
-                        text = "重启前的任务已保留，正在补发结果。" if deliveries else "重启前的任务已恢复，继续处理。"
-                        if record["inflight_tools"] or uncertain:
+                        text = (
+                            "重启前的任务已保留，正在补发结果。"
+                            if deliveries
+                            else "重启前的任务已恢复，继续处理。"
+                            if unfinished
+                            else "上次任务已结束，但有消息的发送结果未确认；请核对现有消息，七七不会自动重发。"
+                        )
+                        if (record["inflight_tools"] or uncertain) and (unfinished or deliveries):
                             text += "部分操作或消息的结果未确认，将保留现状并提示核对。"
+                        if record["inflight_tools"] or uncertain:
                             record["uncertainty_notified"] = True
                         message = make_mention_message(record["protocol"], f"[CQ:at,qq={user}] {text}", {})
                         await durable_send(bot, event, message)
@@ -441,6 +489,11 @@ class RecoveryService:
                 if not unfinished or record.get("answer_ready"):
                     record["state"] = "complete"
                     await binding.save()
+                    if record.get("answer_ready"):
+                        from .chat_runtime import complete_mention
+
+                        with bind_recovery(binding):
+                            await complete_mention(bot, event)
                     continue
                 if deliveries_only:
                     await binding.save()

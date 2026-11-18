@@ -66,42 +66,63 @@ _DISPATCH_FEEDBACK = {
         "必须立即用一两句话向用户说明：任务未完整完成、缺失了哪部分，并建议稍后重试或改用原生命令。"
     ),
     PluginDispatchStatus.MATCHED_EMPTY: (
-        "目标插件 Matcher 已命中，但没有产生可验证输出或副作用；"
-        "不要重复调用相同工具和参数。请把这一情况如实告知用户。"
+        "目标插件 Matcher 已命中，但没有产生可验证输出或副作用；不要重复调用相同工具和参数。请把这一情况如实告知用户。"
     ),
     PluginDispatchStatus.NOT_MATCHED: (
         "目标插件没有 Matcher 命中该 command；不要重复调用相同工具和参数。"
-        "请向用户说明该指令未生效，并建议直接使用对应插件的原生命令。"
+        "这只代表本次投递未匹配，不能据此宣称相关插件未安装或没有该能力。"
+        "请检查是否选错工具或指令格式，再使用正确插件的工具。"
     ),
     PluginDispatchStatus.FAILED: (
-        "目标插件处理发生异常；不要重复调用相同工具和参数。"
-        "必须立即告知用户任务失败，并建议改用原生命令重试。"
+        "目标插件处理发生异常；不要重复调用相同工具和参数。必须立即告知用户任务失败，并建议改用原生命令重试。"
     ),
     PluginDispatchStatus.TIMED_OUT: (
         "目标插件处理超时，任务已被中断且没有完成；不要重复调用相同工具和参数。"
         "必须立即用一两句话向用户说明：请求的任务因超时被中断、后续结果不会到达，"
         "建议稍后重试或改用原生命令。"
     ),
-    PluginDispatchStatus.ADMISSION_REJECTED: (
-        "插件兼容执行队列已满，本次未执行。"
-    ),
-    PluginDispatchStatus.RESULT_UNKNOWN: (
-        "插件调用后的外部结果不确定；绝对不要再次调用同一工具。"
-    ),
+    PluginDispatchStatus.ADMISSION_REJECTED: ("插件兼容执行队列已满，本次未执行。"),
+    PluginDispatchStatus.RESULT_UNKNOWN: ("插件调用后的外部结果不确定；绝对不要再次调用同一工具。"),
 }
+
+
+def command_routing_hint(command: str, plugin_name: str) -> str:
+    """Report a native command's loaded owner without executing other plugins."""
+    from nonebot.rule import CommandRule, ShellCommandRule, TrieRule
+
+    prefix = TrieRule.prefix.longest_prefix(command.lstrip())
+    if not prefix:
+        return ""
+    native_command = prefix.value.command
+    owners = set()
+    for plugin in nonebot.get_loaded_plugins():
+        for matcher in plugin.matcher:
+            for checker in matcher.rule.checkers:
+                call = checker.call
+                if isinstance(call, (CommandRule, ShellCommandRule)) and native_command in call.cmds:
+                    owners.add(plugin.name)
+    if not owners or plugin_name in owners:
+        return ""
+    targets = "、".join(sorted(owners)[:5])
+    return (
+        f"\n已核对运行中的命令注册：{prefix.key} 属于 {targets}，"
+        f"本次却调用了 {plugin_name}。请检索并调用所属插件的工具，保留原查询参数；"
+        "不要把其他插件的未匹配描述为漫画等目标插件不存在。"
+        "本次没有自动转投，仍须沿用目标工具的权限和确认规则。"
+    )
 
 
 class PluginDispatchError(RuntimeError):
     """Typed, bounded feedback for a non-success compatibility dispatch."""
 
-    def __init__(self, result: PluginDispatchResult) -> None:
+    def __init__(self, result: PluginDispatchResult, *, command: str = "", plugin_name: str = "") -> None:
         if not isinstance(result, PluginDispatchResult) or result.succeeded:
             raise TypeError("PluginDispatchError 只接受非成功调度结果")
         self.result = result
         feedback = _DISPATCH_FEEDBACK[result.status]
-        if result.status is PluginDispatchStatus.PARTIAL_SUCCESS and (
-            result.text.strip() or result.images
-        ):
+        if result.status is PluginDispatchStatus.NOT_MATCHED and command and plugin_name:
+            feedback += command_routing_hint(command, plugin_name)
+        if result.status is PluginDispatchStatus.PARTIAL_SUCCESS and (result.text.strip() or result.images):
             confirmed: list[str] = []
             if result.text.strip():
                 confirmed.append(result.text.strip()[:2_000])
@@ -114,6 +135,16 @@ class PluginDispatchError(RuntimeError):
                 + "\n其后仍有未完成或不确定步骤，最终结果可能不完整；不要再次调用同一工具。"
                 "必须向用户简短说明：结果可能不完整、缺失部分不会自动补发，"
                 "建议稍后用原生命令重新获取完整结果。"
+            )
+        if result.rendered_views:
+            references = [
+                {key: view[key] for key in ("render_id", "template") if key in view} | {"text": str(view.get("text", ""))[:1200]}
+                for view in result.rendered_views[:2]
+            ]
+            feedback += (
+                "\n卡片已经生成，查询与渲染原文仍可读取；发送状态不等于接口查询失败。"
+                "以下是模型可读原文，可用 read_rendered_view 补读字段；不要重新查询或识图猜测：\n"
+                + json.dumps(references, ensure_ascii=False)
             )
         super().__init__(feedback)
 
@@ -147,15 +178,7 @@ def _legacy_dependencies(info: Mapping[str, Any]) -> tuple[str, ...]:
         raw = [raw]
     if not isinstance(raw, list):
         return ()
-    return tuple(
-        sorted(
-            {
-                item.strip()
-                for item in raw
-                if isinstance(item, str) and item.strip()
-            }
-        )
-    )
+    return tuple(sorted({item.strip() for item in raw if isinstance(item, str) and item.strip()}))
 
 
 def _normalize_dispatch_text(text: str) -> tuple[str, dict[str, int | bool]]:
@@ -205,7 +228,7 @@ async def execute_nonebot_plugin(
     )
     if not isinstance(dispatch, PluginDispatchResult):
         raise TypeError("NoneBot 兼容调度必须返回 PluginDispatchResult")
-    return await plugin_dispatch_tool_result(dispatch, plugin_name=plugin_name)
+    return await plugin_dispatch_tool_result(dispatch, plugin_name=plugin_name, command=command)
 
 
 def _image_preview(reference: str, maximum: int) -> str | None:
@@ -267,23 +290,28 @@ def _normalize_dispatch_images(references: tuple[str, ...]) -> tuple[tuple[str, 
             continue
         images.append(reference)
         remaining -= size
-    changes = ({"confirmed_images": len(references), "preview_images": len(images),
-                "resized": resized, "omitted": omitted} if resized or omitted else {})
+    changes = (
+        {"confirmed_images": len(references), "preview_images": len(images), "resized": resized, "omitted": omitted}
+        if resized or omitted
+        else {}
+    )
     return tuple(images), changes
 
 
 async def plugin_dispatch_tool_result(
-    dispatch: PluginDispatchResult, *, plugin_name: str,
+    dispatch: PluginDispatchResult,
+    *,
+    plugin_name: str,
+    command: str = "",
 ) -> ToolResult:
     """Use one receipt boundary for provider and legacy NoneBot tools."""
     text, normalization = _normalize_dispatch_text(dispatch.text)
     if normalization:
         dispatch = replace(dispatch, text=text)
-        nonebot.logger.warning(
-            "兼容插件回执文本已规范化 plugin={} details={}", plugin_name, normalization
-        )
+        nonebot.logger.warning("兼容插件回执文本已规范化 plugin={} details={}", plugin_name, normalization)
     metadata: dict[str, Any] = {"plugin_dispatch": _dispatch_metadata(dispatch)}
     from .config import config_parser
+
     omit_game_images = plugin_name == "qi_zmws" or config_parser.get_config("skip_self_image_vision", True)
     if omit_game_images:
         metadata["skip_image_vision"] = True
@@ -296,20 +324,19 @@ async def plugin_dispatch_tool_result(
     if dispatch.status is PluginDispatchStatus.MATCHED_WITH_OUTPUT:
         # The native card was delivered to QQ. The model reads its render
         # evidence without receiving or decoding the generated image.
-        images, image_normalization = ((), {}) if omit_game_images else await asyncio.to_thread(_normalize_dispatch_images, dispatch.images)
+        images, image_normalization = (
+            ((), {}) if omit_game_images else await asyncio.to_thread(_normalize_dispatch_images, dispatch.images)
+        )
         if omit_game_images:
             metadata["delivered_images"] = len(dispatch.images)
             if dispatch.images:
                 note = f"\n已确认向用户发送图片 {len(dispatch.images)} 张；已提供文字回执，不要重复调用。"
-                text, _ = _normalize_dispatch_text(text[:TOOL_RESULT_MAX_TEXT_CHARS - len(note)] + note)
+                text, _ = _normalize_dispatch_text(text[: TOOL_RESULT_MAX_TEXT_CHARS - len(note)] + note)
         if image_normalization:
             metadata["output_image_normalization"] = image_normalization
-            note = (f"\n已确认向用户发送图片 {len(dispatch.images)} 张；"
-                    "当前仅提供可用预览，图片发送已成功，不要重复调用。")
-            text, _ = _normalize_dispatch_text(text[:TOOL_RESULT_MAX_TEXT_CHARS - len(note)] + note)
-            nonebot.logger.warning(
-                "兼容插件图片回执已规范化 plugin={} details={}", plugin_name, image_normalization
-            )
+            note = f"\n已确认向用户发送图片 {len(dispatch.images)} 张；当前仅提供可用预览，图片发送已成功，不要重复调用。"
+            text, _ = _normalize_dispatch_text(text[: TOOL_RESULT_MAX_TEXT_CHARS - len(note)] + note)
+            nonebot.logger.warning("兼容插件图片回执已规范化 plugin={} details={}", plugin_name, image_normalization)
         return ToolResult(
             text=text,
             images=images,
@@ -320,8 +347,9 @@ async def plugin_dispatch_tool_result(
         return ToolResult(
             text=dispatch.text or "插件已成功执行一次由 Bot API 确认的副作用动作。",
             metadata=metadata,
+            structured=structured,
         )
-    raise PluginDispatchError(dispatch)
+    raise PluginDispatchError(dispatch, command=command, plugin_name=plugin_name)
 
 
 def _dispatch_metadata(result: PluginDispatchResult) -> dict[str, int | str]:
@@ -337,6 +365,7 @@ def _dispatch_metadata(result: PluginDispatchResult) -> dict[str, int | str]:
         "api_unknown": result.api_unknown,
         "api_read_failed": result.api_read_failed,
         "api_read_recovered": result.api_read_recovered,
+        "api_delivery_recovered": result.api_delivery_recovered,
         "api_unresolved_failed": result.api_unresolved_failed,
         "api_unresolved_unknown": result.api_unresolved_unknown,
         "mutating_api_succeeded": result.mutating_api_succeeded,
@@ -376,9 +405,7 @@ def build_nonebot_plugin_candidate(
     specs: list[ToolSpec] = []
     if command_prefixes is None:
         command_prefixes = configured_command_prefixes()
-    if not isinstance(command_prefixes, tuple) or not all(
-        isinstance(prefix, str) for prefix in command_prefixes
-    ):
+    if not isinstance(command_prefixes, tuple) or not all(isinstance(prefix, str) for prefix in command_prefixes):
         raise TypeError("command_prefixes 必须是字符串元组")
     for plugin_name in sorted(legacy_info):
         if not isinstance(plugin_name, str):
@@ -395,9 +422,7 @@ def build_nonebot_plugin_candidate(
                 COMPAT_COMMAND_PREFIXES_KEY,
             )
         ):
-            raise ValueError(
-                f"NoneBot 插件 {plugin_name} 不得伪造保留 Provider 字段"
-            )
+            raise ValueError(f"NoneBot 插件 {plugin_name} 不得伪造保留 Provider 字段")
         spec = ToolSpec(
             name=plugin_name,
             description=build_compatibility_description(

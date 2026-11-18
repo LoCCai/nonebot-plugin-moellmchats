@@ -9,12 +9,16 @@ import pytest
 from nonebot_plugin_moellmchats import meme_tools as module
 from nonebot_plugin_moellmchats.meme_tools import (
     GENERATE_MEME_TOOL,
+    MEME_INFO_TOOL,
+    MEME_SEARCH_TOOL,
     RenderToolError,
     _download_public_image,
     _validate_meme_arguments,
+    describe_meme_template,
     generate_meme_image,
     meme_capability_reason,
     register_meme_tools,
+    search_meme_templates,
 )
 from nonebot_plugin_moellmchats.tool_contracts import ToolContext, tool_registry
 
@@ -122,17 +126,23 @@ def test_meme_capability_reason_branches(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_register_meme_tools_toggle(monkeypatch: pytest.MonkeyPatch) -> None:
     # Defensive cleanup: a host that pre-set MOELLM_MEME_API_BASE may have
-    # registered the tool at import time.
-    tool_registry.unregister("generate_meme")
+    # registered the tools at import time.
+    for name in ("generate_meme", "meme_search", "meme_info"):
+        tool_registry.unregister(name)
     _configure_base(monkeypatch, "")
     assert register_meme_tools() == ()
     assert tool_registry.get("generate_meme") is None
+    assert tool_registry.get("meme_search") is None
+    assert tool_registry.get("meme_info") is None
     _configure_base(monkeypatch, "http://192.168.31.193:10008")
-    assert register_meme_tools() == ("generate_meme",)
+    assert register_meme_tools() == ("generate_meme", "meme_search", "meme_info")
     # duplicate registration is tolerated
     assert register_meme_tools() == ()
     assert tool_registry.get("generate_meme") is GENERATE_MEME_TOOL
-    tool_registry.unregister("generate_meme")
+    assert tool_registry.get("meme_search") is MEME_SEARCH_TOOL
+    assert tool_registry.get("meme_info") is MEME_INFO_TOOL
+    for name in ("generate_meme", "meme_search", "meme_info"):
+        tool_registry.unregister(name)
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +159,13 @@ async def test_generate_meme_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["Petpet", "../etc", "a b", ""])
-async def test_generate_meme_rejects_bad_key(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+async def test_generate_meme_rejects_bad_ascii_key_offline(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([])
+    monkeypatch.setattr(module, "_meme_request", backend)
     result = await generate_meme_image(_tool_context=_context(), meme_key=key)
     assert "模板 key" in result.text
+    assert not backend.calls  # invalid ASCII never reaches the network
 
 
 @pytest.mark.asyncio
@@ -307,6 +320,7 @@ async def test_generate_meme_unknown_template(
     monkeypatch.setattr(module, "_meme_request", backend)
     result = await generate_meme_image(_tool_context=_context(), meme_key="nosuch")
     assert "未找到模板" in result.text
+    assert "meme_search" in result.text  # actionable next step
 
 
 @pytest.mark.asyncio
@@ -380,6 +394,313 @@ def test_validate_meme_arguments_zero_is_an_explicit_bound() -> None:
     _validate_meme_arguments(params, images=[], texts=[])
     missing = {"min_texts": 1}
     _validate_meme_arguments(missing, images=[], texts=["ok"])
+
+
+# ---------------------------------------------------------------------------
+# Chinese keyword resolution + discovery tools (mocked transport)
+# ---------------------------------------------------------------------------
+
+_CN_TEXT_INFO = (
+    200,
+    {
+        "key": "texttmpl",
+        "params": {
+            "min_images": 0,
+            "max_images": 0,
+            "min_texts": 2,
+            "max_texts": 2,
+            "default_texts": [],
+            "options": [],
+        },
+        "keywords": ["中文模板"],
+        "tags": [],
+        "shortcuts": [],
+    },
+)
+
+_PUNCH_INFO = (
+    200,
+    {
+        "key": "punch",
+        "params": {
+            "min_images": 1,
+            "max_images": 1,
+            "min_texts": 0,
+            "max_texts": 0,
+            "default_texts": [],
+            "options": [],
+        },
+        "keywords": ["打拳"],
+        "tags": [],
+        "shortcuts": [],
+    },
+)
+
+
+def _k_info(key: str, keyword: str = "多义") -> tuple[int, dict[str, Any]]:
+    return (
+        200,
+        {
+            "key": key,
+            "params": {
+                "min_images": 0,
+                "max_images": 1,
+                "min_texts": 0,
+                "max_texts": 1,
+                "default_texts": [],
+                "options": [],
+            },
+            "keywords": [keyword],
+            "tags": [],
+            "shortcuts": [],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_meme_resolves_chinese_keyword_unique_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend(
+        [
+            (200, ["texttmpl"]),
+            _CN_TEXT_INFO,
+            (200, {"image_id": "result-cn"}),
+            (200, _tiny_png()),
+        ]
+    )
+    monkeypatch.setattr(module, "_meme_request", backend)
+    bot = _FakeBot()
+    result = await generate_meme_image(_tool_context=_context(bot), meme_key=" 中文模板 ", texts=["你好", "世界"])
+    assert "已生成" in result.text
+    assert "中文模板" in result.text
+    assert result.metadata["meme_key"] == "texttmpl"
+    assert result.metadata["meme_key_requested"] == "中文模板"
+    assert len(bot.sent) == 1
+    assert [call[1] for call in backend.calls] == [
+        "/meme/search?query=%E4%B8%AD%E6%96%87%E6%A8%A1%E6%9D%BF&include_tags=true",
+        "/memes/texttmpl/info",
+        "/memes/texttmpl",
+        "/image/result-cn",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_meme_chinese_keyword_ambiguous_lists_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend(
+        [
+            (200, ["k1", "k2", "k3"]),
+            _k_info("k1"),
+            _k_info("k2"),
+            _k_info("k3"),
+        ]
+    )
+    monkeypatch.setattr(module, "_meme_request", backend)
+    bot = _FakeBot()
+    result = await generate_meme_image(_tool_context=_context(bot), meme_key="多义")
+    assert "3 个模板" in result.text
+    assert "k1｜关键词：多义" in result.text
+    assert "k3｜" in result.text
+    assert len(backend.calls) == 4  # search + 3 info; generation never started
+    assert not bot.sent
+
+
+@pytest.mark.asyncio
+async def test_generate_meme_chinese_keyword_no_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([(200, [])])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await generate_meme_image(_tool_context=_context(), meme_key="不存在的词")
+    assert "未找到" in result.text
+    assert "meme_search" in result.text
+    assert len(backend.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_meme_rejects_overlong_chinese_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await generate_meme_image(_tool_context=_context(), meme_key="打" * module._MEME_QUERY_MAX_CHARS + "拳")
+    assert "过长" in result.text
+    assert not backend.calls
+
+
+@pytest.mark.asyncio
+async def test_generate_meme_policy_receives_resolved_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    checked: list[str] = []
+
+    async def authorize(actual: ToolContext, key: str) -> bool:
+        checked.append(key)
+        return True
+
+    module.register_meme_authorizer(authorize)
+    backend = _ScriptedBackend(
+        [
+            (200, ["texttmpl"]),
+            _CN_TEXT_INFO,
+            (200, {"image_id": "result-cn"}),
+            (200, _tiny_png()),
+        ]
+    )
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await generate_meme_image(_tool_context=_context(), meme_key="中文模板", texts=["你好", "世界"])
+    assert "已生成" in result.text
+    assert checked == ["texttmpl"]
+
+
+@pytest.mark.asyncio
+async def test_generate_meme_policy_denies_resolved_key_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+
+    async def authorize(actual: ToolContext, key: str) -> bool:
+        return False
+
+    module.register_meme_authorizer(authorize)
+    backend = _ScriptedBackend([(200, ["texttmpl"])])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await generate_meme_image(_tool_context=_context(), meme_key="中文模板", texts=["你好", "世界"])
+    assert result.metadata["status"] == "denied"
+    # only the search call happened; template info and generation were skipped
+    assert len(backend.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_meme_search_lists_templates_with_summaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([(200, ["punch", "petpet"]), _PUNCH_INFO, _PETPET_INFO])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await search_meme_templates(_tool_context=_context(), query="打拳")
+    assert "2 个模板" in result.text
+    assert "punch｜关键词：打拳" in result.text
+    assert "petpet｜" in result.text
+    assert result.metadata == {"query": "打拳", "matched": 2, "listed": 2}
+    assert backend.calls[0][1] == "/meme/search?query=%E6%89%93%E6%8B%B3&include_tags=true"
+    assert backend.calls[1][1] == "/memes/punch/info"
+
+
+@pytest.mark.asyncio
+async def test_meme_search_bad_query_rejected_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    for query in ("", "   ", "x" * 33, 123):  # type: ignore[arg-type]
+        result = await search_meme_templates(_tool_context=_context(), query=query)
+        assert "query" in result.text
+    assert not backend.calls
+
+
+@pytest.mark.asyncio
+async def test_meme_search_no_match_and_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([(200, [])])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await search_meme_templates(_tool_context=_context(), query="没有这个词")
+    assert "未找到" in result.text
+    _configure_base(monkeypatch, "")
+    result = await search_meme_templates(_tool_context=_context(), query="打拳")
+    assert "未启用" in result.text
+
+
+@pytest.mark.asyncio
+async def test_meme_info_renders_full_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    info = {
+        "key": "capoo",
+        "params": {
+            "min_images": 0,
+            "max_images": 0,
+            "min_texts": 1,
+            "max_texts": 2,
+            "default_texts": ["默认词"],
+            "options": [
+                {
+                    "name": "max_frames",
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "maximum": 40,
+                    "description": "最大帧数",
+                },
+                {"name": "style", "type": "string", "default": "a", "choices": ["a", "b"], "description": None},
+            ],
+        },
+        "keywords": ["capoo", "跨度"],
+        "tags": ["动画"],
+        "shortcuts": [{"pattern": "capoo稿 *. ", "humanized": "capoo模板", "names": [], "texts": [], "options": {}}],
+    }
+    backend = _ScriptedBackend([(200, info)])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await describe_meme_template(_tool_context=_context(), meme_key="capoo")
+    assert "模板 capoo" in result.text
+    assert "关键词：capoo、跨度" in result.text
+    assert "标签：动画" in result.text
+    assert "默认文字：默认词" in result.text
+    assert "max_frames" in result.text
+    assert "最大帧数" in result.text
+    assert "可选 a/b" in result.text
+    assert "capoo模板" in result.text
+    assert result.metadata == {"meme_key": "capoo"}
+
+
+@pytest.mark.asyncio
+async def test_meme_info_resolves_chinese_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([(200, ["punch"]), _PUNCH_INFO])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await describe_meme_template(_tool_context=_context(), meme_key="打拳")
+    assert "模板 punch" in result.text
+    assert "关键词：打拳" in result.text
+    assert backend.calls[0][1].startswith("/meme/search?query=")
+    assert backend.calls[1][1] == "/memes/punch/info"
+
+
+@pytest.mark.asyncio
+async def test_meme_info_404_and_bad_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_base(monkeypatch, "http://192.168.31.193:10008")
+    backend = _ScriptedBackend([(404, {"detail": "not found"})])
+    monkeypatch.setattr(module, "_meme_request", backend)
+    result = await describe_meme_template(_tool_context=_context(), meme_key="nosuch")
+    assert "未找到模板" in result.text
+    assert "meme_search" in result.text
+    result = await describe_meme_template(_tool_context=_context(), meme_key="../etc")
+    assert "meme_key" in result.text
+
+
+def test_meme_discovery_tool_spec_shapes() -> None:
+    for spec in (MEME_SEARCH_TOOL, MEME_INFO_TOOL):
+        assert spec.name in {"meme_search", "meme_info"}
+        assert spec.permission == "user"
+        assert spec.effect.value == "read_only"
+        assert spec.timeout_seconds is not None
+        assert spec.policy is not None
+    assert list(MEME_SEARCH_TOOL.parameters["required"]) == ["query"]
+    assert list(MEME_INFO_TOOL.parameters["required"]) == ["meme_key"]
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +870,7 @@ class _FakeStream:
 
     async def iter_chunked(self, size: int) -> Any:
         for offset in range(0, len(self._data), size):
-            yield self._data[offset:offset + size]
+            yield self._data[offset : offset + size]
 
 
 class _AsyncCM:
@@ -640,7 +961,7 @@ async def test_meme_request_reads_complete_chunked_response(monkeypatch: pytest.
         response = web.StreamResponse(headers={"Content-Type": "application/octet-stream"})
         await response.prepare(request)
         for offset in range(0, len(body), 32_768):
-            await response.write(body[offset:offset + 32_768])
+            await response.write(body[offset : offset + 32_768])
             await asyncio.sleep(0.01)
         await response.write_eof()
         return response

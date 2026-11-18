@@ -33,11 +33,17 @@ def test_pool_edit_persists_without_changing_quota_or_rotation(tmp_path, monkeyp
     assert not selector.is_model_exhausted("model-a (good)")
 
 
-@pytest.mark.parametrize(("action", "query"), [
-    ("设置", "backup (other);missing"), ("设置", "backup (other);backup (other)"),
-    ("设置", "backup (other);"), ("移除", "third (other)"), ("关闭", "unexpected"),
-    ("移除", "model-a (good);backup (other)"),
-])
+@pytest.mark.parametrize(
+    ("action", "query"),
+    [
+        ("设置", "backup (other);missing"),
+        ("设置", "backup (other);backup (other)"),
+        ("设置", "backup (other);"),
+        ("移除", "third (other)"),
+        ("关闭", "unexpected"),
+        ("移除", "model-a (good);backup (other)"),
+    ],
+)
 def test_invalid_edit_is_atomic(tmp_path, monkeypatch, action, query):
     selector = pool(tmp_path, monkeypatch)
     before = deepcopy(selector.model_config)
@@ -108,7 +114,9 @@ async def test_read_only_chain_reports_effective_models_and_thinking_without_sec
     selector = pool(tmp_path, monkeypatch)
     selector.model_config["use_moe"] = True
     selector.models["backup (other)"]["extra_payload"] = {
-        "enable_thinking": False, "reasoning_effort": "high", "secret": "never-print-this",
+        "enable_thinking": False,
+        "reasoning_effort": "high",
+        "secret": "never-print-this",
         "extra_body": {"google": {"thinking_config": {"thinking_level": "low"}}},
     }
     selector.models["third (other)"]["key"] = []
@@ -128,6 +136,44 @@ async def test_read_only_chain_reports_effective_models_and_thinking_without_sec
 
 
 @pytest.mark.asyncio
+async def test_chain_archives_exhausted_models_and_backups(tmp_path, monkeypatch):
+    selector = pool(tmp_path, monkeypatch)
+    selector.model_config["model_pools"] = {}
+    await selector.mark_model_exhausted(selector.models["backup (other)"], 403)
+    text = format_chain(selector, {})
+    assert "显式备用：均额度耗尽" in text
+    assert "• backup (other)" not in text
+    assert "已归档 1 个额度耗尽模型（!查看LLM链路 全部 查看）。" in text
+    full = format_chain(selector, {}, include_archived=True)
+    assert "显式备用：backup (other)" in full
+    assert "• backup (other) · 额度耗尽，已退出" in full
+
+
+@pytest.mark.asyncio
+async def test_chain_marks_exhausted_fixed_role_model(tmp_path, monkeypatch):
+    selector = pool(tmp_path, monkeypatch)
+    selector.model_config["model_pools"] = {}
+    await selector.mark_model_exhausted(selector.models["model-a (good)"], 403)
+    text = format_chain(selector, {})
+    assert "文本对话·固定0档·不调用分类模型：model-a (good)（额度耗尽）" in text
+    assert "• model-a (good)" not in text
+
+
+@pytest.mark.asyncio
+async def test_disabled_model_stays_in_archive_after_removal_from_all_routes(tmp_path, monkeypatch):
+    selector = pool(tmp_path, monkeypatch)
+    name = "backup (other)"
+    await selector.mark_model_exhausted(selector.models[name], 403)
+    selector.models.pop(name)
+    selector.model_config["model_pools"] = {}
+    selector.model_config["model_fallbacks"] = {}
+    text = format_chain(selector, {})
+    assert "已归档 1 个额度耗尽模型" in text
+    assert "• backup (other)" not in text
+    assert "• backup (other) · 额度耗尽，已退出" in format_chain(selector, {}, include_archived=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["/", "!", "！", ""])
 async def test_real_matcher_permission_and_complete_model_names(tmp_path, monkeypatch, prefix):
     selector = pool(tmp_path, monkeypatch)
@@ -140,16 +186,20 @@ async def test_real_matcher_permission_and_complete_model_names(tmp_path, monkey
     assert "已保存" in str(bot.calls[-1][1]["message"])
     before = deepcopy(selector.model_config)
     bot.calls.clear()
-    await check_and_run_matcher(plugin.model_pool_matcher, bot,
-        _group_event(user_id=2, text=f"{prefix}关闭模型池 分类"), {})
+    await check_and_run_matcher(plugin.model_pool_matcher, bot, _group_event(user_id=2, text=f"{prefix}关闭模型池 分类"), {})
     assert selector.model_config == before
     assert not bot.calls
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["!查看LLM链路", "/查看配置", "查看当前配置"])
-async def test_chain_matcher_routes_without_llm(tmp_path, monkeypatch, text):
+async def test_chain_matcher_falls_back_to_text_without_render(tmp_path, monkeypatch, text):
     monkeypatch.setattr(plugin, "model_selector", pool(tmp_path, monkeypatch))
+
+    async def unavailable(data):
+        raise RuntimeError("no browser")
+
+    monkeypatch.setattr(plugin, "render_chain_image", unavailable)
     bot = _RecordingBot()
     with pytest.raises(StopPropagation):
         await check_and_run_matcher(plugin.check_config_matcher, bot, _group_event(user_id=1, text=text), {})
@@ -157,6 +207,36 @@ async def test_chain_matcher_routes_without_llm(tmp_path, monkeypatch, text):
     bot.calls.clear()
     await check_and_run_matcher(plugin.check_config_matcher, bot, _group_event(user_id=2, text=text), {})
     assert not bot.calls
+
+
+@pytest.mark.asyncio
+async def test_chain_matcher_sends_image_and_honors_arguments(tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin, "model_selector", pool(tmp_path, monkeypatch))
+    rendered = []
+
+    async def fake_render(data):
+        rendered.append(data)
+        return b"\x89PNG-fake"
+
+    monkeypatch.setattr(plugin, "render_chain_image", fake_render)
+    bot = _RecordingBot()
+
+    def last_message():
+        return bot.calls[-1][1]["message"]
+
+    for text, archived in (("!查看LLM链路", False), ("!查看LLM链路 全部", True)):
+        bot.calls.clear()
+        rendered.clear()
+        with pytest.raises(StopPropagation):
+            await check_and_run_matcher(plugin.check_config_matcher, bot, _group_event(user_id=1, text=text), {})
+        assert any(segment.type == "image" for segment in last_message())
+        assert rendered[0]["include_archived"] is archived
+    bot.calls.clear()
+    rendered.clear()
+    with pytest.raises(StopPropagation):
+        await check_and_run_matcher(plugin.check_config_matcher, bot, _group_event(user_id=1, text="!查看LLM链路 文本"), {})
+    assert not rendered
+    assert "生效配置" in str(last_message())
 
 
 def test_pool_commit_patches_current_snapshot_and_keeps_bound_request(tmp_path, monkeypatch):
@@ -168,8 +248,17 @@ def test_pool_commit_patches_current_snapshot_and_keeps_bound_request(tmp_path, 
     current = runtime_snapshots.current()
     from nonebot_plugin_moellmchats.runtime_snapshot import RuntimeSnapshot
 
-    snapshot = RuntimeSnapshot(generation=1, config={}, model_state=selector.capture_state(),
-        temperaments={}, temperament_assignments={}, replies={}, tool_snapshot=None, emotions=(), reloaded_at=0)
+    snapshot = RuntimeSnapshot(
+        generation=1,
+        config={},
+        model_state=selector.capture_state(),
+        temperaments={},
+        temperament_assignments={},
+        replies={},
+        tool_snapshot=None,
+        emotions=(),
+        reloaded_at=0,
+    )
     monkeypatch.setattr(runtime_snapshots, "_current", snapshot)
     manage_pool(selector, "设置", "0", "third (other)")
     assert runtime_snapshots.current().model_state.model_config["model_pools"]["0"] == ("third (other)",)

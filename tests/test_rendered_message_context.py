@@ -1,4 +1,5 @@
 """Native card receipts must retain exact facts when quoted to the AI."""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -38,11 +39,16 @@ def quote(*, user=123, group=456, current_image=False, forwarded=False):
     quoted = MessageSegment.image("https://example.com/card.png")
     if forwarded:
         quoted = MessageSegment.node_custom(10000, "bot", Message(quoted))
-    return _event(2).model_copy(update={
-        "user_id": user, "group_id": group, "message": message,
-        "reply": SimpleNamespace(message_id=789, message=Message(quoted),
-                                 sender=SimpleNamespace(user_id=10000, nickname="bot")),
-    })
+    return _event(2).model_copy(
+        update={
+            "user_id": user,
+            "group_id": group,
+            "message": message,
+            "reply": SimpleNamespace(
+                message_id=789, message=Message(quoted), sender=SimpleNamespace(user_id=10000, nickname="bot")
+            ),
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -120,18 +126,34 @@ async def test_media_analysis_uses_original_card_text_without_downloading_its_pi
 
 @pytest.mark.asyncio
 async def test_history_uses_registered_card_text_and_preserves_unrelated_images_for_vision():
-    bot = SimpleNamespace(self_id="10000", call_api=AsyncMock(return_value={"messages": [
-        {"message_id": 789, "group_id": 456, "message_seq": 1, "time": 1,
-         "message": Message(MessageSegment.image("https://example.com/card.png"))},
-        {"message_id": 790, "group_id": 456, "message_seq": 2, "time": 2,
-         "message": Message(MessageSegment.image("https://example.com/user.png"))},
-    ]}))
+    bot = SimpleNamespace(
+        self_id="10000",
+        call_api=AsyncMock(
+            return_value={
+                "messages": [
+                    {
+                        "message_id": 789,
+                        "group_id": 456,
+                        "message_seq": 1,
+                        "time": 1,
+                        "message": Message(MessageSegment.image("https://example.com/card.png")),
+                    },
+                    {
+                        "message_id": 790,
+                        "group_id": 456,
+                        "message_seq": 2,
+                        "time": 2,
+                        "message": Message(MessageSegment.image("https://example.com/user.png")),
+                    },
+                ]
+            }
+        ),
+    )
     await publish(bot, _event(1))
     context = ToolContext(bot=bot, event=quote())
     document = await collect_message_context(context, source="group_history", max_messages=2)
     assert "攻击123456" in document.text
-    assert [media_store.get(context, ref, MediaAsset).rendered_data
-            for ref in document.assets] == [True, False]
+    assert [media_store.get(context, ref, MediaAsset).rendered_data for ref in document.assets] == [True, False]
 
 
 @pytest.mark.asyncio
@@ -168,11 +190,19 @@ async def test_identical_cards_from_concurrent_users_keep_their_own_original_fie
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("known_card", "uploaded_image", "expects_vision"), [
-    (True, False, False), (True, True, True), (False, False, True),
-])
+@pytest.mark.parametrize(
+    ("known_card", "uploaded_image", "expects_vision"),
+    [
+        (True, False, False),
+        (True, True, True),
+        (False, False, True),
+    ],
+)
 async def test_model_routing_overrides_classifier_only_for_verified_card_data(
-    monkeypatch, known_card, uploaded_image, expects_vision,
+    monkeypatch,
+    known_card,
+    uploaded_image,
+    expects_vision,
 ):
     class Category:
         selection_source = "test"
@@ -181,7 +211,10 @@ async def test_model_routing_overrides_classifier_only_for_verified_card_data(
             pass
 
         async def get_category(self):
-            return "1", True, []
+            pytest.fail("ordinary card replies must not call a classifier")
+
+        def get_unclassified_category(self):
+            return "0", True, []
 
     monkeypatch.setattr(llm_payload, "Categorize", Category)
     selector = llm_payload.model_selector

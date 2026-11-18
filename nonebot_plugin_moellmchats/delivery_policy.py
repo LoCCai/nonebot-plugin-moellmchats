@@ -1,4 +1,5 @@
 """One native feature delivery per ordinary request, with copyable follow-ups."""
+
 from __future__ import annotations
 
 import json
@@ -32,14 +33,25 @@ def reserve_deliveries(chat, calls: list) -> dict[str, str]:
         if view is None:
             continue
         native = view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN
-        output = name in {"render_markdown", "render_html", "screenshot_url", "generate_image", "edit_image", "generate_meme"}
+        output = name in {
+            "render_markdown",
+            "render_html",
+            "screenshot_url",
+            "generate_image",
+            "edit_image",
+            "generate_meme",
+            "speak_text",
+            "qiqi_voice",
+        }
         if not native and not output:
             continue
         try:
             args = json.loads(call["function"]["arguments"])
         except (ValueError, TypeError):
             continue  # normal argument validation owns this failure
-        if not isinstance(args, dict) or native and not isinstance(args.get("command"), str):
+        if not isinstance(args, dict) or (native and not isinstance(args.get("command"), str)):
+            continue
+        if name == "qiqi_voice" and args.get("action", "search") != "play":
             continue
         identity = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
         if reserved is None:
@@ -49,9 +61,8 @@ def reserve_deliveries(chat, calls: list) -> dict[str, str]:
             command = args.get("command") if native else None
             if command and command not in commands and len(commands) < 12:
                 commands.append(command)
-            deferred[str(call.get("id", ""))] = (
-                "本次只投递第一个功能，该功能未执行。"
-                + (f"请用纯文字告诉用户复制粘贴即可触发：{command}" if command else "不要继续渲染，直接文字回复。")
+            deferred[str(call.get("id", ""))] = "本次只投递第一个功能，该功能未执行。" + (
+                f"请用纯文字告诉用户复制粘贴即可触发：{command}" if command else "不要继续渲染，直接文字回复。"
             )
     chat._deferred_commands = commands
     return deferred

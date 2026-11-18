@@ -1,4 +1,5 @@
 """Host-independent chat conduct rules. Only the real caller's text is judged."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,26 +16,41 @@ import unicodedata
 from nonebot.log import logger
 import nonebot_plugin_localstore as store
 
-from .config import config_parser
 from .compat import timeout
+from .config import config_parser
 from .onebot_facade import bot_self_id, event_group_id, event_message, event_message_id, event_user_id, onebot_protocol
 from .private_files import atomic_write_private_text, ensure_private_directory, ensure_private_file
 
 # Single characters such as 口/抠 and discussions of health/game skills are not
 # offences. Match explicit requests and direct insults, never quoted context.
 _TAUNT = re.compile(r"(?:你|七七).{0,8}(?:有本事|有胆|敢不敢|能耐).{0,8}(?:禁言|封禁|禁我)|(?:有本事|有胆|敢不敢).{0,6}禁言我")
-_ABUSE = re.compile(r"傻[逼比屄]|煞笔|沙比|脑残|弱智|废物|贱[人货]|死妈|[操艹草]你[妈吗]|去死|滚[开吧啊]|\b(?:fuck\s+you|stfu)\b", re.I)
+_ABUSE = re.compile(
+    r"傻[逼比屄]|煞笔|沙比|脑残|弱智|废物|贱[人货]|死妈|[操艹草]你[妈吗]|去死|滚[开吧啊]|\b(?:fuck\s+you|stfu)\b", re.I
+)
 _DIRECT_ABUSE = re.compile(
     r"(?:你|七七|机器人|bot)(?:就是|真是|是|个|大|这|真|太|一个|能不能|给我|赶紧|他妈的|的|怎么这么|\s){0,6}(?:"
-    + _ABUSE.pattern + r")", re.I)
-_SEXUAL = re.compile(r"(?:帮我|给我|我要|想要|快来|求|能不能帮我|可以帮我|请).{0,12}(?:口交|性交|做爱|打炮|手淫|自慰|射精|颜射|内射|乳交|足交|裸照|裸体|色情|黄片|黄图|涩图|色图)|(?:给我|帮我|为我).{0,4}(?:口一下|口一[口下]|口\b|抠[逼屄]|抠穴|打胶)|(?:r[ -]?18|nsfw).{0,8}(?:图|内容|视频)|(?:画|生成|发|来).{0,8}(?:r[ -]?18|nsfw)|^(?:七七[，, ]*)?(?:帮我|给我|快来|来|请)?(?:口|抠|射精)(?:一下|我|嘛|吧)?[!！。，?？ ]*$", re.I)
+    + _ABUSE.pattern
+    + r")",
+    re.I,
+)
+_SEXUAL = re.compile(
+    (
+        "(?:帮我|给我|我要|想要|快来|求|能不能帮我|可以帮我|请).{0,12}(?:口交|性交|做爱|打炮|手淫|自慰|射精|颜射|内射|"
+        "乳交|足交|裸照|裸体|色情|黄片|黄图|涩图|色图)|(?:给我|帮我|为我).{0,4}(?:口一下|口一[口下]|口\\b|抠[逼屄]|"
+        "抠穴|打胶)|(?:r[ -]?18|nsfw).{0,8}(?:图|内容|视频)|(?:画|生成|发|来).{0,8}(?:r[ -]?1"
+        "8|nsfw)|^(?:七七[，, ]*)?(?:帮我|给我|快来|来|请)?(?:口|抠|射精)(?:一下|我|嘛|吧)?[!！。，?？ "
+        "]*$"
+    ),
+    re.I,
+)
 _GUARD = threading.RLock()
 
 
 def current_text(event) -> str:
     # Reply messages, forwarded nodes and render data are deliberately absent.
-    return "".join(str(segment.data.get("text", "")) for segment in event_message(event)
-                   if getattr(segment, "type", "") == "text")[:8000]
+    return "".join(
+        str(segment.data.get("text", "")) for segment in event_message(event) if getattr(segment, "type", "") == "text"
+    )[:8000]
 
 
 def conduct_reason(text: str) -> str | None:
@@ -46,23 +62,27 @@ def conduct_reason(text: str) -> str | None:
         return "taunt"
     sexual = _SEXUAL.search(text)
     educational = re.search(r"科普|医学|健康|原理|解释.{0,8}(?:意思|含义)|不要.{0,6}(?:色情|色图)", text)
-    explicit_output = re.search(r"(?:给我|帮我|画|生成|发|来).{0,8}(?:口交|做爱|色图|涩图|黄片|裸照|裸体|口一下|抠[逼屄穴])", text)
+    explicit_output = re.search(
+        r"(?:给我|帮我|画|生成|发|来).{0,8}(?:口交|做爱|色图|涩图|黄片|裸照|裸体|口一下|抠[逼屄穴])", text
+    )
     if sexual and (not educational or explicit_output):
         return "sexual"
     reporting = re.search(r"有人(?:说|骂)|举报|被人骂|怎么回应|是什么意思", text)
-    if not reporting and (_DIRECT_ABUSE.search(text) or _ABUSE.fullmatch(text.strip(' ，。！!？?'))):
+    if not reporting and (_DIRECT_ABUSE.search(text) or _ABUSE.fullmatch(text.strip(" ，。！!？?"))):
         return "abuse"
     return None
 
 
 class ConductStore:
     """Small private file, cross-process lock and atomic replacement; no chat bodies."""
+
     def __init__(self, path: Path):
         self.path = path
 
     @contextmanager
     def transaction(self):
         import fcntl
+
         ensure_private_directory(self.path.parent)
         with _GUARD, self.path.with_suffix(".lock").open("a+") as lock:
             self.path.with_suffix(".lock").chmod(0o600)
@@ -114,6 +134,7 @@ def conduct_store() -> ConductStore:
 
 async def user_blocked(bot, event) -> bool:
     from .request_budget import budget_authorized
+
     if await budget_authorized(bot, event):
         return False
     return await asyncio.to_thread(conduct_store().blocked, event_user_id(event))
@@ -128,7 +149,8 @@ async def mute_caller(bot, event, seconds: int) -> bool:
         async with timeout(5):
             own, member = await asyncio.gather(
                 bot.call_api("get_group_member_info", group_id=int(group), user_id=int(bot_self_id(bot, event)), no_cache=True),
-                bot.call_api("get_group_member_info", group_id=int(group), user_id=int(event_user_id(event)), no_cache=True))
+                bot.call_api("get_group_member_info", group_id=int(group), user_id=int(event_user_id(event)), no_cache=True),
+            )
             if own.get("role") not in {"admin", "owner"} or member.get("role") != "member":
                 return False
             await bot.call_api("set_group_ban", group_id=int(group), user_id=int(event_user_id(event)), duration=seconds)

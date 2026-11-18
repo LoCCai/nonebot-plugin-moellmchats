@@ -1,4 +1,5 @@
 """Explicit role pools and provider/model quota status, independent of snapshots."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,13 +27,15 @@ class ModelQuotaStatus:
         ):
             raise ValueError("model_quota_status.json 格式错误")
 
-    def set(self, identity: str, status: int | None) -> None:
+    def set(self, identity: str, status: int | None, *, expires_at=None, quota_scope=None) -> None:
         with self.lock:
             updated = dict(self.exhausted)
             if status is None:
                 updated.pop(identity, None)
             else:
                 updated[identity] = {"reason": "quota_exhausted", "http_status": status, "at": time.time()}
+                if expires_at is not None:
+                    updated[identity].update(expires_at=expires_at, quota_scope=quota_scope)
             atomic_write_private_text(self.path, json.dumps(updated, ensure_ascii=False, indent=2))
             self.exhausted = updated
 
@@ -49,10 +52,13 @@ class ModelPoolMixin:
         if not isinstance(pools, Mapping) or any(role not in {"category", "0", "1", "2"} for role in pools):
             raise ValueError("model_pools 仅支持 category、0、1、2 四个角色")
         for names in pools.values():
-            if (not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 32
-                    or not all(isinstance(name, str) and name in models for name in names)
-                    or any(models[name].get("model_type", "chat") != "chat" for name in names if name in models)
-                    or len(set(names)) != len(names)):
+            if (
+                not isinstance(names, (list, tuple))
+                or not 1 <= len(names) <= 32
+                or not all(isinstance(name, str) and name in models for name in names)
+                or any(models[name].get("model_type", "chat") != "chat" for name in names if name in models)
+                or len(set(names)) != len(names)
+            ):
                 raise ValueError("模型池必须包含 1 至 32 个存在且不重复的完整模型名")
 
     def _quota_status(self) -> ModelQuotaStatus:
@@ -62,18 +68,34 @@ class ModelPoolMixin:
         return store
 
     def is_model_exhausted(self, identity: str) -> bool:
+        from .daily_quota import quota_policy
         from .usage_ledger import get_ledger
-        return identity in self._quota_status().exhausted or get_ledger().exhausted(identity)
+
+        markers = self._quota_status().exhausted
+        marker = markers.get(identity)
+        if marker and marker.get("expires_at", float("inf")) > time.time():
+            return True
+        model = self._active_state().models.get(identity, {})
+        policy = quota_policy(model)
+        if policy:
+            scope = list(policy[:2])
+            if any(row.get("quota_scope") == scope and row.get("expires_at", 0) > time.time() for row in markers.values()):
+                return True
+        return get_ledger().exhausted(identity)
 
     async def mark_model_exhausted(self, model: Mapping, status: int) -> None:
         identity = f"{model.get('model')} ({model.get('provider')})"
         store = self._quota_status()
-        if identity not in store.exhausted:
+        if not self.is_model_exhausted(identity):
+            from .daily_quota import quota_window
+
+            window = quota_window(model)
+            options = {"expires_at": window[-1], "quota_scope": list(window[:2])} if window else {}
             try:
-                await asyncio.to_thread(store.set, identity, status)
+                await asyncio.to_thread(store.set, identity, status, **options)
             except Exception:
                 # Exclude immediately even if the state directory is unavailable.
-                store.exhausted = {**store.exhausted, identity: {"reason": "quota_exhausted", "http_status": status}}
+                store.exhausted = {**store.exhausted, identity: {"reason": "quota_exhausted", "http_status": status, **options}}
                 logger.error("模型额度状态持久保存失败，当前进程已排除该模型：model={}", identity)
             logger.warning("模型额度耗尽，已退出模型池：model={} status={}", identity, status)
 
@@ -82,6 +104,7 @@ class ModelPoolMixin:
         if not name:
             return self._get_resolve_error_msg(query)
         from .usage_ledger import get_ledger
+
         if name in get_ledger().budgets:
             return f"{name} 使用本地Token额度。补充后请执行：补充模型额度 {name} 20000000（保留历史用量）。"
         await asyncio.to_thread(self._quota_status().set, name, None)
@@ -124,6 +147,8 @@ class ModelPoolMixin:
         for role, names in state.model_config.get("model_pools", {}).items():
             label = "分类" if role == "category" else f"第{int(role) + 1}档"
             active = sum(not self.is_model_exhausted(name) for name in names)
-            lines.append(f"▪ {label}模型池（{active}/{len(names)}）：" + "、".join(
-                name + (" [额度耗尽]" if self.is_model_exhausted(name) else "") for name in names))
+            lines.append(
+                f"▪ {label}模型池（{active}/{len(names)}）："
+                + "、".join(name + (" [额度耗尽]" if self.is_model_exhausted(name) else "") for name in names)
+            )
         return "\n".join(lines)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from decimal import Decimal
+import math
 from pathlib import Path
 import re
 from types import MappingProxyType
@@ -11,7 +12,7 @@ from typing import Any
 from nonebot import get_plugin_config
 from nonebot.log import logger
 import nonebot_plugin_localstore as store
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 import ujson as json
 
 from .private_files import (
@@ -26,7 +27,7 @@ MAX_CD_SECONDS = 86_400
 
 
 class MentionAckConfig(BaseModel):
-    """Mention feedback is configured by NoneBot, independently of config.json."""
+    """Legacy defaults; config.json message_reactions can override these."""
 
     moellm_mention_ack_enabled: bool = True
     moellm_mention_ack_emoji_id: int = Field(default=282, ge=0, le=2_147_483_647)
@@ -87,7 +88,33 @@ class RenderToolsConfig(BaseModel):
 render_tools_config = get_plugin_config(RenderToolsConfig)
 
 
+class SpeechConfig(BaseModel):
+    mi_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    moellm_speech_free_pricing: bool = True
+    moellm_speech_voice: str = "Chloe"
+    # Only the administrator can select a local reference; no model-supplied URLs.
+    moellm_speech_reference: str = ""
+    moellm_speech_library: str = ""
+    moellm_speech_style: str = (
+        "年轻少女的轻柔中文声音，清澈、安静、略带气声，音量柔和，语速偏慢，"
+        "轻微呆萌，自然停顿。像认真记笔记的小药师，亲切但不过度活泼。不要念出风格提示。"
+    )
+    moellm_speech_timeout_seconds: float = Field(default=45, ge=5, le=90)
+    # Singing runs on the preset-voice mimo-v2.5-tts with a leading "(唱歌)"
+    # tag; clones do not support singing. Chinese-friendly preset recommended.
+    moellm_sing_voice: str = "茉莉"
+    # Long lyrics take well over the speaking budget; 120s covers full verses
+    # and still fits the tool timeout with retry headroom.
+    moellm_sing_timeout_seconds: float = Field(default=120, ge=5, le=180)
+
+
+speech_config = get_plugin_config(SpeechConfig)
+
+
 DEFAULT_CONFIG: dict[str, Any] = {
+    # Omitted enabled/started values preserve existing NoneBot settings.
+    # An empty emoji ID disables that phase only.
+    "message_reactions": {"completed": "10004", "rejected": "10060"},
     "max_group_history": 10,
     "max_user_history": 8,
     "max_history_chars": 16_000,
@@ -96,6 +123,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_retry_times": 3,
     "max_tool_rounds": 6,
     "max_tool_calls_per_round": 4,
+    "max_tool_calls_per_request": 15,
     "max_agent_steps": 6,
     "max_repeated_tool_calls": 2,
     "max_tool_result_chars": 6_000,
@@ -104,11 +132,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "tool_image_vision_enabled": True,
     "skip_self_image_vision": True,
     "auto_render_markdown": True,
+    "speech_enabled": True,
+    "speech_auto_enabled": True,
+    "speech_auto_rate": 0.15,
+    "speech_ping_rate": 0.15,
+    "speech_auto_max_chars": 40,
     "ordinary_single_delivery": True,
+    # Partial overrides of legacy MOELLM_ORDINARY_* defaults, hot reloaded.
+    "ordinary_request_budget": {},
     "abuse_guard_enabled": True,
     "tool_image_vision_excluded_tools": [],
     "request_timeout_seconds": 180,
     "classification_timeout_seconds": 20,
+    "classification_build_timeout_seconds": 25,
     "classification_max_tokens": 512,
     "tool_timeout_seconds": 180,
     "pending_action_ttl_seconds": 120,
@@ -142,6 +178,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "protocol_tools_low_risk_direct_enabled": True,
     "protocol_tools_business_first": True,
     "tool_progress_messages_enabled": True,
+    "plugin_command_progress_enabled": True,
     "tool_progress_model_preface_enabled": False,
     "user_history_expire_seconds": 600,
     "cd_seconds": 30,
@@ -170,6 +207,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 _POSITIVE_INTEGER_FIELDS = {
+    "speech_auto_max_chars",
     "max_group_history",
     "max_user_history",
     "max_history_chars",
@@ -276,19 +314,41 @@ class ConfigParser:
 
     @staticmethod
     def _validate(candidate: dict[str, Any]) -> None:
+        from .request_budget import validate_ordinary_request_budget
+
+        validate_ordinary_request_budget(candidate.get("ordinary_request_budget", {}))
+        reactions = candidate.get("message_reactions")
+        if (
+            not isinstance(reactions, dict)
+            or set(reactions) - {"enabled", "started", "completed", "rejected"}
+            or ("enabled" in reactions and type(reactions["enabled"]) is not bool)
+        ):
+            raise ValueError("config.json: message_reactions 仅支持 enabled 布尔值及 started/completed/rejected 表情ID")
+        for phase in ("started", "completed", "rejected"):
+            value = reactions.get(phase, "")
+            if not isinstance(value, str) or (value and (not re.fullmatch(r"[0-9]{1,10}", value) or int(value) > 2_147_483_647)):
+                raise ValueError(f"config.json: message_reactions.{phase} 必须是数字ID字符串，或空字符串以关闭")
         owner_id = candidate.get("owner_user_id")
         if not isinstance(owner_id, str) or (owner_id and not re.fullmatch(r"[1-9][0-9]{0,19}", owner_id)):
             raise ValueError("config.json: owner_user_id 必须是单个QQ号字符串或空字符串")
         owner_name = candidate.get("owner_name")
-        if (not isinstance(owner_name, str) or len(owner_name) > 80
-                or any(ord(char) < 32 or ord(char) == 127 for char in owner_name)):
+        if (
+            not isinstance(owner_name, str)
+            or len(owner_name) > 80
+            or any(ord(char) < 32 or ord(char) == 127 for char in owner_name)
+        ):
             raise ValueError("config.json: owner_name 必须是不含控制字符的短名称")
         policy = candidate.get("group_chat_policy")
-        if (not isinstance(policy, dict) or set(policy) != {"default_enabled", "groups"}
-                or type(policy.get("default_enabled")) is not bool
-                or not isinstance(policy.get("groups"), dict)
-                or any(not isinstance(key, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", key)
-                       or type(value) is not bool for key, value in policy["groups"].items())):
+        if (
+            not isinstance(policy, dict)
+            or set(policy) != {"default_enabled", "groups"}
+            or type(policy.get("default_enabled")) is not bool
+            or not isinstance(policy.get("groups"), dict)
+            or any(
+                not isinstance(key, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", key) or type(value) is not bool
+                for key, value in policy["groups"].items()
+            )
+        ):
             raise ValueError("config.json: group_chat_policy 必须包含布尔默认值及群号到布尔值的映射")
         cooldown_seconds = candidate.get("cd_seconds")
         if (
@@ -301,7 +361,18 @@ class ConfigParser:
             value = candidate.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"config.json: {field} 必须是正整数")
-        for field in ("emotion_rate", "poke_llm_rate"):
+        total_calls = candidate.get("max_tool_calls_per_request")
+        if type(total_calls) is not int or not 1 <= total_calls <= 15:
+            raise ValueError("config.json: max_tool_calls_per_request 必须是 1 到 15 的整数")
+        build_timeout = candidate.get("classification_build_timeout_seconds")
+        if (
+            isinstance(build_timeout, bool)
+            or not isinstance(build_timeout, (int, float))
+            or not math.isfinite(build_timeout)
+            or build_timeout < 0
+        ):
+            raise ValueError("config.json: classification_build_timeout_seconds 必须是有限非负秒数，0 表示关闭")
+        for field in ("emotion_rate", "poke_llm_rate", "speech_auto_rate", "speech_ping_rate"):
             value = candidate.get(field)
             if not isinstance(value, (int, float)) or not 0 <= value <= 1:
                 raise ValueError(f"config.json: {field} 必须在 0 到 1 之间")
@@ -316,9 +387,7 @@ class ConfigParser:
         ):
             raise ValueError("config.json: legacy_background_plugins 必须是字符串数组")
         excluded_tools = candidate.get("tool_image_vision_excluded_tools")
-        if not isinstance(excluded_tools, list) or not all(
-            isinstance(item, str) and item.strip() for item in excluded_tools
-        ):
+        if not isinstance(excluded_tools, list) or not all(isinstance(item, str) and item.strip() for item in excluded_tools):
             raise ValueError("config.json: tool_image_vision_excluded_tools 必须是字符串数组")
         background_grace = candidate.get("legacy_background_grace_seconds")
         background_timeout = candidate.get("legacy_background_timeout_seconds")
@@ -329,9 +398,7 @@ class ConfigParser:
             or isinstance(background_timeout, bool)
             or background_timeout <= background_grace
         ):
-            raise ValueError(
-                "config.json: legacy_background_timeout_seconds 必须是正整数且大于 legacy_background_grace_seconds"
-            )
+            raise ValueError("config.json: legacy_background_timeout_seconds 必须是正整数且大于 legacy_background_grace_seconds")
         for field in (
             "provider_catalog_categorize_enabled",
             "provider_catalog_llm_payload_enabled",
@@ -344,11 +411,14 @@ class ConfigParser:
             "protocol_tools_low_risk_direct_enabled",
             "protocol_tools_business_first",
             "tool_progress_messages_enabled",
+            "plugin_command_progress_enabled",
             "tool_progress_model_preface_enabled",
             "tool_batch_sequential_fallback",
             "tool_image_vision_enabled",
             "skip_self_image_vision",
             "auto_render_markdown",
+            "speech_enabled",
+            "speech_auto_enabled",
             "ordinary_single_delivery",
             "abuse_guard_enabled",
             "runtime_watch_enabled",

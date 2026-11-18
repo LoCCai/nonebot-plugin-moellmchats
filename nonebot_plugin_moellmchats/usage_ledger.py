@@ -4,21 +4,20 @@ One row per HTTP attempt; streamed usage snapshots replace the same row. Token
 subcategories are subsets, never added to the provider's input/output totals.
 No prompts, attachments, authorization headers or provider errors are stored.
 """
+
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
 import threading
 import time
 import uuid
-
-from nonebot.log import logger
 
 _scope: ContextVar[dict | None] = ContextVar("moellm_usage_scope", default=None)
 _budget_locks = {}
@@ -29,11 +28,16 @@ _attempt: ContextVar[dict | None] = ContextVar("moellm_usage_attempt", default=N
 @contextmanager
 def bind_usage_scope(bot, event):
     from .onebot_facade import event_user_id
-    token = _scope.set({"bot_id": str(getattr(bot, "self_id", "")),
-        "user_id": str(getattr(event, "get_user_id", lambda: event_user_id(event))()),
-        "group_id": str(getattr(event, "group_id", "") or ""),
-        "scene": "group" if getattr(event, "group_id", None) else "private",
-        "request_id": uuid.uuid4().hex})
+
+    token = _scope.set(
+        {
+            "bot_id": str(getattr(bot, "self_id", "")),
+            "user_id": str(getattr(event, "get_user_id", lambda: event_user_id(event))()),
+            "group_id": str(getattr(event, "group_id", "") or ""),
+            "scene": "group" if getattr(event, "group_id", None) else "private",
+            "request_id": uuid.uuid4().hex,
+        }
+    )
     try:
         yield
     finally:
@@ -48,9 +52,11 @@ def numeric_usage(value, depth=0):
     """Keep returned counters, including unknown future numeric details."""
     if not isinstance(value, Mapping) or depth > 3:
         return {}
-    return {str(k)[:100]: numeric_usage(v, depth + 1) if isinstance(v, Mapping) else v
-            for k, v in list(value.items())[:64]
-            if isinstance(v, Mapping) or (type(v) in (int, float) and 0 <= v <= (1 << 53))}
+    return {
+        str(k)[:100]: numeric_usage(v, depth + 1) if isinstance(v, Mapping) else v
+        for k, v in list(value.items())[:64]
+        if isinstance(v, Mapping) or (type(v) in (int, float) and 0 <= v <= (1 << 53))
+    }
 
 
 def normalize_usage(usage):
@@ -65,8 +71,15 @@ def normalize_usage(usage):
     # Some non-chat APIs return total_tokens only. Preserve it without inventing
     # an input/output breakdown or pretending an absent usage is free.
     total = prompt + output or integer(payload.get("total_tokens"))
-    return {"prompt": prompt, "completion": output, "cache": cache, "reasoning": reasoning,
-            "total": total, "usage_known": int(bool(payload)), "raw_usage": numeric_usage(payload)}
+    return {
+        "prompt": prompt,
+        "completion": output,
+        "cache": cache,
+        "reasoning": reasoning,
+        "total": total,
+        "usage_known": int(bool(payload)),
+        "raw_usage": numeric_usage(payload),
+    }
 
 
 class UsageLedger:
@@ -83,6 +96,7 @@ class UsageLedger:
             if self.initialized:
                 return
             from .private_files import ensure_private_directory, ensure_private_file
+
             ensure_private_directory(self.path.parent)
             ensure_private_file(self.path)
             with self.connect() as db:
@@ -107,8 +121,10 @@ class UsageLedger:
                   baseline INTEGER NOT NULL, actor TEXT NOT NULL, at REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS prices (model TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
                 """)
-                self.totals = {r[0]: r[1] for r in db.execute(
-                    "SELECT model || ' (' || provider || ')',sum(total) FROM usage GROUP BY provider,model")}
+                self.totals = {
+                    r[0]: r[1]
+                    for r in db.execute("SELECT model || ' (' || provider || ')',sum(total) FROM usage GROUP BY provider,model")
+                }
                 self.budgets = {r[0]: (r[1], r[2]) for r in db.execute("SELECT identity,allowance,baseline FROM budgets")}
                 self.prices = {r[0]: json.loads(r[1]) for r in db.execute("SELECT model,snapshot FROM prices")}
             self.path.chmod(0o600)
@@ -134,8 +150,10 @@ class UsageLedger:
                 return
             baseline = self.totals.get(identity, 0) if reset else 0
             db.execute("INSERT OR REPLACE INTO budgets VALUES (?,?,?,?)", (identity, allowance, baseline, time.time()))
-            db.execute("INSERT INTO budget_changes(identity,allowance,baseline,actor,at) VALUES (?,?,?,?,?)",
-                       (identity, allowance, baseline, actor, time.time()))
+            db.execute(
+                "INSERT INTO budget_changes(identity,allowance,baseline,actor,at) VALUES (?,?,?,?,?)",
+                (identity, allowance, baseline, actor, time.time()),
+            )
             self.budgets[identity] = allowance, baseline
 
     def remaining(self, identity):
@@ -149,19 +167,23 @@ class UsageLedger:
         self.initialize()
         with self.lock, self.connect() as db:
             if replace_imported:
-                expired = [key for key, row in self.prices.items()
-                           if row.get('source', '').startswith(('local_newapi_', 'newapi_reference_'))]
+                expired = [
+                    key
+                    for key, row in self.prices.items()
+                    if row.get("source", "").startswith(("local_newapi_", "newapi_reference_"))
+                ]
                 db.executemany("DELETE FROM prices WHERE model=?", [(key,) for key in expired])
                 for key in expired:
                     del self.prices[key]
             for model, row in prices.items():
-                if row.get('source') != 'manual_admin' and self.prices.get(model, {}).get('source') == 'manual_admin':
+                if row.get("source") != "manual_admin" and self.prices.get(model, {}).get("source") == "manual_admin":
                     continue
                 db.execute("INSERT OR REPLACE INTO prices VALUES (?,?)", (model, json.dumps(row)))
                 self.prices[model] = row
 
     def estimate(self, model, counters):
         from .usage_pricing import applicable_price, estimate_price
+
         with self.lock:
             return estimate_price(applicable_price(self.prices, model), counters)
 
@@ -171,11 +193,20 @@ class UsageLedger:
         identity = f"{model.get('model', 'unknown')} ({model.get('provider', 'unknown')})"
         estimate, currency, price = self.estimate(model, counters)
         scope = scope or {}
-        row = dict(id=attempt_id or uuid.uuid4().hex, at=time.time(),
-            provider=str(model.get("provider", "unknown")), model=str(model.get("model", "unknown")),
+        row = dict(
+            id=attempt_id or uuid.uuid4().hex,
+            at=time.time(),
+            provider=str(model.get("provider", "unknown")),
+            model=str(model.get("model", "unknown")),
             **{key: str(scope.get(key, "")) for key in ("bot_id", "group_id", "user_id", "request_id")},
-            scene=scope.get("scene", "unattributed"), purpose=purpose, status=status,
-            **counters, estimate=estimate, currency=currency, price_snapshot=json.dumps(price))
+            scene=scope.get("scene", "unattributed"),
+            purpose=purpose,
+            status=status,
+            **counters,
+            estimate=estimate,
+            currency=currency,
+            price_snapshot=json.dumps(price),
+        )
         row["raw_usage"] = json.dumps(row["raw_usage"])
         with self.lock, self.connect() as db:
             previous = db.execute("SELECT total,at FROM usage WHERE id=?", (row["id"],)).fetchone()
@@ -185,8 +216,10 @@ class UsageLedger:
                 if previous["total"] > row["total"]:
                     return
                 row["at"] = previous["at"]
-            db.execute("INSERT OR REPLACE INTO usage (" + ",".join(row) + ") VALUES (" +
-                       ",".join("?" for _ in row) + ")", tuple(row.values()))
+            db.execute(
+                "INSERT OR REPLACE INTO usage (" + ",".join(row) + ") VALUES (" + ",".join("?" for _ in row) + ")",
+                tuple(row.values()),
+            )
             db.commit()
             self.totals[identity] = self.totals.get(identity, 0) + row["total"] - (previous["total"] if previous else 0)
 
@@ -204,9 +237,15 @@ class UsageLedger:
             where.append("(at>? OR (at=? AND id>?))")
             values.extend((after[0], after[0], after[1]))
         with self.lock, self.connect() as db:
-            return [dict(row) for row in db.execute("SELECT * FROM usage WHERE " + " AND ".join(where) +
-                    (" ORDER BY at DESC,id DESC LIMIT ?" if reverse else " ORDER BY at,id LIMIT ?"),
-                    (*values, min(10_000, max(1, limit))))]
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM usage WHERE "
+                    + " AND ".join(where)
+                    + (" ORDER BY at DESC,id DESC LIMIT ?" if reverse else " ORDER BY at,id LIMIT ?"),
+                    (*values, min(10_000, max(1, limit))),
+                )
+            ]
 
 
 _ledger: UsageLedger | None = None
@@ -216,6 +255,7 @@ def get_ledger():
     global _ledger
     if _ledger is None:
         from .config import config_path
+
         _ledger = UsageLedger(config_path / "usage" / "usage.sqlite3")
     return _ledger
 
@@ -228,37 +268,50 @@ async def record_usage(model, usage, *, purpose="chat", attempt_id=None, status=
     if not scope:
         # Restart recovery executes its saved operation directly.
         from .request_recovery import current_binding
+
         if binding := current_binding():
             event = binding.record.get("event", {})
-            scope = {"bot_id": binding.record.get("bot_id", ""),
-                "user_id": event.get("user_id", ""), "group_id": event.get("group_id") or "",
+            scope = {
+                "bot_id": binding.record.get("bot_id", ""),
+                "user_id": event.get("user_id", ""),
+                "group_id": event.get("group_id") or "",
                 "scene": "group" if event.get("group_id") else "private",
-                "request_id": binding.record["key"]}
+                "request_id": binding.record["key"],
+            }
     attempt = _attempt.get()
     if attempt and attempt_id is None:
         attempt_id = attempt["id"]
         attempt["recorded"] = True
-    await asyncio.to_thread(ledger.record, model, usage, scope=scope,
-                            purpose=purpose, attempt_id=attempt_id, status=status)
+        counters = normalize_usage(usage)
+        if counters["usage_known"]:
+            attempt["used"] = max(attempt.get("used", 0), counters["total"])
+    await asyncio.to_thread(ledger.record, model, usage, scope=scope, purpose=purpose, attempt_id=attempt_id, status=status)
 
 
 class _BudgetResponse:
     status = 403
-    headers = {}
+
     def __init__(self, status=403):
         self.status = status
+        self.headers = {}
+
     async def text(self):
         return '{"error":{"code":"insufficient_quota","message":"quota exhausted"}}'
+
     async def json(self):
         return json.loads(await self.text())
+
     @property
     def content(self):
         owner = self
+
         class Content:
             async def read(self, n=-1):
-                return (await owner.text()).encode()[:n if n >= 0 else None]
+                return (await owner.text()).encode()[: n if n >= 0 else None]
+
             async def iter_chunked(self, n):
                 yield (await owner.text()).encode()
+
         return Content()
 
 
@@ -268,9 +321,24 @@ async def budgeted_post(session, model, *args, **kwargs):
 
     The final in-flight response can cross the boundary; no subsequent request is
     sent after that response is counted. Limits apply across every user and group.
-"""
+    """
     # This is the last shared boundary before every provider request. Copies
     # prevent one user's limits from leaking into shared model configuration.
+    scope = _scope.get()
+    if scope and scope.get("user_id"):
+        identity = json.dumps(
+            [scope.get("bot_id"), scope.get("scene"), scope.get("group_id"), scope["user_id"]], separators=(",", ":")
+        )
+        kwargs["headers"] = {
+            **(kwargs.get("headers") or {}),
+            "X-Session-Id": "qiqi-" + hashlib.sha256(identity.encode()).hexdigest(),
+        }
+    from . import personal_billing
+
+    if personal_billing.active():
+        async with personal_billing.post(session, model, *args, **kwargs) as response:
+            yield response
+        return
     payload = kwargs.get("json")
     encoded_payload = False
     if payload is None and isinstance(kwargs.get("data"), (str, bytes)):
@@ -285,6 +353,9 @@ async def budgeted_post(session, model, *args, **kwargs):
         payload = dict(payload)
         apply_glm_policy(model, payload)
         apply_payload_budget(model, payload)
+        from .daily_quota import apply_openai_chat_policy
+
+        apply_openai_chat_policy(model, payload)
         kwargs["data" if encoded_payload else "json"] = json.dumps(payload) if encoded_payload else payload
     identity = f"{model.get('model')} ({model.get('provider')})"
     ledger = get_ledger()
@@ -294,17 +365,17 @@ async def budgeted_post(session, model, *args, **kwargs):
     if lock:
         # JSON bytes conservatively cover text and tool schemas. Native media
         # has provider-dependent tokenization, so reserve its full context size.
-        payload = kwargs.get('json')
+        payload = kwargs.get("json")
         if payload is None:
             try:
-                payload = json.loads(kwargs.get('data') or '{}')
+                payload = json.loads(kwargs.get("data") or "{}")
             except (TypeError, ValueError):
                 payload = {}
         encoded = json.dumps(payload, ensure_ascii=False)
-        context_size = integer(model.get('context_tokens')) or 1_000_000
+        context_size = integer(model.get("context_tokens")) or 1_000_000
         media = any(kind in encoded for kind in ('"image_url"', '"video_url"', '"file_url"', '"input_audio"'))
-        incoming = context_size if media else min(context_size, len(encoded.encode('utf-8')) + 4096)
-        reservation = incoming + max(integer(payload.get('max_tokens')), integer(payload.get('max_completion_tokens')), 8192)
+        incoming = context_size if media else min(context_size, len(encoded.encode("utf-8")) + 4096)
+        reservation = incoming + max(integer(payload.get("max_tokens")), integer(payload.get("max_completion_tokens")), 8192)
         async with lock:
             outstanding = _budget_reserved.get(identity, 0)
             remaining = ledger.remaining(identity)
@@ -317,17 +388,29 @@ async def budgeted_post(session, model, *args, **kwargs):
     attempt = {"id": uuid.uuid4().hex, "recorded": False}
     token = _attempt.set(attempt)
     status = "interrupted_usage_unknown"
+    daily_reserved = False
+    definite_rejection = False
     try:
         if rejected is not None or ledger.exhausted(identity):
             attempt["recorded"] = True
             yield _BudgetResponse(rejected or 403)
             return
+        if model.get("daily_quota") is not None:
+            from .daily_quota import daily_store
+
+            daily_status = await asyncio.to_thread(daily_store(ledger).reserve, model, payload, attempt["id"])
+            if daily_status:
+                attempt["recorded"] = True
+                yield _BudgetResponse(daily_status)
+                return
+            daily_reserved = True
         # Write intent before network I/O. A crash can leave an explicit
         # unknown-cost attempt, rather than making personal accounting vanish.
         await record_usage(model, None, status="started_usage_unknown")
         attempt["recorded"] = False
         async with session.post(*args, **kwargs) as response:
             status = "completed_usage_unknown" if response.status == 200 else f"http_{response.status}"
+            definite_rejection = response.status in {400, 401, 403, 404, 413, 422, 429}
             yield response
     finally:
         try:
@@ -335,22 +418,48 @@ async def budgeted_post(session, model, *args, **kwargs):
                 await asyncio.shield(record_usage(model, None, status=status))
         finally:
             _attempt.reset(token)
-            if lock and rejected is None:
-                async with lock:
-                    _budget_reserved[identity] = max(0, _budget_reserved.get(identity, 0) - reservation)
+            try:
+                if daily_reserved:
+                    from .daily_quota import daily_store
+
+                    await asyncio.shield(
+                        asyncio.to_thread(
+                            daily_store(ledger).finish,
+                            attempt["id"],
+                            used=attempt.get("used"),
+                            definite_rejection=definite_rejection,
+                        )
+                    )
+            finally:
+                if lock and rejected is None:
+                    async with lock:
+                        _budget_reserved[identity] = max(0, _budget_reserved.get(identity, 0) - reservation)
 
 
 def apply_glm_policy(model, payload):
     if model.get("provider") != "bigmodel":
         return
     name = model.get("model")
-    if name in {"glm-4-flash-250414", "glm-4.7-flash", "glm-4.6v-flash"}:
+    if name in {"cogview-3-flash", "cogvideox-flash"}:
+        for key in ("stream", "thinking", "reasoning_effort", "tools", "tool_choice", "tool_stream"):
+            payload.pop(key, None)
+        return
+    if name in {
+        "glm-4-flash-250414",
+        "glm-4.7-flash",
+        "glm-4.6v-flash",
+        "glm-z1-flash",
+        "glm-4v-flash",
+        "glm-4.1v-thinking-flash",
+    }:
         # These documented free models do not share 5.3's mandatory thinking
         # contract. Disable optional reasoning for bounded interactive tasks.
         payload.pop("reasoning_effort", None)
         payload.pop("tool_stream", None)
         payload.pop("thinking", None)
-        if name != "glm-4-flash-250414":
+        if name == "glm-4v-flash" and "max_tokens" in payload:
+            payload["max_tokens"] = min(1024, integer(payload["max_tokens"]))
+        if name in {"glm-4.7-flash", "glm-4.6v-flash"}:
             payload["thinking"] = {"type": "disabled"}
         for key in ("web_search_options", "web_search", "retrieval"):
             payload.pop(key, None)
@@ -362,8 +471,7 @@ def apply_glm_policy(model, payload):
         return
     if name != "glm-5.3-flash":
         raise ValueError("BigModel模型尚未适配")
-    payload.update(temperature=1, top_p=0.95, reasoning_effort="max",
-                   thinking={"type": "enabled", "clear_thinking": False})
+    payload.update(temperature=1, top_p=0.95, reasoning_effort="max", thinking={"type": "enabled", "clear_thinking": False})
     if payload.get("stream"):
         payload["tool_stream"] = True
     # Thinking is mandatory. Tiny classification/output limits must not spend

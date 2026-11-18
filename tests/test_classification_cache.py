@@ -1070,10 +1070,7 @@ async def test_memory_resolver_keeps_different_keys_concurrent() -> None:
         return build
 
     tasks = [
-        asyncio.create_task(
-            resolve_classification(cache, record.key, builder(index))
-        )
-        for index, record in enumerate(records)
+        asyncio.create_task(resolve_classification(cache, record.key, builder(index))) for index, record in enumerate(records)
     ]
     await asyncio.wait_for(
         asyncio.gather(*(event.wait() for event in entered)),
@@ -1098,12 +1095,8 @@ async def test_cancelled_waiter_does_not_cancel_shared_classification() -> None:
         await release.wait()
         return record
 
-    cancelled = asyncio.create_task(
-        resolve_classification(cache, record.key, builder)
-    )
-    survivor = asyncio.create_task(
-        resolve_classification(cache, record.key, builder)
-    )
+    cancelled = asyncio.create_task(resolve_classification(cache, record.key, builder))
+    survivor = asyncio.create_task(resolve_classification(cache, record.key, builder))
     await asyncio.wait_for(entered.wait(), timeout=1)
     cancelled.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1112,6 +1105,91 @@ async def test_cancelled_waiter_does_not_cancel_shared_classification() -> None:
 
     assert await survivor is record
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_build_total_deadline_ends_zombie_flight(monkeypatch) -> None:
+    """A build that outlives every waiter must not burn indefinitely."""
+    from nonebot_plugin_moellmchats.classification_cache import (
+        ClassificationCacheUnavailableError,
+    )
+    from nonebot_plugin_moellmchats.config import config_parser
+
+    record = _record()
+    cache = MemoryClassificationCache()
+    entered = asyncio.Event()
+
+    async def builder() -> ClassificationCacheRecord:
+        entered.set()
+        await asyncio.sleep(30)
+        return record
+
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: 0.05 if key == "classification_build_timeout_seconds" else default,
+    )
+
+    with pytest.raises(ClassificationCacheUnavailableError, match="超时"):
+        await resolve_classification(cache, record.key, builder)
+    await entered.wait()
+    await asyncio.sleep(0)
+    # The flight ended with the deadline instead of lingering as a zombie.
+    assert not cache._flights
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, "bad", float("nan"), float("inf"), -1])
+async def test_bad_build_timeout_cannot_poison_a_cache_flight(monkeypatch, value):
+    from nonebot_plugin_moellmchats.classification_cache import ClassificationCacheUnavailableError
+    from nonebot_plugin_moellmchats.config import config_parser
+
+    record = _record()
+    cache = MemoryClassificationCache()
+    current = [value]
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: current[0] if key == "classification_build_timeout_seconds" else default,
+    )
+
+    async def builder():
+        return record
+
+    with pytest.raises(ClassificationCacheUnavailableError, match="配置无效"):
+        await resolve_classification(cache, record.key, builder)
+    assert not cache._flights
+    current[0] = 25
+    assert await resolve_classification(cache, record.key, builder) is record
+
+
+@pytest.mark.asyncio
+async def test_shared_deadline_cancels_orphaned_builder_after_waiter_leaves(monkeypatch):
+    from nonebot_plugin_moellmchats.config import config_parser
+
+    record = _record()
+    cache = MemoryClassificationCache()
+    entered, ended = asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr(
+        config_parser, "get_config", lambda key, default=None: 0.03 if key == "classification_build_timeout_seconds" else default
+    )
+
+    async def builder():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            ended.set()
+
+    waiter = asyncio.create_task(resolve_classification(cache, record.key, builder))
+    await entered.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert not ended.is_set()
+    await asyncio.wait_for(ended.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert not cache._flights
 
 
 @pytest.mark.asyncio

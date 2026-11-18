@@ -84,9 +84,18 @@ async def test_cancel_notice_preserves_repeated_cancellation() -> None:
 
 def _mention_event(message: Message) -> GroupMessageEvent:
     return GroupMessageEvent(
-        time=1_000, self_id=123, post_type="message", message_type="group",
-        sub_type="normal", user_id=42, group_id=456, message_id=-835204486,
-        message=message, raw_message=str(message), font=0, sender={"user_id": 42},
+        time=1_000,
+        self_id=123,
+        post_type="message",
+        message_type="group",
+        sub_type="normal",
+        user_id=42,
+        group_id=456,
+        message_id=-835204486,
+        message=message,
+        raw_message=str(message),
+        font=0,
+        sender={"user_id": 42},
     )
 
 
@@ -99,16 +108,22 @@ async def test_mention_ack_uses_original_message_after_adapter_strips_at() -> No
     await chat_runtime.acknowledge_mention(bot, event)
 
     bot.call_api.assert_awaited_once_with(
-        "set_msg_emoji_like", message_id=-835204486, emoji_id="282", set=True,
+        "set_msg_emoji_like",
+        message_id=-835204486,
+        emoji_id="282",
+        set=True,
     )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("message", [
-    Message("@小天才七七(运行中) 问题"),
-    Message([MessageSegment.at(789), MessageSegment.text("问题")]),
-    Message([MessageSegment.at("all"), MessageSegment.text("问题")]),
-])
+@pytest.mark.parametrize(
+    "message",
+    [
+        Message("@小天才七七(运行中) 问题"),
+        Message([MessageSegment.at(789), MessageSegment.text("问题")]),
+        Message([MessageSegment.at("all"), MessageSegment.text("问题")]),
+    ],
+)
 async def test_mention_ack_does_not_react_to_text_or_other_targets(message: Message) -> None:
     bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
 
@@ -151,16 +166,25 @@ async def test_mention_ack_uses_configured_emoji(monkeypatch: pytest.MonkeyPatch
     await chat_runtime.acknowledge_mention(bot, event)
 
     bot.call_api.assert_awaited_once_with(
-        "set_msg_emoji_like", message_id=-835204486, emoji_id="76", set=True,
+        "set_msg_emoji_like",
+        message_id=-835204486,
+        emoji_id="76",
+        set=True,
     )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("original,to_me,expected", [
-    ("七七 查询造梦", True, True), ("七七，帮我看看", True, True),
-    ("七七你好", True, True), ("今天七七在线吗", True, False),
-    ("七七 查询造梦", False, False), ("@七七 查询造梦", True, False),
-])
+@pytest.mark.parametrize(
+    ("original", "to_me", "expected"),
+    [
+        ("七七 查询造梦", True, True),
+        ("七七，帮我看看", True, True),
+        ("七七你好", True, True),
+        ("今天七七在线吗", True, False),
+        ("七七 查询造梦", False, False),
+        ("@七七 查询造梦", True, False),
+    ],
+)
 async def test_nickname_ack_follows_adapter_prefix_recognition(original, to_me, expected):
     bot = SimpleNamespace(self_id="123", config=SimpleNamespace(nickname={"七七"}), call_api=AsyncMock())
     event = _mention_event(Message(original))
@@ -181,6 +205,61 @@ async def test_nickname_and_at_ack_only_once_and_obeys_switch(monkeypatch):
     monkeypatch.setattr(chat_runtime.mention_ack_config, "moellm_mention_ack_enabled", False)
     await chat_runtime.acknowledge_mention(bot, event)
     bot.call_api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reaction_phases_use_json_config_and_support_disabling(monkeypatch):
+    settings = {"enabled": True, "started": "76", "completed": "128077", "rejected": "10060"}
+    monkeypatch.setattr(chat_runtime.config_parser, "get_config", lambda _key, _default=None: settings)
+    # JSON is authoritative even if the old NoneBot switch is disabled.
+    monkeypatch.setattr(chat_runtime.mention_ack_config, "moellm_mention_ack_enabled", False)
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
+    event = _mention_event(Message(MessageSegment.at(123)))
+    await chat_runtime.acknowledge_mention(bot, event)
+    await chat_runtime.complete_mention(bot, event)
+    await chat_runtime.acknowledge_mention(bot, event, rejected=True)
+    assert [call.kwargs["emoji_id"] for call in bot.call_api.await_args_list] == ["76", "128077", "10060"]
+    bot.call_api.reset_mock()
+    settings["completed"] = ""
+    await chat_runtime.complete_mention(bot, event)
+    settings["enabled"] = False
+    await chat_runtime.acknowledge_mention(bot, event)
+    bot.call_api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "failed", "expected"),
+    [
+        ("sent", False, True),
+        ("pending", False, False),
+        ("unknown", False, False),
+        ("sending", False, False),
+        ("sent", True, False),
+    ],
+)
+async def test_completion_requires_confirmed_deliveries(monkeypatch, state, failed, expected):
+    from nonebot_plugin_moellmchats import request_recovery
+
+    monkeypatch.setattr(
+        request_recovery,
+        "current_binding",
+        lambda: SimpleNamespace(record={"model_failed": failed, "outbox": [{"state": state}]}),
+    )
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock())
+    await chat_runtime.complete_mention(bot, _mention_event(Message(MessageSegment.at(123))))
+    assert bot.call_api.await_count == int(expected)
+
+
+@pytest.mark.asyncio
+async def test_completion_reaction_timeout_is_bounded_without_message_fallback(monkeypatch):
+    async def slow_api(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(chat_runtime, "_MENTION_ACK_TIMEOUT_SECONDS", 0.01)
+    bot = SimpleNamespace(self_id="123", call_api=AsyncMock(side_effect=slow_api), send=AsyncMock())
+    await asyncio.wait_for(chat_runtime.complete_mention(bot, _mention_event(Message(MessageSegment.at(123)))), timeout=0.2)
+    bot.send.assert_not_awaited()
 
 
 def _event(*, user_id: int = 42, timestamp: int = 1_000):
@@ -331,8 +410,8 @@ def _generation_redis_host(
 @pytest.mark.asyncio
 async def test_cooldown_rejects_before_entering_admission_queue(monkeypatch) -> None:
     chat_runtime.reset_all_runtime_state()
-    chat_runtime.cd['42'] = 990
-    monkeypatch.setattr(chat_runtime.time, 'time', lambda: 1000)
+    chat_runtime.cd["42"] = 990
+    monkeypatch.setattr(chat_runtime.time, "time", lambda: 1000)
     _config(monkeypatch, cooldown=120, timeout=180)
     entered = False
 
@@ -386,7 +465,7 @@ async def test_fifteen_groups_wait_briefly_without_formatting_or_leaking_slots(m
     _publish_snapshot()
     gate = AdmissionController(name="llm", max_active=4, max_pending=32, max_per_key=1)
     monkeypatch.setattr(chat_runtime, "get_llm_controller", lambda: gate)
-    monkeypatch.setattr(request_budget.budget_config, "moellm_queue_wait_seconds", 0.05)
+    monkeypatch.setattr(request_budget.budget_config, "moellm_queue_wait_seconds", 0.1)
     monkeypatch.setattr(request_budget, "_authorizer", AsyncMock(return_value=False))
     monkeypatch.setattr(chat_runtime.temperament_manager, "get_temperament", lambda _: "默认")
     release = asyncio.Event()
@@ -416,13 +495,13 @@ async def test_fifteen_groups_wait_briefly_without_formatting_or_leaking_slots(m
         formatter, matcher = AsyncMock(return_value={}), FakeMatcher()
         formatters.append(formatter)
         matchers.append(matcher)
-        tasks.append(asyncio.create_task(chat_runtime.handle_llm(
-            object(), event, matcher, formatter, resource_host=host)))
+        tasks.append(asyncio.create_task(chat_runtime.handle_llm(object(), event, matcher, formatter, resource_host=host)))
     try:
         await asyncio.wait_for(full.wait(), 1)
         pending = [task for index, task in enumerate(tasks) if 90000 + index not in started]
         await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 1)
-        assert gate.active == 4 and gate.pending == 0
+        assert gate.active == 4
+        assert gate.pending == 0
         assert sum(formatter.await_count for formatter in formatters) == 4
         for index, matcher in enumerate(matchers):
             if 90000 + index not in started:
@@ -435,8 +514,9 @@ async def test_fifteen_groups_wait_briefly_without_formatting_or_leaking_slots(m
         assert gate.active == gate.pending == 0
         # A rejected QQ may retry immediately; its conversation lease is gone.
         retry_index = next(i for i in range(15) if 90000 + i not in started)
-        await chat_runtime.handle_llm(object(), _runtime_event(user_id=90000 + retry_index),
-                                     FakeMatcher(), {}, resource_host=host)
+        await chat_runtime.handle_llm(
+            object(), _runtime_event(user_id=90000 + retry_index), FakeMatcher(), {}, resource_host=host
+        )
         assert gate.active == gate.pending == 0
     finally:
         release.set()
@@ -448,6 +528,7 @@ async def test_fifteen_groups_wait_briefly_without_formatting_or_leaking_slots(m
 async def test_queue_deadline_does_not_cancel_running_work_and_cancellation_unreserves():
     gate = AdmissionController(name="llm", max_active=1, max_pending=4, max_per_key=1)
     async with queued_slot(gate, "running", timeout_seconds=0.01):
+
         async def wait():
             async with queued_slot(gate, "waiting", timeout_seconds=1):
                 pytest.fail("no capacity")
@@ -459,7 +540,8 @@ async def test_queue_deadline_does_not_cancel_running_work_and_cancellation_unre
         with pytest.raises(asyncio.CancelledError):
             await waiter
         await asyncio.sleep(0.02)
-        assert gate.active == 1 and gate.pending == 0
+        assert gate.active == 1
+        assert gate.pending == 0
     assert gate.active == gate.pending == 0
     async with queued_slot(gate, "waiting", timeout_seconds=0.1):
         assert gate.active == 1
@@ -539,6 +621,54 @@ async def test_chat_entry_binds_one_deadline_and_completes_memory_agent(
     assert len(captured) == 1
     assert captured[0].run.state is AgentRunState.COMPLETED
     assert captured[0].deadline.deadline_at > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled", "delivery_unknown"])
+async def test_completion_reaction_follows_successful_reply_only(monkeypatch, outcome):
+    chat_runtime.reset_all_runtime_state()
+    _config(monkeypatch, cooldown=0, timeout=30)
+    _publish_snapshot()
+    host = RuntimeResourceHost()
+    steps = []
+
+    async def reaction(_api, **kwargs):
+        steps.append(kwargs["emoji_id"])
+
+    class Chat:
+        def __init__(self, _bot, _event, _message, *, temperament, agent_runtime):
+            self.runtime = agent_runtime
+
+        async def get_llm_chat(self):
+            await self.runtime.advance(AgentRunState.PLANNING, model="model")
+            await self.runtime.advance(AgentRunState.EXECUTING)
+            if outcome == "cancelled":
+                raise asyncio.CancelledError
+            if outcome == "failure":
+                return False
+            steps.append("reply")
+            if outcome == "delivery_unknown":
+                raise NetworkError("uncertain")
+            return True
+
+    monkeypatch.setattr(chat_runtime.llm, "MoeLlm", Chat)
+    monkeypatch.setattr(chat_runtime.temperament_manager, "get_temperament", lambda _user: "test")
+    bot = SimpleNamespace(self_id="123", config=SimpleNamespace(superusers=set()), call_api=AsyncMock(side_effect=reaction))
+    event = _mention_event(Message(MessageSegment.at(123)))
+    try:
+        operation = chat_runtime.handle_llm(bot, event, FakeMatcher(), {"text": ["question"]}, resource_host=host)
+        if outcome == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+        else:
+            await operation
+    finally:
+        await host.close()
+    assert steps[0] == "282"
+    if outcome == "success":
+        assert steps == ["282", "reply", "10004"]
+    else:
+        assert "10004" not in steps
 
 
 @pytest.mark.asyncio

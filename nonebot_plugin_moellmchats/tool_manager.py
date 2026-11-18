@@ -456,9 +456,7 @@ class ToolSnapshot:
     generated_state_revision: int = 0
     generated_state_digest: str = ""
     generated_active: Mapping[str, str] = field(default_factory=dict)
-    intent_owners: Mapping[str, tuple[tuple[str, bool], ...]] = field(
-        default_factory=dict
-    )
+    intent_owners: Mapping[str, tuple[tuple[str, bool], ...]] = field(default_factory=dict)
     directory_entry_count: int = 0
     directory_digest: str = ""
     picmenu_plugin_count: int = 0
@@ -490,9 +488,7 @@ class ToolSnapshot:
                 )
             ):
                 raise ValueError("ToolSnapshot.intent_owners 内容非法")
-            normalized_owners[intent] = tuple(
-                sorted((str(owner[0]), bool(owner[1])) for owner in owners)
-            )
+            normalized_owners[intent] = tuple(sorted((str(owner[0]), bool(owner[1])) for owner in owners))
         if not normalized_owners:
             normalized_owners = dict(build_intent_owner_index(self.plugin_info))
         object.__setattr__(
@@ -2195,10 +2191,7 @@ TOOLS_REGISTRY = [
         """Backward-compatible detached projection for legacy callers/tests."""
 
         snapshot = ToolManager.capture_picmenu_projection(loaded_plugins)
-        return {
-            plugin_id: mutable_value(info)
-            for plugin_id, info in snapshot.plugins.items()
-        }
+        return {plugin_id: mutable_value(info) for plugin_id, info in snapshot.plugins.items()}
 
     def build_plugin_info(
         self,
@@ -2263,10 +2256,13 @@ TOOLS_REGISTRY = [
                 extra = getattr(getattr(plugin, "metadata", None), "extra", None)
                 raw_dependencies = extra.get("tool_dependencies") if isinstance(extra, Mapping) else None
                 if isinstance(raw_dependencies, (list, tuple)):
-                    dependencies = list(dict.fromkeys(
-                        name for name in raw_dependencies[:64]
-                        if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
-                    ))
+                    dependencies = list(
+                        dict.fromkeys(
+                            name
+                            for name in raw_dependencies[:64]
+                            if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+                        )
+                    )
                     if dependencies:
                         info["tool_dependencies"] = dependencies
 
@@ -2358,7 +2354,7 @@ TOOLS_REGISTRY = [
 
                 description = info.get("description") or "无描述"
 
-                catalog.append(f"- {name} | {tool_type} | {str(description)[:160]}")
+                catalog.append(f"- {name} | {tool_type} | {str(description)[:120]}")
 
             protocol_names = available_protocol_tool_names(
                 is_superuser=is_superuser,
@@ -2368,7 +2364,7 @@ TOOLS_REGISTRY = [
                 if spec.name not in protocol_names or is_blacklisted(spec.name):
                     continue
                 tool_type = "QQ安全封装" if spec.name.startswith("qq__") else "OneBot协议动作"
-                catalog.append(f"- {spec.name} | {tool_type} | {spec.description[:160]}")
+                catalog.append(f"- {spec.name} | {tool_type} | {spec.description[:120]}")
 
         # 3. 联网搜索
         if web_search_enabled and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
@@ -2452,7 +2448,7 @@ TOOLS_REGISTRY = [
                 if not decision.allowed:
                     continue
                 tool_type = "MCP工具" if item.source is ToolSource.MCP else "自定义函数"
-                catalog.append(f"- {name} | {tool_type} | {item.spec.description[:160]}")
+                catalog.append(f"- {name} | {tool_type} | {item.spec.description[:120]}")
 
             protocol_names = available_protocol_tool_names(
                 is_superuser=is_superuser,
@@ -2472,7 +2468,7 @@ TOOLS_REGISTRY = [
                 if not decision.allowed:
                     continue
                 tool_type = "QQ安全封装" if spec.name.startswith("qq__") else "OneBot协议动作"
-                catalog.append(f"- {spec.name} | {tool_type} | {spec.description[:160]}")
+                catalog.append(f"- {spec.name} | {tool_type} | {spec.description[:120]}")
 
         if web_search_enabled and not is_blacklisted(WEB_SEARCH_TOOL_SPEC.name):
             item = provider_catalog.tools.get(WEB_SEARCH_TOOL_SPEC.name)

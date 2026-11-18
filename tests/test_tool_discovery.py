@@ -13,8 +13,8 @@ from nonebot_plugin_moellmchats.tool_discovery import (
     MAX_DISCOVERY_CATALOG_CHARS,
     MAX_DISCOVERY_FEATURES,
     PicMenuProjectionSnapshot,
-    build_intent_owner_index,
     build_compatibility_description,
+    build_intent_owner_index,
     build_plugin_catalog_entries,
     discovery_directory_identity,
     finalize_discovery_catalog,
@@ -112,14 +112,23 @@ def test_menu_discovery_limits_feature_count_and_does_not_coerce_objects() -> No
 
 
 def test_complete_catalog_has_a_global_fail_safe_budget() -> None:
-    entries = [f"- tool_{index} | 工具 | " + "x" * 1000 for index in range(200)]
+    entries = [f"- tool_{index} | 工具 | " + "x" * 1000 for index in range(2000)]
 
     catalog = finalize_discovery_catalog(entries)
 
     assert len(catalog) <= MAX_DISCOVERY_CATALOG_CHARS + 80
     assert catalog.startswith("- tool_0")
     assert "工具目录达到安全上限" in catalog
-    assert "tool_199" not in catalog
+    assert "tool_1999" not in catalog
+
+
+def test_compact_discovery_keeps_all_tools_and_explicit_permission_fields() -> None:
+    entries = [f"- tool_{index} | 工具 | " + "x" * 1000 + " | 条件: 仅管理员" for index in range(200)]
+    catalog = finalize_discovery_catalog(entries)
+    assert len(catalog.splitlines()) == 200
+    assert "tool_199" in catalog
+    assert catalog.count("条件: 仅管理员") == 200
+    assert len(catalog) < len("\n".join(entries)) / 2
 
 
 def test_feature_catalog_and_selected_schema_share_the_same_menu_projection() -> None:
@@ -134,7 +143,7 @@ def test_feature_catalog_and_selected_schema_share_the_same_menu_projection() ->
     entries = build_plugin_catalog_entries("qi_group_admin", info)
     plugin_info, specs = build_nonebot_plugin_candidate({"qi_group_admin": info})
 
-    assert entries[0].startswith("- qi_group_admin | 群管理 > 点赞 | 请求机器人给自己点赞")
+    assert entries[0].startswith("- qi_group_admin | 点赞 | 请求机器人给自己点赞")
     assert "点赞 或 赞我 或 七七赞我" in entries[0]
     assert "资料卡点赞通知" in entries[1]
     assert "菜单功能提示" in specs[0].description
@@ -253,9 +262,15 @@ def test_loaded_plugin_menu_is_automatic_but_custom_info_remains_authoritative(
 
 def test_plugin_tool_dependencies_survive_both_discovery_sources(monkeypatch) -> None:
     plugin = SimpleNamespace(
-        name="qi_zmws", metadata=SimpleNamespace(name="造梦", description="资料", usage="问答",
-            extra={"tool_dependencies": ["zmws_knowledge_search", "zmws_knowledge_read",
-                                         "zmws_knowledge_read", None, "../invalid"]}),
+        name="qi_zmws",
+        metadata=SimpleNamespace(
+            name="造梦",
+            description="资料",
+            usage="问答",
+            extra={
+                "tool_dependencies": ["zmws_knowledge_search", "zmws_knowledge_read", "zmws_knowledge_read", None, "../invalid"]
+            },
+        ),
     )
     monkeypatch.setattr(nonebot.plugin, "get_loaded_plugins", lambda: [plugin])
     manager = object.__new__(ToolManager)
@@ -273,17 +288,21 @@ def test_plugin_tool_dependencies_survive_both_discovery_sources(monkeypatch) ->
 
 
 def test_game_discovery_preserves_native_menu_and_scopes_data_tools_to_analysis():
-    info = with_menu_discovery({'name': '造梦无双', 'usage': '/造梦资料 [UID]'}, [
-        {'func': '造梦技能', 'trigger_method': '指令', 'trigger_condition': '/造梦技能 <名字>',
-         'brief_des': '技能原生卡片'},
-    ])
-    catalog = '\n'.join(build_plugin_catalog_entries('qi_zmws', info))
-    description = build_compatibility_description('qi_zmws', info)
-    assert '/造梦技能' in catalog
-    assert '优先调用原生命令' in catalog
-    assert '/造梦资料 [UID]' in description and '/造梦技能' in description
-    assert '复杂统计' in description and 'read_rendered_view' in description
-    assert '不执行原生命令' not in description
+    info = with_menu_discovery(
+        {"name": "造梦无双", "usage": "/造梦资料 [UID]"},
+        [
+            {"func": "造梦技能", "trigger_method": "指令", "trigger_condition": "/造梦技能 <名字>", "brief_des": "技能原生卡片"},
+        ],
+    )
+    catalog = "\n".join(build_plugin_catalog_entries("qi_zmws", info))
+    description = build_compatibility_description("qi_zmws", info)
+    assert "/造梦技能" in catalog
+    assert "优先调用原生命令" in catalog
+    assert "/造梦资料 [UID]" in description
+    assert "/造梦技能" in description
+    assert "复杂统计" in description
+    assert "read_rendered_view" in description
+    assert "不执行原生命令" not in description
 
 
 def test_custom_info_can_explicitly_supply_menu_data() -> None:
@@ -385,9 +404,7 @@ def test_business_intent_aliases_are_exact_normalized_and_fail_closed() -> None:
         ],
     )
     owners = build_intent_owner_index({"qi_post": qi_post})
-    assert normalize_llm_intent("  今天，谁发言最多？！ ") == (
-        normalize_llm_intent("今天谁发言最多")
-    )
+    assert normalize_llm_intent("  今天，谁发言最多？！ ") == (normalize_llm_intent("今天谁发言最多"))
     unique = resolve_business_intent(
         "今天，谁发言最多？！",
         owners=owners,
@@ -397,27 +414,36 @@ def test_business_intent_aliases_are_exact_normalized_and_fail_closed() -> None:
     )
     assert unique.status == "unique"
     assert unique.owner == "qi_post"
-    assert resolve_business_intent(
-        "今天谁发言比较多",
-        owners=owners,
-        loaded_plugins={"qi_post": qi_post},
-        is_superuser=False,
-        is_blacklisted=lambda _name: False,
-    ).status == "no_match"
-    assert resolve_business_intent(
-        "今天谁发言最多",
-        owners=owners,
-        loaded_plugins={},
-        is_superuser=False,
-        is_blacklisted=lambda _name: False,
-    ).status == "unavailable"
-    assert resolve_business_intent(
-        "今天谁发言最多",
-        owners=owners,
-        loaded_plugins={"qi_post": qi_post},
-        is_superuser=False,
-        is_blacklisted=lambda _name: True,
-    ).status == "unavailable"
+    assert (
+        resolve_business_intent(
+            "今天谁发言比较多",
+            owners=owners,
+            loaded_plugins={"qi_post": qi_post},
+            is_superuser=False,
+            is_blacklisted=lambda _name: False,
+        ).status
+        == "no_match"
+    )
+    assert (
+        resolve_business_intent(
+            "今天谁发言最多",
+            owners=owners,
+            loaded_plugins={},
+            is_superuser=False,
+            is_blacklisted=lambda _name: False,
+        ).status
+        == "unavailable"
+    )
+    assert (
+        resolve_business_intent(
+            "今天谁发言最多",
+            owners=owners,
+            loaded_plugins={"qi_post": qi_post},
+            is_superuser=False,
+            is_blacklisted=lambda _name: True,
+        ).status
+        == "unavailable"
+    )
 
     duplicate = build_intent_owner_index(
         {
@@ -436,30 +462,49 @@ def test_business_intent_aliases_are_exact_normalized_and_fail_closed() -> None:
             ),
         }
     )
-    assert resolve_business_intent(
-        "今天谁发言最多",
-        owners=duplicate,
-        loaded_plugins={"qi_post": qi_post, "wrong_owner": {}},
-        is_superuser=True,
-        is_blacklisted=lambda _name: False,
-    ).status == "ambiguous"
+    assert (
+        resolve_business_intent(
+            "今天谁发言最多",
+            owners=duplicate,
+            loaded_plugins={"qi_post": qi_post, "wrong_owner": {}},
+            is_superuser=True,
+            is_blacklisted=lambda _name: False,
+        ).status
+        == "ambiguous"
+    )
 
 
 def test_exact_native_command_name_is_owned_without_short_business_aliases():
-    info = with_menu_discovery({"name": "群管理"}, [{
-        "func": "点赞与禅定", "trigger_method": "命令", "trigger_condition": "群成员",
-        "brief_des": "自我禁言", "pmn_llm_intents": ["我想禅定"],
-        "pmn_triggers": [
-            {"type": "command", "value": "<命令前缀>禅定"},
-            {"type": "command", "value": "<命令前缀>馋定"},
-            {"type": "command", "value": "<命令前缀>禅定 [分钟]"},
-            {"type": "event", "value": "入群"},
+    info = with_menu_discovery(
+        {"name": "群管理"},
+        [
+            {
+                "func": "点赞与禅定",
+                "trigger_method": "命令",
+                "trigger_condition": "群成员",
+                "brief_des": "自我禁言",
+                "pmn_llm_intents": ["我想禅定"],
+                "pmn_triggers": [
+                    {"type": "command", "value": "<命令前缀>禅定"},
+                    {"type": "command", "value": "<命令前缀>馋定"},
+                    {"type": "command", "value": "<命令前缀>禅定 [分钟]"},
+                    {"type": "event", "value": "入群"},
+                ],
+            }
         ],
-    }])
+    )
     owners = build_intent_owner_index({"qi_group_admin": info})
     for plain in ("禅定", "馋定", "我想禅定"):
-        assert resolve_business_intent(plain, owners=owners, loaded_plugins={"qi_group_admin": info},
-                                       is_superuser=False, is_blacklisted=lambda name: False).owner == "qi_group_admin"
+        assert (
+            resolve_business_intent(
+                plain,
+                owners=owners,
+                loaded_plugins={"qi_group_admin": info},
+                is_superuser=False,
+                is_blacklisted=lambda name: False,
+            ).owner
+            == "qi_group_admin"
+        )
     assert "入群" not in owners
     assert "禅定分钟" not in owners
 

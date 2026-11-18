@@ -31,8 +31,10 @@ def _clean_history():
 
 def _previous(*, event=None, targets=None):
     event = event or _event(100)
-    source = {"text": ["造梦里我怎么才能打过他 对手[at:1]"],
-              "mentions": targets if targets is not None else [{"qq": "1911698701", "name": "对手"}]}
+    source = {
+        "text": ["造梦里我怎么才能打过他 对手[at:1]"],
+        "mentions": targets if targets is not None else [{"qq": "1911698701", "name": "对手"}],
+    }
     handler = MessagesHandler(str(event.user_id))
     handler.pre_process(source, scope=mention_scope(event))
     handler.post_process("可以查询双方属性再算天道修正")
@@ -71,9 +73,14 @@ def test_actual_failed_command_fingerprint_and_trusted_followup():
 def test_committed_history_restores_identity_and_new_turn_keeps_the_same_token():
     previous = _previous()
     entity = previous.messages_entity
-    first = MessageRecord(message_id=1, conversation_id="conversation-1", role="user",
-                          content=entity.user_msg["content"], structured_content={"mention_context": entity.mention_context},
-                          created_at=datetime.now(timezone.utc))
+    first = MessageRecord(
+        message_id=1,
+        conversation_id="conversation-1",
+        role="user",
+        content=entity.user_msg["content"],
+        structured_content={"mention_context": entity.mention_context},
+        created_at=datetime.now(timezone.utc),
+    )
     handler = MessagesHandler("123")
     handler.bind_committed_history((first,))
     source = {"text": ["继续算天道"], "mentions": []}
@@ -82,8 +89,9 @@ def test_committed_history_restores_identity_and_new_turn_keeps_the_same_token()
     expected = entity.mention_context["targets"][0]["token"]
     assert token == expected
     # Metadata without targets is still a scoped conversational exchange.
-    second = replace(first, message_id=2, content="继续算天道",
-                     structured_content={"mention_context": handler.messages_entity.mention_context})
+    second = replace(
+        first, message_id=2, content="继续算天道", structured_content={"mention_context": handler.messages_entity.mention_context}
+    )
     third = MessagesHandler("123")
     third.bind_committed_history((first, second))
     later = {"text": ["他换装了吗"], "mentions": []}
@@ -126,8 +134,13 @@ def test_historical_targets_cannot_be_used_for_management_or_binding(command):
 
 
 def test_missing_legacy_metadata_does_not_guess_from_old_text_or_tool_command():
-    first = MessageRecord(message_id=1, conversation_id="conversation-1", role="user",
-                          content="造梦对手[at:1]的天道", created_at=datetime.now(timezone.utc))
+    first = MessageRecord(
+        message_id=1,
+        conversation_id="conversation-1",
+        role="user",
+        content="造梦对手[at:1]的天道",
+        created_at=datetime.now(timezone.utc),
+    )
     handler = MessagesHandler("123")
     handler.bind_committed_history((first,))
     source = {"text": ["你自己查"], "mentions": []}
@@ -172,7 +185,10 @@ async def test_followup_model_selection_receives_scoped_conversation_context(mon
             captured.append(text)
 
         async def get_category(self):
-            return "2", False, ["qi_zmws", "zmws_combat_calculate"]
+            pytest.fail("ordinary followups must not call a classifier")
+
+        def get_unclassified_category(self):
+            return "0", False, ["qi_zmws", "zmws_combat_calculate"]
 
     monkeypatch.setattr(payload_module, "Categorize", Category)
     monkeypatch.setattr(model_selector, "get_use_tools", lambda: True)
@@ -195,8 +211,9 @@ async def test_stale_placeholder_returns_input_feedback_before_any_matcher_or_ap
         pytest.fail("身份缺失时不能进入 Matcher")
 
     monkeypatch.setattr(simulator, "_dispatch_targeted", forbidden)
-    result = await simulator.event_simulator.dispatch_event(object(), _event(100), "/六维计算 [at:1]", {},
-                                                          plugin_name="qi_zmws", wait_for_result=True)
+    result = await simulator.event_simulator.dispatch_event(
+        object(), _event(100), "/六维计算 [at:1]", {}, plugin_name="qi_zmws", wait_for_result=True
+    )
     assert result.status is simulator.PluginDispatchStatus.INPUT_REQUIRED
     assert result.matcher_checked == result.api_succeeded == result.api_failed == 0
     feedback = str(PluginDispatchError(result))
@@ -236,8 +253,14 @@ async def test_followup_query_uses_native_permission_with_original_invoker(monke
             return {"message_id": -100}
 
     try:
-        result = await simulator.event_simulator.dispatch_event(Bot(Adapter(), "10000"), _event(101),
-            f"/六维计算 [history_at:{token}] 天道", source, plugin_name="qi_zmws", wait_for_result=True)
+        result = await simulator.event_simulator.dispatch_event(
+            Bot(Adapter(), "10000"),
+            _event(101),
+            f"/六维计算 [history_at:{token}] 天道",
+            source,
+            plugin_name="qi_zmws",
+            wait_for_result=True,
+        )
     finally:
         for group in matchers.values():
             if matcher in group:

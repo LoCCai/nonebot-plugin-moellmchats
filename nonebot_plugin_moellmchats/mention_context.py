@@ -10,6 +10,16 @@ HISTORY_TARGET_LIMIT = 12
 HISTORY_TOKEN = re.compile(r"[a-f0-9]{32}")
 
 
+def display_mention_name(value: object) -> str:
+    """A label is optional; never echo binary card data into a model prompt."""
+    if not isinstance(value, str) or not value.strip():
+        return "群友"
+    value = value.replace("\x00", "")
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 or 0xD800 <= ord(char) <= 0xDFFF for char in value):
+        return "群友"
+    return value.strip()[:80] or "群友"
+
+
 def mention_scope(event) -> dict[str, str] | None:
     user = event_user_id(event)
     bot = bot_self_id(None, event)
@@ -42,23 +52,20 @@ def verified_mention_context(source: dict, scope: dict | None) -> dict | None:
         if scope["protocol"] == "onebot_v11" and (not qq.isascii() or not qq.isdecimal() or int(qq) <= 0):
             continue
         seen.add(qq)
-        targets.append({
-            "token": uuid.uuid4().hex,
-            "qq": qq,
-            "name": str(target.get("name") or "群友").replace("\x00", "")[:80],
-        })
+        targets.append(
+            {
+                "token": uuid.uuid4().hex,
+                "qq": qq,
+                "name": display_mention_name(target.get("name")),
+            }
+        )
         if len(targets) >= HISTORY_TARGET_LIMIT:
             break
     return {"version": 1, "scope": dict(scope), "targets": targets}
 
 
 def historical_targets(context: object, scope: dict | None) -> list[dict]:
-    if (
-        scope is None
-        or not isinstance(context, Mapping)
-        or context.get("version") != 1
-        or context.get("scope") != scope
-    ):
+    if scope is None or not isinstance(context, Mapping) or context.get("version") != 1 or context.get("scope") != scope:
         return []
     targets = context.get("targets")
     if not isinstance(targets, list):
@@ -69,13 +76,16 @@ def historical_targets(context: object, scope: dict | None) -> list[dict]:
             continue
         token, qq, name = target.get("token"), target.get("qq"), target.get("name")
         if (
-            not isinstance(token, str) or HISTORY_TOKEN.fullmatch(token) is None
-            or not isinstance(qq, str) or not qq or len(qq) > 128
+            not isinstance(token, str)
+            or HISTORY_TOKEN.fullmatch(token) is None
+            or not isinstance(qq, str)
+            or not qq
+            or len(qq) > 128
             or any(ord(char) < 32 for char in qq)
             or not isinstance(name, str)
         ):
             continue
         if scope["protocol"] == "onebot_v11" and (not qq.isascii() or not qq.isdecimal() or int(qq) <= 0):
             continue
-        result.append({"token": token, "qq": qq, "name": name.replace("\x00", "")[:80]})
+        result.append({"token": token, "qq": qq, "name": display_mention_name(name)})
     return result

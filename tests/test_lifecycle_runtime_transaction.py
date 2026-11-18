@@ -93,9 +93,7 @@ def _prepared_change() -> tuple[LifecycleState, PreparedLifecycleChange]:
     change = PreparedLifecycleChange(
         plan=plan_record_draft(before, record),
         result={"draft_id": record.draft_id},
-        generated_source_overrides={
-            (record.bundle_id, digest): Path("/staged/weather/tool.py")
-        },
+        generated_source_overrides={(record.bundle_id, digest): Path("/staged/weather/tool.py")},
     )
     return before, change
 
@@ -443,9 +441,7 @@ async def _assert_cancellation_waits_for_durable_thread(
         blocking_commit,
     )
 
-    task = asyncio.create_task(
-        reloader.apply_generated_change("draft-create", change)
-    )
+    task = asyncio.create_task(reloader.apply_generated_change("draft-create", change))
     try:
         started = await asyncio.wait_for(
             asyncio.to_thread(commit_started.wait, 2),
@@ -555,6 +551,9 @@ def _configure_real_generated_loader(
     store: GeneratedToolStore,
 ) -> None:
     monkeypatch.setattr(reload_module, "generated_tool_store", store)
+    # This fixture projects generated tools only; don't discover unrelated
+    # module-level registrations from the rest of the plugin test suite.
+    monkeypatch.setattr(reload_module.tool_registry, "snapshot", lambda: {})
     monkeypatch.setattr(runtime_snapshots, "_current", None)
     monkeypatch.setattr(
         reload_module.config_parser,
@@ -565,11 +564,7 @@ def _configure_real_generated_loader(
         reload_module.config_parser,
         "get_config",
         lambda key, default=None: (
-            True
-            if key == "runtime_watch_enabled"
-            else 0
-            if key == "runtime_watch_interval_seconds"
-            else default
+            True if key == "runtime_watch_enabled" else 0 if key == "runtime_watch_interval_seconds" else default
         ),
     )
     monkeypatch.setattr(
@@ -702,9 +697,7 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     )
     approved_snapshot = runtime_snapshots.current()
     assert approved_snapshot is not None
-    approved_schema = approved_snapshot.tool_snapshot.custom_tools[
-        "date_difference"
-    ]
+    approved_schema = approved_snapshot.tool_snapshot.custom_tools["date_difference"]
     assert approved_schema["bundle_digest"] == validation.digest
     assert approved_schema["tool_spec"].permission == "superuser"
     approved_catalog = approved_snapshot.tool_snapshot.provider_catalog
@@ -714,12 +707,8 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     assert generated_record.artifact is approved_schema["tool_artifact"]
     assert generated_record.spec is approved_schema["tool_spec"]
     assert generated_record.artifact.bundle_digest == validation.digest
-    assert approved_snapshot.generated_active == {
-        "date_math": validation.digest
-    }
-    assert approved_result.generated_state_digest == (
-        approved_snapshot.generated_state_digest
-    )
+    assert approved_snapshot.generated_active == {"date_math": validation.digest}
+    assert approved_result.generated_state_digest == (approved_snapshot.generated_state_digest)
 
     permission = store.prepare_permission(
         "date_math",
@@ -732,9 +721,7 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     await first.apply_generated_change("generated-tool-permission", permission)
     permission_snapshot = runtime_snapshots.current()
     assert permission_snapshot is not None
-    assert permission_snapshot.tool_snapshot.custom_tools[
-        "date_difference"
-    ]["tool_spec"].permission == "user"
+    assert permission_snapshot.tool_snapshot.custom_tools["date_difference"]["tool_spec"].permission == "user"
 
     deactivation = store.prepare_deactivation("date_math")
     await first.apply_generated_change(
@@ -743,18 +730,14 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
     )
     deactivated_snapshot = runtime_snapshots.current()
     assert deactivated_snapshot is not None
-    assert "date_difference" not in (
-        deactivated_snapshot.tool_snapshot.custom_tools
-    )
+    assert "date_difference" not in (deactivated_snapshot.tool_snapshot.custom_tools)
     assert not deactivated_snapshot.generated_active
 
     rollback = store.prepare_rollback("date_math", validation.digest[:12])
     await first.apply_generated_change("generated-tool-rollback", rollback)
     rolled_back_snapshot = runtime_snapshots.current()
     assert rolled_back_snapshot is not None
-    assert rolled_back_snapshot.generated_active == {
-        "date_math": validation.digest
-    }
+    assert rolled_back_snapshot.generated_active == {"date_math": validation.digest}
     assert "date_difference" in rolled_back_snapshot.tool_snapshot.custom_tools
 
     rejected_id, _ = store.create_draft(
@@ -784,16 +767,8 @@ async def test_real_generated_management_chain_and_second_watcher_converge(
         lambda *, generated_state=None, picmenu_projection=None: (
             (
                 "generated",
-                (
-                    store.read_lifecycle_state()
-                    if generated_state is None
-                    else generated_state
-                ).revision,
-                (
-                    store.read_lifecycle_state()
-                    if generated_state is None
-                    else generated_state
-                ).state_digest,
+                (store.read_lifecycle_state() if generated_state is None else generated_state).revision,
+                (store.read_lifecycle_state() if generated_state is None else generated_state).state_digest,
             ),
         ),
     )

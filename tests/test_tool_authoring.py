@@ -66,10 +66,12 @@ async def test_draft_model_switches_quota_backup_with_its_own_options(tmp_path, 
     selector = _pair(tmp_path, monkeypatch)
     monkeypatch.setattr(module.model_selector, "get_model", selector.get_model)
     monkeypatch.setattr(module.model_selector, "get_rate_limit_fallback", selector.get_rate_limit_fallback)
-    session = _FakeSession([
-        _FakeResponse(403, json.dumps({"error": {"code": "AllocationQuota.FreeTierOnly"}})),
-        _FakeResponse(200, json.dumps({"choices": [{"message": {"content": "draft"}}]})),
-    ])
+    session = _FakeSession(
+        [
+            _FakeResponse(403, json.dumps({"error": {"code": "AllocationQuota.FreeTierOnly"}})),
+            _FakeResponse(200, json.dumps({"choices": [{"message": {"content": "draft"}}]})),
+        ]
+    )
     monkeypatch.setattr(module, "get_session", lambda: session)
     assert await ToolAuthoringService()._call_model("selected_model", "system", "task") == "draft"
     assert len(session.requests) == 2
@@ -288,7 +290,8 @@ async def test_call_model_retries_http_400_with_minimal_payload(
             {"role": "system", "content": "system"},
             {"role": "user", "content": "user"},
         ],
-        "stream": False,
+        "stream": True,
+        "stream_options": {"include_usage": True},
     }
     assert session.requests[1]["headers"]["Accept-Encoding"] == "identity"
     assert first.content.read_limits == [_MODEL_ERROR_BODY_LIMIT + 1]

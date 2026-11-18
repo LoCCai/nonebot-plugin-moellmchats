@@ -92,9 +92,7 @@ def _nonebot_batch(
     generation: int,
     specs: tuple[ToolSpec, ...] = (),
 ) -> ProviderDiscoveryBatch:
-    registration = ProviderRegistration.from_provider(
-        nonebot_plugin_provider
-    )
+    registration = ProviderRegistration.from_provider(nonebot_plugin_provider)
     records = tuple(
         DiscoveredTool(
             provider_id=registration.provider_id,
@@ -115,9 +113,7 @@ def _registered_catalog(
 ) -> ProviderCatalogSnapshot:
     registration = ProviderRegistration.from_provider(registered_tool_provider)
     file_registration = ProviderRegistration.from_provider(file_tool_provider)
-    generated_registration = ProviderRegistration.from_provider(
-        generated_tool_provider
-    )
+    generated_registration = ProviderRegistration.from_provider(generated_tool_provider)
     mcp_registration = ProviderRegistration.from_provider(mcp_tool_provider)
     records = tuple(
         DiscoveredTool(
@@ -233,14 +229,10 @@ def _file_legacy_schema(artifact: ToolArtifact) -> dict:
             {
                 "tool_contract_version": artifact.contract.contract_version,
                 "artifact_digest_version": artifact.artifact_version,
-                "requested_capabilities": (
-                    artifact.contract.requested_capabilities
-                ),
+                "requested_capabilities": (artifact.contract.requested_capabilities),
                 "detected_capabilities": artifact.contract.detected_capabilities,
                 "admin_capabilities": artifact.contract.admin_capabilities,
-                "effective_capabilities": (
-                    artifact.contract.effective_capabilities
-                ),
+                "effective_capabilities": (artifact.contract.effective_capabilities),
                 "capability_policy": spec.policy.capability_contract(),
             }
         )
@@ -483,18 +475,13 @@ def test_tool_snapshot_dual_view_keeps_exact_registered_identity() -> None:
         dependencies=("snapshot_helper",),
     )
     catalog = _registered_catalog((registered, helper), generation=12)
-    legacy_tools = {
-        spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        for spec in (registered, helper)
-    }
+    legacy_tools = {spec.name: {**spec.as_legacy_schema(), "source": "registered"} for spec in (registered, helper)}
 
     snapshot = ToolSnapshot(
         generation=12,
         plugin_info={},
         custom_tools=legacy_tools,
-        tool_dependencies={
-            "snapshot_registered": {"snapshot_helper", "optional_plugin"}
-        },
+        tool_dependencies={"snapshot_registered": {"snapshot_helper", "optional_plugin"}},
         mcp_tool_names=set(),
         provider_catalog=catalog,
     )
@@ -522,10 +509,7 @@ def test_tool_snapshot_builtin_shadow_requires_canonical_spec_identity() -> None
     builtin_records = snapshot.provider_catalog.tools_for_provider("builtin")
     assert len(builtin_records) == len(builtin_tool_specs())
     assert record in builtin_records
-    assert all(
-        snapshot.provider_catalog.tools[spec.name].spec is spec
-        for spec in builtin_tool_specs()
-    )
+    assert all(snapshot.provider_catalog.tools[spec.name].spec is spec for spec in builtin_tool_specs())
     assert record.spec is builtin_spec
     assert builtin_spec.name not in snapshot.custom_tools
 
@@ -561,9 +545,7 @@ def test_tool_snapshot_nonebot_plugin_shadow_keeps_adapter_identity() -> None:
         }
     )
     base = _registered_catalog((), generation=15)
-    registration = ProviderRegistration.from_provider(
-        nonebot_plugin_provider
-    )
+    registration = ProviderRegistration.from_provider(nonebot_plugin_provider)
     record = DiscoveredTool(
         provider_id=registration.provider_id,
         source=registration.source,
@@ -594,10 +576,7 @@ def test_tool_snapshot_nonebot_plugin_shadow_keeps_adapter_identity() -> None:
     assert record.spec.permission == "user"
     assert "plugin_weather" not in snapshot.custom_tools
 
-    drifted = {
-        name: dict(info)
-        for name, info in legacy.items()
-    }
+    drifted = {name: dict(info) for name, info in legacy.items()}
     drifted["plugin_weather"]["description"] = "drifted"
     with pytest.raises(ValueError, match="description"):
         ToolSnapshot(
@@ -625,10 +604,7 @@ def test_tool_snapshot_dual_view_fails_closed_for_drift() -> None:
         dependencies=("parity_helper",),
     )
     catalog = _registered_catalog((registered, helper), generation=13)
-    legacy_tools = {
-        spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        for spec in (registered, helper)
-    }
+    legacy_tools = {spec.name: {**spec.as_legacy_schema(), "source": "registered"} for spec in (registered, helper)}
     common = {
         "generation": 13,
         "plugin_info": {},
@@ -753,9 +729,7 @@ def test_tool_snapshot_dual_view_keeps_exact_generated_artifact_identity() -> No
     assert discovered.artifact is artifact
     assert discovered.spec is artifact.spec
     assert snapshot.custom_tools[spec.name]["tool_artifact"] is artifact
-    assert snapshot.custom_tools[spec.name]["bundle_digest"] == (
-        artifact.bundle_digest
-    )
+    assert snapshot.custom_tools[spec.name]["bundle_digest"] == (artifact.bundle_digest)
 
     mutated = dict(legacy)
     mutated["effective_capabilities"] = {}
@@ -786,16 +760,12 @@ def test_tool_snapshot_dual_reads_v1_artifact_sidecars() -> None:
     file_snapshot = ToolSnapshot(
         generation=18,
         plugin_info={},
-        custom_tools={
-            file_spec.name: _file_legacy_schema(file_artifact)
-        },
+        custom_tools={file_spec.name: _file_legacy_schema(file_artifact)},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_file_catalog(file_artifact, generation=18),
     )
-    assert file_snapshot.custom_tools[file_spec.name][
-        "tool_artifact"
-    ].artifact_version == 1
+    assert file_snapshot.custom_tools[file_spec.name]["tool_artifact"].artifact_version == 1
 
     generated_spec = ToolSpec(
         name="legacy_snapshot_generated",
@@ -814,11 +784,7 @@ def test_tool_snapshot_dual_reads_v1_artifact_sidecars() -> None:
     generated_snapshot = ToolSnapshot(
         generation=19,
         plugin_info={},
-        custom_tools={
-            generated_spec.name: _generated_legacy_schema(
-                generated_artifact
-            )
-        },
+        custom_tools={generated_spec.name: _generated_legacy_schema(generated_artifact)},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_generated_catalog(
@@ -826,9 +792,7 @@ def test_tool_snapshot_dual_reads_v1_artifact_sidecars() -> None:
             generation=19,
         ),
     )
-    assert generated_snapshot.custom_tools[generated_spec.name][
-        "tool_artifact"
-    ].artifact_version == 1
+    assert generated_snapshot.custom_tools[generated_spec.name]["tool_artifact"].artifact_version == 1
 
 
 def test_tool_snapshot_dual_view_keeps_mcp_legacy_schema_and_sidecar() -> None:
@@ -1109,9 +1073,7 @@ async def test_load_custom_tools_reuses_explicit_generated_candidate(
     )
 
     def forbidden_load(*_args, **_kwargs):
-        raise AssertionError(
-            "legacy merge must reuse the transaction generated candidate"
-        )
+        raise AssertionError("legacy merge must reuse the transaction generated candidate")
 
     monkeypatch.setattr(
         manager_module.generated_tool_store,
@@ -1235,11 +1197,7 @@ def test_real_frozen_snapshot_filters_permissions_and_thaws_model_schema(
     assert isinstance(parameters, dict)
     assert isinstance(parameters["properties"], dict)
     parameters["properties"]["value"]["type"] = "integer"
-    assert (
-        snapshot.custom_tools["admin_only"]["parameters"]["properties"]
-        ["value"]["type"]
-        == "string"
-    )
+    assert snapshot.custom_tools["admin_only"]["parameters"]["properties"]["value"]["type"] == "string"
 
 
 def test_categorize_provider_cutover_matches_legacy_and_filters_trust(
@@ -1368,9 +1326,7 @@ def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
         generation=generation,
     )
     base = _registered_catalog((registered_spec,), generation=generation)
-    nonebot_registration = ProviderRegistration.from_provider(
-        nonebot_plugin_provider
-    )
+    nonebot_registration = ProviderRegistration.from_provider(nonebot_plugin_provider)
     nonebot_record = DiscoveredTool(
         provider_id=nonebot_registration.provider_id,
         source=nonebot_registration.source,
@@ -1407,9 +1363,7 @@ def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
                 "source": "registered",
             },
             file_spec.name: _file_legacy_schema(file_artifact),
-            generated_spec.name: _generated_legacy_schema(
-                generated_artifact
-            ),
+            generated_spec.name: _generated_legacy_schema(generated_artifact),
             mcp_spec.name: _mcp_legacy_schema(mcp_spec),
         },
         tool_dependencies={},
@@ -1432,8 +1386,7 @@ def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
 
     expected = "\n".join(
         (
-            "- catalog_plugin | Catalog Plugin > 目录动作 | "
-            "feature description | 命令: /catalog",
+            "- catalog_plugin | 目录动作 | feature description | 命令: /catalog",
             "- catalog_registered | 自定义函数 | registered description",
             "- catalog_file | 自定义函数 | file description",
             "- catalog_generated | 自定义函数 | generated description",
@@ -1463,13 +1416,9 @@ def test_categorize_provider_cutover_matches_all_sources_and_feature_filters(
 
     blacklist.clear()
     feature_flags["tools"] = False
-    assert snapshot.get_brief_catalog(provider_cutover=True) == (
-        "- web_search | 联网搜索 | 回答实时问题、新闻、天气与近期信息"
-    )
+    assert snapshot.get_brief_catalog(provider_cutover=True) == ("- web_search | 联网搜索 | 回答实时问题、新闻、天气与近期信息")
     feature_flags["search"] = False
-    assert snapshot.get_brief_catalog(provider_cutover=True) == (
-        "当前工具调用与联网功能均已关闭，无需返回任何插件。"
-    )
+    assert snapshot.get_brief_catalog(provider_cutover=True) == ("当前工具调用与联网功能均已关闭，无需返回任何插件。")
 
 
 def test_categorize_provider_cutover_handles_empty_and_legacy_snapshots(
@@ -1486,9 +1435,7 @@ def test_categorize_provider_cutover_handles_empty_and_legacy_snapshots(
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((), generation=46),
     )
-    assert complete_empty.get_brief_catalog(provider_cutover=True) == (
-        "当前工具调用与联网功能均已关闭，无需返回任何插件。"
-    )
+    assert complete_empty.get_brief_catalog(provider_cutover=True) == ("当前工具调用与联网功能均已关闭，无需返回任何插件。")
 
     legacy_spec = ToolSpec(
         name="legacy_catalog",
@@ -1508,9 +1455,7 @@ def test_categorize_provider_cutover_handles_empty_and_legacy_snapshots(
         "build_provider_brief_catalog",
         lambda **_kwargs: pytest.fail("旧快照不应进入 Provider consumer"),
     )
-    assert legacy_snapshot.get_brief_catalog(provider_cutover=True) == (
-        "- legacy_catalog | 自定义函数 | legacy catalog"
-    )
+    assert legacy_snapshot.get_brief_catalog(provider_cutover=True) == ("- legacy_catalog | 自定义函数 | legacy catalog")
 
 
 def test_categorize_provider_cutover_fails_closed_on_parity_drift(
@@ -1547,10 +1492,7 @@ def test_categorize_provider_cutover_fails_closed_on_parity_drift(
 
     with pytest.raises(ProviderConsumerParityError, match="rollback view"):
         snapshot.get_brief_catalog(provider_cutover=True)
-    assert (
-        snapshot.get_brief_catalog(provider_cutover=False)
-        == "- provider_parity | 自定义函数 | provider parity"
-    )
+    assert snapshot.get_brief_catalog(provider_cutover=False) == "- provider_parity | 自定义函数 | provider parity"
 
 
 def test_categorize_provider_cutover_is_enabled_by_default(
@@ -1600,9 +1542,7 @@ def test_categorize_provider_cutover_is_enabled_by_default(
         track_provider_call,
     )
 
-    assert snapshot.get_brief_catalog() == (
-        "- provider_default | 自定义函数 | provider default"
-    )
+    assert snapshot.get_brief_catalog() == ("- provider_default | 自定义函数 | provider default")
     assert provider_calls == [catalog]
 
 
@@ -1639,9 +1579,7 @@ def test_categorize_provider_cutover_config_can_rollback_to_legacy(
         lambda **_kwargs: pytest.fail("rollback 不应读取 Provider consumer"),
     )
 
-    assert snapshot.get_brief_catalog() == (
-        "- provider_rollback | 自定义函数 | provider rollback"
-    )
+    assert snapshot.get_brief_catalog() == ("- provider_rollback | 自定义函数 | provider rollback")
 
 
 @pytest.mark.parametrize("flag", [1, "true", [], {}])
@@ -1737,9 +1675,7 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
         generation=generation,
     )
     base = _registered_catalog((registered_spec,), generation=generation)
-    plugin_registration = ProviderRegistration.from_provider(
-        nonebot_plugin_provider
-    )
+    plugin_registration = ProviderRegistration.from_provider(nonebot_plugin_provider)
     plugin_record = DiscoveredTool(
         provider_id=plugin_registration.provider_id,
         source=plugin_registration.source,
@@ -1810,11 +1746,15 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
         is_superuser=False,
         provider_cutover=True,
     )
-    assert provider_names == legacy_names == {
-        *selected,
-        file_spec.name,
-        mcp_spec.name,
-    }
+    assert (
+        provider_names
+        == legacy_names
+        == {
+            *selected,
+            file_spec.name,
+            mcp_spec.name,
+        }
+    )
     assert provider_schema == legacy_schema
     assert {item["function"]["name"] for item in provider_schema} == {
         registered_spec.name,
@@ -1824,9 +1764,7 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
         "web_search",
     }
     public_plugin_description = next(
-        item["function"]["description"]
-        for item in provider_schema
-        if item["function"]["name"] == plugin_specs[0].name
+        item["function"]["description"] for item in provider_schema if item["function"]["name"] == plugin_specs[0].name
     )
     assert "公开动作" in public_plugin_description
     assert "隐藏动作" not in public_plugin_description
@@ -1847,13 +1785,9 @@ def test_llm_payload_provider_cutover_matches_all_sources_and_dependencies(
     )
     assert admin_provider_names == admin_legacy_names
     assert admin_schema == admin_legacy_schema
-    assert generated_spec.name in {
-        item["function"]["name"] for item in admin_schema
-    }
+    assert generated_spec.name in {item["function"]["name"] for item in admin_schema}
     admin_plugin_description = next(
-        item["function"]["description"]
-        for item in admin_schema
-        if item["function"]["name"] == plugin_specs[0].name
+        item["function"]["description"] for item in admin_schema if item["function"]["name"] == plugin_specs[0].name
     )
     assert "隐藏动作" in admin_plugin_description
 
@@ -1893,10 +1827,7 @@ def test_llm_payload_provider_cutover_fails_closed_on_dependency_drift(
     snapshot = ToolSnapshot(
         generation=48,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-            for spec in (root, legacy_only)
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"} for spec in (root, legacy_only)},
         # Provider parity deliberately permits additional legacy edges while
         # dual-publishing. The payload cutover must surface them instead of
         # silently treating the sidecar as canonical.
@@ -1940,9 +1871,7 @@ def test_llm_payload_provider_cutover_fails_closed_on_schema_drift(
     snapshot = ToolSnapshot(
         generation=49,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=49),
@@ -2026,9 +1955,7 @@ def test_llm_payload_provider_cutover_default_and_config_rollback(
     snapshot = ToolSnapshot(
         generation=50,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=catalog,
@@ -2165,11 +2092,7 @@ def test_llm_tools_provider_cutover_resolves_all_six_sources() -> None:
     generated_snapshot = ToolSnapshot(
         generation=generation,
         plugin_info={},
-        custom_tools={
-            generated_spec.name: _generated_legacy_schema(
-                generated_artifact
-            )
-        },
+        custom_tools={generated_spec.name: _generated_legacy_schema(generated_artifact)},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_generated_catalog(
@@ -2205,9 +2128,7 @@ def test_llm_tools_provider_cutover_resolves_all_six_sources() -> None:
         }
     )
     base = _registered_catalog((), generation=generation)
-    plugin_registration = ProviderRegistration.from_provider(
-        nonebot_plugin_provider
-    )
+    plugin_registration = ProviderRegistration.from_provider(nonebot_plugin_provider)
     plugin_record = DiscoveredTool(
         provider_id=plugin_registration.provider_id,
         source=plugin_registration.source,
@@ -2314,9 +2235,7 @@ def test_llm_tools_provider_trust_preserves_pending_transition() -> None:
     snapshot = ToolSnapshot(
         generation=52,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=52),
@@ -2357,9 +2276,7 @@ def test_llm_tools_provider_cutover_fails_closed_on_identity_drift(
     snapshot = ToolSnapshot(
         generation=53,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=53),
@@ -2446,9 +2363,7 @@ def test_llm_tools_provider_cutover_default_and_config_rollback(
     snapshot = ToolSnapshot(
         generation=55,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=55),
@@ -2573,11 +2488,7 @@ def test_pending_action_provider_view_is_canonical_for_custom_sources() -> None:
     generated_snapshot = ToolSnapshot(
         generation=generation,
         plugin_info={},
-        custom_tools={
-            generated_spec.name: _generated_legacy_schema(
-                generated_artifact
-            )
-        },
+        custom_tools={generated_spec.name: _generated_legacy_schema(generated_artifact)},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_generated_catalog(
@@ -2912,11 +2823,7 @@ def test_search_extractor_provider_view_is_canonical_for_custom_sources() -> Non
     generated_snapshot = ToolSnapshot(
         generation=generation,
         plugin_info={},
-        custom_tools={
-            generated_spec.name: _generated_legacy_schema(
-                generated_artifact
-            )
-        },
+        custom_tools={generated_spec.name: _generated_legacy_schema(generated_artifact)},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_generated_catalog(
@@ -2979,9 +2886,7 @@ def test_search_extractor_provider_selection_rechecks_actor_permission() -> None
     snapshot = ToolSnapshot(
         generation=62,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=62),
@@ -3018,9 +2923,7 @@ def test_search_extractor_provider_cutover_fails_closed_on_identity_drift(
     snapshot = ToolSnapshot(
         generation=63,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=63),
@@ -3103,9 +3006,7 @@ def test_search_extractor_provider_cutover_default_and_config_rollback(
     snapshot = ToolSnapshot(
         generation=65,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=65),
@@ -3234,11 +3135,7 @@ def test_management_provider_cutover_resolves_all_six_sources() -> None:
     generated_snapshot = ToolSnapshot(
         generation=generation,
         plugin_info={},
-        custom_tools={
-            generated_spec.name: _generated_legacy_schema(
-                generated_artifact
-            )
-        },
+        custom_tools={generated_spec.name: _generated_legacy_schema(generated_artifact)},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_generated_catalog(
@@ -3275,9 +3172,7 @@ def test_management_provider_cutover_resolves_all_six_sources() -> None:
         }
     )
     base = _registered_catalog((), generation=generation)
-    plugin_registration = ProviderRegistration.from_provider(
-        nonebot_plugin_provider
-    )
+    plugin_registration = ProviderRegistration.from_provider(nonebot_plugin_provider)
     plugin_record = DiscoveredTool(
         provider_id=plugin_registration.provider_id,
         source=plugin_registration.source,
@@ -3384,9 +3279,7 @@ def test_management_provider_requires_superuser_even_for_user_tool() -> None:
     snapshot = ToolSnapshot(
         generation=68,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=68),
@@ -3457,9 +3350,7 @@ def test_management_provider_preserves_mcp_service_and_wildcard_selectors() -> N
     snapshot = ToolSnapshot(
         generation=generation,
         plugin_info={},
-        custom_tools={
-            spec.name: _mcp_legacy_schema(spec) for spec in specs
-        },
+        custom_tools={spec.name: _mcp_legacy_schema(spec) for spec in specs},
         tool_dependencies={},
         mcp_tool_names={spec.name for spec in specs},
         provider_catalog=catalog,
@@ -3479,9 +3370,7 @@ def test_management_provider_preserves_mcp_service_and_wildcard_selectors() -> N
         assert view.kind is ToolManagementTargetKind.MCP_SERVICE
         assert view.label == "MCP 服务"
         assert view.matched_tool_names == expected_names
-        assert tuple(
-            decision.tool_name for decision in view.trust_decisions
-        ) == expected_names
+        assert tuple(decision.tool_name for decision in view.trust_decisions) == expected_names
         assert view.allowed
 
     empty = snapshot.resolve_tool_management(
@@ -3545,9 +3434,7 @@ def test_management_provider_cutover_fails_closed_on_identity_drift(
     snapshot = ToolSnapshot(
         generation=70,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=70),
@@ -3689,9 +3576,7 @@ def test_management_provider_cutover_default_and_config_rollback(
     snapshot = ToolSnapshot(
         generation=73,
         plugin_info={},
-        custom_tools={
-            spec.name: {**spec.as_legacy_schema(), "source": "registered"}
-        },
+        custom_tools={spec.name: {**spec.as_legacy_schema(), "source": "registered"}},
         tool_dependencies={},
         mcp_tool_names=set(),
         provider_catalog=_registered_catalog((spec,), generation=73),
@@ -3771,8 +3656,7 @@ def test_management_provider_cutover_config_requires_boolean(flag) -> None:
 
 def test_permission_filter_fails_closed_for_malformed_entries() -> None:
     assert not tool_manager.is_tool_allowed(
-        object(), is_superuser=False  # type: ignore[arg-type]
+        object(),
+        is_superuser=False,  # type: ignore[arg-type]
     )
-    assert not tool_manager.is_tool_allowed(
-        {"tool_spec": object()}, is_superuser=False
-    )
+    assert not tool_manager.is_tool_allowed({"tool_spec": object()}, is_superuser=False)

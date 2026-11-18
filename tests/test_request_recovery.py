@@ -24,17 +24,29 @@ from nonebot_plugin_moellmchats.request_recovery import (
 
 
 def event(message_id=123):
-    return GroupMessageEvent.model_validate({
-        "time": 1792050000, "self_id": 99999, "post_type": "message", "message_type": "group",
-        "sub_type": "normal", "user_id": 42, "group_id": 55555, "message_id": message_id,
-        "message": [{"type": "text", "data": {"text": "请查询并画图"}}], "raw_message": "请查询并画图",
-        "font": 0, "sender": {"user_id": 42, "nickname": "用户", "role": "member"}, "to_me": True,
-    })
+    return GroupMessageEvent.model_validate(
+        {
+            "time": 1792050000,
+            "self_id": 99999,
+            "post_type": "message",
+            "message_type": "group",
+            "sub_type": "normal",
+            "user_id": 42,
+            "group_id": 55555,
+            "message_id": message_id,
+            "message": [{"type": "text", "data": {"text": "请查询并画图"}}],
+            "raw_message": "请查询并画图",
+            "font": 0,
+            "sender": {"user_id": 42, "nickname": "用户", "role": "member"},
+            "to_me": True,
+        }
+    )
 
 
 def bot():
-    return SimpleNamespace(self_id="99999", adapter=SimpleNamespace(get_name=lambda: "OneBot V11"),
-                           send=AsyncMock(return_value={"message_id": 101}))
+    return SimpleNamespace(
+        self_id="99999", adapter=SimpleNamespace(get_name=lambda: "OneBot V11"), send=AsyncMock(return_value={"message_id": 101})
+    )
 
 
 @pytest_asyncio.fixture
@@ -59,12 +71,14 @@ async def reboot(service):
 @pytest.mark.asyncio
 async def test_final_text_and_image_survive_restart_and_are_sent_once(service):
     target = bot()
+
     async def generate():
         service.begin_shutdown()
         await durable_reply(target, event(), ["生成的文字", MessageSegment.image(b"picture")])
+
     await service.run(target, event(), {"text": ["请画图"]}, False, generate)
     target.send.assert_not_awaited()
-    record, = service.store.records()
+    (record,) = service.store.records()
     assert record["answer_ready"]
     assert all(e["state"] == "pending" for e in record["outbox"])
     restored = await reboot(service)
@@ -84,19 +98,70 @@ async def test_final_text_and_image_survive_restart_and_are_sent_once(service):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["confirmed", "unknown", "model_failed"])
+async def test_recovered_answer_reacts_after_delivery_only(service, monkeypatch, delivery):
+    from nonebot_plugin_moellmchats import chat_runtime
+
+    monkeypatch.setattr(chat_runtime.config_parser, "get_config", lambda _key, _default=None: {})
+    called = GroupMessageEvent.model_validate(
+        {
+            **event().model_dump(),
+            "message": [
+                {"type": "at", "data": {"qq": "99999"}},
+                {"type": "text", "data": {"text": "test"}},
+            ],
+        }
+    )
+    service.authorize.return_value = called
+    target, order = bot(), []
+
+    async def generate():
+        service.begin_shutdown()
+        await durable_reply(target, called, ["saved answer"])
+        if delivery == "model_failed":
+            current_binding().record["model_failed"] = True
+
+    await service.run(target, called, {}, False, generate)
+
+    async def send(_event, message):
+        order.append(str(message))
+        return None if delivery == "unknown" else {"message_id": "789"}
+
+    async def react(_api, **kwargs):
+        order.append(kwargs["emoji_id"])
+
+    target.send.side_effect = send
+    target.call_api = AsyncMock(side_effect=react)
+    restored = await reboot(service)
+    try:
+        await restored.recover(target)
+        if delivery == "confirmed":
+            assert order[-2:] == ["saved answer", "10004"]
+            await restored.recover(target)
+            assert target.call_api.await_count == 1
+        else:
+            target.call_api.assert_not_awaited()
+    finally:
+        restored.store.close()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancels_model_wait_and_restores_checkpoint(service):
     started = asyncio.Event()
+
     async def work():
-        await current_binding().checkpoint([{"role": "system", "content": "not persisted"},
-                                           {"role": "user", "content": "原任务"}], phase="model")
+        await current_binding().checkpoint(
+            [{"role": "system", "content": "not persisted"}, {"role": "user", "content": "原任务"}], phase="model"
+        )
         started.set()
         await asyncio.Event().wait()
+
     task = asyncio.create_task(service.run(bot(), event(), {"text": ["原任务"]}, False, work))
     await started.wait()
     await service.drain(grace=0)
     with pytest.raises(asyncio.CancelledError):
         await task
-    record, = service.store.records()
+    (record,) = service.store.records()
     assert record["state"] == "pending"
     assert record["checkpoint"] == [{"role": "user", "content": "原任务"}]
     restored = await reboot(service)
@@ -111,9 +176,11 @@ async def test_shutdown_cancels_model_wait_and_restores_checkpoint(service):
 @pytest.mark.asyncio
 async def test_admin_cancel_is_not_resumed(service):
     started = asyncio.Event()
+
     async def work():
         started.set()
         await asyncio.Event().wait()
+
     task = asyncio.create_task(service.run(bot(), event(), {}, False, work))
     await started.wait()
     task.cancel()
@@ -128,8 +195,10 @@ async def test_admin_cancel_is_not_resumed(service):
 async def test_missing_adapter_receipt_is_unknown_and_never_replayed(service):
     target = bot()
     target.send.return_value = None
+
     async def work():
         await durable_reply(target, event(), ["结果"])
+
     with pytest.raises(RuntimeError, match="消息回执"):
         await service.run(target, event(), {}, False, work)
     assert service.store.records()[0]["outbox"][0]["state"] == "unknown"
@@ -142,9 +211,11 @@ async def test_missing_adapter_receipt_is_unknown_and_never_replayed(service):
 @pytest.mark.asyncio
 async def test_corrupt_journal_does_not_block_other_saved_results(service):
     target = bot()
+
     async def work():
         service.begin_shutdown()
         await durable_reply(target, event(), ["正确的结果"])
+
     await service.run(target, event(), {}, False, work)
     bad = service.store.path("0" * 64)
     bad.write_text("invalid JSON")
@@ -159,6 +230,7 @@ async def test_temporary_permission_lookup_failure_keeps_task_for_reconnect(serv
     async def work():
         service.begin_shutdown()
         raise asyncio.CancelledError()
+
     target = bot()
     with pytest.raises(asyncio.CancelledError):
         await service.run(target, event(), {}, False, work)
@@ -183,13 +255,17 @@ async def test_shutdown_after_primary_failure_does_not_start_backup(service, tmp
     monkeypatch.setattr(module.model_selector, "get_rate_limit_fallback", selector.get_rate_limit_fallback)
     chat = object.__new__(MoeLlm)
     chat.model_info, chat.agent_runtime = selector.get_model("category_model"), None
+
     async def primary(*args):
         service.begin_shutdown()
         chat._last_api_http_status = 429
         return False, "rate limited", None, ""
+
     chat.none_stream_llm_chat = AsyncMock(side_effect=primary)
+
     async def work():
         await chat._request_with_rate_limit_fallback(object(), {}, {"messages": [], "stream": False}, False)
+
     with pytest.raises(asyncio.CancelledError):
         await service.run(bot(), event(), {}, False, work)
     assert chat.none_stream_llm_chat.await_count == 1
@@ -200,8 +276,10 @@ async def test_shutdown_after_primary_failure_does_not_start_backup(service, tmp
 async def test_unknown_send_is_never_replayed_and_user_gets_one_notice(service):
     target = bot()
     target.send.side_effect = ConnectionError("ack lost")
+
     async def work():
         await durable_reply(target, event(), ["不可重复的结果"])
+
     with pytest.raises(ConnectionError):
         await service.run(target, event(), {}, False, work)
     assert service.store.records()[0]["outbox"][0]["state"] == "unknown"
@@ -216,39 +294,71 @@ async def test_unknown_send_is_never_replayed_and_user_gets_one_notice(service):
 
 
 @pytest.mark.asyncio
+async def test_completed_task_with_old_unknown_external_attempt_stays_silent_after_restart(service):
+    target = bot()
+
+    async def work():
+        binding = current_binding()
+        binding.record["outbox"].append({"message": [], "kwargs": {}, "state": "unknown", "external": True})
+        await durable_reply(target, event(), ["最终计算已完成"])
+
+    await service.run(target, event(), {}, False, work)
+    assert service.store.records()[0]["state"] == "complete"
+    restored = await reboot(service)
+    target.send.reset_mock()
+    try:
+        await restored.recover(target)
+        await restored.recover(target)
+        target.send.assert_not_awaited()
+        restored.resume.assert_not_awaited()
+        assert restored.store.records()[0]["outbox"][0]["state"] == "unknown"
+    finally:
+        restored.store.close()
+
+
+@pytest.mark.asyncio
 async def test_send_interrupted_while_awaiting_ack_is_unknown(service):
     target, entered = bot(), asyncio.Event()
+
     async def send(*args, **kwargs):
         entered.set()
         await asyncio.Event().wait()
+
     target.send.side_effect = send
+
     async def work():
         await durable_reply(target, event(), ["正文"])
+
     task = asyncio.create_task(service.run(target, event(), {}, False, work))
     await entered.wait()
     await service.drain(grace=0)
     with pytest.raises(asyncio.CancelledError):
         await task
-    record, = service.store.records()
+    (record,) = service.store.records()
     assert record["outbox"][0]["state"] == "unknown"
 
 
 @pytest.mark.asyncio
 async def test_all_saved_results_are_sent_before_any_model_resume(service):
     target, order = bot(), []
+
     async def unfinished(number):
         service.begin_shutdown()
         await durable_send(target, event(number), f"结果{number}")
         raise asyncio.CancelledError()
+
     for number in (1, 2):
         service.stopping = False
         with pytest.raises(asyncio.CancelledError):
             await service.run(target, event(number), {}, False, lambda: unfinished(number))
+
     async def send(_event, message):
         order.append(str(message))
         return {"message_id": 100}
+
     async def resume(*args):
         order.append("MODEL")
+
     target.send.side_effect = send
     service.resume.side_effect = resume
     restored = await reboot(service)
@@ -265,6 +375,7 @@ async def test_recovery_rechecks_access_and_never_delivers_to_removed_member(ser
     async def work():
         service.begin_shutdown()
         await durable_reply(bot(), event(), ["私有结果"])
+
     await service.run(bot(), event(), {}, False, work)
     restored = await reboot(service)
     target = bot()
@@ -288,8 +399,10 @@ async def test_duplicate_event_does_not_execute_twice(service):
 @pytest.mark.asyncio
 async def test_storage_failure_prevents_tool_work(service, monkeypatch):
     operation = AsyncMock()
+
     def fail(record):
         raise OSError("disk full")
+
     monkeypatch.setattr(service.store, "save", fail)
     with pytest.raises(OSError, match="disk full"):
         await service.run(bot(), event(), {}, False, operation)
@@ -317,10 +430,12 @@ def test_store_is_private_has_one_owner_and_rejects_symlinks(tmp_path):
 @pytest.mark.asyncio
 async def test_checkpoint_does_not_save_system_prompt_or_model_credentials(service):
     async def work():
-        await current_binding().checkpoint([{"role": "system", "content": "model-secret"},
-                                           {"role": "user", "content": "问题"}], phase="model")
+        await current_binding().checkpoint(
+            [{"role": "system", "content": "model-secret"}, {"role": "user", "content": "问题"}], phase="model"
+        )
+
     await service.run(bot(), event(), {}, False, work)
-    path, = service.store.root.glob("*.json")
+    (path,) = service.store.root.glob("*.json")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert "model-secret" not in path.read_text()
 
@@ -328,9 +443,11 @@ async def test_checkpoint_does_not_save_system_prompt_or_model_credentials(servi
 @pytest.mark.asyncio
 async def test_first_signal_drains_then_forwards_and_second_signal_escalates(monkeypatch):
     service, forwarded, entered = RecoveryService(), [], asyncio.Event()
+
     async def drain():
         entered.set()
         await asyncio.Event().wait()
+
     monkeypatch.setattr(service, "drain", drain)
     monkeypatch.setattr(recovery_lifecycle, "recovery_service", service)
     monkeypatch.setattr(recovery_lifecycle, "_shutdown_task", None)
@@ -350,11 +467,15 @@ async def test_first_signal_drains_then_forwards_and_second_signal_escalates(mon
 
 def test_repeated_tool_call_ids_do_not_hide_an_interrupted_later_turn():
     call = {"id": "call0", "function": {"name": "write", "arguments": "{}"}}
-    record = {"checkpoint": [
-        {"role": "assistant", "tool_calls": [call]},
-        {"role": "tool", "tool_call_id": "call0", "content": "第一次完成"},
-        {"role": "assistant", "tool_calls": [call]},
-    ], "inflight_tools": [], "outbox": []}
+    record = {
+        "checkpoint": [
+            {"role": "assistant", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": "call0", "content": "第一次完成"},
+            {"role": "assistant", "tool_calls": [call]},
+        ],
+        "inflight_tools": [],
+        "outbox": [],
+    }
     messages, completed, unsafe = resume_checkpoint(record)
     assert unsafe
     assert len(completed) == 1
@@ -365,17 +486,25 @@ def test_repeated_tool_call_ids_do_not_hide_an_interrupted_later_turn():
 async def test_resume_never_calls_tools_when_previous_mutation_is_unknown(service, monkeypatch):
     from nonebot_plugin_moellmchats import moe_llm as module
     from nonebot_plugin_moellmchats.moe_llm import MoeLlm
+
     target = bot()
     call = {"id": "write1", "type": "function", "function": {"name": "write", "arguments": "{}"}}
+
     async def interrupted():
-        await current_binding().checkpoint([
-            {"role": "user", "content": "修改绑定后画图"}, {"role": "assistant", "tool_calls": [call]},
-        ], phase="tools", calls=[call])
+        await current_binding().checkpoint(
+            [
+                {"role": "user", "content": "修改绑定后画图"},
+                {"role": "assistant", "tool_calls": [call]},
+            ],
+            phase="tools",
+            calls=[call],
+        )
         service.begin_shutdown()
         raise asyncio.CancelledError()
+
     with pytest.raises(asyncio.CancelledError):
         await service.run(target, event(), {}, False, interrupted)
-    record, = service.store.records()
+    (record,) = service.store.records()
     record["state"] = "recovering"
     service.stopping = False
     binding = RecoveryBinding(service, record)
@@ -389,12 +518,17 @@ async def test_resume_never_calls_tools_when_previous_mutation_is_unknown(servic
     chat._execute_tools = AsyncMock(side_effect=AssertionError("must not replay"))
     chat._request_with_rate_limit_fallback = AsyncMock(return_value=(True, "请核对上次操作结果", [call], "", False))
     handler = SimpleNamespace(
-        pre_process=lambda *args, **kwargs: "问题", get_send_message_list=lambda **kwargs: [],
-        messages_entity=SimpleNamespace(tool_messages=[], mention_context=None))
+        pre_process=lambda *args, **kwargs: "问题",
+        get_send_message_list=lambda **kwargs: [],
+        messages_entity=SimpleNamespace(tool_messages=[], mention_context=None),
+    )
     monkeypatch.setattr(module, "MessagesHandler", lambda _: handler)
     monkeypatch.setattr(module, "get_session", object)
-    monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None:
-                        {"max_tool_rounds": 1, "max_agent_steps": 1, "max_retry_times": 1}.get(key, default))
+    monkeypatch.setattr(
+        module.config_parser,
+        "get_config",
+        lambda key, default=None: {"max_tool_rounds": 1, "max_agent_steps": 1, "max_retry_times": 1}.get(key, default),
+    )
     with bind_recovery(binding):
         assert await chat.get_llm_chat() is True
     chat._execute_tools.assert_not_awaited()
@@ -407,11 +541,12 @@ async def test_resume_never_calls_tools_when_previous_mutation_is_unknown(servic
 @pytest.mark.asyncio
 async def test_store_reclaims_completed_tombstones_but_preserves_pending_work(service, monkeypatch):
     from nonebot_plugin_moellmchats.config import recovery_config
+
     monkeypatch.setattr(recovery_config, "moellm_recovery_max_entries", 1)
     await service.run(bot(), event(1), {}, False, AsyncMock())
     await service.run(bot(), event(2), {}, False, AsyncMock())
     assert len(service.store.records()) == 1
-    record, = service.store.records()
+    (record,) = service.store.records()
     record["state"] = "pending"
     service.store.save(record)
     operation = AsyncMock()
@@ -425,14 +560,17 @@ async def test_authorization_uses_current_member_role_and_host_guards(monkeypatc
     import nonebot.message
 
     import nonebot_plugin_moellmchats as plugin
+
     target = bot()
     target.get_group_member_info = AsyncMock(return_value={"user_id": 42, "nickname": "用户", "role": "member"})
     snapshot = event().model_dump(mode="json")
     snapshot["sender"]["role"] = "owner"
     rule = AsyncMock(return_value=True)
     matcher = SimpleNamespace(permission=AsyncMock(return_value=True), rule=rule)
+
     class MatcherType:
         permission, rule = matcher.permission, matcher.rule
+
     monkeypatch.setattr(plugin, "llm_matcher", MatcherType)
     before = AsyncMock(return_value=True)
     run_before = AsyncMock(return_value=True)
@@ -443,5 +581,6 @@ async def test_authorization_uses_current_member_role_and_host_guards(monkeypatc
     assert before.await_count == 1
     assert run_before.await_count == 1
     run_before.return_value = False
-    assert await recovery_lifecycle.authorize_recovery(target,
-        {"protocol": "onebot_v11", "is_ai": False, "event": snapshot}) is None
+    assert (
+        await recovery_lifecycle.authorize_recovery(target, {"protocol": "onebot_v11", "is_ai": False, "event": snapshot}) is None
+    )

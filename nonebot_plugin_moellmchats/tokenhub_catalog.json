@@ -1,4 +1,24 @@
 {
+  "glm_image": {
+    "provider": "bigmodel",
+    "kind": "image",
+    "models": ["cogview-3-flash"],
+    "path": "/images/generations",
+    "doc": "glm_image",
+    "poll": "",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
+  "glm_video": {
+    "provider": "bigmodel",
+    "kind": "video",
+    "models": ["cogvideox-flash"],
+    "path": "/videos/generations",
+    "doc": "glm_video",
+    "poll": "/async-result/{id}",
+    "poll_method": "GET",
+    "poll_field": "id"
+  },
   "hy_image": {
     "kind": "image",
     "models": [

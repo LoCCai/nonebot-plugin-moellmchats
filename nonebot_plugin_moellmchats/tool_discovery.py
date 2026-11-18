@@ -16,14 +16,21 @@ MAX_DISCOVERY_FEATURES = 128
 MAX_DISCOVERY_PLUGIN_CHARS = 48_000
 MAX_DISCOVERY_TRIGGERS = 16
 MAX_LLM_INTENTS = 16
-MAX_DISCOVERY_CATALOG_CHARS = 96_000
+# The classifier prompt rides an 8s per-request budget; a 46k-char catalog
+# was a measured failure driver (llm-classifier-investigation-20261106).
+# Size reduction comes from the tighter per-row budgets below.  This cap is
+# only a fail-safe: it must stay above the measured pre-compression catalog
+# (~45k) so it can never silently drop tail rows such as web_search, and can
+# be tightened once compressed production sizes are logged.
+MAX_DISCOVERY_CATALOG_CHARS = 48_000
 
 _MAX_TITLE_CHARS = 80
 _MAX_SUMMARY_CHARS = 240
 _MAX_DETAIL_CHARS = 600
 _MAX_TRIGGER_CHARS = 240
 _MAX_PERMISSION_CHARS = 200
-_MAX_CATALOG_TRIGGER_CHARS = 640
+_MAX_CATALOG_TRIGGER_CHARS = 120
+_MAX_CATALOG_SUMMARY_CHARS = 72
 _MAX_COMPAT_DESCRIPTION_CHARS = 28_000
 _MIN_LLM_INTENT_CHARS = 4
 _MAX_LLM_INTENT_CHARS = 80
@@ -47,9 +54,7 @@ _TRIGGER_LABELS = {
 
 def _freeze_projection(value: object) -> object:
     if isinstance(value, Mapping):
-        return MappingProxyType(
-            {str(key): _freeze_projection(item) for key, item in value.items()}
-        )
+        return MappingProxyType({str(key): _freeze_projection(item) for key, item in value.items()})
     if isinstance(value, list | tuple):
         return tuple(_freeze_projection(item) for item in value)
     return value
@@ -82,8 +87,7 @@ class PicMenuProjectionSnapshot:
         feature_count = sum(
             len(item.get("menu_data", ()))
             for item in detached.values()
-            if isinstance(item, Mapping)
-            and isinstance(item.get("menu_data"), list)
+            if isinstance(item, Mapping) and isinstance(item.get("menu_data"), list)
         )
         return cls(
             plugins=MappingProxyType(
@@ -139,10 +143,7 @@ def normalize_llm_intent(value: object) -> str:
         return ""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return "".join(
-        character
-        for character in normalized
-        if not character.isspace()
-        and not unicodedata.category(character).startswith("P")
+        character for character in normalized if not character.isspace() and not unicodedata.category(character).startswith("P")
     )
 
 
@@ -339,9 +340,11 @@ def normalize_menu_data(raw_menu: object) -> tuple[dict[str, object], ...]:
         if permission:
             feature["permission"] = permission
 
-        feature_chars = sum(len(value) for value in (title, summary, detail, permission)) + sum(
-            len(trigger["type"]) + len(trigger["value"]) for trigger in triggers
-        ) + sum(len(intent) for intent in intents)
+        feature_chars = (
+            sum(len(value) for value in (title, summary, detail, permission))
+            + sum(len(trigger["type"]) + len(trigger["value"]) for trigger in triggers)
+            + sum(len(intent) for intent in intents)
+        )
         if consumed_chars + feature_chars > MAX_DISCOVERY_PLUGIN_CHARS:
             break
         features.append(feature)
@@ -436,11 +439,7 @@ def project_picmenu_infos(raw_infos: object) -> dict[str, dict[str, object]]:
                 if raw_intents is None:
                     raw_intents = _object_field(raw_item, "pmn_llm_intents")
                 if isinstance(raw_intents, (list, tuple)):
-                    intents = [
-                        value
-                        for value in raw_intents
-                        if isinstance(value, str)
-                    ]
+                    intents = [value for value in raw_intents if isinstance(value, str)]
                     if intents:
                         item["pmn_llm_intents"] = intents
                 if item.get("func"):
@@ -501,12 +500,7 @@ def build_intent_owner_index(
             continue
         add_features(plugin_id, discovery_features(info))
 
-    return MappingProxyType(
-        {
-            intent: tuple(sorted(by_plugin.items()))
-            for intent, by_plugin in sorted(owners.items())
-        }
-    )
+    return MappingProxyType({intent: tuple(sorted(by_plugin.items())) for intent, by_plugin in sorted(owners.items())})
 
 
 def resolve_business_intent(
@@ -550,10 +544,9 @@ def discovery_directory_identity(
         }
     payload = {
         "plugins": detached,
-        "intent_owners": {
-            intent: list(values) for intent, values in sorted(intent_owners.items())
-        },
+        "intent_owners": {intent: list(values) for intent, values in sorted(intent_owners.items())},
     }
+
     def mutable(value: object) -> object:
         if isinstance(value, Mapping):
             return {str(key): mutable(item) for key, item in value.items()}
@@ -572,9 +565,7 @@ def discovery_directory_identity(
 
 
 def preferred_command_prefix(prefixes: tuple[str, ...]) -> str:
-    if not isinstance(prefixes, tuple) or not all(
-        isinstance(prefix, str) for prefix in prefixes
-    ):
+    if not isinstance(prefixes, tuple) or not all(isinstance(prefix, str) for prefix in prefixes):
         raise TypeError("command_start 必须是字符串元组")
     unique = tuple(sorted(set(prefixes), key=lambda item: (len(item), item)))
     if "/" in unique:
@@ -641,11 +632,12 @@ def build_plugin_catalog_entries(
     entries: list[str] = []
     if plugin_id == "qi_zmws":
         entries.append(
-            '- qi_zmws | 造梦原生卡片与数据分析 | 图鉴、技能、角色面板/资料、玩家检索、蟠桃排行等已有功能优先调用原生命令出主题图片；'
-            'AI读取实际渲染文字，不识图。复杂统计及尚未实现的功能才使用zmws_*数据接口；参数不明读zmws_api_guide。'
+            "- qi_zmws | 造梦原生卡片与数据分析 | 图鉴、技能、角色面板/资料、玩家检索、"
+            "蟠桃排行等已有功能优先调用原生命令出主题图片；"
+            "AI读取实际渲染文字，不识图。复杂统计及尚未实现的功能才使用zmws_*数据接口；参数不明读zmws_api_guide。"
         )
     if not features:
-        return entries + [f"- {plugin_id} | {display_name} | {description[:160]}"]
+        return [*entries, f"- {plugin_id} | {display_name} | {description[:120]}"]
 
     for feature in features:
         if feature.get("hidden") is True and not is_superuser:
@@ -654,7 +646,12 @@ def build_plugin_catalog_entries(
         summary = feature.get("summary")
         if not isinstance(name, str) or not isinstance(summary, str):
             continue
-        parts = [f"- {plugin_id} | {display_name} > {name} | {summary}"]
+        # Classification selects a plugin, not a full command schema. Keep
+        # every visible feature, concise examples and permission conditions;
+        # selected-plugin instructions still carry the complete usage.  The
+        # display-name column is dropped per row: the plugin id in column one
+        # is what the classifier returns, and name+triggers carry the intent.
+        parts = [f"- {plugin_id} | {name} | {summary[:_MAX_CATALOG_SUMMARY_CHARS]}"]
         triggers = _trigger_text(
             feature,
             limit=_MAX_CATALOG_TRIGGER_CHARS,
@@ -663,7 +660,7 @@ def build_plugin_catalog_entries(
             parts.append(triggers)
         permission = feature.get("permission")
         if isinstance(permission, str) and permission:
-            parts.append(f"条件: {permission}")
+            parts.append(f"条件: {permission[:_MAX_CATALOG_SUMMARY_CHARS]}")
         entries.append(" | ".join(parts))
     return entries
 
@@ -677,6 +674,16 @@ def finalize_discovery_catalog(entries: list[str]) -> str:
     for entry in entries:
         if not isinstance(entry, str):
             continue
+        parts = entry.split(" | ")
+        if len(parts) >= 3 and parts[0].startswith("- "):
+            # Discovery needs a short intent hint. Names, individual feature
+            # rows, trigger examples and explicit permission fields survive;
+            # full selected-tool descriptions/schema are never changed here.
+            # The per-row hint budget covers both feature summaries (built at
+            # 72 chars) and custom/protocol descriptions (built at 120).
+            summary = _WHITESPACE_RE.sub(" ", parts[2]).strip()
+            parts[2] = summary if len(summary) <= 96 else summary[:96] + "…"
+            entry = " | ".join(parts)
         cost = len(entry) + (1 if result else 0)
         if consumed + cost > MAX_DISCOVERY_CATALOG_CHARS:
             truncated = True
@@ -701,14 +708,10 @@ def build_compatibility_description(
         raise TypeError("is_superuser 必须是布尔值")
     if command_prefixes is None:
         frozen_prefixes = info.get(COMPAT_COMMAND_PREFIXES_KEY, ("/",))
-        if not isinstance(frozen_prefixes, (list, tuple)) or not all(
-            isinstance(prefix, str) for prefix in frozen_prefixes
-        ):
+        if not isinstance(frozen_prefixes, (list, tuple)) or not all(isinstance(prefix, str) for prefix in frozen_prefixes):
             raise TypeError("generation 内冻结的 command_start 非法")
         command_prefixes = tuple(frozen_prefixes)
-    if not isinstance(command_prefixes, tuple) or not all(
-        isinstance(prefix, str) for prefix in command_prefixes
-    ):
+    if not isinstance(command_prefixes, tuple) or not all(isinstance(prefix, str) for prefix in command_prefixes):
         raise TypeError("command_prefixes 必须是字符串元组")
 
     display_name = str(info.get("name") or plugin_id)
@@ -760,8 +763,7 @@ def build_compatibility_description(
         rendered = "、".join(passive_names)
         lines.append(f"以下功能只由真实事件或定时任务触发，不得通过 command 伪造：{rendered}")
     lines.append(
-        "生成 command 时只使用上面标为消息/命令触发的真实格式；"
-        "不要输出命令前缀占位文本，也不要改为直接调用 Bot/NapCat API。"
+        "生成 command 时只使用上面标为消息/命令触发的真实格式；不要输出命令前缀占位文本，也不要改为直接调用 Bot/NapCat API。"
     )
     result = render_command_prefix_contract(
         "\n".join(lines),

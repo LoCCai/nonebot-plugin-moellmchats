@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nonebot_plugin_moellmchats import request_budget as policy, usage_ledger
-from nonebot_plugin_moellmchats.moe_llm import MoeLlm
+from nonebot_plugin_moellmchats import request_budget as policy
+from nonebot_plugin_moellmchats import usage_ledger
 from nonebot_plugin_moellmchats.llm_tools import LlmToolsMixin
+from nonebot_plugin_moellmchats.moe_llm import MoeLlm
 from nonebot_plugin_moellmchats.usage_ledger import budgeted_post
-
 
 GLM = {"model": "glm-5.3-flash", "provider": "bigmodel"}
 
@@ -38,8 +38,12 @@ class Response:
 @pytest.mark.parametrize("encoded", [False, True])
 async def test_concurrent_qq_budgets_do_not_leak_to_models_or_other_users(no_accounting_io, encoded):
     original_model = deepcopy(GLM)
-    original_payload = {"messages": [{"role": "user", "content": "test"}],
-                        "max_tokens": 16384, "stream": True, "reasoning_effort": "max"}
+    original_payload = {
+        "messages": [{"role": "user", "content": "test"}],
+        "max_tokens": 16384,
+        "stream": True,
+        "reasoning_effort": "max",
+    }
     observed = {}
 
     async def call(index):
@@ -83,23 +87,41 @@ async def test_classification_is_small_then_chat_restores_its_own_budget(no_acco
 
 
 def test_request_caps_cover_tools_history_retries_and_model_wait():
-    values = {"request_timeout_seconds": 480, "max_tool_rounds": 12, "max_agent_steps": 12,
-              "max_tool_calls_per_round": 4, "max_retry_times": 3,
-              "max_history_tokens": 4000, "max_history_chars": 16000,
-              "max_user_history": 8, "classification_timeout_seconds": 20}
+    values = {
+        "request_timeout_seconds": 480,
+        "max_tool_rounds": 12,
+        "max_agent_steps": 12,
+        "max_tool_calls_per_round": 4,
+        "max_retry_times": 3,
+        "max_history_tokens": 4000,
+        "max_history_chars": 16000,
+        "max_user_history": 8,
+        "classification_timeout_seconds": 20,
+    }
     with policy.request_budget_scope(authorized=False):
         result = {k: policy.budget_limit(k, v) for k, v in values.items()}
-        assert result == dict(request_timeout_seconds=180, max_tool_rounds=4, max_agent_steps=4,
-                              max_tool_calls_per_round=2, max_retry_times=2,
-                              max_history_tokens=2000, max_history_chars=6000,
-                              max_user_history=4, classification_timeout_seconds=8)
+        assert result == {
+            "request_timeout_seconds": 180,
+            "max_tool_rounds": 4,
+            "max_agent_steps": 4,
+            "max_tool_calls_per_round": 2,
+            "max_retry_times": 2,
+            "max_history_tokens": 2000,
+            "max_history_chars": 6000,
+            "max_user_history": 4,
+            "classification_timeout_seconds": 8,
+        }
         assert policy.budget_limit("max_tool_rounds", 2) == 2
         chat = object.__new__(MoeLlm)
         chat._remaining_request_seconds = lambda: 180
         assert chat._llm_request_timeout().total == 45
     with policy.request_budget_scope(authorized=True):
         assert {k: policy.budget_limit(k, v) for k, v in values.items()} == {
-            **values, 'request_timeout_seconds': 3600, 'max_tool_rounds': 9, 'max_agent_steps': 9}
+            **values,
+            "request_timeout_seconds": 3600,
+            "max_tool_rounds": 9,
+            "max_agent_steps": 9,
+        }
         chat._remaining_request_seconds = lambda: 3600
         assert chat._llm_request_timeout().total == 360
 
@@ -113,6 +135,55 @@ def test_plain_models_keep_supported_parameters_and_completion_limit_field():
         payload = {"max_completion_tokens": 1200, "reasoning_effort": "high"}
         policy.apply_payload_budget(model, payload)
         assert payload == {"max_completion_tokens": 1200, "reasoning_effort": "low"}
+
+
+def test_configured_ordinary_high_reasoning_keeps_bounded_multistep_and_context_isolation(monkeypatch):
+    configured = policy.RequestBudgetConfig(
+        moellm_ordinary_request_seconds=360,
+        moellm_ordinary_model_seconds=90,
+        moellm_ordinary_output_tokens=8192,
+        moellm_ordinary_tool_rounds=6,
+        moellm_ordinary_history_tokens=4000,
+        moellm_ordinary_history_exchanges=8,
+        moellm_ordinary_reasoning_effort="high",
+    )
+    monkeypatch.setattr(policy, "budget_config", configured)
+    model = {"model": "hy4free-workbuddy", "provider": "workbuddy"}
+    with policy.request_budget_scope(authorized=False):
+        payload = {"max_tokens": 16384, "reasoning_effort": "max"}
+        policy.apply_payload_budget(model, payload)
+        assert payload == {"max_tokens": 8192, "reasoning_effort": "high"}
+        assert policy.budget_limit("max_tool_rounds", 12) == 6
+        assert policy.budget_limit("max_agent_steps", 16) == 6
+        assert policy.budget_limit("max_tool_calls_per_round", 8) == 2
+        assert policy.budget_limit("request_timeout_seconds", 480) == 360
+        assert policy.budget_limit("model_timeout_seconds", 360) == 90
+        assert policy.budget_limit("max_history_tokens", 16000) == 4000
+        assert policy.budget_limit("max_user_history", 20) == 8
+        assert policy.budget_limit("max_tool_rounds", 2) == 2
+        payload = {
+            "max_tokens": 16384,
+            "reasoning_effort": "high",
+            "reasoning": {"effort": "max"},
+            "thinking_budget": 16000,
+            "reasoning_budget": 2000,
+        }
+        policy.apply_payload_budget(model, payload)
+        assert payload == {
+            "max_tokens": 8192,
+            "reasoning_effort": "high",
+            "reasoning": {"effort": "high"},
+            "thinking_budget": 4096,
+            "reasoning_budget": 2000,
+        }
+        with policy.classification_budget_scope():
+            payload = {"max_tokens": 16384, "reasoning_effort": "high"}
+            policy.apply_payload_budget(model, payload)
+            assert payload == {"max_tokens": 512, "reasoning_effort": "low"}
+    with policy.request_budget_scope(authorized=True):
+        payload = {"max_tokens": 16384, "reasoning_effort": "max"}
+        policy.apply_payload_budget(model, payload)
+        assert payload == {"max_tokens": 16384, "reasoning_effort": "max"}
 
 
 @pytest.mark.asyncio

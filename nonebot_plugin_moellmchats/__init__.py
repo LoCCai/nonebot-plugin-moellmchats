@@ -13,9 +13,10 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.adapters.onebot.v11 import (
     Message as V11Message,
 )
+from nonebot.adapters.onebot.v11 import MessageSegment as V11MessageSegment
 from nonebot.adapters.onebot.v11.event import Sender
 from nonebot.log import logger
-from nonebot.params import CommandArg
+from nonebot.params import CommandArg, RegexGroup
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata, require
 from nonebot.plugin.on import on_command, on_fullmatch, on_message, on_notice, on_regex
@@ -32,11 +33,16 @@ _runner_preflight_task: asyncio.Task | None = None
 from . import media_tools as _media_tools  # noqa: F401
 from . import meme_tools as _meme_tools  # noqa: F401
 from . import moe_llm as llm
+from . import policy_admin as _policy_admin  # noqa: F401
 from . import render_data as _render_data  # noqa: F401
 from . import render_tools as _render_tools  # noqa: F401
+from . import speech_library as _speech_library
+from . import speech_tools as _speech_tools  # noqa: F401
 from . import tokenhub_tools as _tokenhub_tools  # noqa: F401
+from . import usage_admin as _usage_admin  # noqa: F401
 from . import usage_tools as _usage_tools  # noqa: F401
 from .agent_context_runtime import runtime_resource_host
+from .chain_view import render_chain_image
 from .chat_runtime import (
     acknowledge_mention,
     cd,
@@ -46,15 +52,15 @@ from .chat_runtime import (
     reset_user_runtime_state,
 )
 from .config import MAX_CD_SECONDS, config_parser
+from .delivery_errors import finish_local_reply
 from .generated_tool_runner import generated_tool_runner
 from .generated_tools import generated_tool_store
-from .group_switch import COMMAND_PATTERN as GROUP_SWITCH_PATTERN, group_llm_enabled, manage_group_llm
+from .group_switch import COMMAND_PATTERN as GROUP_SWITCH_PATTERN
+from .group_switch import group_llm_enabled, manage_group_llm
 from .messages_handler import messages_dict
-from .model_admin import POOL_HELP, format_chain, format_pools, manage_pool, pool_role
+from .model_admin import POOL_HELP, chain_data, format_chain, format_pools, manage_pool, pool_role
 from .model_selector import model_selector
-from . import usage_admin as _usage_admin  # noqa: F401
-from . import policy_admin as _policy_admin  # noqa: F401
-from .moe_llm import token_usage_history
+from .moe_llm import token_usage_history as token_usage_history
 from .pending_actions import (
     PendingAction,
     PendingActionError,
@@ -69,7 +75,7 @@ from .runtime_metrics import runtime_metrics
 from .runtime_reload import runtime_reloader
 from .runtime_snapshot import runtime_snapshots
 from .temperament_manager import temperament_manager
-from .token_usage_formatter import format_token_usage_history
+from .token_usage_formatter import format_token_usage_history as format_token_usage_history
 from .tool_authoring import tool_authoring_service
 from .tool_contracts import (
     ToolCapability,
@@ -148,6 +154,8 @@ __plugin_meta__ = PluginMetadata(
 20.超级管理员限定：用"!查看LLM链路"查询实际模型与思考参数；用"!模型池帮助"查看分类/三档池的设置、增删、关闭命令
 21.超级管理员限定：用"开启LLM/关闭LLM/查看LLM [群号或全部]"管理群聊开关；群内可省略群号
 22.超级管理员限定：用"模型消耗图 本月"、"模型用量统计 本月"查看自然月统计；AI 可直接调用 query_model_usage 获取图表与账本文字
+23.超级管理员限定：用"开启LLM语音/关闭LLM语音/查看LLM语音"管理全部群与私聊的语音；"开启LLM随机语音/关闭LLM随机语音"单独管理短回复随机语音
+24.配置本地原声库后，可要求七七查找、播放游戏原声台词；仅@且无正文时默认15%概率播放一句日常台词
 """,
     type="application",
     homepage="https://github.com/LoCCai/nonebot-plugin-moellmchats",
@@ -234,23 +242,42 @@ async def _(event: MessageEvent, args: Message = CommandArg()):
 
 # 2. 查看当前机器人身上挂着哪些配置
 check_config_matcher = on_regex(
-    r"^[!！/]?(?:查看当前配置|查看配置|查看LLM链路|查看当前链路)\s*$",
-    flags=re.IGNORECASE, permission=SUPERUSER, priority=10, block=True,
+    r"^[!！/]?(?:查看当前配置|查看配置|查看LLM链路|查看当前链路)(?:\s+(全部|文本|图片))?\s*$",
+    flags=re.IGNORECASE,
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
 )
 
 
 @check_config_matcher.handle()
-async def _(event: MessageEvent):
-    settings = {key: config_parser.get_config(key, default) for key, default in (
-        ("tool_image_vision_enabled", True), ("tool_image_vision_excluded_tools", []),
-        ("classification_timeout_seconds", 20),
-    )}
-    await check_config_matcher.finish(format_chain(model_selector, settings))
+async def _(event: MessageEvent, groups: tuple[str | None, ...] = RegexGroup()):
+    argument = (groups[0] or "").strip() if groups else ""
+    settings = {
+        key: config_parser.get_config(key, default)
+        for key, default in (
+            ("tool_image_vision_enabled", True),
+            ("tool_image_vision_excluded_tools", []),
+            ("classification_timeout_seconds", 20),
+        )
+    }
+    include_archived = argument == "全部"
+    if argument != "文本":
+        # Default to the rendered chain card; any render failure falls back to text.
+        try:
+            payload = await render_chain_image(chain_data(model_selector, settings, include_archived))
+        except Exception as error:
+            logger.warning("LLM链路图渲染失败，回退文本：error_type={}", type(error).__name__)
+        else:
+            await check_config_matcher.finish(V11MessageSegment.image(payload))
+    await check_config_matcher.finish(format_chain(model_selector, settings, include_archived))
 
 
 model_pool_matcher = on_regex(
     r"^[!！/]?(?:(?:查看|设置|添加|移除|关闭)模型池(?:\s+[\s\S]*)?|模型池帮助)\s*$",
-    permission=SUPERUSER, priority=10, block=True,
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
 )
 
 
@@ -364,7 +391,10 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
 
 
 media_model_matcher = on_command(
-    "设置媒体模型", permission=SUPERUSER, priority=10, block=True,
+    "设置媒体模型",
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
 )
 
 
@@ -372,6 +402,7 @@ media_model_matcher = on_command(
 async def _(args: Message = CommandArg()):
     role, _, query = args.extract_plain_text().strip().partition(" ")
     from .model_selector import MEDIA_ROLES
+
     roles = {label: key for key, (label, _kind) in MEDIA_ROLES.items()}
     if role not in roles or not query.strip():
         await media_model_matcher.finish(
@@ -381,8 +412,11 @@ async def _(args: Message = CommandArg()):
 
 
 group_llm_switch_matcher = on_regex(
-    GROUP_SWITCH_PATTERN, flags=re.IGNORECASE,
-    permission=SUPERUSER, priority=10, block=True,
+    GROUP_SWITCH_PATTERN,
+    flags=re.IGNORECASE,
+    permission=SUPERUSER,
+    priority=10,
+    block=True,
 )
 
 
@@ -414,12 +448,15 @@ async def _(bot: Bot, event: MessageEvent):
     if event_plain_text(event).strip():
         await handle_llm(bot, event, llm_matcher, lambda: format_message(event, bot), is_ai=False)
     else:
+        if await _speech_library.try_ping_voice(bot, event, llm_matcher):
+            await llm_matcher.finish()
         await acknowledge_mention(bot, event)
-        await llm_matcher.finish(
+        await finish_local_reply(
+            llm_matcher,
             make_text_message(
                 onebot_protocol(bot, event) or "onebot_v11",
                 random.choice(get_reply_messages("hello")),
-            )
+            ),
         )
 
 
@@ -440,11 +477,12 @@ async def _(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     else:
         from .onebot_facade import make_text_message, onebot_protocol
 
-        await ai_matcher.finish(
+        await finish_local_reply(
+            ai_matcher,
             make_text_message(
                 onebot_protocol(bot, event) or "onebot_v11",
                 random.choice(get_reply_messages("hello")),
-            )
+            ),
         )
 
 
@@ -460,6 +498,7 @@ async def _run_confirmation_code(action_name: str, code: str, bot: Bot, event: M
     if action_name != "取消执行" and not group_llm_enabled(event):
         raise PendingActionError("本群 LLM 功能已关闭，不能执行待确认操作")
     from .chat_policy import user_blocked
+
     if action_name != "取消执行" and await user_blocked(bot, event):
         raise PendingActionError("AI 使用权限已停用，不能执行待确认操作")
     snapshot = runtime_snapshots.current()
@@ -475,10 +514,12 @@ async def _run_confirmation_code(action_name: str, code: str, bot: Bot, event: M
                 await protocol_pending_actions.cancel(code, bot=bot, event=event)
                 return "已取消该待确认协议操作。"
             invocation = await protocol_broker.confirm(
-                code, bot=bot, event=event, generation=snapshot.generation,
-                is_superuser=event_user_id(event) in {
-                    str(value) for value in getattr(getattr(bot, "config", None), "superusers", set())
-                },
+                code,
+                bot=bot,
+                event=event,
+                generation=snapshot.generation,
+                is_superuser=event_user_id(event)
+                in {str(value) for value in getattr(getattr(bot, "config", None), "superusers", set())},
             )
             return f"已确认并执行协议工具 {invocation.tool_name}：\n{render_tool_result(invocation.result) or '执行成功'}"
         async with runtime_resource_host.lease(snapshot) as coordinator:
@@ -487,7 +528,10 @@ async def _run_confirmation_code(action_name: str, code: str, bot: Bot, event: M
                 await action_store.cancel(code, bot=bot, event=event)
                 return "已取消该待确认操作。"
             action, result = await execute_pending_action(
-                code, bot=bot, event=event, runtime_snapshot=snapshot,
+                code,
+                bot=bot,
+                event=event,
+                runtime_snapshot=snapshot,
                 store=coordinator.resources.pending_action_store,
             )
         result_text = result.text or "执行成功"
@@ -860,28 +904,21 @@ async def _(event: MessageEvent):
     try:
         enabled = _parse_tool_progress_command(event.get_plaintext())
     except ValueError as error:
-        await set_tool_progress_matcher.finish(
-            f"参数错误：{error}。格式：/设置工具进度 开、关、1、0"
-        )
+        await set_tool_progress_matcher.finish(f"参数错误：{error}。格式：/设置工具进度 开、关、1、0")
     if enabled is None:  # pragma: no cover - on_regex guarantees this invariant
         return
 
-    previous = bool(
-        config_parser.get_config("tool_progress_messages_enabled", True)
-    )
+    previous = bool(config_parser.get_config("tool_progress_messages_enabled", True))
     try:
         config_parser.set_config("tool_progress_messages_enabled", enabled)
     except Exception:
         logger.exception("超级管理员设置工具进度消息失败")
-        await set_tool_progress_matcher.finish(
-            "工具进度消息设置失败，原配置继续使用，请查看后台日志。"
-        )
+        await set_tool_progress_matcher.finish("工具进度消息设置失败，原配置继续使用，请查看后台日志。")
 
     state = "开启" if enabled else "关闭"
     previous_state = "开启" if previous else "关闭"
     await set_tool_progress_matcher.finish(
-        f"已{state}工具调用进度提示（原状态：{previous_state}）。"
-        "确认消息、工具结果、最终回复和后台日志不受影响。"
+        f"已{state}工具调用进度提示（原状态：{previous_state}）。确认消息、工具结果、最终回复和后台日志不受影响。"
     )
 
 
@@ -897,13 +934,9 @@ set_tool_progress_model_preface_matcher = on_regex(
 @set_tool_progress_model_preface_matcher.handle()
 async def _(event: MessageEvent):
     try:
-        enabled = _parse_tool_progress_model_preface_command(
-            event.get_plaintext()
-        )
+        enabled = _parse_tool_progress_model_preface_command(event.get_plaintext())
     except ValueError as error:
-        await set_tool_progress_model_preface_matcher.finish(
-            f"参数错误：{error}。格式：/设置工具自然话术 开、关、1、0"
-        )
+        await set_tool_progress_model_preface_matcher.finish(f"参数错误：{error}。格式：/设置工具自然话术 开、关、1、0")
     if enabled is None:  # pragma: no cover - on_regex guarantees this invariant
         return
 
@@ -920,15 +953,12 @@ async def _(event: MessageEvent):
         )
     except Exception:
         logger.exception("超级管理员设置工具自然话术失败")
-        await set_tool_progress_model_preface_matcher.finish(
-            "工具自然话术设置失败，原配置继续使用，请查看后台日志。"
-        )
+        await set_tool_progress_model_preface_matcher.finish("工具自然话术设置失败，原配置继续使用，请查看后台日志。")
 
     state = "开启" if enabled else "关闭"
     previous_state = "开启" if previous else "关闭"
     await set_tool_progress_model_preface_matcher.finish(
-        f"已{state}工具调用自然话术（原状态：{previous_state}）。"
-        "它不会增加模型请求；工具进度总开关关闭时不会发送。"
+        f"已{state}工具调用自然话术（原状态：{previous_state}）。它不会增加模型请求；工具进度总开关关闭时不会发送。"
     )
 
 
@@ -1121,15 +1151,17 @@ check_token_matcher = on_command(
 @check_token_matcher.handle()
 async def _(event: MessageEvent, args: Message = CommandArg()):
     arg = args.extract_plain_text().strip()
-    from .usage_reports import report_data, format_report
     from .usage_ledger import get_ledger
+    from .usage_reports import format_report, report_data
+
     if not arg or arg.isdecimal():
         count = min(50, max(1, int(arg or 10)))
         rows = await asyncio.to_thread(get_ledger().rows, limit=count, reverse=True)
         text = "最近模型用量（持久记录）\n" + "\n".join(
             f"{row['model']} ({row['provider']}) · QQ {row['user_id'] or '系统'} · "
-            f"{'群 '+row['group_id'] if row['group_id'] else row['scene']} · {row['total']:,} Token"
-            for row in rows)
+            f"{'群 ' + row['group_id'] if row['group_id'] else row['scene']} · {row['total']:,} Token"
+            for row in rows
+        )
         text += "\n统计/图表：模型用量统计、模型用量图 [周|月|年|全部] [群 群号] [用户 QQ]\n完整历史：导出模型用量 全部"
     else:
         try:

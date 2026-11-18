@@ -10,24 +10,28 @@ import time
 from typing import TYPE_CHECKING, Any
 import unicodedata
 
+from nonebot.adapters import Message
 from nonebot.log import logger
 import ujson as json
 
-from .agent_runtime import AgentRunState, ToolCallStatus
+from .agent_runtime import AgentRunState, ToolCallStatus, _freeze_agent_json
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
-from .request_budget import budget_limit, request_config
 from .event_simulator import (
+    MentionIdentityRequired,
     PluginDispatchResult,
     PluginDispatchStatus,
+    _build_fake_message,
     event_simulator,
+    normalize_plugin_command,
 )
 from .nonebot_plugin_tools import (
     PluginDispatchError,
     configured_command_prefixes,
     plugin_dispatch_tool_result,
 )
+from .onebot_facade import onebot_protocol
 from .parallel_execution import (
     ReadOnlyParallelExecutionError,
     ReadOnlyParallelExecutionTimeout,
@@ -40,6 +44,7 @@ from .protocol_broker import (
     ProtocolInvocationStatus,
 )
 from .protocol_registry import protocol_registry
+from .request_budget import budget_limit, request_config
 from .request_recovery import current_binding
 from .runtime_metrics import runtime_metrics
 from .tool_contracts import (
@@ -57,6 +62,7 @@ from .tool_execution import (
 from .tool_graph import ToolGraph
 from .tool_manager import LlmToolExecutionRoute, LlmToolExecutionView
 from .tool_providers import ToolSource
+from .tool_rediscovery import DISCOVER_TOOL_NAME, DISCOVER_TOOL_SPEC
 from .tool_scheduler import ReadOnlyParallelToolScheduler, ToolSchedulingError
 from .trusted_runner_pool import (
     TrustedRunnerEligibilityError,
@@ -138,6 +144,10 @@ class LlmToolsMixin:
         arguments: object,
         parameters: Mapping[str, Any] | None,
     ) -> str | None:
+        try:
+            _freeze_agent_json(arguments, label="ToolCall.arguments")
+        except (TypeError, ValueError) as error:
+            return str(error)
         return validate_tool_arguments(arguments, parameters)
 
     @staticmethod
@@ -169,10 +179,7 @@ class LlmToolsMixin:
             or "?" in verb
             or "\\" in verb
             or "=" in verb
-            or any(
-                marker in lowered
-                for marker in ("token", "cookie", "authorization", "secret")
-            )
+            or any(marker in lowered for marker in ("token", "cookie", "authorization", "secret"))
             or (verb.startswith("/") and "/" in verb[1:])
         ):
             verb = "<redacted>"
@@ -182,9 +189,7 @@ class LlmToolsMixin:
         return f"{verb}{suffix} [tokens={len(tokens)},chars={len(compact)}]"
 
     def _progress_messages_enabled(self) -> bool:
-        return bool(
-            config_parser.get_config("tool_progress_messages_enabled", True)
-        )
+        return bool(config_parser.get_config("tool_progress_messages_enabled", True))
 
     def _progress_model_preface_enabled(self) -> bool:
         return bool(
@@ -331,9 +336,9 @@ class LlmToolsMixin:
             heading += f"｜功能：{cls._protocol_progress_feature(view)}"
         elif view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN:
             command = arguments.get("command", "")
-            # Keep the full command/parameters copyable, but treat CQ as text.
+            # Text fallback; _send_tool_progress builds verified at segments.
             command = str(command).replace("[CQ:", "［CQ:")
-            command = " ".join(command.split())
+            command = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", command).strip()
             heading = f"七七正在帮你投递：{command}"
         else:
             source_labels = {
@@ -406,14 +411,21 @@ class LlmToolsMixin:
         confirmation_required: bool = False,
         include_model_preface: bool = True,
     ) -> None:
-        if not self._progress_messages_enabled():
+        is_plugin_command = view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN
+        enabled = (
+            config_parser.get_config("plugin_command_progress_enabled", True)
+            if is_plugin_command
+            else self._progress_messages_enabled()
+        )
+        if not enabled:
             self._set_tool_progress_status(call, "disabled")
             return
         attempted = getattr(self, "_tool_progress_attempted", False)
         command_key = None
-        if view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN:
-            command = " ".join(str(arguments.get("command", "")).split())
-            command_key = hashlib.sha256(command.encode()).hexdigest()
+        if is_plugin_command:
+            command = str(arguments.get("command", "")).strip()
+            identity = json.dumps([view.tool_name, command], ensure_ascii=False)
+            command_key = hashlib.sha256(identity.encode()).hexdigest()
         commands = getattr(self, "_tool_progress_commands", None)
         if commands is None:
             commands = self._tool_progress_commands = set()
@@ -426,7 +438,7 @@ class LlmToolsMixin:
             commands.add(command_key)
         self._tool_progress_attempted = True
         model_preface = ""
-        if not attempted and include_model_preface and self._progress_model_preface_enabled():
+        if not is_plugin_command and not attempted and include_model_preface and self._progress_model_preface_enabled():
             model_preface = self._safe_progress_preface(result_text)
         message = self._build_tool_progress_message(
             view,
@@ -434,6 +446,18 @@ class LlmToolsMixin:
             confirmation_required=confirmation_required,
             model_preface=model_preface,
         )
+        if is_plugin_command:
+            try:
+                command_message = _build_fake_message(
+                    str(arguments.get("command", "")),
+                    getattr(self, "format_message_dict", {}),
+                    protocol=onebot_protocol(self.bot) or "onebot_v11",
+                )
+            except MentionIdentityRequired:
+                self._set_tool_progress_status(call, "invalid_command")
+                return
+            if any(segment.type in {"at", "mention"} for segment in command_message):
+                message = command_message.__class__("七七正在帮你投递：") + command_message
         task = asyncio.create_task(
             self._deliver_tool_progress(call=call, view=view, message=message),
             name="llm_tool_progress",
@@ -456,7 +480,7 @@ class LlmToolsMixin:
         *,
         call: Mapping[str, Any],
         view: LlmToolExecutionView,
-        message: str,
+        message: str | Message,
     ) -> None:
         status = "sent"
         error_type = ""
@@ -468,7 +492,12 @@ class LlmToolsMixin:
             # receipts; only retract a confirmed message sent by this request.
             if isinstance(message_id, str) and re.fullmatch(r"-?\d+", message_id):
                 message_id = int(message_id)
-            if isinstance(message_id, int) and not isinstance(message_id, bool) and message_id:
+            if (
+                view.route is not LlmToolExecutionRoute.NONEBOT_PLUGIN
+                and isinstance(message_id, int)
+                and not isinstance(message_id, bool)
+                and message_id
+            ):
                 ids = getattr(self, "_tool_progress_message_ids", None)
                 if ids is None:
                     ids = self._tool_progress_message_ids = set()
@@ -522,11 +551,11 @@ class LlmToolsMixin:
         if message_id is None:
             return
         # Clear before awaiting so completion and the timer cannot both recall.
-        if hasattr(self, '_tool_progress_message_ids'):
+        if hasattr(self, "_tool_progress_message_ids"):
             if message_id not in ids:
                 return
             ids.discard(message_id)
-        if getattr(self, '_tool_progress_message_id', None) == message_id:
+        if getattr(self, "_tool_progress_message_id", None) == message_id:
             self._tool_progress_message_id = None
         try:
             try:
@@ -534,9 +563,11 @@ class LlmToolsMixin:
             except ModuleNotFoundError as error:
                 if error.name not in {"src", "src.utils", "src.utils.onebot_recall"}:
                     raise
+
                 # Standalone plugin deployments have no Qiqi utils package.
                 async def recall_message(bot: Any, **params: Any) -> None:
                     await bot.delete_msg(**params)
+
             async with timeout_scope(_PROGRESS_RECALL_TIMEOUT_SECONDS):
                 await recall_message(self.bot, message_id=message_id)
         except Exception as error:
@@ -546,8 +577,8 @@ class LlmToolsMixin:
 
     async def _finish_tool_progress(self) -> None:
         self._tool_progress_finished = True
-        for pending_id, pending_timer in tuple(getattr(self, '_tool_progress_recall_timers', {}).items()):
-            if pending_id in getattr(self, '_tool_progress_message_ids', ()):
+        for pending_id, pending_timer in tuple(getattr(self, "_tool_progress_recall_timers", {}).items()):
+            if pending_id in getattr(self, "_tool_progress_message_ids", ()):
                 pending_timer.cancel()
         timer = getattr(self, "_tool_progress_recall_timer", None)
         if timer is not None and getattr(self, "_tool_progress_message_id", None) is not None:
@@ -572,7 +603,8 @@ class LlmToolsMixin:
     def _tool_vision_images(result: ToolResult, tool_name: str) -> tuple[str, ...]:
         """Image delivery is independent of optional model reinspection."""
         if (
-            tool_name == "qi_zmws" or tool_name.startswith("zmws_")
+            tool_name == "qi_zmws"
+            or tool_name.startswith("zmws_")
             or config_parser.get_config("skip_self_image_vision", True)
             or not config_parser.get_config("tool_image_vision_enabled", True)
             or tool_name in config_parser.get_config("tool_image_vision_excluded_tools", [])
@@ -616,8 +648,7 @@ class LlmToolsMixin:
             PluginDispatchStatus.MATCHED_SIDE_EFFECT.value,
         }:
             return (
-                "相同插件指令已执行成功，结果已向用户发送，禁止重复投递；"
-                "请使用已有文本或结构化数据，缺少字段时按render_id读取。"
+                "相同插件指令已执行成功，结果已向用户发送，禁止重复投递；请使用已有文本或结构化数据，缺少字段时按render_id读取。"
             )
         if prior in {
             PluginDispatchStatus.NOT_MATCHED.value,
@@ -630,7 +661,9 @@ class LlmToolsMixin:
         return None
 
     def _execution_arguments_digest(
-        self, arguments: Mapping[str, Any], view: LlmToolExecutionView | None,
+        self,
+        arguments: Mapping[str, Any],
+        view: LlmToolExecutionView | None,
     ) -> str:
         """Equivalent native command prefixes share one per-request attempt.
 
@@ -643,7 +676,7 @@ class LlmToolsMixin:
             command = command.strip()
             for prefix in sorted(configured_command_prefixes(), key=len, reverse=True):
                 if prefix and command.startswith(prefix):
-                    command = command[len(prefix):]
+                    command = command[len(prefix) :]
                     break
             canonical["command"] = re.sub(r"^(\S+)\s+", r"\1 ", command)
         return self._canonical_arguments_digest(canonical)
@@ -695,15 +728,9 @@ class LlmToolsMixin:
             "api_unknown": dispatch.api_unknown if dispatch else 0,
             "api_read_failed": dispatch.api_read_failed if dispatch else 0,
             "api_read_recovered": dispatch.api_read_recovered if dispatch else 0,
-            "api_unresolved_failed": (
-                dispatch.api_unresolved_failed if dispatch else 0
-            ),
-            "api_unresolved_unknown": (
-                dispatch.api_unresolved_unknown if dispatch else 0
-            ),
-            "mutating_api_success": (
-                dispatch.mutating_api_succeeded if dispatch else 0
-            ),
+            "api_unresolved_failed": (dispatch.api_unresolved_failed if dispatch else 0),
+            "api_unresolved_unknown": (dispatch.api_unresolved_unknown if dispatch else 0),
+            "mutating_api_success": (dispatch.mutating_api_succeeded if dispatch else 0),
             "progress_status": self._tool_progress_status(call),
             "status": status,
             "duration_ms": max(0, int(duration_ms)),
@@ -736,11 +763,7 @@ class LlmToolsMixin:
 
         def count(name: str) -> int:
             value = raw.get(name, 0)
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value < 0
-            ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"plugin_dispatch.{name} 非法")
             return value
 
@@ -1003,6 +1026,27 @@ class LlmToolsMixin:
             )
         self.messages_handler.messages_entity.tool_messages.extend(history_msgs)
 
+    def _remaining_tool_call_budget(self) -> int:
+        limit = request_config("max_tool_calls_per_request", 15)
+        used = getattr(self, "_request_tool_calls_used", 0)
+        if recovery := current_binding():
+            saved = recovery.record.get("tool_calls_used", 0)
+            # Preserve the same request allowance across a restart as well as
+            # model failover. Invalid saved counters cannot grant extra calls.
+            used = max(used, saved if type(saved) is int and saved >= 0 else limit)
+        self._request_tool_calls_used = used
+        return max(0, limit - used)
+
+    def _reserve_request_tool_calls(self, count: int) -> int:
+        # Reserve synchronously before any await/parallel scheduling. Calls in
+        # later rounds and model fallbacks share this request's same engine.
+        granted = min(count, self._remaining_tool_call_budget())
+        self._request_tool_calls_used = getattr(self, "_request_tool_calls_used", 0) + granted
+        if recovery := current_binding():
+            # Admission paths persist this counter before executing the batch.
+            recovery.record["tool_calls_used"] = self._request_tool_calls_used
+        return granted
+
     async def _try_execute_read_only_parallel_tools(
         self,
         tool_calls: list,
@@ -1010,11 +1054,20 @@ class LlmToolsMixin:
         send_message_list: list,
         reasoning_content: str,
     ) -> list | None:
+        # Discovery mutates only this request's schema; serialize it with the
+        # other calls so a worker cannot race selection/cache publication.
+        if any(call.get("function", {}).get("name") == DISCOVER_TOOL_NAME for call in tool_calls):
+            return None
         if len(tool_calls) > budget_limit("max_tool_calls_per_round", len(tool_calls)):
+            return None
+        if len(tool_calls) > self._remaining_tool_call_budget():
             return None
         batch = self._prepare_read_only_parallel_batch(tool_calls)
         if batch is None:
             return None
+        self._reserve_request_tool_calls(len(tool_calls))
+        if recovery := current_binding():
+            await recovery.save()
         runtime = self.agent_runtime
         assert runtime is not None
 
@@ -1296,9 +1349,7 @@ class LlmToolsMixin:
 
         for prepared in batch.calls:
             outcome = outcomes[prepared.tool_name]
-            arguments_digest = self._canonical_arguments_digest(
-                prepared.arguments
-            )
+            arguments_digest = self._canonical_arguments_digest(prepared.arguments)
             fingerprint = (
                 int(getattr(self.tool_snapshot, "generation", 0)),
                 prepared.tool_name,
@@ -1345,25 +1396,34 @@ class LlmToolsMixin:
         return send_message_list
 
     async def _execute_tools(
-        self, tool_calls: list, result_text: str, send_message_list: list, reasoning_content: str,
+        self,
+        tool_calls: list,
+        result_text: str,
+        send_message_list: list,
+        reasoning_content: str,
     ) -> list:
         recovery = current_binding()
         if recovery is not None:
             recovery.pause_if_stopping()
-            await recovery.checkpoint([*send_message_list,
-                {"role": "assistant", "content": result_text or "", "tool_calls": tool_calls}],
-                phase="tools", calls=tool_calls)
+            await recovery.checkpoint(
+                [*send_message_list, {"role": "assistant", "content": result_text or "", "tool_calls": tool_calls}],
+                phase="tools",
+                calls=tool_calls,
+            )
         self._recovery_messages = send_message_list
         try:
             from .request_budget import authorized_request
+
             if authorized_request() and hasattr(self, "_remaining_request_seconds"):
                 async with timeout_scope(self._remaining_request_seconds()):
                     result = await self._execute_tools_inner(tool_calls, result_text, send_message_list, reasoning_content)
             else:
                 result = await self._execute_tools_inner(tool_calls, result_text, send_message_list, reasoning_content)
             from .delivery_policy import pending_commands
+
             if notice := pending_commands(self):
                 from .request_recovery import durable_send
+
                 # This is always plain text, independent of AI rendering tools.
                 await durable_send(self.bot, self.event, notice)
             if recovery is not None:
@@ -1386,9 +1446,13 @@ class LlmToolsMixin:
                 call["function"]["arguments"] = "{}"
 
         from .delivery_policy import reserve_deliveries
+
         deferred = reserve_deliveries(self, tool_calls)
-        parallel_result = None if deferred else await self._try_execute_read_only_parallel_tools(
-            tool_calls, result_text, send_message_list, reasoning_content)
+        parallel_result = (
+            None
+            if deferred
+            else await self._try_execute_read_only_parallel_tools(tool_calls, result_text, send_message_list, reasoning_content)
+        )
         if parallel_result is not None:
             return parallel_result
 
@@ -1408,10 +1472,20 @@ class LlmToolsMixin:
             # A rejected explicit graph batch must retain its existing
             # one-call fallback, including conflicts and confirmation gates.
             max_tool_calls_per_round = 1
-        executable_tool_calls = [call for index, call in enumerate(tool_calls)
-                                 if index < max_tool_calls_per_round or str(call.get("id", "")) in deferred]
-        skipped_tool_calls = [call for index, call in enumerate(tool_calls)
-                              if index >= max_tool_calls_per_round and str(call.get("id", "")) not in deferred]
+        executable_tool_calls, skipped_tool_calls = [], []
+        request_limited_ids = set()
+        for index, call in enumerate(tool_calls):
+            if str(call.get("id", "")) in deferred:
+                executable_tool_calls.append(call)
+            elif index >= max_tool_calls_per_round:
+                skipped_tool_calls.append(call)
+            elif self._reserve_request_tool_calls(1):
+                executable_tool_calls.append(call)
+            else:
+                skipped_tool_calls.append(call)
+                request_limited_ids.add(str(call.get("id", "")))
+        if recovery := current_binding():
+            await recovery.save()
         if skipped_tool_calls:
             logger.warning(f"本轮工具调用数量为 {len(tool_calls)}，超过上限 {max_tool_calls_per_round}，将跳过超出的调用")
 
@@ -1444,9 +1518,15 @@ class LlmToolsMixin:
             if reason := deferred.get(str(call.get("id", ""))):
                 send_message_list.append({"role": "tool", "tool_call_id": call["id"], "content": reason})
                 await self._record_agent_tool_outcome(
-                    call=call, tool_view=tool_view, arguments={}, status=ToolCallStatus.REJECTED,
-                    created_at=trace_created_at, started_monotonic=trace_started_monotonic,
-                    error_type="OrdinarySingleDelivery", result_preview=reason)
+                    call=call,
+                    tool_view=tool_view,
+                    arguments={},
+                    status=ToolCallStatus.REJECTED,
+                    created_at=trace_created_at,
+                    started_monotonic=trace_started_monotonic,
+                    error_type="OrdinarySingleDelivery",
+                    result_preview=reason,
+                )
                 continue
             if not hasattr(self, "_current_tool_usage"):
                 self._current_tool_usage = Counter()
@@ -1457,6 +1537,20 @@ class LlmToolsMixin:
                 args = None
                 argument_error = f"工具参数不是有效 JSON: {error}"
             else:
+                normalization_error = None
+                if (
+                    isinstance(args, dict)
+                    and isinstance(args.get("command"), str)
+                    and tool_view is not None
+                    and tool_view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN
+                ):
+                    try:
+                        args = {
+                            **args,
+                            "command": normalize_plugin_command(args["command"], getattr(self, "format_message_dict", {})),
+                        }
+                    except MentionIdentityRequired as error:
+                        normalization_error = str(error)
                 parameters = None
                 if tool_view is not None and tool_view.spec is not None:
                     parameters = tool_view.spec.parameters
@@ -1471,7 +1565,7 @@ class LlmToolsMixin:
                         "properties": {"command": {"type": "string"}},
                         "required": ["command"],
                     }
-                argument_error = self._validate_tool_arguments(args, parameters)
+                argument_error = normalization_error or self._validate_tool_arguments(args, parameters)
             if argument_error:
                 safe_arguments = args if isinstance(args, Mapping) else {}
                 await self._record_agent_tool_outcome(
@@ -1494,14 +1588,10 @@ class LlmToolsMixin:
                     call=call,
                     tool_name=func_name,
                     arguments=safe_arguments,
-                    arguments_digest=self._canonical_arguments_digest(
-                        safe_arguments
-                    ),
+                    arguments_digest=self._canonical_arguments_digest(safe_arguments),
                     status="arguments_rejected",
                     retry_decision="allow_corrected_arguments",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
             assert isinstance(args, dict)
@@ -1536,19 +1626,14 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="retry_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
             fingerprint_usage = self._tool_fingerprint_usage()
             repeated_limit = config_parser.get_config("max_repeated_tool_calls", 2)
             if fingerprint_usage[fingerprint] + 1 > repeated_limit:
-                tool_result = (
-                    f"工具 {func_name} 使用相同参数已达到单任务重复调用上限 "
-                    f"{repeated_limit}，请基于已有结果完成回答。"
-                )
+                tool_result = f"工具 {func_name} 使用相同参数已达到单任务重复调用上限 {repeated_limit}，请基于已有结果完成回答。"
                 send_message_list.append(
                     {
                         "role": "tool",
@@ -1572,9 +1657,7 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="repeat_limit_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
@@ -1583,7 +1666,10 @@ class LlmToolsMixin:
                     {
                         "role": "tool",
                         "tool_call_id": call["id"],
-                        "content": (f"工具 {func_name} 不在当前 generation 的工具目录中，已拒绝执行。"),
+                        "content": (
+                            f"工具 {func_name} 不在当前 generation 的工具目录中，已拒绝执行。"
+                            "可调用 discover_tools 检索已注册且有权限的真实能力，不要猜测工具名。"
+                        ),
                     }
                 )
                 await self._record_agent_tool_outcome(
@@ -1602,9 +1688,7 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="unknown_tool_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
@@ -1648,17 +1732,11 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="trust_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
-            if (
-                tool_view.spec is not None
-                and tool_view.spec.permission == "superuser"
-                and not is_superuser
-            ):
+            if tool_view.spec is not None and tool_view.spec.permission == "superuser" and not is_superuser:
                 send_message_list.append(
                     {
                         "role": "tool",
@@ -1682,9 +1760,7 @@ class LlmToolsMixin:
                     arguments_digest=arguments_digest,
                     status="permission_rejected",
                     retry_decision="blocked",
-                    duration_ms=int(
-                        (time.monotonic() - trace_started_monotonic) * 1000
-                    ),
+                    duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                 )
                 continue
 
@@ -1787,10 +1863,7 @@ class LlmToolsMixin:
                             arguments_digest=arguments_digest,
                             status=ToolCallStatus.WAITING_CONFIRMATION.value,
                             retry_decision="await_confirmation",
-                            duration_ms=int(
-                                (time.monotonic() - trace_started_monotonic)
-                                * 1000
-                            ),
+                            duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                         )
                         if runtime is not None:
                             await runtime.advance(AgentRunState.EXECUTING)
@@ -1839,10 +1912,12 @@ class LlmToolsMixin:
 
             elif tool_view.route is LlmToolExecutionRoute.CUSTOM_TOOL:
                 try:
+                    from .builtin_tools import is_trusted_speech_tool_spec
+
                     tool_entry = tool_view.legacy_entry
                     assert tool_entry is not None
                     spec = tool_view.spec
-                    if spec is not None and spec.effect == ToolEffect.MUTATING:
+                    if spec is not None and spec.effect == ToolEffect.MUTATING and not is_trusted_speech_tool_spec(spec):
                         # A model-provided flag or confirmation phrase in the original
                         # request is never authorization. Freeze the exact call and wait
                         # for a separate, user-bound nonce message instead.
@@ -1879,13 +1954,7 @@ class LlmToolsMixin:
                                 arguments_digest=arguments_digest,
                                 status="pending_validation_rejected",
                                 retry_decision="blocked",
-                                duration_ms=int(
-                                    (
-                                        time.monotonic()
-                                        - trace_started_monotonic
-                                    )
-                                    * 1000
-                                ),
+                                duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                             )
                             continue
                         await self._send_tool_progress(
@@ -1956,15 +2025,9 @@ class LlmToolsMixin:
                             arguments_digest=arguments_digest,
                             status=pending_status.value,
                             retry_decision=(
-                                "await_confirmation"
-                                if pending_status
-                                is ToolCallStatus.WAITING_CONFIRMATION
-                                else "blocked"
+                                "await_confirmation" if pending_status is ToolCallStatus.WAITING_CONFIRMATION else "blocked"
                             ),
-                            duration_ms=int(
-                                (time.monotonic() - trace_started_monotonic)
-                                * 1000
-                            ),
+                            duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
                         )
                         if runtime is not None and pending_status is ToolCallStatus.WAITING_CONFIRMATION:
                             await runtime.advance(AgentRunState.EXECUTING)
@@ -1976,13 +2039,16 @@ class LlmToolsMixin:
                         result_text=result_text,
                     )
                     async with timeout_scope(self._tool_timeout_seconds()):
-                        result = await execute_custom_tool(
-                            func_name,
-                            tool_entry,
-                            args,
-                            bot=self.bot,
-                            event=self.event,
-                        )
+                        if func_name == DISCOVER_TOOL_NAME and spec is DISCOVER_TOOL_SPEC:
+                            result = await spec.handler(**args, _request=self)
+                        else:
+                            result = await execute_custom_tool(
+                                func_name,
+                                tool_entry,
+                                args,
+                                bot=self.bot,
+                                event=self.event,
+                            )
                     # The shared executor has already applied the ToolSpec-specific
                     # text and image contract. Do not override it with the global
                     # fallback below.
@@ -2023,10 +2089,14 @@ class LlmToolsMixin:
                     trace_status = ToolCallStatus.REJECTED
                     trace_error_type = "ToolExecutionRejected"
                     tool_result = f"函数执行出错: {error}"
-                except Exception:
-                    logger.error("自定义工具执行失败，异常详情已安全省略")
+                except Exception as error:
+                    from .diagnostics import exception_metadata
+
+                    details = exception_metadata(error)
+                    safe_tool = re.sub(r"[^A-Za-z0-9_.-]", "_", str(func_name))[:80]
+                    logger.error("自定义工具执行失败: tool={} details={}；参数与异常正文已省略", safe_tool, details)
                     trace_status = ToolCallStatus.FAILED
-                    trace_error_type = "ToolExecutionError"
+                    trace_error_type = str(details["exception_type"])
                     tool_result = "函数执行出错，异常详情已安全省略"
             else:
                 assert tool_view.route is LlmToolExecutionRoute.NONEBOT_PLUGIN
@@ -2050,15 +2120,11 @@ class LlmToolsMixin:
                             )
                             if not isinstance(plugin_result, ToolResult):
                                 raise TypeError("NoneBot Provider handler 必须返回 ToolResult")
-                            dispatch_result = self._dispatch_from_tool_result(
-                                plugin_result
-                            )
+                            dispatch_result = self._dispatch_from_tool_result(plugin_result)
                             if dispatch_result is None:
-                                raise TypeError(
-                                    "NoneBot Provider handler 缺少调度状态"
-                                )
+                                raise TypeError("NoneBot Provider handler 缺少调度状态")
                             if not dispatch_result.succeeded:
-                                raise PluginDispatchError(dispatch_result)
+                                raise PluginDispatchError(dispatch_result, command=command, plugin_name=func_name)
                         else:
                             raw_dispatch_result = await event_simulator.dispatch_event(
                                 self.bot,
@@ -2072,14 +2138,13 @@ class LlmToolsMixin:
                                 raw_dispatch_result,
                                 PluginDispatchResult,
                             ):
-                                raise TypeError(
-                                    "NoneBot 兼容调度必须返回 PluginDispatchResult"
-                                )
+                                raise TypeError("NoneBot 兼容调度必须返回 PluginDispatchResult")
                             dispatch_result = raw_dispatch_result
                             if not dispatch_result.succeeded:
-                                raise PluginDispatchError(dispatch_result)
+                                raise PluginDispatchError(dispatch_result, command=command, plugin_name=func_name)
                             plugin_result = await plugin_dispatch_tool_result(
-                                dispatch_result, plugin_name=func_name,
+                                dispatch_result,
+                                plugin_name=func_name,
                             )
                 except asyncio.CancelledError:
                     await self._record_agent_tool_outcome(
@@ -2104,13 +2169,8 @@ class LlmToolsMixin:
                     )
                 except PluginDispatchError as error:
                     dispatch_result = error.result
-                    trace_status = self._trace_status_for_dispatch(
-                        dispatch_result.status
-                    )
-                    trace_error_type = (
-                        "PluginDispatch"
-                        + dispatch_result.status.value.title().replace("_", "")
-                    )
+                    trace_status = self._trace_status_for_dispatch(dispatch_result.status)
+                    trace_error_type = "PluginDispatch" + dispatch_result.status.value.title().replace("_", "")
                     plugin_result = None
                     tool_result = str(error)
                     self._remember_tool_attempt(
@@ -2119,13 +2179,12 @@ class LlmToolsMixin:
                     )
                 except Exception as exc:
                     from .diagnostics import exception_metadata
+
                     logger.error("NoneBot 插件工具执行失败: plugin={} details={}", func_name, exception_metadata(exc))
                     trace_status = ToolCallStatus.FAILED
                     trace_error_type = "ToolExecutionError"
                     plugin_result = None
-                    tool_result = (
-                        "插件处理异常；不要重复调用相同工具和参数。"
-                    )
+                    tool_result = "插件处理异常；不要重复调用相同工具和参数。"
                     self._remember_tool_attempt(
                         fingerprint,
                         PluginDispatchStatus.FAILED.value,
@@ -2144,16 +2203,12 @@ class LlmToolsMixin:
                             "不要识图、重新排版或逐项复述已发送卡片。"
                         )
                     if plugin_result.metadata.get("data_only"):
-                        _PLUGIN_SYSTEM_HINT = ("\n\n[系统提示]：这是供模型读取的接口信息，尚未向用户发送游戏结果。"
-                                               "请按工具指引继续查询并根据文字数据回答原问题，自行选择文字、表格或普通渲染。")
-                    self._pending_vision_images.extend(
-                        self._tool_vision_images(plugin_result, func_name)
-                    )
-                    visible_metadata = {
-                        key: value
-                        for key, value in plugin_result.metadata.items()
-                        if key != "plugin_dispatch"
-                    }
+                        _PLUGIN_SYSTEM_HINT = (
+                            "\n\n[系统提示]：这是供模型读取的接口信息，尚未向用户发送游戏结果。"
+                            "请按工具指引继续查询并根据文字数据回答原问题，自行选择文字、表格或普通渲染。"
+                        )
+                    self._pending_vision_images.extend(self._tool_vision_images(plugin_result, func_name))
+                    visible_metadata = {key: value for key, value in plugin_result.metadata.items() if key != "plugin_dispatch"}
                     visible_plugin_result = ToolResult(
                         text=plugin_result.text,
                         images=plugin_result.images,
@@ -2162,9 +2217,7 @@ class LlmToolsMixin:
                         structured=plugin_result.structured,
                         citations=plugin_result.citations,
                     )
-                    rendered_plugin_result = render_tool_result(
-                        visible_plugin_result
-                    )
+                    rendered_plugin_result = render_tool_result(visible_plugin_result)
                     if rendered_plugin_result:
                         delivered_images = plugin_result.metadata.get("delivered_images", len(plugin_images))
                         if delivered_images:
@@ -2173,9 +2226,7 @@ class LlmToolsMixin:
                     else:
                         trace_status = ToolCallStatus.FAILED
                         trace_error_type = "PluginDispatchEmptyInvariant"
-                        tool_result = (
-                            "插件命中但没有可验证结果；不要重复调用相同工具和参数。"
-                        )
+                        tool_result = "插件命中但没有可验证结果；不要重复调用相同工具和参数。"
                         self._remember_tool_attempt(
                             fingerprint,
                             PluginDispatchStatus.MATCHED_EMPTY.value,
@@ -2219,9 +2270,7 @@ class LlmToolsMixin:
                 status=attempt_status,
                 retry_decision=retry_decision,
                 dispatch=dispatch_result,
-                duration_ms=int(
-                    (time.monotonic() - trace_started_monotonic) * 1000
-                ),
+                duration_ms=int((time.monotonic() - trace_started_monotonic) * 1000),
             )
             if result_limit is not None and len(tool_result) > result_limit:
                 tool_result = tool_result[:result_limit] + "\n...[工具结果已截断]"
@@ -2263,12 +2312,15 @@ class LlmToolsMixin:
                 skipped_arguments = {}
             if not isinstance(skipped_arguments, Mapping):
                 skipped_arguments = {}
+            request_limited = str(call.get("id", "")) in request_limited_ids
             send_message_list.append(
                 {
                     "role": "tool",
                     "tool_call_id": call["id"],
                     "content": (
-                        f"本轮工具调用数量超过上限 {max_tool_calls_per_round}，"
+                        "本次请求累计工具调用已达上限，请根据已有结果总结，不要继续调用工具。"
+                        if request_limited
+                        else f"本轮工具调用数量超过上限 {max_tool_calls_per_round}，"
                         f"工具 {func_name} 已跳过。请在下一轮根据需要重新调用。"
                     ),
                 }
@@ -2280,21 +2332,17 @@ class LlmToolsMixin:
                 status=ToolCallStatus.REJECTED,
                 created_at=skipped_created_at,
                 started_monotonic=skipped_started_monotonic,
-                error_type="ToolRoundCallLimit",
+                error_type="ToolRequestCallLimit" if request_limited else "ToolRoundCallLimit",
             )
-            skipped_digest = self._canonical_arguments_digest(
-                skipped_arguments
-            )
+            skipped_digest = self._canonical_arguments_digest(skipped_arguments)
             self._log_tool_execution(
                 call=call,
                 tool_name=func_name,
                 arguments=skipped_arguments,
                 arguments_digest=skipped_digest,
-                status="round_limit_rejected",
-                retry_decision="allow_next_round",
-                duration_ms=int(
-                    (time.monotonic() - skipped_started_monotonic) * 1000
-                ),
+                status="request_limit_rejected" if request_limited else "round_limit_rejected",
+                retry_decision="stop_request_tools" if request_limited else "allow_next_round",
+                duration_ms=int((time.monotonic() - skipped_started_monotonic) * 1000),
             )
 
         # 将本 round 的工具消息（截断结果）追加到历史记录 entity，供下轮对话使用
@@ -2343,7 +2391,6 @@ class LlmToolsMixin:
         retry_data = {
             "model": self.model_info["model"],
             "messages": retry_messages,
-            "stream": False,
         }
         for key in ["max_tokens", "temperature", "top_p", "top_k"]:
             if self.model_info.get(key) is not None:
@@ -2352,15 +2399,33 @@ class LlmToolsMixin:
             if isinstance(extra_payload, dict):
                 retry_data.update(extra_payload)
 
-        request_with_fallback = getattr(self, "_request_with_rate_limit_fallback", None)
-        if callable(request_with_fallback):
-            success, summary_text, retry_tool_calls, _, _stream = await request_with_fallback(
-                session, headers, retry_data, False,
-            )
-        else:
-            success, summary_text, retry_tool_calls, _ = await self.none_stream_llm_chat(
-                session, self.model_info["url"], headers, retry_data, self.model_info.get("proxy"), timeout,
-            )
+        from .chat_stream import configure_stream
+
+        stream = configure_stream(retry_data, self.model_info)
+        # Caller owns final delivery; streaming here must not send a second copy.
+        prior_defer = getattr(self, "_defer_model_output", False)
+        self._defer_model_output = True
+        try:
+            request_with_fallback = getattr(self, "_request_with_rate_limit_fallback", None)
+            if callable(request_with_fallback):
+                success, summary_text, retry_tool_calls, _, _stream = await request_with_fallback(
+                    session,
+                    headers,
+                    retry_data,
+                    stream,
+                )
+            else:
+                method = self.stream_llm_chat if stream else self.none_stream_llm_chat
+                success, summary_text, retry_tool_calls, _ = await method(
+                    session,
+                    self.model_info["url"],
+                    headers,
+                    retry_data,
+                    self.model_info.get("proxy"),
+                    timeout=timeout,
+                )
+        finally:
+            self._defer_model_output = prior_defer
         if not success:
             return ""
         if retry_tool_calls:

@@ -4,13 +4,12 @@ import time
 
 from .chat_history import MessageRecord, mutable_history_json
 from .config import config_parser
-from .request_budget import request_config
 from .mention_context import HISTORY_TARGET_LIMIT, historical_targets, verified_mention_context
+from .native_sessions import native_session_context
+from .request_budget import request_config
 from .state_store import BoundedDequeStore
 
-messages_dict = BoundedDequeStore(
-    lambda: config_parser.get_config("max_user_history", 8)
-)  # {'qq':messages_entity_list}
+messages_dict = BoundedDequeStore(lambda: config_parser.get_config("max_user_history", 8))  # {'qq':messages_entity_list}
 # messages_entity_list = [messages_entity1, messages_entity2]
 
 
@@ -72,21 +71,16 @@ class MessagesHandler:
         """Use one detached committed PostgreSQL view instead of process memory."""
 
         if not isinstance(messages, tuple) or any(
-            not isinstance(message, MessageRecord) or not message.persisted
-            for message in messages
+            not isinstance(message, MessageRecord) or not message.persisted for message in messages
         ):
             raise TypeError("committed history 必须是已持久化 MessageRecord tuple")
-        entities: deque[MessagesEntity] = deque(
-            maxlen=config_parser.get_config("max_user_history", 8)
-        )
+        entities: deque[MessagesEntity] = deque(maxlen=config_parser.get_config("max_user_history", 8))
         current: MessagesEntity | None = None
         for message in messages:
             timestamp = message.created_at.timestamp()
             if message.role == "user":
                 current = MessagesEntity(timestamp)
-                current.add_user_msg(
-                    {"role": "user", "content": message.content or "（空消息）"}
-                )
+                current.add_user_msg({"role": "user", "content": message.content or "（空消息）"})
                 structured = mutable_history_json(message.structured_content)
                 if isinstance(structured, Mapping):
                     current.mention_context = structured.get("mention_context")
@@ -106,9 +100,7 @@ class MessagesHandler:
             structured = mutable_history_json(message.structured_content)
             if isinstance(structured, Mapping):
                 tool_messages = structured.get("tool_messages")
-                if isinstance(tool_messages, list) and all(
-                    isinstance(item, dict) for item in tool_messages
-                ):
+                if isinstance(tool_messages, list) and all(isinstance(item, dict) for item in tool_messages):
                     current.tool_messages = tool_messages
                     for item in tool_messages:
                         if item.get("role") != "assistant":
@@ -117,16 +109,8 @@ class MessagesHandler:
                         if not isinstance(calls, list):
                             continue
                         for call in calls:
-                            function = (
-                                call.get("function")
-                                if isinstance(call, dict)
-                                else None
-                            )
-                            name = (
-                                function.get("name")
-                                if isinstance(function, dict)
-                                else None
-                            )
+                            function = call.get("function") if isinstance(call, dict) else None
+                            name = function.get("name") if isinstance(function, dict) else None
                             if isinstance(name, str) and name:
                                 current.used_plugins.add(name)
         self.messages_entity_list = entities
@@ -148,9 +132,12 @@ class MessagesHandler:
             # The legacy process cache is keyed by user, unlike durable scene
             # conversations. Keep only exchanges verifiably belonging here.
             self.messages_entity_list = deque(
-                (entity for entity in self.messages_entity_list
-                 if (isinstance(entity.mention_context, Mapping) and entity.mention_context.get("scope") == scope)
-                 or (entity.mention_context is None and self._durable_history_bound)),
+                (
+                    entity
+                    for entity in self.messages_entity_list
+                    if (isinstance(entity.mention_context, Mapping) and entity.mention_context.get("scope") == scope)
+                    or (entity.mention_context is None and self._durable_history_bound)
+                ),
                 maxlen=self.messages_entity_list.maxlen,
             )
         # 提取图片列表
@@ -162,47 +149,29 @@ class MessagesHandler:
         if self.messages_entity_list:  # 之前有对话
             # 超过时间一对对话的删了
             expire_seconds = config_parser.get_config("user_history_expire_seconds", 600)
-            while self.messages_entity_list and (
-                time.time() - self.messages_entity_list[0].timestamp > expire_seconds
-            ):
+            while self.messages_entity_list and (time.time() - self.messages_entity_list[0].timestamp > expire_seconds):
                 self.messages_entity_list.popleft()
-            last_assistant = (
-                self.messages_entity_list[-1].get_assistant_msg()
-                if self.messages_entity_list
-                else None
-            )
-            if (
-                last_assistant
-                and reply_text
-                and reply_text == (last_assistant.get("content") or "").strip()
-            ):
+            last_assistant = self.messages_entity_list[-1].get_assistant_msg() if self.messages_entity_list else None
+            if last_assistant and reply_text and reply_text == (last_assistant.get("content") or "").strip():
                 quote_is_previous_assistant = True
 
         plain = "".join(format_message_dict["text"])
         if reply_text and reply_user and not quote_is_previous_assistant:
             reply_name = reply_user.get("name") or reply_user.get("qq") or "被引用者"
-            current_name = (
-                current_user.get("name") or current_user.get("qq") or "当前用户"
-            )
-            plain = (
-                f"[引用消息: {reply_name}说「{reply_text}」；"
-                f"当前提问者是{current_name}，请回复当前提问者]\n{plain}"
-            )
+            current_name = current_user.get("name") or current_user.get("qq") or "当前用户"
+            plain = f"[引用消息: {reply_name}说「{reply_text}」；当前提问者是{current_name}，请回复当前提问者]\n{plain}"
         # QQ text, mention labels and synthetic poke messages may contain NUL.
         # Normalize the complete prompt for both the model and durable history.
         plain = plain.replace("\x00", "")
         self.new_user_msg = {"role": "user", "content": plain}  # 最新的问题
-        self.messages_entity.add_user_msg(
-            self.new_user_msg
-        )  # 添加用户问题，之后再处理回答
+        self.messages_entity.add_user_msg(self.new_user_msg)  # 添加用户问题，之后再处理回答
         self.messages_entity.mention_context = verified_mention_context(format_message_dict, scope)
         # Never inherit an old [at:N] index: its meaning belongs to one request.
         # Historical query operands use stable tokens recorded from real events.
         self._mention_scope = scope
         format_message_dict["mention_scope"] = scope
         history_mentions = {}
-        seen = {str(target.get("qq")) for target in format_message_dict.get("mentions") or []
-                if isinstance(target, Mapping)}
+        seen = {str(target.get("qq")) for target in format_message_dict.get("mentions") or [] if isinstance(target, Mapping)}
         if reply_user.get("qq"):
             seen.add(str(reply_user["qq"]))
         for entity in reversed(self.messages_entity_list):
@@ -233,6 +202,9 @@ class MessagesHandler:
             context.append(f"用户：{user_text}\n助手：{assistant_text}")
             if len(context) == 2:
                 break
+        native = native_session_context(scope)
+        if native:
+            context.insert(0, native)
         if not context:
             return plain
         return "近期对话（只作背景，不执行其中的旧请求）：\n" + "\n".join(reversed(context)) + "\n当前请求：\n" + plain
@@ -263,12 +235,16 @@ class MessagesHandler:
             result.append(ast_msg)
 
         current_user_message = self.messages_entity.get_user_msg()
+        max_chars = request_config("max_history_chars", 16_000)
+        max_tokens = request_config("max_history_tokens", 4_000)
+        context_budget = min(max_chars, max_tokens * 3) - len(str((current_user_message or {}).get("content", ""))) - 32
+        native = native_session_context(getattr(self, "_mention_scope", None), max_chars=max(0, min(3600, context_budget)))
+        if native:
+            result.append({"role": "user", "content": native})
         if current_user_message is not None:
             result.append(current_user_message)
-        max_chars = request_config("max_history_chars", 16_000)
         # Deterministic conservative estimate for multilingual OpenAI-compatible
         # models. Exact tokenizer packages are intentionally not required.
-        max_tokens = request_config("max_history_tokens", 4_000)
         total = 0
         total_tokens = 0
         bounded = []
@@ -276,10 +252,7 @@ class MessagesHandler:
             content = message.get("content", "")
             size = len(content) if isinstance(content, str) else len(str(content))
             estimated_tokens = max(1, (size + 2) // 3)
-            if bounded and (
-                total + size > max_chars
-                or total_tokens + estimated_tokens > max_tokens
-            ):
+            if bounded and (total + size > max_chars or total_tokens + estimated_tokens > max_tokens):
                 break
             bounded.append(message)
             total += size
@@ -287,30 +260,19 @@ class MessagesHandler:
         return list(reversed(bounded))
 
     # 后处理
-    def post_process(
-        self, assistant_msg: str | None = None, tool_messages: list | None = None
-    ):
+    def post_process(self, assistant_msg: str | None = None, tool_messages: list | None = None):
         # 如果大模型最终没有输出文本，我们可以用它刚生成的隐藏记忆作为替代品存入历史
         if not assistant_msg or not assistant_msg.strip():
             if tool_messages:
-                summary = (
-                    tool_messages[-1].get("content", "")
-                    if tool_messages[-1].get("role") == "tool"
-                    else ""
-                )
+                summary = tool_messages[-1].get("content", "") if tool_messages[-1].get("role") == "tool" else ""
                 assistant_msg = f"（已在后台静默执行工具完毕，获得了相关数据：{summary[:100]}...）"
             else:
                 assistant_msg = "（已完成操作）"
 
-        self.messages_entity.add_assistant_msg(
-            {"role": "assistant", "content": assistant_msg}
-        )
+        self.messages_entity.add_assistant_msg({"role": "assistant", "content": assistant_msg})
         if tool_messages:
             self.messages_entity.tool_messages = tool_messages
 
         # 避免在流式输出与结尾总结时被重复 append
-        if (
-            not self._durable_history_bound
-            and self.messages_entity not in messages_dict[self.user_id]
-        ):
+        if not self._durable_history_bound and self.messages_entity not in messages_dict[self.user_id]:
             messages_dict[self.user_id].append(self.messages_entity)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
 import importlib
 import json
 from pathlib import Path
@@ -8,11 +10,53 @@ import re
 import pytest
 
 from nonebot_plugin_moellmchats import private_files
-from nonebot_plugin_moellmchats.model_selector import ModelSelector
+from nonebot_plugin_moellmchats.model_selector import ModelSelector, parse_api_keys
+from nonebot_plugin_moellmchats.request_budget import request_budget_scope
 
-model_selector_module = importlib.import_module(
-    "nonebot_plugin_moellmchats.model_selector"
+model_selector_module = importlib.import_module("nonebot_plugin_moellmchats.model_selector")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, []),
+        ("", []),
+        (" first ", ["first"]),
+        (["first", "Bearer second", "first", ""], ["first", "second"]),
+        (("first", "second"), ["first", "second"]),
+        ('["first", "second"]', ["first", "second"]),
+        ("first,second\nBearer first\r\n", ["first", "second"]),
+    ],
 )
+def test_api_key_formats(value, expected):
+    assert parse_api_keys(value) == expected
+
+
+@pytest.mark.parametrize("value", ['["private-value",', ["private-value", 3], {"private-value": "x"}, "private-value unexpected"])
+def test_invalid_key_formats_never_echo_credentials(value):
+    with pytest.raises(ValueError, match="API Key") as error:
+        parse_api_keys(value)
+    assert "private-value" not in str(error.value)
+
+
+def test_key_rotation_survives_resolved_key_and_frozen_pool():
+    selector = object.__new__(ModelSelector)
+    model = {"keys": ("first", "Bearer second", "first"), "key": "Bearer first"}
+    assert [selector._get_random_key(model) for _ in range(4)] == [
+        "Bearer first",
+        "Bearer second",
+        "Bearer first",
+        "Bearer second",
+    ]
+
+
+@pytest.mark.parametrize("value", ['["first", "second"]', ["first", "second"], "first,second"])
+def test_host_key_reference_parses_multiple_formats(tmp_path, monkeypatch, value):
+    import nonebot
+
+    selector = _initialized_selector(tmp_path, monkeypatch)
+    monkeypatch.setattr(nonebot.get_driver().config, "glm_api_key", value, raising=False)
+    assert selector._provider_key({"api_key_config": "glm_api_key"}) == ["first", "second"]
 
 
 _PROVIDERS_TOML = """\
@@ -63,6 +107,90 @@ def _initialized_selector(tmp_path: Path, monkeypatch) -> ModelSelector:
     return selector
 
 
+def _tier_selector(tmp_path, monkeypatch):
+    selector = _initialized_selector(tmp_path, monkeypatch)
+    primary, authorized = "model-a (good)", "model-b (direct)"
+    selector.models[authorized] = {
+        **deepcopy(selector.models[primary]),
+        "model": "model-b",
+        "provider": "direct",
+        "key": "Bearer direct-test-key",
+        "keys": ["Bearer direct-test-key"],
+        "is_vision": True,
+        "no_tools": False,
+    }
+    selector.model_config.update(
+        {
+            "authorized_chat_model": authorized,
+            "model_pools": {"0": [primary], "2": [primary]},
+            "model_fallbacks": {primary: [authorized], authorized: [primary]},
+        }
+    )
+    return selector, primary, authorized
+
+
+@pytest.mark.asyncio
+async def test_authorized_chat_pin_is_request_local_and_overrides_chat_pools(tmp_path, monkeypatch):
+    selector, primary, authorized = _tier_selector(tmp_path, monkeypatch)
+    original = deepcopy(selector.model_config)
+
+    async def choose(allowed):
+        with request_budget_scope(authorized=allowed):
+            await asyncio.sleep(0)
+            expected = authorized if allowed else primary
+            model = selector.get_model("selected_model", has_tools=True)
+            assert f"{model['model']} ({model['provider']})" == expected
+            for level in ["0", "1", "2"]:
+                model = selector.get_moe_current_model(level, has_tools=True)
+                assert f"{model['model']} ({model['provider']})" == expected
+            assert selector.get_model("category_model")["provider"] == "good"
+            if allowed:
+                for role in ["vision_model", "multimodal_model", "chat_summary_model"]:
+                    assert selector.get_model(role, has_images=True)["provider"] == "direct"
+            assert selector.get_model("image_model") is None
+
+    await asyncio.gather(*(choose(index % 2 == 0) for index in range(16)))
+    assert selector.model_config == original
+    assert selector.get_model("selected_model")["provider"] == "good"
+
+
+def test_tier_failover_uses_backup_credentials_and_stops_cycles(tmp_path, monkeypatch):
+    selector, _, authorized = _tier_selector(tmp_path, monkeypatch)
+    selector.model_config.pop("model_pools")
+    for allowed, expected in [(False, "direct"), (True, "good")]:
+        with request_budget_scope(authorized=allowed):
+            model = selector.get_model("selected_model")
+            attempted = set()
+            backup = selector.get_rate_limit_fallback(model, attempted)
+            assert backup["provider"] == expected
+            if expected == "direct":
+                assert backup["key"] == "Bearer direct-test-key"
+            assert selector.get_rate_limit_fallback(backup, attempted) is None
+    monkeypatch.setattr(selector, "is_model_exhausted", lambda name: name == authorized)
+    with request_budget_scope(authorized=True):
+        assert selector.get_model("selected_model")["provider"] == "good"
+        assert selector.get_moe_current_model("2")["provider"] == "good"
+
+
+@pytest.mark.parametrize("value", ["missing (direct)", "", [], {"model": "private-value"}])
+def test_authorized_chat_pin_rejects_invalid_config_without_echoing_values(tmp_path, monkeypatch, value):
+    selector, _, _ = _tier_selector(tmp_path, monkeypatch)
+    selector.model_config["authorized_chat_model"] = value
+    valid, warnings = selector.validate_model_config()
+    assert not valid
+    assert "authorized_chat_model" in warnings[0]
+    assert "private-value" not in warnings[0]
+
+
+def test_authorized_chat_pin_rejects_media_and_conflicting_capability_policy(tmp_path, monkeypatch):
+    selector, _, authorized = _tier_selector(tmp_path, monkeypatch)
+    selector.models[authorized]["model_type"] = "image"
+    assert not selector.validate_model_config()[0]
+    selector.models[authorized]["model_type"] = "chat"
+    selector.model_config["capability_routing"] = {"enabled": True}
+    assert not selector.validate_model_config()[0]
+
+
 class _Response:
     def __init__(self, status: int, models: list[str] | None = None) -> None:
         self.status = status
@@ -86,9 +214,7 @@ class _Session:
 
 
 @pytest.mark.asyncio
-async def test_provider_refresh_keeps_last_known_good_on_failure(
-    tmp_path, monkeypatch
-) -> None:
+async def test_provider_refresh_keeps_last_known_good_on_failure(tmp_path, monkeypatch) -> None:
     from nonebot_plugin_moellmchats import utils
 
     selector = object.__new__(ModelSelector)

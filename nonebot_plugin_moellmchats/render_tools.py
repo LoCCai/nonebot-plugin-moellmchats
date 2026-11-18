@@ -263,6 +263,43 @@ def _session_overrides() -> dict[str, Any]:
     return overrides
 
 
+def _filter_session_overrides(
+    overrides: dict[str, Any],
+    *,
+    cdp_endpoint: str | None,
+    ws_endpoint: str | None,
+) -> dict[str, Any]:
+    """Drop launch-only kwargs whenever any side asked for a remote session.
+
+    htmlrender forwards session kwargs straight into Playwright's
+    ``launch`` / ``connect_over_cdp`` / ``connect`` calls, and the connect
+    calls reject ``executable_path`` with a TypeError. A deployment can set
+    ``MOELLM_RENDER_BROWSER_EXECUTABLE`` while the host's htmlrender config
+    already points at a remote CDP/WS browser; in that case the endpoint
+    (explicit moellm override or central htmlrender config) wins and the
+    executable must not ride along, or every cold start of the shared
+    renderer fails until some other component warms the session first.
+    """
+
+    if overrides.get("endpoint_url") or overrides.get("endpoint") or cdp_endpoint or ws_endpoint:
+        return {key: value for key, value in overrides.items() if key != "executable_path"}
+    return overrides
+
+
+def _htmlrender_remote_endpoints() -> tuple[str | None, str | None]:
+    try:
+        from nonebot_plugin_htmlrender.backend.playwright.config import (
+            get_playwright_config,
+        )
+    except Exception:  # pragma: no cover - optional backend layout changed
+        return None, None
+    try:
+        cfg = get_playwright_config()
+        return cfg.connect_cdp.endpoint, cfg.connect_ws.endpoint
+    except Exception:  # pragma: no cover - config not loaded
+        return None, None
+
+
 async def get_shared_renderer() -> Any:
     """Return htmlrender's default Render, honoring explicit browser config.
 
@@ -279,7 +316,8 @@ async def get_shared_renderer() -> Any:
     renderer = get_default_render()
     overrides = _session_overrides()
     if overrides:
-        await renderer.get_render(**overrides)
+        cdp_endpoint, ws_endpoint = _htmlrender_remote_endpoints()
+        await renderer.get_render(**_filter_session_overrides(overrides, cdp_endpoint=cdp_endpoint, ws_endpoint=ws_endpoint))
     return renderer
 
 
@@ -442,11 +480,7 @@ def guarded_image_bytes(payload: bytes) -> bytes:
     if len(data) <= _IMAGE_DEGRADE_BYTES:
         return data
     host_guard = sys.modules.get("src.plugins.qi_zmws.image_encode")
-    compressor = (
-        _host_compress_image
-        or getattr(host_guard, "compress_image", None)
-        or _standalone_compress_image
-    )
+    compressor = _host_compress_image or getattr(host_guard, "compress_image", None) or _standalone_compress_image
     try:
         compressed = compressor(data)
     except Exception as error:
@@ -512,6 +546,7 @@ def _finish_image_result(
     extra_metadata: Mapping[str, Any] | None = None,
 ) -> ToolResult:
     from .config import config_parser
+
     skip_vision = config_parser.get_config("skip_self_image_vision", True)
     vision = None if skip_vision else vision_data_uri(payload)
     metadata: dict[str, Any] = {
@@ -619,9 +654,103 @@ async def render_html_image(
     except Exception as error:
         logger.warning("render_html 工具失败：error_type={}", type(error).__name__)
         return ToolResult(text="❌ HTML 渲染失败，请简化内容后重试。")
-    return _finish_image_result(payload, capability_note=RENDER_CAPABILITY.reason,
-                                extra_metadata={"skip_image_vision": True, "theme": theme["theme"],
-                                                "theme_mode": theme["mode"]})
+    return _finish_image_result(
+        payload,
+        capability_note=RENDER_CAPABILITY.reason,
+        extra_metadata={"skip_image_vision": True, "theme": theme["theme"], "theme_mode": theme["mode"]},
+    )
+
+
+def _separate_markdown_tables(markdown: str) -> str:
+    """Python-Markdown needs a blank before tables following a paragraph."""
+    separator = re.compile(r" {0,3}\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*:?-{3,}:?[ \t]*\|?[ \t]*")
+    lines: list[str] = []
+    fence = ""
+    for line in markdown.splitlines(keepends=True):
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if marker:
+            run, tail = marker.groups()
+            if not fence:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not tail.strip():
+                fence = ""
+            lines.append(line)
+            continue
+        if (
+            not fence
+            and separator.fullmatch(line.rstrip("\r\n"))
+            and len(lines) >= 2
+            and "|" in lines[-1]
+            and not lines[-1].startswith(("    ", "\t"))
+            and lines[-2].strip()
+        ):
+            lines.insert(len(lines) - 1, "\r\n" if line.endswith("\r\n") else "\n")
+        lines.append(line)
+    return "".join(lines)
+
+
+async def html_image_payload(
+    *,
+    html: str,
+    width: int | None = None,
+    card: str = "general",
+) -> tuple[bytes, dict]:
+    """Render plugin-authored HTML with the shared theme and browser budget.
+
+    Same pipeline as ``render_html_image`` but without a ToolContext: the
+    caller owns delivery. Only for HTML this plugin generated itself, never
+    for model-authored documents (those go through the registered tool so the
+    capability gate and delivery rules apply).
+    """
+
+    if not RENDER_CAPABILITY.available:
+        raise RenderToolError(f"渲染工具未启用：{RENDER_CAPABILITY.hint}")
+    if not isinstance(html, str) or not html.strip() or len(html) > _HTML_MAX_CHARS:
+        raise RenderToolError(f"HTML 内容必须是 1～{_HTML_MAX_CHARS} 字的字符串。")
+    render_width = _normalize_width(width)
+    theme = await asyncio.to_thread(_render_theme, card)
+
+    async def operation() -> bytes:
+        from nonebot_plugin_htmlrender.backend.playwright.models import (
+            ContentConfig,
+            HtmlRenderRequest,
+            PageConfig,
+            PngScreenshotOptions,
+            RenderConfig,
+            ViewportConfig,
+        )
+
+        renderer = await get_shared_renderer()
+        request = HtmlRenderRequest(
+            content=ContentConfig(
+                html=themed_html(html, theme),
+                wait_until="domcontentloaded",
+                additional_wait=300,
+            ),
+            render=RenderConfig(
+                page=PageConfig(
+                    viewport=ViewportConfig(
+                        width=render_width,
+                        height=max(_WIDTH_MIN, round(render_width * 0.6)),
+                    ),
+                ),
+                screenshot=PngScreenshotOptions(
+                    device_scale_factor=2.0,
+                    timeout=_SCREENSHOT_TIMEOUT_MS,
+                    full_page=True,
+                    wait_before_screenshot=100,
+                ),
+            ),
+        )
+        return await renderer.render_html(
+            request,
+            offline=True,
+            screenshot_timeout=_SCREENSHOT_TIMEOUT_MS,
+            full_page=True,
+        )
+
+    payload = await run_browser_task(operation, budget_seconds=_RENDER_BUDGET_SECONDS)
+    return guarded_image_bytes(payload), theme
 
 
 async def markdown_image_payload(
@@ -639,6 +768,7 @@ async def markdown_image_payload(
     render_width = _normalize_width(width)
     theme = await asyncio.to_thread(_render_theme, card)
     await check_markdown_links_public(markdown)
+    markdown = _separate_markdown_tables(markdown)
 
     async def operation() -> bytes:
         renderer = await get_shared_renderer()
@@ -679,9 +809,11 @@ async def render_markdown_image(
     except Exception as error:
         logger.warning("render_markdown 工具失败：error_type={}", type(error).__name__)
         return ToolResult(text="❌ Markdown 渲染失败，请精简内容后重试。")
-    return _finish_image_result(payload, capability_note=RENDER_CAPABILITY.reason,
-                                extra_metadata={"skip_image_vision": True, "theme": theme["theme"],
-                                                "theme_mode": theme["mode"]})
+    return _finish_image_result(
+        payload,
+        capability_note=RENDER_CAPABILITY.reason,
+        extra_metadata={"skip_image_vision": True, "theme": theme["theme"], "theme_mode": theme["mode"]},
+    )
 
 
 async def screenshot_public_url(
@@ -780,17 +912,24 @@ _NETWORK_POLICY = ToolPolicy.configured(ToolCapabilityV2(network_allow=("*",)))
 # Only published design tokens are imported. Host selectors, artwork and local
 # file URLs never become part of a model-authored document.
 _THEME_TOKENS = {
-    "background": "background-color", "surface": "card-background-color",
-    "text": "font-color-main", "muted": "font-color-sub", "accent": "accent-color",
-    "secondary": "accent-secondary", "border": "border-color",
-    "background-image": "background-image", "shadow": "card-shadow",
-    "radius": "menu-radius", "surface-muted": "surface-muted",
-    "surface-accent": "surface-accent", "code-background": "code-background",
+    "background": "background-color",
+    "surface": "card-background-color",
+    "text": "font-color-main",
+    "muted": "font-color-sub",
+    "accent": "accent-color",
+    "secondary": "accent-secondary",
+    "border": "border-color",
+    "background-image": "background-image",
+    "shadow": "card-shadow",
+    "radius": "menu-radius",
+    "surface-muted": "surface-muted",
+    "surface-accent": "surface-accent",
+    "code-background": "code-background",
 }
 
 
 def _theme_style(theme: dict[str, Any]) -> str:
-    return '<style data-llm-theme="auto">' + theme["css"] + '</style>'
+    return '<style data-llm-theme="auto">' + theme["css"] + "</style>"
 
 
 def themed_html(html: str, theme: dict[str, Any]) -> str:
@@ -798,7 +937,7 @@ def themed_html(html: str, theme: dict[str, Any]) -> str:
     style = _theme_style(theme)
     closing_head = re.search(r"</head\s*>", html, re.IGNORECASE)
     if closing_head:
-        return html[:closing_head.start()] + style + html[closing_head.start():]
+        return html[: closing_head.start()] + style + html[closing_head.start() :]
     return style + html
 
 
@@ -816,11 +955,21 @@ def render_theme_reference(card: str = "general", *, use_host: bool = True) -> d
     """Read the host's published theme without importing any game plugin."""
     if card not in {"general", "zmws"}:
         raise RenderToolError("主题类型应为 general 或 zmws。")
-    palette = {"background": "#f5f6fa", "surface": "#ffffff", "text": "#242841",
-               "muted": "#58627c", "accent": "#65429a", "border": "#d7d6e8",
-               "secondary": "#286491", "background-image": "none", "radius": "16px",
-               "shadow": "0 8px 24px #24284114", "surface-muted": "#f4f2fa",
-               "surface-accent": "#ede5f8", "code-background": "#f4f2fa"}
+    palette = {
+        "background": "#f5f6fa",
+        "surface": "#ffffff",
+        "text": "#242841",
+        "muted": "#58627c",
+        "accent": "#65429a",
+        "border": "#d7d6e8",
+        "secondary": "#286491",
+        "background-image": "none",
+        "radius": "16px",
+        "shadow": "0 8px 24px #24284114",
+        "surface-muted": "#f4f2fa",
+        "surface-accent": "#ede5f8",
+        "code-background": "#f4f2fa",
+    }
     family, mode, source = "default", "day", "standalone"
     try:
         if not use_host:
@@ -833,10 +982,15 @@ def render_theme_reference(card: str = "general", *, use_host: bool = True) -> d
         context = render_theme.stylesheet_context("zmws/zmws.css" if card == "zmws" else "post/post.css")
         family, mode = context["theme_family"], context["theme"]
         selector = "light" if mode == "day" else "dark"
-        match = re.search(r':root\[data-theme=[\"\']' + selector + r'[\"\']\]\s*\{([^}]+)', context["theme_css"])
+        match = re.search(r":root\[data-theme=[\"\']" + selector + r"[\"\']\]\s*\{([^}]+)", context["theme_css"])
         variables = dict(re.findall(r"--([\w-]+)\s*:\s*([^;{}]+)\s*;", match[1] if match else ""))
-        palette.update({key: variables[name].strip() for key, name in _THEME_TOKENS.items()
-                        if name in variables and not re.search(r"url\s*\(|[<>]", variables[name], re.I)})
+        palette.update(
+            {
+                key: variables[name].strip()
+                for key, name in _THEME_TOKENS.items()
+                if name in variables and not re.search(r"url\s*\(|[<>]", variables[name], re.I)
+            }
+        )
         if "code-background" not in variables:
             palette["code-background"] = palette["surface-muted"]
         source = "host"
@@ -873,10 +1027,18 @@ body hr{border:0;border-top:1px solid var(--border);background:var(--border)!imp
 body img,body svg{max-width:100%}body .markdown-body>:first-child{margin-top:0}
 body .markdown-body>:last-child{margin-bottom:0}
 """
-    return {"theme": family, "mode": mode, "source": source, "palette": palette, "css": css,
-            "guidance": ("渲染器自动应用当前主题与昼夜模式。HTML 请使用这些 CSS 变量，保留布局、图表和语义颜色；"
-                         "造梦内容传 card=zmws 继承造梦主题覆盖。根据用户需要选择文字、图片或其他已授权工具；"
-                         "简短回复可直接用文字，表格和图表可选图片。")}
+    return {
+        "theme": family,
+        "mode": mode,
+        "source": source,
+        "palette": palette,
+        "css": css,
+        "guidance": (
+            "渲染器自动应用当前主题与昼夜模式。HTML 请使用这些 CSS 变量，保留布局、图表和语义颜色；"
+            "造梦内容传 card=zmws 继承造梦主题覆盖。根据用户需要选择文字、图片或其他已授权工具；"
+            "简短回复可直接用文字，表格和图表可选图片。"
+        ),
+    }
 
 
 async def get_render_theme(*, _tool_context: ToolContext, card: str = "general") -> ToolResult:
@@ -890,11 +1052,22 @@ async def get_render_theme(*, _tool_context: ToolContext, card: str = "general")
 
 RENDER_THEME_TOOL = ToolSpec(
     name="get_render_theme",
-    description=("读取宿主已发布主题、昼夜模式与 CSS 变量，供设计 HTML 图表。"
-                 "HTML 和 Markdown 渲染会自动应用主题，无需先调用本工具；可自主安排内容和布局。"),
-    parameters={"type": "object", "properties": {"card": {"type": "string", "enum": ["general", "zmws"],
-                "description": "通用卡或造梦游戏卡，默认 general。"}}, "additionalProperties": False},
-    handler=get_render_theme, effect=ToolEffect.READ_ONLY, permission="user", timeout_seconds=10, result_limit=4000,
+    description=(
+        "读取宿主已发布主题、昼夜模式与 CSS 变量，供设计 HTML 图表。"
+        "HTML 和 Markdown 渲染会自动应用主题，无需先调用本工具；可自主安排内容和布局。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "card": {"type": "string", "enum": ["general", "zmws"], "description": "通用卡或造梦游戏卡，默认 general。"}
+        },
+        "additionalProperties": False,
+    },
+    handler=get_render_theme,
+    effect=ToolEffect.READ_ONLY,
+    permission="user",
+    timeout_seconds=10,
+    result_limit=4000,
 )
 
 RENDER_HTML_TOOL = ToolSpec(
@@ -924,8 +1097,11 @@ RENDER_HTML_TOOL = ToolSpec(
                 "type": "boolean",
                 "description": "是否截取整个页面，默认 true。",
             },
-            "card": {"type": "string", "enum": ["general", "zmws"],
-                     "description": "主题域，普通内容 general（默认），造梦数据与攻略使用 zmws。"},
+            "card": {
+                "type": "string",
+                "enum": ["general", "zmws"],
+                "description": "主题域，普通内容 general（默认），造梦数据与攻略使用 zmws。",
+            },
         },
         "required": ["html"],
         "additionalProperties": False,
@@ -939,9 +1115,11 @@ RENDER_HTML_TOOL = ToolSpec(
 
 RENDER_MARKDOWN_TOOL = ToolSpec(
     name="render_markdown",
-    description=("普通用户可用，无需绘图授权。把攻略、文章、笔记、清单、表格和代码块整理为 Markdown 后渲染成图片并发送。"
-                 "自动继承七七当前主题与昼夜模式；造梦内容设置 card=zmws。"
-                 "用户说绘制攻略图、做图、表格转图片等可直接使用；流程图和思维导图可改用 render_html 排版。"),
+    description=(
+        "普通用户可用，无需绘图授权。把攻略、文章、笔记、清单、表格和代码块整理为 Markdown 后渲染成图片并发送。"
+        "自动继承七七当前主题与昼夜模式；造梦内容设置 card=zmws。"
+        "用户说绘制攻略图、做图、表格转图片等可直接使用；流程图和思维导图可改用 render_html 排版。"
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -957,8 +1135,11 @@ RENDER_MARKDOWN_TOOL = ToolSpec(
                 "minimum": _WIDTH_MIN,
                 "maximum": _WIDTH_MAX,
             },
-            "card": {"type": "string", "enum": ["general", "zmws"],
-                     "description": "主题域，普通内容 general（默认），造梦数据与攻略使用 zmws。"},
+            "card": {
+                "type": "string",
+                "enum": ["general", "zmws"],
+                "description": "主题域，普通内容 general（默认），造梦数据与攻略使用 zmws。",
+            },
         },
         "required": ["markdown"],
         "additionalProperties": False,

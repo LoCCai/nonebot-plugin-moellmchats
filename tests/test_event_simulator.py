@@ -35,15 +35,18 @@ from nonebot_plugin_moellmchats.admission import AdmissionController
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("command", "expected"), [
-    ("/战力对比 ♻️ 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
-    ("/战力对比 1470907075|4399|1 @♻️", [("uid", "1470907075|4399|1"), ("at", "1969334055")]),
-    ("/战力对比 [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
-    ("/战力对比 [CQ:at,qq=1969334055] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
-    ("/战力对比 ♻️[at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
-    ("/战力对比 ♻️ [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
-    ("/战力对比 [at:2] [at:1] 完整", [("at", "234"), ("at", "1969334055")]),
-])
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("/战力对比 ♻️ 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+        ("/战力对比 1470907075|4399|1 @♻️", [("uid", "1470907075|4399|1"), ("at", "1969334055")]),
+        ("/战力对比 [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+        ("/战力对比 [CQ:at,qq=1969334055] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+        ("/战力对比 ♻️[at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+        ("/战力对比 ♻️ [at:1] 1470907075|4399|1", [("at", "1969334055"), ("uid", "1470907075|4399|1")]),
+        ("/战力对比 [at:2] [at:1] 完整", [("at", "234"), ("at", "1969334055")]),
+    ],
+)
 async def test_comparison_mentions_survive_llm_dispatch_and_commandarg_injection(monkeypatch, command, expected):
     matcher = on_command("战力对比", priority=7, block=True)
     received = []
@@ -59,8 +62,9 @@ async def test_comparison_mentions_survive_llm_dispatch_and_commandarg_injection
         received.append((event.user_id, players))
         await matcher.finish("对比结果")
 
-    monkeypatch.setattr(simulator_module, "get_plugin",
-        lambda name: SimpleNamespace(matcher={matcher}) if name == "qi_zmws" else None)
+    monkeypatch.setattr(
+        simulator_module, "get_plugin", lambda name: SimpleNamespace(matcher={matcher}) if name == "qi_zmws" else None
+    )
 
     class Adapter:
         @staticmethod
@@ -72,9 +76,12 @@ async def test_comparison_mentions_survive_llm_dispatch_and_commandarg_injection
 
     try:
         result = await simulator_module.event_simulator.dispatch_event(
-            V11Bot(Adapter(), "10000"), _event(100), command,
+            V11Bot(Adapter(), "10000"),
+            _event(100),
+            command,
             {"mentions": [{"qq": "1969334055", "name": "♻️"}, {"qq": "234", "name": "另一人"}]},
-            plugin_name="qi_zmws", wait_for_result=True,
+            plugin_name="qi_zmws",
+            wait_for_result=True,
         )
     finally:
         for priority_matchers in matchers.values():
@@ -98,21 +105,23 @@ def test_comparison_name_fallback_never_guesses_identity_or_changes_unrelated_co
     assert simulator_module._build_fake_message(command, source).extract_plain_text() == command
 
 
-@pytest.mark.parametrize(("command", "remaining"), [
-    ("/造梦资料 ♻️ 完整 时装", "/造梦资料  完整 时装"),
-    ("/造梦详情 ♻️ 角色2", "/造梦详情  角色2"),
-    ("/造梦面板 ♻️", "/造梦面板 "),
-    ("/造梦战力分析 ♻️ 完整 横图", "/造梦战力分析  完整 横图"),
-    ("/造梦在线 ♻️", "/造梦在线 "),
-    ("/造梦改名 ♻️", "/造梦改名 "),
-    ("/蟠桃趋势 ♻️ 24h 嫦娥", "/蟠桃趋势  24h 嫦娥"),
-    ("/造梦蟠桃趋势 ♻️[at:1] 48h", "/造梦蟠桃趋势  48h"),
-    ("/造梦升满 ♻️ 装备 完整", "/造梦升满  装备 完整"),
-    ("/造梦充值 ♻️", "/造梦充值 "),
-])
+@pytest.mark.parametrize(
+    ("command", "remaining"),
+    [
+        ("/造梦资料 ♻️ 完整 时装", "/造梦资料  完整 时装"),
+        ("/造梦详情 ♻️ 角色2", "/造梦详情  角色2"),
+        ("/造梦面板 ♻️", "/造梦面板 "),
+        ("/造梦战力分析 ♻️ 完整 横图", "/造梦战力分析  完整 横图"),
+        ("/造梦在线 ♻️", "/造梦在线 "),
+        ("/造梦改名 ♻️", "/造梦改名 "),
+        ("/蟠桃趋势 ♻️ 24h 嫦娥", "/蟠桃趋势  24h 嫦娥"),
+        ("/造梦蟠桃趋势 ♻️[at:1] 48h", "/造梦蟠桃趋势  48h"),
+        ("/造梦升满 ♻️ 装备 完整", "/造梦升满  装备 完整"),
+        ("/造梦充值 ♻️", "/造梦充值 "),
+    ],
+)
 def test_other_player_queries_restore_mention_and_preserve_system_options(command, remaining):
-    message = simulator_module._build_fake_message(command,
-        {"mentions": [{"qq": "1969334055", "name": "♻️"}]})
+    message = simulator_module._build_fake_message(command, {"mentions": [{"qq": "1969334055", "name": "♻️"}]})
     assert [seg.data["qq"] for seg in message if seg.type == "at"] == ["1969334055"]
     assert message.extract_plain_text() == remaining
 
@@ -140,9 +149,12 @@ async def test_other_plugins_receive_real_mention_through_the_same_dispatch_bus(
 
     try:
         result = await simulator_module.event_simulator.dispatch_event(
-            V11Bot(Adapter(), "10000"), _event(100), f"/{command_name} [at:1]",
+            V11Bot(Adapter(), "10000"),
+            _event(100),
+            f"/{command_name} [at:1]",
             {"mentions": [{"qq": "1969334055", "name": "♻️"}]},
-            plugin_name="other-plugin", wait_for_result=True,
+            plugin_name="other-plugin",
+            wait_for_result=True,
         )
     finally:
         for priority_matchers in matchers.values():
@@ -159,9 +171,15 @@ def test_missing_mention_identity_stops_before_falling_back_to_invoker(command):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("command", "role"), [
-    ("/群老婆", "老婆"), ("/抽群友", "群友"), ("抽一个", "群友"), ("抽一个老婆", "老婆"),
-])
+@pytest.mark.parametrize(
+    ("command", "role"),
+    [
+        ("/群老婆", "老婆"),
+        ("/抽群友", "群友"),
+        ("抽一个", "群友"),
+        ("抽一个老婆", "老婆"),
+    ],
+)
 async def test_regex_arguments_survive_real_ai_dispatch(monkeypatch, command, role):
     # A portable third party matcher exercises RegexDict injection without
     # depending on a particular production checkout or its current internals.
@@ -173,8 +191,10 @@ async def test_regex_arguments_survive_real_ai_dispatch(monkeypatch, command, ro
         selected = groups.get("role") or groups.get("suffix") or "群友"
         drawn.append((event.user_id, event.group_id, selected, False))
         await matcher.finish("已抽到测试群友")
-    monkeypatch.setattr(simulator_module, "get_plugin",
-        lambda name: SimpleNamespace(matcher={matcher}) if name == "qi_random_role" else None)
+
+    monkeypatch.setattr(
+        simulator_module, "get_plugin", lambda name: SimpleNamespace(matcher={matcher}) if name == "qi_random_role" else None
+    )
 
     class Adapter:
         @staticmethod
@@ -186,7 +206,10 @@ async def test_regex_arguments_survive_real_ai_dispatch(monkeypatch, command, ro
 
     try:
         result = await simulator_module.event_simulator.dispatch_event(
-            V11Bot(Adapter(), "10000"), _event(100), command, plugin_name="qi_random_role",
+            V11Bot(Adapter(), "10000"),
+            _event(100),
+            command,
+            plugin_name="qi_random_role",
         )
     finally:
         for priority_matchers in matchers.values():
@@ -223,7 +246,8 @@ def test_v11_synthetic_event_has_its_own_original_message():
     assert event.original_message is not event.message
     assert original.original_message.extract_plain_text() == "用户原问题"
     assert event.message_id == message_id != original.message_id
-    assert event.user_id == original.user_id and event.group_id == original.group_id
+    assert event.user_id == original.user_id
+    assert event.group_id == original.group_id
 
 
 def _v12_event(message_id: str, text: str = "original") -> V12GroupMessageEvent:
@@ -254,9 +278,7 @@ def _v12_event(message_id: str, text: str = "original") -> V12GroupMessageEvent:
 async def test_targeted_dispatch_only_checks_selected_plugin(monkeypatch) -> None:
     selected = [SimpleNamespace(priority=10), SimpleNamespace(priority=20)]
     checked = []
-    monkeypatch.setattr(
-        simulator_module, "get_plugin", lambda name: SimpleNamespace(matcher=selected)
-    )
+    monkeypatch.setattr(simulator_module, "get_plugin", lambda name: SimpleNamespace(matcher=selected))
 
     async def check(matcher, *args, **kwargs):
         checked.append(matcher)
@@ -285,8 +307,7 @@ async def test_targeted_dispatch_resumes_confirmation_only_in_original_session(m
         await matcher.send("请回复确认或取消")
 
     @matcher.got("confirmation")
-    async def confirm(event: GroupMessageEvent, state: T_State,
-                      answer: str = ArgPlainText("confirmation")):
+    async def confirm(event: GroupMessageEvent, state: T_State, answer: str = ArgPlainText("confirmation")):
         if answer.strip() == "取消":
             await matcher.finish("已取消")
         if answer.strip() != "确认":
@@ -294,8 +315,7 @@ async def test_targeted_dispatch_resumes_confirmation_only_in_original_session(m
         saved.append((event.user_id, event.group_id, state["candidate"]))
         await matcher.finish("绑定成功")
 
-    monkeypatch.setattr(simulator_module, "get_plugin", lambda name:
-        SimpleNamespace(id_="binding-test", matcher={matcher}))
+    monkeypatch.setattr(simulator_module, "get_plugin", lambda name: SimpleNamespace(id_="binding-test", matcher={matcher}))
 
     class Adapter:
         config = SimpleNamespace(session_expire_timeout=timedelta(minutes=2))
@@ -309,8 +329,11 @@ async def test_targeted_dispatch_resumes_confirmation_only_in_original_session(m
 
     async def dispatch(event, command):
         return await simulator_module.event_simulator.dispatch_event(
-            V11Bot(Adapter(), "10000"), event, command,
-            plugin_name="binding-test", wait_for_result=True,
+            V11Bot(Adapter(), "10000"),
+            event,
+            command,
+            plugin_name="binding-test",
+            wait_for_result=True,
         )
 
     try:
@@ -342,9 +365,11 @@ async def test_targeted_dispatch_resumes_confirmation_only_in_original_session(m
         assert saved == [(123, 456, "123|4399|1")]
     finally:
         for priority_matchers in matchers.values():
-            priority_matchers[:] = [m for m in priority_matchers
-                if m is not foreign and
-                getattr(getattr(m, "_source", None), "plugin_id", None) != "binding-test"]
+            priority_matchers[:] = [
+                m
+                for m in priority_matchers
+                if m is not foreign and getattr(getattr(m, "_source", None), "plugin_id", None) != "binding-test"
+            ]
 
 
 @pytest.mark.asyncio
@@ -355,29 +380,19 @@ async def test_capture_contexts_do_not_cross_talk(monkeypatch) -> None:
     monkeypatch.setattr(
         simulator_module.config_parser,
         "get_config",
-        lambda key, default=None: []
-        if key == "legacy_full_event_plugins"
-        else original_get_config(key, default),
+        lambda key, default=None: [] if key == "legacy_full_event_plugins" else original_get_config(key, default),
     )
 
     async def dispatch(bot, event, plugin_name):
         await asyncio.sleep(0.02 if "first" in str(event.message) else 0)
         data = {"message": Message(str(event.message))}
-        await simulator_module._capture_outgoing_api(
-            bot, "send_group_msg", data
-        )
-        await simulator_module._confirm_outgoing_api(
-            bot, None, "send_group_msg", data, {"message_id": 1}
-        )
+        await simulator_module._capture_outgoing_api(bot, "send_group_msg", data)
+        await simulator_module._confirm_outgoing_api(bot, None, "send_group_msg", data, {"message_id": 1})
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
     results = await asyncio.gather(
-        simulator_module.event_simulator.dispatch_event(
-            object(), _event(1), "first", plugin_name="a"
-        ),
-        simulator_module.event_simulator.dispatch_event(
-            object(), _event(2), "second", plugin_name="b"
-        ),
+        simulator_module.event_simulator.dispatch_event(object(), _event(1), "first", plugin_name="a"),
+        simulator_module.event_simulator.dispatch_event(object(), _event(2), "second", plugin_name="b"),
     )
     assert [result.status for result in results] == [
         simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT,
@@ -395,22 +410,20 @@ async def test_capture_contexts_do_not_cross_talk(monkeypatch) -> None:
 async def test_capture_supports_every_onebot_message_send_action(api: str) -> None:
     capture_id = uuid.uuid4().hex
     context = simulator_module._empty_dispatch_context()
-    context.update({
-        "original_id": 10,
-        "fake_id": 20,
-    })
+    context.update(
+        {
+            "original_id": 10,
+            "fake_id": 20,
+        }
+    )
     simulator_module._captures[capture_id] = context
     token = simulator_module._capture_key.set(capture_id)
     data = {"message": Message("正文")}
     try:
         await simulator_module._capture_outgoing_api(object(), api, data)
         assert simulator_module._captures[capture_id]["messages"] == []
-        await simulator_module._confirm_outgoing_api(
-            object(), None, api, data, {"message_id": 1}
-        )
-        assert simulator_module._captures[capture_id]["messages"] == [
-            {"text": "正文", "images": []}
-        ]
+        await simulator_module._confirm_outgoing_api(object(), None, api, data, {"message_id": 1})
+        assert simulator_module._captures[capture_id]["messages"] == [{"text": "正文", "images": []}]
     finally:
         simulator_module._capture_key.reset(token)
         simulator_module._captures.pop(capture_id, None)
@@ -420,11 +433,13 @@ async def test_capture_supports_every_onebot_message_send_action(api: str) -> No
 async def test_capture_supports_v12_send_message_and_file_id() -> None:
     capture_id = uuid.uuid4().hex
     context = simulator_module._empty_dispatch_context()
-    context.update({
-        "original_id": "original-message",
-        "fake_id": "fake-message",
-        "protocol": "onebot_v12",
-    })
+    context.update(
+        {
+            "original_id": "original-message",
+            "fake_id": "fake-message",
+            "protocol": "onebot_v12",
+        }
+    )
     simulator_module._captures[capture_id] = context
     token = simulator_module._capture_key.set(capture_id)
     data = {
@@ -445,9 +460,7 @@ async def test_capture_supports_v12_send_message_and_file_id() -> None:
         )
         assert data["message"][0].data["message_id"] == "original-message"
         assert simulator_module._captures[capture_id]["messages"] == []
-        await simulator_module._confirm_outgoing_api(
-            object(), None, "send_message", data, {"message_id": "sent"}
-        )
+        await simulator_module._confirm_outgoing_api(object(), None, "send_message", data, {"message_id": "sent"})
         assert simulator_module._captures[capture_id]["messages"] == [
             {
                 "text": "正文[提及:actor-2][图片]",
@@ -639,38 +652,29 @@ def test_v12_synthetic_event_preserves_protocol_and_string_identity() -> None:
     assert fake.self.user_id == "bot-v12"
     assert fake.user_id == "actor-1"
     assert fake.group_id == "group-1"
-    assert any(
-        segment.type == "mention" and segment.data["user_id"] == "actor-2"
-        for segment in fake.message
-    )
-    assert any(
-        segment.type == "image" and segment.data["file_id"] == "file-1"
-        for segment in fake.message
-    )
+    assert any(segment.type == "mention" and segment.data["user_id"] == "actor-2" for segment in fake.message)
+    assert any(segment.type == "image" and segment.data["file_id"] == "file-1" for segment in fake.message)
 
 
 @pytest.mark.asyncio
 async def test_capture_does_not_consume_send_like_side_effect() -> None:
     capture_id = uuid.uuid4().hex
     context = simulator_module._empty_dispatch_context()
-    context.update({
-        "original_id": 10,
-        "fake_id": 20,
-    })
+    context.update(
+        {
+            "original_id": 10,
+            "fake_id": 20,
+        }
+    )
     simulator_module._captures[capture_id] = context
     token = simulator_module._capture_key.set(capture_id)
     try:
         data = {"user_id": 123, "times": 1}
         await simulator_module._capture_outgoing_api(object(), "send_like", data)
-        await simulator_module._confirm_outgoing_api(
-            object(), None, "send_like", data, {"ok": True}
-        )
+        await simulator_module._confirm_outgoing_api(object(), None, "send_like", data, {"ok": True})
         assert simulator_module._captures[capture_id]["messages"] == []
         assert simulator_module._captures[capture_id]["api_succeeded"] == 1
-        assert (
-            simulator_module._captures[capture_id]["mutating_api_succeeded"]
-            == 1
-        )
+        assert simulator_module._captures[capture_id]["mutating_api_succeeded"] == 1
     finally:
         simulator_module._capture_key.reset(token)
         simulator_module._captures.pop(capture_id, None)
@@ -705,11 +709,7 @@ async def test_natural_language_like_runs_real_business_matcher_once(
     monkeypatch.setattr(
         simulator_module,
         "get_plugin",
-        lambda name: (
-            SimpleNamespace(matcher={business_matcher})
-            if name == "qi_group_admin"
-            else None
-        ),
+        lambda name: SimpleNamespace(matcher={business_matcher}) if name == "qi_group_admin" else None,
     )
     adapter = Adapter()
     bot = V11Bot(adapter, "10000")
@@ -737,17 +737,25 @@ async def test_dispatch_respects_host_registered_retry_budget(monkeypatch) -> No
     from nonebot_plugin_moellmchats import plugin_timeouts
 
     monkeypatch.setattr(plugin_timeouts, "_plugin_timeouts", {})
-    plugin_timeouts.register_plugin_timeout("budgeted", .2)
+    plugin_timeouts.register_plugin_timeout("budgeted", 0.2)
     gate = AdmissionController(name="dispatch", max_active=1, max_pending=1)
     monkeypatch.setattr(simulator_module, "get_dispatch_controller", lambda: gate)
     original = simulator_module.config_parser.get_config
-    monkeypatch.setattr(simulator_module.config_parser, "get_config", lambda key, default=None:
-        .01 if key == "legacy_dispatch_timeout_seconds" else
-        [] if key in {"legacy_full_event_plugins", "legacy_background_plugins"} else original(key, default))
+    monkeypatch.setattr(
+        simulator_module.config_parser,
+        "get_config",
+        lambda key, default=None: (
+            0.01
+            if key == "legacy_dispatch_timeout_seconds"
+            else []
+            if key in {"legacy_full_event_plugins", "legacy_background_plugins"}
+            else original(key, default)
+        ),
+    )
     completed = asyncio.Event()
 
     async def dispatch(*args):
-        await asyncio.sleep(.03)
+        await asyncio.sleep(0.03)
         completed.set()
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
@@ -769,11 +777,13 @@ async def test_dispatch_timeout_cancels_target(monkeypatch) -> None:
     monkeypatch.setattr(
         simulator_module.config_parser,
         "get_config",
-        lambda key, default=None: 0.01
-        if key == "legacy_dispatch_timeout_seconds"
-        else []
-        if key == "legacy_full_event_plugins"
-        else original_get_config(key, default),
+        lambda key, default=None: (
+            0.01
+            if key == "legacy_dispatch_timeout_seconds"
+            else []
+            if key == "legacy_full_event_plugins"
+            else original_get_config(key, default)
+        ),
     )
 
     async def dispatch(*args):
@@ -784,9 +794,7 @@ async def test_dispatch_timeout_cancels_target(monkeypatch) -> None:
             raise
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
-    result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(3), "slow", plugin_name="slow"
-    )
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(3), "slow", plugin_name="slow")
     assert result.status is simulator_module.PluginDispatchStatus.TIMED_OUT
     assert cancelled.is_set()
 
@@ -800,9 +808,7 @@ async def test_called_api_failure_never_commits_staged_output() -> None:
     token = simulator_module._capture_key.set(capture_id)
     data = {"message": Message("不应成为成功输出")}
     try:
-        await simulator_module._capture_outgoing_api(
-            object(), "send_group_msg", data
-        )
+        await simulator_module._capture_outgoing_api(object(), "send_group_msg", data)
         await simulator_module._confirm_outgoing_api(
             object(),
             ActionFailed("OneBot V11", "failed"),
@@ -863,20 +869,10 @@ async def test_recovered_read_failure_with_verified_output_is_success(
     successful_fallback: dict = {}
     sent = {"message": message}
     try:
-        await simulator_module._capture_outgoing_api(
-            object(), read_api, failed_read
-        )
-        await simulator_module._confirm_outgoing_api(
-            object(), exception, read_api, failed_read, None
-        )
-        fallback_api = (
-            "get_stranger_info"
-            if protocol == "onebot_v11"
-            else "get_self_info"
-        )
-        await simulator_module._capture_outgoing_api(
-            object(), fallback_api, successful_fallback
-        )
+        await simulator_module._capture_outgoing_api(object(), read_api, failed_read)
+        await simulator_module._confirm_outgoing_api(object(), exception, read_api, failed_read, None)
+        fallback_api = "get_stranger_info" if protocol == "onebot_v11" else "get_self_info"
+        await simulator_module._capture_outgoing_api(object(), fallback_api, successful_fallback)
         await simulator_module._confirm_outgoing_api(
             object(),
             None,
@@ -884,12 +880,8 @@ async def test_recovered_read_failure_with_verified_output_is_success(
             successful_fallback,
             {"nickname": "fallback"},
         )
-        await simulator_module._capture_outgoing_api(
-            object(), send_api, sent
-        )
-        await simulator_module._confirm_outgoing_api(
-            object(), None, send_api, sent, {"message_id": "sent"}
-        )
+        await simulator_module._capture_outgoing_api(object(), send_api, sent)
+        await simulator_module._confirm_outgoing_api(object(), None, send_api, sent, {"message_id": "sent"})
         result = simulator_module._dispatch_result(
             context,
             started_monotonic=0,
@@ -941,23 +933,18 @@ def test_dispatch_result_distinguishes_all_execution_truth_states() -> None:
 
     assert status() is simulator_module.PluginDispatchStatus.NOT_MATCHED
     assert status(matcher_matched=1) is simulator_module.PluginDispatchStatus.MATCHED_EMPTY
-    assert status(messages=[{"text": "正文", "images": []}]) is (
-        simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
+    assert status(messages=[{"text": "正文", "images": []}]) is (simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT)
+    assert status(matcher_matched=1, mutating_api_succeeded=1) is (simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT)
+    assert status(matcher_matched=1, matcher_failed=1) is (simulator_module.PluginDispatchStatus.FAILED)
+    assert status(matcher_matched=1, api_unknown=1) is (simulator_module.PluginDispatchStatus.RESULT_UNKNOWN)
+    assert (
+        status(
+            matcher_matched=1,
+            api_failed=1,
+            messages=[{"text": "已发送", "images": []}],
+        )
+        is simulator_module.PluginDispatchStatus.PARTIAL_SUCCESS
     )
-    assert status(matcher_matched=1, mutating_api_succeeded=1) is (
-        simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT
-    )
-    assert status(matcher_matched=1, matcher_failed=1) is (
-        simulator_module.PluginDispatchStatus.FAILED
-    )
-    assert status(matcher_matched=1, api_unknown=1) is (
-        simulator_module.PluginDispatchStatus.RESULT_UNKNOWN
-    )
-    assert status(
-        matcher_matched=1,
-        api_failed=1,
-        messages=[{"text": "已发送", "images": []}],
-    ) is simulator_module.PluginDispatchStatus.PARTIAL_SUCCESS
 
 
 @pytest.mark.asyncio
@@ -1005,9 +992,7 @@ async def test_network_failure_after_api_call_is_result_unknown(
 async def test_dispatch_admission_rejection_is_typed(monkeypatch) -> None:
     gate = AdmissionController(name="dispatch", max_active=1, max_pending=0)
     monkeypatch.setattr(simulator_module, "get_dispatch_controller", lambda: gate)
-    result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(102), "test", plugin_name="demo"
-    )
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(102), "test", plugin_name="demo")
     assert result.status is simulator_module.PluginDispatchStatus.ADMISSION_REJECTED
 
 
@@ -1046,8 +1031,7 @@ async def _drain_background_tasks(timeout: float = 5.0) -> None:
 @pytest.mark.parametrize("mode", ["targeted", "full"])
 async def test_model_dispatch_waits_past_progress_notice_for_final_image(monkeypatch, mode):
     _use_local_gate(monkeypatch)
-    _background_config_router(monkeypatch,
-        legacy_full_event_plugins=["slow_report"] if mode == "full" else [])
+    _background_config_router(monkeypatch, legacy_full_event_plugins=["slow_report"] if mode == "full" else [])
     finished = asyncio.Event()
 
     async def dispatch(bot, event, *args):
@@ -1065,7 +1049,11 @@ async def test_model_dispatch_waits_past_progress_notice_for_final_image(monkeyp
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
     monkeypatch.setattr(simulator_module, "_dispatch_full_bus", dispatch)
     result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(200), "报告并分析", plugin_name="slow_report", wait_for_result=True,
+        object(),
+        _event(200),
+        "报告并分析",
+        plugin_name="slow_report",
+        wait_for_result=True,
     )
     assert finished.is_set()
     assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
@@ -1091,9 +1079,15 @@ async def test_waiting_for_final_output_cancels_plugin_and_cleans_capture(monkey
             cancelled.set()
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
-    task = asyncio.create_task(simulator_module.event_simulator.dispatch_event(
-        object(), _event(200), "报告并分析", plugin_name="slow_report", wait_for_result=True,
-    ))
+    task = asyncio.create_task(
+        simulator_module.event_simulator.dispatch_event(
+            object(),
+            _event(200),
+            "报告并分析",
+            plugin_name="slow_report",
+            wait_for_result=True,
+        )
+    )
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1116,16 +1110,12 @@ async def test_background_dispatch_returns_at_first_visible_effect(monkeypatch) 
         await asyncio.sleep(0.05)
         data = {"message": Message("正在查询，预计 需要40S")}
         await simulator_module._capture_outgoing_api(bot, "send_group_msg", data)
-        await simulator_module._confirm_outgoing_api(
-            bot, None, "send_group_msg", data, {"message_id": 9}
-        )
+        await simulator_module._confirm_outgoing_api(bot, None, "send_group_msg", data, {"message_id": 9})
         await asyncio.sleep(0.3)
         finished.set()
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
-    result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(201), "B话榜 本月", plugin_name="slow_report"
-    )
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(201), "B话榜 本月", plugin_name="slow_report")
 
     assert result.status is simulator_module.PluginDispatchStatus.MATCHED_WITH_OUTPUT
     assert "正在查询，预计 需要40S" in result.text
@@ -1148,15 +1138,17 @@ async def test_background_dispatch_grace_expiry_still_reports_side_effect(monkey
     monkeypatch.setattr(
         simulator_module.config_parser,
         "get_config",
-        lambda key, default=None: ["slow_report"]
-        if key == "legacy_background_plugins"
-        else 0.3
-        if key == "legacy_background_grace_seconds"
-        else 30
-        if key == "legacy_background_timeout_seconds"
-        else []
-        if key == "legacy_full_event_plugins"
-        else original_get_config(key, default),
+        lambda key, default=None: (
+            ["slow_report"]
+            if key == "legacy_background_plugins"
+            else 0.3
+            if key == "legacy_background_grace_seconds"
+            else 30
+            if key == "legacy_background_timeout_seconds"
+            else []
+            if key == "legacy_full_event_plugins"
+            else original_get_config(key, default)
+        ),
     )
 
     async def dispatch(bot, event, plugin_name):
@@ -1167,9 +1159,7 @@ async def test_background_dispatch_grace_expiry_still_reports_side_effect(monkey
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
     loop = asyncio.get_running_loop()
     returned_at = loop.time()
-    result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(202), "B话榜 本月", plugin_name="slow_report"
-    )
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(202), "B话榜 本月", plugin_name="slow_report")
     assert loop.time() - returned_at < 1.0
     assert result.matcher_matched == 1
     # grace 内没有可见输出：不能报失败，必须上报"已在后台执行"
@@ -1187,15 +1177,17 @@ async def test_background_dispatch_timeout_counts_and_cleans(monkeypatch) -> Non
     monkeypatch.setattr(
         simulator_module.config_parser,
         "get_config",
-        lambda key, default=None: ["slow_report"]
-        if key == "legacy_background_plugins"
-        else 0.3
-        if key == "legacy_background_grace_seconds"
-        else 0.05
-        if key == "legacy_background_timeout_seconds"
-        else []
-        if key == "legacy_full_event_plugins"
-        else original_get_config(key, default),
+        lambda key, default=None: (
+            ["slow_report"]
+            if key == "legacy_background_plugins"
+            else 0.3
+            if key == "legacy_background_grace_seconds"
+            else 0.05
+            if key == "legacy_background_timeout_seconds"
+            else []
+            if key == "legacy_full_event_plugins"
+            else original_get_config(key, default)
+        ),
     )
 
     async def dispatch(bot, event, plugin_name):
@@ -1205,15 +1197,11 @@ async def test_background_dispatch_timeout_counts_and_cleans(monkeypatch) -> Non
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
     timeouts_before = simulator_module.runtime_metrics.dispatch_background_timeouts
-    result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(203), "B话榜 本月", plugin_name="slow_report"
-    )
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(203), "B话榜 本月", plugin_name="slow_report")
     assert result.status is simulator_module.PluginDispatchStatus.MATCHED_SIDE_EFFECT
     await _drain_background_tasks()
     assert simulator_module._captures == {}
-    assert (
-        simulator_module.runtime_metrics.dispatch_background_timeouts == timeouts_before + 1
-    )
+    assert simulator_module.runtime_metrics.dispatch_background_timeouts == timeouts_before + 1
     assert simulator_module._BACKGROUND_TASKS == set()
 
 
@@ -1228,9 +1216,7 @@ async def test_non_background_plugin_keeps_synchronous_path(monkeypatch) -> None
         await asyncio.sleep(0.01)
 
     monkeypatch.setattr(simulator_module, "_dispatch_targeted", dispatch)
-    result = await simulator_module.event_simulator.dispatch_event(
-        object(), _event(204), "fast", plugin_name="fast_plugin"
-    )
+    result = await simulator_module.event_simulator.dispatch_event(object(), _event(204), "fast", plugin_name="fast_plugin")
     assert ran.is_set()
     assert result.status is simulator_module.PluginDispatchStatus.NOT_MATCHED
     assert "后台" not in result.text

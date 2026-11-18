@@ -53,41 +53,62 @@ def _clear_media_state():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('quoted,enabled,expected', [(False, True, 0), (True, True, 1), (False, False, 1)])
+@pytest.mark.parametrize(("quoted", "enabled", "expected"), [(False, True, 0), (True, True, 1), (False, False, 1)])
 async def test_self_images_from_history_skip_vision_unless_quoted_or_switch_off(monkeypatch, quoted, enabled, expected):
     context = _context()
-    image = [_segment('image', url='https://example.org/image.png')]
+    image = [_segment("image", url="https://example.org/image.png")]
     if quoted:
         context.event.reply = SimpleNamespace(message=image)
         document = await collect_message_context(context)
     else:
-        context.bot.call_api.return_value = {'messages': [
-            {'message_id': 80001, 'time': 100, 'sender': {'user_id': '42'}, 'message': image}]}
-        document = await collect_message_context(context, source='group_history', max_messages=1)
+        context.bot.call_api.return_value = {
+            "messages": [{"message_id": 80001, "time": 100, "sender": {"user_id": "42"}, "message": image}]
+        }
+        document = await collect_message_context(context, source="group_history", max_messages=1)
         assert media_store.get(context, document.assets[0], MediaAsset).self_generated
-    monkeypatch.setattr(tools.config_parser, 'get_config', lambda key, default=None: enabled if key == 'skip_self_image_vision' else default)
-    download = AsyncMock(return_value=MediaAsset('image', 'image', payload=_png(), mime='image/png'))
-    monkeypatch.setattr(tools, 'asset_bytes', download)
+    monkeypatch.setattr(
+        tools.config_parser, "get_config", lambda key, default=None: enabled if key == "skip_self_image_vision" else default
+    )
+    download = AsyncMock(return_value=MediaAsset("image", "image", payload=_png(), mime="image/png"))
+    monkeypatch.setattr(tools, "asset_bytes", download)
     _, parts, _ = await tools._prepared_content(context, document, document.assets)
-    assert len(parts) == expected and download.await_count == expected
+    assert len(parts) == expected
+    assert download.await_count == expected
 
 
 @pytest.mark.asyncio
 async def test_nested_reply_forward_json_keeps_sources_deduplicates_cycles_and_hides_urls():
-    context = _context([_segment("text", text="总结这个记录")],
-        reply=SimpleNamespace(message=[_segment("forward", id="one")]))
+    context = _context([_segment("text", text="总结这个记录")], reply=SimpleNamespace(message=[_segment("forward", id="one")]))
 
     async def api(name, **params):
         assert name == "get_forward_msg"
         identity = params["id"]
         if identity == "one":
-            return {"messages": [{"sender": {"nickname": "甲"}, "time": 100,
-                "message": [_segment("text", text="第一层"), _segment("json", data=json.dumps({
-                    "meta": {"detail": {"resid": "two"}}}))]}]}
-        return {"messages": [{"sender": {"nickname": "乙"}, "time": 200,
-            "message": [_segment("text", text="第二层"),
+            return {
+                "messages": [
+                    {
+                        "sender": {"nickname": "甲"},
+                        "time": 100,
+                        "message": [
+                            _segment("text", text="第一层"),
+                            _segment("json", data=json.dumps({"meta": {"detail": {"resid": "two"}}})),
+                        ],
+                    }
+                ]
+            }
+        return {
+            "messages": [
+                {
+                    "sender": {"nickname": "乙"},
+                    "time": 200,
+                    "message": [
+                        _segment("text", text="第二层"),
                         _segment("file", name="说明.txt", file_id="opaque", url="https://example.com/private?token=secret"),
-                        _segment("forward", id="one")]}]}
+                        _segment("forward", id="one"),
+                    ],
+                }
+            ]
+        }
 
     context.bot.call_api.side_effect = api
     result = await tools.read_message_content(_tool_context=context)
@@ -109,8 +130,7 @@ async def test_message_pagination_retains_complete_original_and_scope_is_enforce
     context = _context([_segment("text", text="a" * 5000 + "终点")])
     first = json.loads((await tools.read_message_content(_tool_context=context)).text)
     assert first["has_more"]
-    second = json.loads((await tools.read_message_content(_tool_context=context,
-        context_ref=first["context_ref"], page=2)).text)
+    second = json.loads((await tools.read_message_content(_tool_context=context, context_ref=first["context_ref"], page=2)).text)
     assert "终点" in second["text"]
     assert not second["has_more"]
     for other in (_context(user="10003"), _context(group=10004)):
@@ -136,11 +156,25 @@ async def test_recursive_depth_and_character_budgets_report_partial():
 async def test_history_stays_in_current_group_paginates_and_orders_by_time():
     context = _context()
     pages = [
-        {"messages": [{"message_id": 3, "message_seq": 30, "group_id": 10002, "time": 300,
-                       "sender": {"nickname": "丙"}, "message": "第三条"},
-                      {"message_id": 2, "message_seq": 20, "group_id": 10002, "time": 200, "message": "第二条"}]},
-        {"messages": [{"message_id": 1, "message_seq": 10, "group_id": 10002, "time": 100, "message": "第一条"},
-                      {"message_id": 99, "message_seq": 9, "group_id": 90000, "time": 90, "message": "其他群隐私"}]},
+        {
+            "messages": [
+                {
+                    "message_id": 3,
+                    "message_seq": 30,
+                    "group_id": 10002,
+                    "time": 300,
+                    "sender": {"nickname": "丙"},
+                    "message": "第三条",
+                },
+                {"message_id": 2, "message_seq": 20, "group_id": 10002, "time": 200, "message": "第二条"},
+            ]
+        },
+        {
+            "messages": [
+                {"message_id": 1, "message_seq": 10, "group_id": 10002, "time": 100, "message": "第一条"},
+                {"message_id": 99, "message_seq": 9, "group_id": 90000, "time": 90, "message": "其他群隐私"},
+            ]
+        },
     ]
     context.bot.call_api.side_effect = pages
     document = await collect_message_context(context, source="group_history", max_messages=3)
@@ -239,8 +273,14 @@ async def test_text_document_is_read_before_model_and_no_attachment_is_sent_as_f
 
 @pytest.mark.asyncio
 async def test_chat_summary_uses_separate_configured_model_and_returns_text_to_agent(monkeypatch):
-    context = _context([_segment("forward", content=[{"sender": {"nickname": "甲"}, "time": 100,
-        "message": [_segment("text", text="明天八点集合")]}])])
+    context = _context(
+        [
+            _segment(
+                "forward",
+                content=[{"sender": {"nickname": "甲"}, "time": 100, "message": [_segment("text", text="明天八点集合")]}],
+            )
+        ]
+    )
     complete = AsyncMock(return_value=("甲约定明天八点集合。", "summary-model"))
     monkeypatch.setattr(tools, "complete_media", complete)
     result = await tools.summarize_chat(_tool_context=context)
@@ -254,9 +294,14 @@ def _selector(tmp_path, monkeypatch, role="image_model"):
     selector = _initialized_selector(tmp_path, monkeypatch)
     primary = "model-a (good)"
     for name in ("backup", "last"):
-        selector.models[f"{name} (good)"] = {"model": name, "provider": "good", "key": ["second-key"],
-            "url": "https://second.invalid/compatible-mode/v1/chat/completions", "is_vision": True,
-            "image_api_format": "dashscope"}
+        selector.models[f"{name} (good)"] = {
+            "model": name,
+            "provider": "good",
+            "key": ["second-key"],
+            "url": "https://second.invalid/compatible-mode/v1/chat/completions",
+            "is_vision": True,
+            "image_api_format": "dashscope",
+        }
     selector.models[primary].update(image_api_format="dashscope", is_vision=True)
     selector.model_config[role] = primary
     selector.model_config["model_fallbacks"] = {primary: ["backup (good)", "last (good)"]}
@@ -265,8 +310,10 @@ def _selector(tmp_path, monkeypatch, role="image_model"):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("arguments", [{}, {"continue_previous": True},
-    {"image_refs": ["private-reference"]}, {"image_urls": ["https://example.com/image"]}])
+@pytest.mark.parametrize(
+    "arguments",
+    [{}, {"continue_previous": True}, {"image_refs": ["private-reference"]}, {"image_urls": ["https://example.com/image"]}],
+)
 async def test_drawing_denied_before_any_media_or_provider_call(monkeypatch, arguments):
     authorizer = AsyncMock(return_value=False)
     monkeypatch.setattr(tools, "_image_generation_authorizer", authorizer)
@@ -330,8 +377,13 @@ async def test_drawing_rechecks_manual_grant_before_spending_quota(monkeypatch, 
 @pytest.mark.asyncio
 async def test_native_image_generation_switches_only_explicit_quota_models_and_downloads_once(tmp_path, monkeypatch):
     _selector(tmp_path, monkeypatch)
-    post = AsyncMock(side_effect=[(429, {}), (403, {"code": "AllocationQuota.FreeTierOnly"}),
-        (200, {"output": {"choices": [{"message": {"content": [{"image": "https://example.com/finished"}]}}]}})])
+    post = AsyncMock(
+        side_effect=[
+            (429, {}),
+            (403, {"code": "AllocationQuota.FreeTierOnly"}),
+            (200, {"output": {"choices": [{"message": {"content": [{"image": "https://example.com/finished"}]}}]}}),
+        ]
+    )
     monkeypatch.setattr(models, "_post", post)
     download = AsyncMock(return_value=(_png(), "image/png"))
     monkeypatch.setattr(models, "download_media", download)
@@ -347,8 +399,14 @@ async def test_native_image_generation_switches_only_explicit_quota_models_and_d
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [MediaError("超时，不重提"), (401, {"error": {"message": "private-secret"}}),
-    (400, {"code": "DataInspectionFailed", "message": "private-secret"})])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        MediaError("超时，不重提"),
+        (401, {"error": {"message": "private-secret"}}),
+        (400, {"code": "DataInspectionFailed", "message": "private-secret"}),
+    ],
+)
 async def test_generation_does_not_switch_on_timeout_auth_or_content_failure(tmp_path, monkeypatch, failure):
     _selector(tmp_path, monkeypatch)
     post = AsyncMock(side_effect=[failure])
@@ -360,13 +418,50 @@ async def test_generation_does_not_switch_on_timeout_auth_or_content_failure(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("size", "expected"), [("1024x1024", "1024x1024"), ("1024x1536", "768x1344"), ("1536x1024", "1344x768")])
+async def test_cogview_uses_image_api_without_chat_sse(tmp_path, monkeypatch, size, expected):
+    selector = _selector(tmp_path, monkeypatch)
+    selector.models["model-a (good)"].update(
+        model="cogview-3-flash",
+        provider="bigmodel",
+        image_api_format="bigmodel",
+        supports_image_edit=False,
+        url="https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    )
+    post = AsyncMock(return_value=(200, {"data": [{"url": "https://example.com/picture.png"}]}))
+    monkeypatch.setattr(models, "_post", post)
+    monkeypatch.setattr(models, "download_media", AsyncMock(return_value=(_png(), "image/png")))
+    picture, name = await models.generate_picture("a cloud", [], size=size)
+    assert picture == _png()
+    assert name == "cogview-3-flash"
+    assert post.call_args.args[1] == "https://open.bigmodel.cn/api/paas/v4/images/generations"
+    assert post.call_args.kwargs["payload"] == {"model": "cogview-3-flash", "prompt": "a cloud", "size": expected}
+
+
+@pytest.mark.asyncio
+async def test_cogview_reference_uses_edit_capable_backup_before_request(tmp_path, monkeypatch):
+    selector = _selector(tmp_path, monkeypatch)
+    selector.models["model-a (good)"].update(image_api_format="bigmodel", supports_image_edit=False)
+    post = AsyncMock(
+        return_value=(200, {"output": {"choices": [{"message": {"content": [{"image": "https://example.com/picture.png"}]}}]}})
+    )
+    monkeypatch.setattr(models, "_post", post)
+    monkeypatch.setattr(models, "download_media", AsyncMock(return_value=(_png(), "image/png")))
+    _, name = await models.generate_picture("edit", [_png()])
+    assert name == "backup"
+    assert post.await_count == 1
+    assert post.call_args.kwargs["payload"]["input"]["messages"][0]["content"][0]["image"].startswith("data:image/")
+
+
+@pytest.mark.asyncio
 async def test_text_and_media_model_failover_keeps_payload_and_model_options_separate(tmp_path, monkeypatch):
     selector = _selector(tmp_path, monkeypatch, role="multimodal_model")
     selector.models["model-a (good)"]["extra_payload"] = {"enable_thinking": False}
     post = AsyncMock(side_effect=[(429, {}), (200, {"choices": [{"message": {"content": "蓝色"}}]})])
     monkeypatch.setattr(models, "_post", post)
-    text, model = await models.complete_media("multimodal_model", prompt="什么颜色", parts=[
-        {"type": "image_url", "image_url": {"url": models.image_uri(_png())}}])
+    text, model = await models.complete_media(
+        "multimodal_model", prompt="什么颜色", parts=[{"type": "image_url", "image_url": {"url": models.image_uri(_png())}}]
+    )
     assert text == "蓝色"
     assert model == "backup"
     assert post.call_args_list[0].kwargs["payload"]["messages"] == post.call_args_list[1].kwargs["payload"]["messages"]
@@ -438,8 +533,9 @@ async def test_drawing_lock_refuses_same_user_parallel_generation(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "gb18030"])
 async def test_document_text_decoding(encoding):
-    text, pictures, warnings = await extract_document(MediaAsset("file", "技能.txt",
-        payload="水魔爆19级".encode(encoding), mime="text/plain"))
+    text, pictures, warnings = await extract_document(
+        MediaAsset("file", "技能.txt", payload="水魔爆19级".encode(encoding), mime="text/plain")
+    )
     assert text == "水魔爆19级"
     assert not pictures
     assert not warnings

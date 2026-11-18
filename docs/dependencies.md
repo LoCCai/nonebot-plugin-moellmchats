@@ -29,7 +29,7 @@ Python 3.14 及更高版本虽然可能满足元数据范围，但尚未进入�
 | `nonebot-plugin-localstore>=0.7.0,<0.8.0` | 确定配置目录并创建插件私有文件 | 只访问本地配置目录 |
 | `python-dotenv>=1.2.2,<2.0.0` | 保留 NoneBot `.env` 配置链的显式安全版本下限 | 否；插件源码不直接 import 它 |
 | `redis>=5.2.0,<7.0.0` | 可选 Redis admission、冷却、PendingAction 和 history backend | 否；默认没有 Redis URL，也不会创建 client |
-| `sqlalchemy>=2.0.0,<3.0.0` | Agent/history/summary/usage/audit 的可选 PostgreSQL Schema、Repository 与 engine | 否；默认使用 Memory 组合 |
+| `sqlalchemy[asyncio]>=2.0.0,<3.0.0` | Agent/history/summary/usage/audit 的可选 PostgreSQL Schema、Repository 与 engine；asyncio extra 确保安装异步导入必需的 greenlet | 否；默认使用 Memory 组合 |
 | `tomli>=2.0.1,<3.0.0`（仅 Python `<3.11`） | Python 3.10 读取 TOML；3.11+ 使用标准库 `tomllib` | 否 |
 | `mcp[cli]>=1.28.1,<2.0.0` | MCP client session，以及 stdio、Streamable HTTP、SSE transport | 只有启用某个 MCP server 后才连接或启动子进程 |
 
@@ -37,6 +37,9 @@ Python 3.14 及更高版本虽然可能满足元数据范围，但尚未进入�
 
 渲染与媒体工具的三个可选依赖通过 extra 启用：`nonebot-plugin-htmlrender` 提供浏览器渲染，
 `pillow` 提供图片校验与压缩，`pypdf` 提供 PDF 文本读取。不安装这些 extra 时相应工具降级或禁用。
+
+`statistics` extra 的 `matplotlib>=3.9,<4` 用于用量统计图和模型链路图的本地绘制；
+该依赖同样为可选项，安装后不会连接模型或计费服务。
 
 ### 为什么数据库和 Redis 包是安装依赖
 

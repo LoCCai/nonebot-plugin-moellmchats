@@ -1,4 +1,5 @@
 """Read effective routes without selecting a model; atomically edit role pools."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from .runtime_snapshot import mutable_value, runtime_snapshots
 POOL_ROLES = {"分类": "category", "category": "category", "0": "0", "1": "1", "2": "2"}
 POOL_HELP = (
     "超级管理员命令（参数用空格分隔，多个模型用分号分隔）：\n"
-    "!查看LLM链路\n!查看模型池 [分类|0|1|2]\n"
+    "!查看LLM链路 [全部|文本|图片]\n!查看模型池 [分类|0|1|2]\n"
     "!设置模型池 分类 模型编号;完整模型名 (供应商)\n"
     "!添加模型池 0 模型编号\n!移除模型池 0 模型编号\n!关闭模型池 0\n"
     "0=简单、1=中等、2=复杂。编号从 !查看模型 获取。\n"
@@ -62,8 +63,17 @@ def _thinking(model: Mapping) -> str:
         if isinstance(value, (bool, int)):
             display = ("开" if value else "关") if isinstance(value, bool) else str(value)
         elif isinstance(value, str) and value in {
-            "none", "minimal", "low", "medium", "high", "xhigh", "max", "auto",
-            "enabled", "disabled", "adaptive",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "auto",
+            "enabled",
+            "disabled",
+            "adaptive",
         }:
             display = value
         else:
@@ -78,7 +88,7 @@ def format_pools(selector, role: str | None = None) -> str:
     roles = (role,) if role is not None else ("category", "0", "1", "2")
     lines = ["模型池（逐次轮转；额度耗尽自动跳过，工具/识图请求还会筛选能力）"]
     for key in roles:
-        label = "分类" if key == "category" else f"{key}档（{'简单中等复杂'[int(key)*2:int(key)*2+2]}）"
+        label = "分类" if key == "category" else f"{key}档（{'简单中等复杂'[int(key) * 2 : int(key) * 2 + 2]}）"
         names = pools.get(key, ())
         lines.append(f"{label}：" + ("已关闭，使用固定模型" if not names else ""))
         for name in names:
@@ -88,58 +98,88 @@ def format_pools(selector, role: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def format_chain(selector, settings: Mapping) -> str:
+def _model_view(selector, state, name: str) -> dict:
+    """One model's display facts; secrets never leave the provider config."""
+    model = state.models.get(name, {})
+    return {
+        "name": name,
+        "status": _status(selector, model, name),
+        "exhausted": selector.is_model_exhausted(name),
+        "thinking": _thinking(model),
+        "vision": bool(model.get("is_vision")),
+        "tools": not model.get("no_tools"),
+        "stream": bool(model.get("stream")),
+    }
+
+
+def chain_data(selector, settings: Mapping, include_archived: bool = False) -> dict:
+    """Read the effective routing table as structured data for text/image views.
+
+    Quota-exhausted models are archived unless ``include_archived`` is true:
+    they drop out of explicit-backup chains and the parameter list (a summary
+    count replaces them). An exhausted fixed-role model stays visible with a
+    marker because the role itself is still bound to it.
+    """
     state = selector._active_state()
     cfg = state.model_config
     pools = cfg.get("model_pools", {})
     moe = cfg.get("use_moe", False)
     routing = cfg.get("capability_routing", {}).get("enabled", False)
     snapshot = runtime_snapshots.active()
-    lines = ["当前 LLM 链路（生效配置）", f"MoE：{'开' if moe else '关'}；工具：{'开' if cfg.get('use_tools') else '关'}；"
-             f"联网：{'开' if cfg.get('use_web_search') else '关'}"]
-    if snapshot is not None:
-        lines.append(f"运行资源版本：{snapshot.generation}")
-    used = []
+    routes: list[dict] = []
+    used: list[str] = []
+
+    def use(name):
+        if name and name not in used:
+            used.append(name)
 
     def route(label, key, role=None, fallback=None):
         if routing and key in {"selected_model", "category_model", "vision_model", "summary_model"}:
-            lines.append(f"{label}：由能力路由按请求选择（固定模型仅为绑定配置）")
+            routes.append({"kind": "capability", "label": label})
             return
-        names = pools.get(role, ()) if role is not None else ()
+        names = tuple(pools.get(role, ())) if role is not None else ()
         if names:
-            lines.append(f"{label}：{'分类' if role == 'category' else role}模型池，逐次轮转")
-        else:
-            name = fallback if fallback is not None else cfg.get(key)
-            names = (name,) if name else ()
-            lines.append(f"{label}：{name or '未配置'}")
-            backups = cfg.get("model_fallbacks", {}).get(name, ()) if name else ()
-            if backups:
-                lines.append("  显式备用：" + " → ".join(backups))
-        for name in names:
-            if name not in used:
-                used.append(name)
+            routes.append(
+                {"kind": "pool", "label": label, "pool": role, "models": [_model_view(selector, state, name) for name in names]}
+            )
+            for name in names:
+                use(name)
+            return
+        name = fallback if fallback is not None else cfg.get(key)
+        backups = tuple(cfg.get("model_fallbacks", {}).get(name, ())) if name else ()
+        visible = backups if include_archived else tuple(backup for backup in backups if not selector.is_model_exhausted(backup))
+        routes.append(
+            {
+                "kind": "fixed",
+                "label": label,
+                "model": _model_view(selector, state, name) if name else None,
+                "backups": [_model_view(selector, state, backup) for backup in visible],
+                "dropped_backups": len(backups) - len(visible),
+                "all_backups_exhausted": bool(backups) and not visible,
+            }
+        )
+        use(name)
 
-    route("意图分类", "category_model" if moe else "selected_model", "category" if moe else "0")
     if moe:
+        route("意图分类（仅超级管理员）", "category_model", "category")
+        efforts = cfg.get("moe_reasoning_efforts", {})
         for key, label in (("0", "简单"), ("1", "中等"), ("2", "复杂")):
-            route(f"文本 {key}档·{label}", "selected_model", key, cfg.get("moe_models", {}).get(key))
+            effort = efforts.get(key) if isinstance(efforts, Mapping) else None
+            suffix = f"·{effort}" if effort in {"low", "medium", "high", "max"} else ""
+            route(f"超级管理员文本 {key}档·{label}{suffix}", "selected_model", key, cfg.get("moe_models", {}).get(key))
+        route("普通用户文本·固定0档·不调用分类模型", "selected_model", "0")
     else:
-        route("文本对话", "selected_model", "0")
+        route("文本对话·固定0档·不调用分类模型", "selected_model", "0")
     route("用户图片识图（优先于文本分档）", "vision_model")
     route("绘图/改图工具", "image_model")
     route("音视频/文件多模态工具", "multimodal_model")
     route("群聊总结工具", "chat_summary_model", "2")
     from .model_selector import MEDIA_ROLES
+
     for role, (label, _kind) in MEDIA_ROLES.items():
         if role not in {"image_model", "multimodal_model", "chat_summary_model"}:
             route(label + "工具", role)
     route("工具草稿复核", "summary_model", "category")
-    lines.extend([
-        "工具产图二次识图：" + ("开" if settings.get("tool_image_vision_enabled", True) else "关"),
-        "免二次识图工具：" + ("、".join(settings.get("tool_image_vision_excluded_tools", ())) or "无"),
-        f"分类总预算：{settings.get('classification_timeout_seconds', 20)}秒；超时使用降级路径。",
-        "模型参数（已合并默认/供应商/模型配置；能力为配置声明）：",
-    ])
     if routing:
         used = list(cfg.get("capability_routing", {}).get("models", {}))
     else:
@@ -148,14 +188,79 @@ def format_chain(selector, settings: Mapping) -> str:
             for backup in cfg.get("model_fallbacks", {}).get(name, ()):
                 if backup not in used:
                     used.append(backup)
-    for name in used:
-        model = state.models.get(name, {})
-        lines.append(f"• {name} · {_status(selector, model, name)}\n"
-                     f"  {_thinking(model)}；识图={'是' if model.get('is_vision') else '否'}；"
-                     f"工具={'否' if model.get('no_tools') else '是'}；流式={'开' if model.get('stream') else '关'}")
-    lines.extend(["池优先于固定模型。临时限流尝试同池备用；额度耗尽标记会跨重启保留。",
-                  "固定模型不可用时按显式备用筛选；模型配置不替代宿主的绘图授权。",
-                  "!查看模型池 ／ !模型池帮助；固定角色沿用 !设置视觉模型、!设置媒体模型 等命令。"])
+    # Disabled/archived providers no longer appear in active routes. Retain
+    # their quota inventory in the existing explicit "全部" archive view.
+    for name in selector._quota_status().exhausted:
+        use(name)
+    entries = [_model_view(selector, state, name) for name in used]
+    return {
+        "moe": moe,
+        "tools": bool(cfg.get("use_tools")),
+        "web_search": bool(cfg.get("use_web_search")),
+        "capability_routing": routing,
+        "generation": snapshot.generation if snapshot is not None else None,
+        "routes": routes,
+        "tool_image_vision_enabled": bool(settings.get("tool_image_vision_enabled", True)),
+        "tool_image_vision_excluded_tools": list(settings.get("tool_image_vision_excluded_tools", ())),
+        "classification_timeout_seconds": settings.get("classification_timeout_seconds", 20),
+        "models": [entry for entry in entries if include_archived or not entry["exhausted"]],
+        "archived": [entry for entry in entries if entry["exhausted"]],
+        "include_archived": include_archived,
+    }
+
+
+def _route_lines(entry: Mapping) -> list[str]:
+    label = entry["label"]
+    if entry["kind"] == "capability":
+        return [f"{label}：由能力路由按请求选择（固定模型仅为绑定配置）"]
+    if entry["kind"] == "pool":
+        return [f"{label}：{'分类' if entry['pool'] == 'category' else entry['pool']}模型池，逐次轮转"]
+    model = entry["model"]
+    if model is None:
+        return [f"{label}：未配置"]
+    name = model["name"] + ("（额度耗尽）" if model["exhausted"] else "")
+    lines = [f"{label}：{name}"]
+    if entry["all_backups_exhausted"]:
+        lines.append("  显式备用：均额度耗尽")
+    elif entry["backups"]:
+        lines.append("  显式备用：" + " → ".join(backup["name"] for backup in entry["backups"]))
+    return lines
+
+
+def format_chain(selector, settings: Mapping, include_archived: bool = False) -> str:
+    data = chain_data(selector, settings, include_archived)
+    lines = [
+        "当前 LLM 链路（生效配置）",
+        f"MoE：{'开' if data['moe'] else '关'}；工具：{'开' if data['tools'] else '关'}；"
+        f"联网：{'开' if data['web_search'] else '关'}",
+    ]
+    if data["generation"] is not None:
+        lines.append(f"运行资源版本：{data['generation']}")
+    for entry in data["routes"]:
+        lines.extend(_route_lines(entry))
+    lines.extend(
+        [
+            "工具产图二次识图：" + ("开" if data["tool_image_vision_enabled"] else "关"),
+            "免二次识图工具：" + ("、".join(data["tool_image_vision_excluded_tools"]) or "无"),
+            f"分类总预算：{data['classification_timeout_seconds']}秒；超时使用降级路径。",
+            "模型参数（已合并默认/供应商/模型配置；能力为配置声明）：",
+        ]
+    )
+    for entry in data["models"]:
+        lines.append(
+            f"• {entry['name']} · {entry['status']}\n"
+            f"  {entry['thinking']}；识图={'是' if entry['vision'] else '否'}；"
+            f"工具={'否' if not entry['tools'] else '是'}；流式={'开' if entry['stream'] else '关'}"
+        )
+    if data["archived"] and not include_archived:
+        lines.append(f"已归档 {len(data['archived'])} 个额度耗尽模型（!查看LLM链路 全部 查看）。")
+    lines.extend(
+        [
+            "池优先于固定模型。临时限流尝试同池备用；额度耗尽标记会跨重启保留。",
+            "固定模型不可用时按显式备用筛选；模型配置不替代宿主的绘图授权。",
+            "!查看模型池 ／ !模型池帮助；固定角色沿用 !设置视觉模型、!设置媒体模型 等命令。",
+        ]
+    )
     return "\n".join(lines)
 
 

@@ -30,6 +30,7 @@ from .agent_runtime import (
     DeadlineContext,
     ToolCall,
     ToolCallStatus,
+    _freeze_agent_json,
 )
 from .audit_event import AuditEventRecord
 from .chat_history import (
@@ -543,8 +544,7 @@ class PostgresTransactionFactory:
             )
             if cleanup_errors:
                 raise AgentContextCancellationCleanupError(
-                    "PostgreSQL transaction 被取消且 cleanup 未确认"
-                    + self._cleanup_suffix(cleanup_errors)
+                    "PostgreSQL transaction 被取消且 cleanup 未确认" + self._cleanup_suffix(cleanup_errors)
                 ) from None
             raise
         except Exception as error:
@@ -555,8 +555,7 @@ class PostgresTransactionFactory:
             if isinstance(error, AgentContextRuntimeError):
                 raise
             raise AgentContextPersistenceError(
-                f"PostgreSQL transaction 执行失败 ({_safe_error_type(error)})"
-                + self._cleanup_suffix(cleanup_errors)
+                f"PostgreSQL transaction 执行失败 ({_safe_error_type(error)})" + self._cleanup_suffix(cleanup_errors)
             ) from None
 
         try:
@@ -567,8 +566,7 @@ class PostgresTransactionFactory:
                 rollback=False,
             )
             raise AgentContextCommitCancellationUnknownError(
-                f"PostgreSQL commit 被取消且结果不可确认 ({_safe_error_type(error)})"
-                + self._cleanup_suffix(cleanup_errors)
+                f"PostgreSQL commit 被取消且结果不可确认 ({_safe_error_type(error)})" + self._cleanup_suffix(cleanup_errors)
             ) from None
         except Exception as error:
             cleanup_errors, _ = await self._cleanup_session(
@@ -576,8 +574,7 @@ class PostgresTransactionFactory:
                 rollback=False,
             )
             raise AgentContextCommitUnknownError(
-                f"PostgreSQL commit 结果不可确认 ({_safe_error_type(error)})"
-                + self._cleanup_suffix(cleanup_errors)
+                f"PostgreSQL commit 结果不可确认 ({_safe_error_type(error)})" + self._cleanup_suffix(cleanup_errors)
             ) from None
 
         cleanup_errors, interrupted = await self._cleanup_session(
@@ -588,8 +585,7 @@ class PostgresTransactionFactory:
             raise asyncio.CancelledError
         if cleanup_errors:
             raise AgentContextCleanupError(
-                "PostgreSQL commit 已确认但 session 关闭失败"
-                + self._cleanup_suffix(cleanup_errors)
+                "PostgreSQL commit 已确认但 session 关闭失败" + self._cleanup_suffix(cleanup_errors)
             ) from None
         return result
 
@@ -1419,7 +1415,10 @@ class AgentRequestRuntime:
         return self.prompt_context
 
     async def persist_user_message(
-        self, text: str, *, mention_context: dict | None = None,
+        self,
+        text: str,
+        *,
+        mention_context: dict | None = None,
     ) -> AgentPromptContext:
         # Other callers can bypass MessagesHandler; memory retrieval and history
         # must receive the same full text without PostgreSQL's forbidden NUL.
@@ -1607,6 +1606,14 @@ class AgentRequestRuntime:
         safe_tool_name = tool_name if _TOOL_NAME_RE.fullmatch(tool_name) else "unknown_tool"
         detached_arguments = _safe_json_copy(arguments)
         safe_arguments = detached_arguments if isinstance(detached_arguments, Mapping) else {}
+        arguments_omitted = False
+        try:
+            _freeze_agent_json(safe_arguments, label="ToolCall.arguments")
+        except (TypeError, ValueError):
+            # An invalid optional audit payload must not replace an already
+            # completed action or encourage the caller to repeat a mutation.
+            safe_arguments = {"_invalid_arguments_omitted": True}
+            arguments_omitted = True
         terminal_status = {
             ToolCallStatus.COMPLETED: AgentStepStatus.COMPLETED,
             ToolCallStatus.FAILED: AgentStepStatus.FAILED,
@@ -1629,7 +1636,13 @@ class AgentRequestRuntime:
             type=AgentStepType.TOOL,
             status=terminal_status,
             tool=safe_tool_name,
-            input_preview=("tool arguments accepted" if safe_arguments else "empty tool arguments"),
+            input_preview=(
+                "invalid tool argument metadata omitted"
+                if arguments_omitted
+                else "tool arguments accepted"
+                if safe_arguments
+                else "empty tool arguments"
+            ),
             output_preview=(
                 _safe_preview(result_preview)
                 if terminal_status is AgentStepStatus.COMPLETED and result_preview is not None

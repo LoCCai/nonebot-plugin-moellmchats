@@ -195,3 +195,17 @@ def builtin_protocol_spec(name: str) -> ToolSpec | None:
 
 def is_trusted_protocol_tool_spec(spec: ToolSpec) -> bool:
     return _PROTOCOL_TOOL_SPEC_BY_NAME.get(spec.name) is spec
+
+
+def is_trusted_speech_tool_spec(spec: ToolSpec) -> bool:
+    """Trust only the two package-owned speech objects, never a name or clone.
+
+    Speech retains its Registered execution adapter and current-event delivery.
+    This is a sealed exception, not permission for arbitrary registered Bot tools.
+    """
+    if spec.name not in {"speak_text", "qiqi_voice"}:
+        return False
+    from .speech_library import QIQI_VOICE_TOOL
+    from .speech_tools import SPEAK_TOOL
+
+    return spec is SPEAK_TOOL or spec is QIQI_VOICE_TOOL

@@ -1,4 +1,5 @@
 """NoneBot lifecycle integration for durable LLM requests."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +25,7 @@ _signal_installed = False
 async def authorize_recovery(bot, record):
     """Use current group membership, roles, matcher rules and host preprocessors."""
     from . import ai_matcher, llm_matcher
+
     if record["protocol"] == "onebot_v12":
         from nonebot.adapters.onebot.v12 import GroupMessageEvent, PrivateMessageEvent
     else:
@@ -31,10 +33,13 @@ async def authorize_recovery(bot, record):
     data = deepcopy(record["event"])
     group = data.get("group_id")
     from types import SimpleNamespace
+
     from .group_switch import group_llm_enabled
+
     if not group_llm_enabled(SimpleNamespace(**data)):
         return None
     from .chat_policy import user_blocked
+
     if await user_blocked(bot, SimpleNamespace(**data)):
         return None
     # Permissions from an old event are never trusted after a restart.
@@ -59,31 +64,34 @@ async def authorize_recovery(bot, record):
         matcher_type = ai_matcher if record["is_ai"] else llm_matcher
         from nonebot.message import _apply_event_preprocessors, _apply_run_preprocessors
         from nonebot.rule import TrieRule
+
         state, cache = {}, {}
         async with AsyncExitStack() as stack:
-            if not await _apply_event_preprocessors(bot=bot, event=event, state=state, stack=stack,
-                                                     dependency_cache=cache, show_log=False):
+            if not await _apply_event_preprocessors(
+                bot=bot, event=event, state=state, stack=stack, dependency_cache=cache, show_log=False
+            ):
                 return None
             TrieRule.get_value(bot, event, state)
             if not await matcher_type.permission(bot, event, stack=stack, dependency_cache=cache):
                 return None
             if not await matcher_type.rule(bot, event, state, stack=stack, dependency_cache=cache):
                 return None
-            if not await _apply_run_preprocessors(bot=bot, event=event, state=state, matcher=matcher_type(),
-                                                  stack=stack, dependency_cache=cache):
+            if not await _apply_run_preprocessors(
+                bot=bot, event=event, state=state, matcher=matcher_type(), stack=stack, dependency_cache=cache
+            ):
                 return None
         return event
 
 
 async def resume_request(bot, event, record):
+    from .chat_policy import user_blocked
     from .chat_runtime import _handle_llm
     from .conversation_slots import conversation_slots
     from .cooldowns import MemoryCooldownStore
+    from .group_switch import group_llm_enabled
+    from .request_budget import budget_authorized, request_budget_scope
     from .state_store import BoundedValueStore
     from .usage_ledger import bind_usage_scope
-    from .group_switch import group_llm_enabled
-    from .chat_policy import user_blocked
-    from .request_budget import budget_authorized, request_budget_scope
 
     if not group_llm_enabled(event) or await user_blocked(bot, event):
         return None
@@ -104,8 +112,14 @@ async def resume_request(bot, event, record):
         with request_budget_scope(authorized=await budget_authorized(bot, event)), bind_usage_scope(bot, event):
             # The old request must not fail its own cooldown after startup.
             event.time = time.time()
-            return await _handle_llm(bot, event, RecoveryMatcher(), record["formatted"], record["is_ai"],
-                                     cooldown_store=MemoryCooldownStore(BoundedValueStore(lambda: 0)))
+            return await _handle_llm(
+                bot,
+                event,
+                RecoveryMatcher(),
+                record["formatted"],
+                record["is_ai"],
+                cooldown_store=MemoryCooldownStore(BoundedValueStore(lambda: 0)),
+            )
 
 
 def defer_shutdown(signum: int, forward) -> bool:
@@ -143,6 +157,7 @@ def defer_shutdown(signum: int, forward) -> bool:
 
 def recovery_service_config():
     from .config import recovery_config
+
     return recovery_config
 
 

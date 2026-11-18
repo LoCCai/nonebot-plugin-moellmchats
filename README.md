@@ -37,6 +37,22 @@
 
 最终回复含公式、Markdown 表格或代码块时，默认自动按当前主题渲染成图片，渲染失败回退文字；可复制的后续指令保持文字。`config.json` 中的 `auto_render_markdown` 可关闭此行为。
 
+配置环境变量 `mi_api_key` 后，`speak_text` 可使用 MiMo 的 `mimo-v2.5-tts`、`mimo-v2.5-tts-voiceclone`、`mimo-v2.5-tts-voicedesign`，直接发送 QQ 语音。例如 @机器人「我想听你说话」「用语音说晚安」。默认先设计安静、轻柔、稍慢的音色，保存本地参考后复用声音复刻；管理员可用 `MOELLM_SPEECH_REFERENCE` 指定本地 WAV，`MOELLM_SPEECH_STYLE` 调整音色描述，普通合成使用 `MOELLM_SPEECH_VOICE`（默认 Chloe）。接口目前限时免费，用量按现有用户、群维度记录，未返回用量不会估造。
+
+唱歌：用户说「唱一段小星星」「清唱两句」等自然语言时，LLM 以 `model=sing` 调用 `speak_text`，在 `mimo-v2.5-tts` 预置音色上以官方 `(唱歌)` 前缀演唱中文歌词（建议副歌短片段，风格用自然语言 `style` 描述）。唱歌仅预置音色支持（复刻音色不支持），音色与超时可用 `MOELLM_SING_VOICE`（默认 茉莉）、`MOELLM_SING_TIMEOUT_SECONDS`（默认 120，上限 180）调整；长歌词合成可能需要一到两分钟，超时预算按合成模式区分并直接作用于 HTTP 请求。限流（429）、服务端 5xx 与连接中断会自动重试一次（退避 2 秒，总时长仍受该次合成预算约束）；其余失败不重试，语音已发送或发送结果不确定时永不自动重发。
+
+限免期 `MOELLM_SPEECH_FREE_PRICING=true` 按人民币零元记录费用估算；活动结束后关闭，并按供应商价格设置费用。管理员手工设置的价格优先。
+
+`config.json` 的 `speech_enabled` 控制语音，`speech_auto_enabled` 控制短回复随机语音，`speech_auto_rate` 默认 0.15，`speech_auto_max_chars` 默认 40。指令、链接、表格、公式和代码保留文字；合成失败回退文字，发送结果不确定时不重复发送。语音继续遵循现有用户权限、冷却与内容限制，无需绘图授权。
+
+超级管理员可用 `开启LLM语音`、`关闭LLM语音`、`查看LLM语音` 管理全部群与私聊的三种语音模型，设置持久保存并立即生效；`开启LLM随机语音`、`关闭LLM随机语音` 单独控制随机语音，关闭随机不影响明确要求的语音。总开关关闭后，合成中的请求也会在发送前检查并回退文字。用量进入现有 `模型用量统计 本月`、`模型消耗图 本月` 和 `导出模型用量 全部`，按实际模型名、用户与群筛选；缓存、音频 Token 等数值以接口返回为准。
+
+`MOELLM_SPEECH_LIBRARY` 可指定本地七七中文原声索引（`character`、`language`、`clips`；每条包含 `title`、`text`、同目录 WAV 的 `file` 和 `sha256`）。`qiqi_voice` 按标题或台词关键词查找，`action=play` 播放唯一匹配的原声，直接本地发送，不调用合成模型。仅 @机器人、没有正文或附件时，默认按 `speech_ping_rate=0.15` 的概率播放一句简短日常台词，遵循用户冷却、拉黑和群开关；语音总开关及随机语音开关都可关闭它。语音库需由管理员预先准备，代码不在启动时自动下载素材；复刻参考仍用 `MOELLM_SPEECH_REFERENCE` 指定。
+
+语音工具在 Registered 执行入口中按包内两个固定 `ToolSpec` 对象授予当前会话发送权限；
+它们标记为有副作用、低风险直接执行。普通工具、同名工具、复制的 spec 或替换的 handler
+不能获得该例外；群管理权限不在语音能力范围内。
+
 - **更加拟人的回复风格**：分段发送回复，每段根据内容长度增加延迟，支持自定义发送表情包
 
 - **多模态视觉支持**：用户上传的图片使用视觉模型；插件已提供原始文字和字段的卡片优先读数据。接入原生渲染与发送回执的卡片，在同群引用和群历史读取中也使用原始数据，未展示字段通过 `read_rendered_view` 继续读取；数据过期提示重新查询。卡片图片仍可用于编辑，跨群和跨 Bot 的数据保持隔离。
@@ -71,7 +87,36 @@
 
 - **独立协议与 OS 隔离**：结果通过版本化 FD3 返回，stdout/stderr 只作有界日志；FD3 用来隔离意外 stdout 污染，并不认证恶意工具代码。runner 使用独立 PID/mount/IPC/UTS namespace 与固定 hostname，把根挂载递归设为只读，只在 `workspace=true` 时恢复私有 workspace bind mount 的写权限；`host_filesystem=false` 时再用 Landlock 收紧可读路径并拒绝 xattr 读取/枚举。禁网时拒绝全部新建 socket；仅开放 IP 网络但未开放宿主文件时仍拒绝 AF_UNIX/AF_VSOCK，受限 `socketpair` 只保留 AF_UNIX/STREAM；Linux keyring syscall 始终拒绝。它没有 cgroup，也不是容器或完整 syscall allowlist；`stat`/`readlink` 等路径元数据仍可能可见，Custom File 显式取得 `host_filesystem=true` 后仍可读取 DAC 允许的宿主文件
 
+### LLM 贴表情配置
+
+在插件的 `config.json` 中设置，沿用运行快照热加载：
+
+```json
+{
+  "message_reactions": {
+    "enabled": true,
+    "started": "282",
+    "completed": "10004",
+    "rejected": "10060"
+  }
+}
+```
+
+`started` 为受理反馈，`completed` 为回复完成反馈，`rejected` 为忙碌拒绝反馈；
+填写 OneBot/QQ 支持的数字表情 ID 字符串，单项留空 `""` 关闭该表情，
+`enabled: false` 关闭全部反馈。省略 `enabled`、`started` 时，继续沿用旧的
+NoneBot `moellm_mention_ack_enabled`、`moellm_mention_ack_emoji_id`。
+仅对群内真实 @ 或适配器识别的昵称唤醒贴表情；超时、取消、回复发送失败或
+投递结果不确定时不贴完成表情。贴表情失败不补发文字、不撤回消息。
+
+语音工具成功投递后直接结束本轮，不再生成“已经发语音”“还有其他问题”等
+文字确认；保留实际说出的内容到对话历史，语音失败仍可使用文字回答。
+
 ## 📦 安装
+
+当前维护分支版本为 `0.26.5.post8`，包括流式工具响应、个人计费宿主适配、语音与工具发现改进。
+个人账户接入方法见[宿主个人计费适配](docs/personal-billing.md)。下列 SHA 与 Actions
+是此前版本的验证记录，不代表本次维护分支的 CI 结果；本次结果请查看对应提交的 Actions。
 
 0.26.5 已按 [K-11 工具进度与恢复状态真实性](docs/规划/13-tool-progress-execution-truth-20260901.md) 完成实现与精确双 Actions 门禁。当前隔离测试恢复点是完整提交 `e704092a1e8d9ad215e4e9de35a9fe403483d56f`；其 push [`33495001417`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495001417) 与 PR [`33495005164`](https://github.com/LoCCai/nonebot-plugin-moellmchats/actions/runs/33495005164) 均 12/12 success、各唯一 `release-gate` 成功。PR [#5](https://github.com/LoCCai/nonebot-plugin-moellmchats/pull/5) 核验时为 `OPEN / MERGEABLE / CLEAN`，不会在本任务中合并；PyPI 和七七实际安装状态必须分别核对。本证据提交还必须通过自身双 Actions，最终结果直接交付，不再创建第三个自指提交。
 
@@ -143,7 +188,19 @@ COMMAND_START=["/",""]   # 可选
 并在 `providers.toml` 的模型配置中设置 `billing_type = "free"`、`priority_consume = true`；
 限流、超时或额度不可用时继续尝试同池其他模型，仍按工具和视觉能力筛选。
 普通用户的请求预算与思考深度限制独立于模型池，不限制其使用池内其他模型。
-智谱已适配 `glm-4-flash-250414`、`glm-4.7-flash`、`glm-4.6v-flash`，后两者关闭可选思考。
+可在 `config.json` 的 `ordinary_request_budget` 中热调整普通用户的思考强度、输出、工具轮次与历史量，
+自动监听或 `重载LLM` 后对新请求生效；完整字段与范围见[请求预算配置](docs/configuration.md#请求模型与工具预算)。
+智谱已适配 `glm-4-flash-250414`、`glm-4.7-flash`、`glm-z1-flash`、`glm-4.6v-flash`、
+`glm-4v-flash`、`glm-4.1v-thinking-flash`，4.7 和 4.6V 关闭可选思考。
+不能稳定支持 Function Calling 的旧模型应设置 `no_tools = true`，避免参与需要执行工具的请求。
+`cogview-3-flash` 配置为 `model_type = "image"`、`image_api_format = "bigmodel"`、
+`supports_image_edit = false` 后，通过 `generate_image` 直接出图；参考图可使用已配置的改图备用模型。
+`cogvideox-flash` 配置为 `model_type = "video"`，通过 `tokenhub_capabilities(operation="glm_video")`
+读取指南，再用 `call_model_capability` 提交、`get_model_task` 查询视频；不使用聊天 SSE 接口。
+这两类能力沿用绘图授权、生成防重和统一用量统计，限流不会记成永久额度耗尽。
+服务商 `api_key` 及 `api_key_config` 引用的宿主配置（如 `glm_api_key`、`txhy_api_key`），
+均支持单字符串、原生字符串列表、JSON 数组字符串，以及逗号或换行分隔的多个 Key。
+多个 Key 去重后轮询；异步任务绑定提交时的 Key，后续查询不会切换账号。
 `glm-5.3-flash` 属于付费模型，活动赠送额度不能视为长期免费；
 `moellm_glm_promo_exhausted=true` 可在统计说明中标注历史赠额已用尽，实际停用仍由模型配置和额度状态控制。
 
@@ -170,7 +227,7 @@ COMMAND_START=["/",""]   # 可选
 |        设置分类模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                    设置分类模型，如：`设置分类模型 1`                     |
 |        设置总结模型         | 超级管理员 | 私聊 / 群聊 |    模型名或编号    |                设置工具包复核等总结任务使用的模型                         |
 |      设置工具/函数调用      | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    |              控制是否开启函数调用机制，如：`设置工具调用 开`              |
-|          设置工具进度       | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    | 工具进度总开关；开启时每个获准调用各发一条固定提示，如：`/设置工具进度 关` |
+|          设置工具进度       | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    | 其他工具进度开关；插件完整指令投递提示由 `plugin_command_progress_enabled` 独立控制 |
 |       设置工具自然话术      | 超级管理员 | 私聊 / 群聊 |    0、1、开、关    | 将同一次工具决策中的一句脱敏自然话术合入固定提示；默认关闭，不增加模型请求 |
 |          刷新工具           | 超级管理员 | 私聊 / 群聊 |         无         | 原子热重载工具；成功显示新 generation 与分类计数，失败保留旧 generation |
 |          重载LLM            | 超级管理员 | 私聊 / 群聊 |         无         | 原子重载全部运行资源；失败时保留上一代快照 |

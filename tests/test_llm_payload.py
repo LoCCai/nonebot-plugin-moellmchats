@@ -24,7 +24,8 @@ def test_tool_hint_distinguishes_mentions_from_literal_player_uids() -> None:
 def test_tool_hint_exposes_images_as_copyable_sources_and_distinguishes_sender():
     harness = PayloadHarness()
     harness.format_message_dict = {
-        "current_user": {"qq": "12001"}, "reply_user": {"qq": "12002", "name": "引用者"},
+        "current_user": {"qq": "12001"},
+        "reply_user": {"qq": "12002", "name": "引用者"},
         "image_sources": [{"source": "reply", "url": "https://example.com/quoted.png"}],
     }
     hint = harness._build_tool_mention_hint()
@@ -97,9 +98,11 @@ def test_payload_delegates_tool_view_to_generation_snapshot(monkeypatch) -> None
         }
     ]
     assert data["tools"] == schema
-    assert data["stream"] is False
-    assert stream is False
-    assert "固定进度提示由运行时按配置发送" in messages[0]["content"]
+    assert data["stream"] is True
+    assert stream is True
+    assert "七七正在帮你投递：/指令 参数" in messages[0]["content"]
+    assert "贴表情不替代此提示" in messages[0]["content"]
+    assert "其他工具进度按配置发送" in messages[0]["content"]
 
     original_get_config = config_parser.get_config
     monkeypatch.setattr(
@@ -151,9 +154,7 @@ def test_payload_passes_disabled_model_boundary_without_search_read(
     monkeypatch.setattr(
         model_selector,
         "get_web_search",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("no_tools 模型不应读取搜索开关")
-        ),
+        lambda: (_ for _ in ()).throw(AssertionError("no_tools 模型不应读取搜索开关")),
     )
     harness = PayloadHarness()
     harness.model_info = {

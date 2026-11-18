@@ -193,14 +193,17 @@ class ToolAuthoringService:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "stream": False,
         }
+        from .chat_stream import configure_stream, read_completion
+
+        configure_stream(minimal_data, model)
         data = dict(minimal_data)
         for key in ("max_tokens", "temperature", "top_p", "top_k"):
             if model.get(key) is not None:
                 data[key] = model[key]
         if isinstance(model.get("extra_payload"), dict):
             data.update(model["extra_payload"])
+        configure_stream(data, model)
         timeout = aiohttp.ClientTimeout(
             total=min(
                 180,
@@ -212,7 +215,9 @@ class ToolAuthoringService:
 
         compatibility_retried = False
         while True:
-            async with budgeted_post(get_session(), model,
+            async with budgeted_post(
+                get_session(),
+                model,
                 model["url"],
                 headers=headers,
                 json=attempt_data,
@@ -220,13 +225,11 @@ class ToolAuthoringService:
                 timeout=timeout,
             ) as response:
                 if response.status == 200:
-                    body = await response.text()
-                    try:
-                        usage_body = json.loads(body)
-                    except (ValueError, TypeError):
-                        usage_body = {}
-                    await record_usage(model, usage_body.get("usage") if isinstance(usage_body, dict) else None,
-                                       purpose="tool_authoring")
+                    usage_body = await read_completion(response)
+                    body = json.dumps(usage_body)
+                    await record_usage(
+                        model, usage_body.get("usage") if isinstance(usage_body, dict) else None, purpose="tool_authoring"
+                    )
                     break
                 if response.status == 429:
                     error_body, truncated, read_bytes = "", False, 0

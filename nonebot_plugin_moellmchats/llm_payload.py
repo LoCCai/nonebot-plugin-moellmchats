@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from copy import deepcopy
 import hashlib
 import re
 
@@ -7,6 +9,7 @@ import ujson as json
 from .categorize import Categorize
 from .config import config_parser
 from .image_output_policy import image_output_hint
+from .mention_context import display_mention_name
 from .model_capabilities import ModelCapability
 from .model_selector import model_selector
 from .onebot_facade import event_group_id
@@ -18,20 +21,32 @@ from .tool_schema_cache import (
 
 
 class LlmPayloadMixin:
+    @staticmethod
+    def _ordinary_task_pool(plain: str, enabled: bool) -> str | None:
+        # Optional local routing changes model choice only; tool permissions,
+        # output budgets and superuser-only MoE classification remain intact.
+        if not enabled:
+            return None
+        if re.search(
+            r"```|\b(?:python|javascript|typescript|sql|rust|golang|traceback|debug)\b|代码|编程|报错|接口开发", plain, re.I
+        ):
+            return "1"
+        if re.search(r"推理|证明|数学|解题|算法|研判|制定.{0,8}(?:计划|方案)|详细分析|深入分析", plain):
+            return "2"
+        return "0"
+
     def _tool_schema_request_inputs(self) -> tuple[set[str], bool, bool]:
         resident_plugins = set(model_selector.get_resident_plugins())
-        selected_plugins = (
-            set(getattr(self, "required_plugins", [])) | resident_plugins
-        )
+        selected_plugins = set(getattr(self, "required_plugins", [])) | resident_plugins
+        from .tool_rediscovery import DISCOVER_TOOL_NAME, restored_tools
+
+        selected_plugins.update(restored_tools(self))
+        if DISCOVER_TOOL_NAME in getattr(self.tool_snapshot, "custom_tools", {}):
+            selected_plugins.add(DISCOVER_TOOL_NAME)
         if getattr(self, "format_message_dict", {}).get("rendered_views"):
             selected_plugins.add("read_rendered_view")
-        model_supports_tools = (
-            model_selector.get_use_tools()
-            and not self.model_info.get("no_tools", False)
-        )
-        search_enabled = (
-            model_selector.get_web_search() if model_supports_tools else False
-        )
+        model_supports_tools = model_selector.get_use_tools() and not self.model_info.get("no_tools", False)
+        search_enabled = model_selector.get_web_search() if model_supports_tools else False
         return selected_plugins, model_supports_tools, search_enabled
 
     async def _prepare_tool_schema_record(self) -> None:
@@ -43,12 +58,8 @@ class LlmPayloadMixin:
         resources = runtime.coordinator.resources
         snapshot = self.tool_snapshot
         if getattr(snapshot, "generation", None) != resources.generation:
-            raise ToolSchemaCacheUnavailableError(
-                "tool schema cache consumer generation 不一致"
-            )
-        selected_plugins, tools_enabled, search_enabled = (
-            self._tool_schema_request_inputs()
-        )
+            raise ToolSchemaCacheUnavailableError("tool schema cache consumer generation 不一致")
+        selected_plugins, tools_enabled, search_enabled = self._tool_schema_request_inputs()
         context = snapshot.capture_llm_payload_schema_context(
             selected_plugins,
             tools_enabled=tools_enabled,
@@ -56,9 +67,7 @@ class LlmPayloadMixin:
             is_superuser=self.is_superuser,
         )
         if context.generation != resources.generation:
-            raise ToolSchemaCacheUnavailableError(
-                "tool schema cache context generation 漂移"
-            )
+            raise ToolSchemaCacheUnavailableError("tool schema cache context generation 漂移")
         self._tool_schema_record = await resolve_tool_schema(
             resources.tool_schema_cache,
             context.cache_key,
@@ -68,47 +77,38 @@ class LlmPayloadMixin:
     async def _prepare_model_info(self, plain: str):
         """预处理：获取模型信息、处理难度分类与视觉判断"""
         self._tool_schema_record = None
-        self.tool_intent_digest = hashlib.sha256(
-            plain.encode("utf-8")
-        ).hexdigest()
+        self.tool_intent_digest = hashlib.sha256(plain.encode("utf-8")).hexdigest()
         self.required_plugins = []
-        difficulty = "1"
+        difficulty = "0"
+        # Extended budgets/manual grants do not confer superuser MoE access.
+        from . import personal_billing
+
+        use_moe = (
+            model_selector.get_moe()
+            if personal_billing.active()
+            else (getattr(self, "is_superuser", False) is True and model_selector.get_moe())
+        )
         # 1. 绝对的客观事实：只要真实提取到了图片URL，就必定触发视觉处理，不再完全依赖大模型分类判断
         has_image = bool(self.messages_handler.current_images)
-        if (
-            model_selector.get_moe()
-            or model_selector.get_web_search()
-            or model_selector.get_use_tools()
-        ):
+        if use_moe or model_selector.get_web_search() or model_selector.get_use_tools():
             runtime = getattr(self, "agent_runtime", None)
-            resources = (
-                runtime.coordinator.resources if runtime is not None else None
-            )
+            resources = runtime.coordinator.resources if runtime is not None else None
             category = Categorize(
                 getattr(self.messages_handler, "classification_text", lambda text: text)(plain),
                 self.tool_snapshot,
                 is_superuser=self.is_superuser,
-                tool_catalog_cache=(
-                    resources.tool_catalog_cache
-                    if resources is not None
-                    else None
-                ),
-                classification_cache=(
-                    resources.classification_cache
-                    if resources is not None
-                    else None
-                ),
-                runtime_generation=(
-                    resources.generation if resources is not None else None
-                ),
+                tool_catalog_cache=(resources.tool_catalog_cache if resources is not None else None),
+                classification_cache=(resources.classification_cache if resources is not None else None),
+                runtime_generation=(resources.generation if resources is not None else None),
                 scene=("group" if event_group_id(self.event) is not None else "private"),
             )
-            category_result = await category.get_category()
+            category_result = await category.get_category() if use_moe else category.get_unclassified_category()
             self.tool_selection_source = category.selection_source
             if isinstance(category_result, str):
                 return category_result
             if isinstance(category_result, tuple):
-                difficulty, vision_required, required_plugins = category_result
+                classified_difficulty, vision_required, required_plugins = category_result
+                difficulty = classified_difficulty if use_moe else "0"
                 logger.info(
                     f"难度：{difficulty}, 视觉：{vision_required}, "
                     f"需要插件：{required_plugins}, 选择来源：{self.tool_selection_source}"
@@ -118,10 +118,33 @@ class LlmPayloadMixin:
                     vision_required and not getattr(self, "format_message_dict", {}).get("images_have_rendered_data")
                 )
 
+        from .speech_library import original_voice_requested
+        from .speech_tools import sing_requested, speech_available, speech_enabled, voice_requested
+
+        original_voice = original_voice_requested(plain)
+        if (
+            model_selector.get_use_tools()
+            and speech_enabled()
+            and original_voice
+            and "qiqi_voice" in self.tool_snapshot.custom_tools
+            and "qiqi_voice" not in self.required_plugins
+        ):
+            self.required_plugins.append("qiqi_voice")
+        if (
+            model_selector.get_use_tools()
+            and speech_available()
+            and (voice_requested(plain) or sing_requested(plain))
+            and not original_voice
+            and "speak_text" in self.tool_snapshot.custom_tools
+            and "speak_text" not in self.required_plugins
+        ):
+            self.required_plugins.append("speak_text")
+
         requires_tools = bool(
             model_selector.get_use_tools()
             and (
                 self.required_plugins
+                or "discover_tools" in getattr(self.tool_snapshot, "custom_tools", {})
                 or model_selector.get_resident_plugins()
                 or model_selector.get_web_search()
                 or getattr(self, "format_message_dict", {}).get("rendered_views")
@@ -134,6 +157,12 @@ class LlmPayloadMixin:
             json_schema=False,
             reasoning=False,
             streaming=False,
+        )
+
+        ordinary_pool = self._ordinary_task_pool(
+            plain,
+            getattr(self, "is_superuser", False) is not True
+            and model_selector.get_config_value("ordinary_task_pools", False) is True,
         )
 
         # 视觉任务高于 MoE 与 selected_model：只要本轮有图片，就必须使用 vision_model。
@@ -151,7 +180,9 @@ class LlmPayloadMixin:
             logger.info(f"触发视觉任务，切换至视觉模型: {self.model_info['model']}")
 
         # 纯文本任务，若开启了MoE，则分配对应难度的模型
-        elif model_selector.get_moe():
+        elif use_moe or ordinary_pool is not None:
+            if not use_moe:
+                difficulty = ordinary_pool
             self.model_info = model_selector.get_moe_current_model_for_capabilities(
                 difficulty,
                 required_capabilities,
@@ -167,6 +198,16 @@ class LlmPayloadMixin:
             )
         if not self.model_info:
             return "当前模型池没有可用模型，请联系管理员检查额度与模型配置。"
+        efforts = model_selector.get_config_value("moe_reasoning_efforts", {})
+        if isinstance(efforts, Mapping) and efforts:
+            effort = efforts.get(difficulty if use_moe else "0")
+            if effort not in {"low", "medium", "high", "max"}:
+                return "本档思考强度配置无效，请联系管理员检查 MoE 档位。"
+            self.model_info = deepcopy(self.model_info)
+            self.model_info["extra_payload"] = {
+                **self.model_info.get("extra_payload", {}),
+                "reasoning_effort": effort,
+            }
         await self._prepare_tool_schema_record()
         logger.info(f"模型选择为：{self.model_info['model']}")
         return None
@@ -183,19 +224,22 @@ class LlmPayloadMixin:
 
         if mentions:
             mention_desc = "，".join(
-                f"[at:{i+1}]={json.dumps(m.get('name', '未知用户'), ensure_ascii=False)}，"
-                f"QQ号={m.get('qq')}，真实@码=[CQ:at,qq={m.get('qq')}]" for i, m in enumerate(mentions)
+                f"[at:{i + 1}]={json.dumps(display_mention_name(m.get('name')), ensure_ascii=False)}，"
+                f"QQ号={m.get('qq')}，真实@码=[CQ:at,qq={m.get('qq')}]"
+                for i, m in enumerate(mentions)
             )
             parts.append(f"当前消息额外提到的人：{mention_desc}。")
 
         if reply_user and reply_user.get("name"):
-            parts.append(f"当前用户引用的群友：{json.dumps(reply_user['name'], ensure_ascii=False)}，"
-                         f"QQ号={reply_user.get('qq')}，真实@码=[CQ:at,qq={reply_user.get('qq')}]；旧占位符[at:0]。")
+            parts.append(
+                f"当前用户引用的群友：{json.dumps(display_mention_name(reply_user['name']), ensure_ascii=False)}，"
+                f"QQ号={reply_user.get('qq')}，真实@码=[CQ:at,qq={reply_user.get('qq')}]；旧占位符[at:0]。"
+            )
 
         history_mentions = self.format_message_dict.get("history_mentions") or {}
         if history_mentions:
             history_desc = "，".join(
-                f"[history_at:{token}]={json.dumps(target.get('name') or '群友', ensure_ascii=False)}"
+                f"[history_at:{token}]={json.dumps(display_mention_name(target.get('name')), ensure_ascii=False)}"
                 for token, target in history_mentions.items()
             )
             parts.append(f"同一用户在本群近期真实提及的查询对象：{history_desc}。")
@@ -210,9 +254,7 @@ class LlmPayloadMixin:
                 "仅当用户明确要求回复、@或转告被引用群友时才@引用者，不要把引用者当作当前提问者。"
             )
         else:
-            parts.append(
-                "工具指令及最终回复需要真实@时使用[CQ:at,qq=真实QQ号]，运行时会组装为真实@消息段。"
-            )
+            parts.append("工具指令及最终回复需要真实@时使用[CQ:at,qq=真实QQ号]，运行时会组装为真实@消息段。")
 
         parts.append(
             "QQ号可从当前身份映射或Bot资料查询获得；不要把@1、昵称或玩家UID当QQ号。"
@@ -226,33 +268,34 @@ class LlmPayloadMixin:
             "不能写成昵称加UID，也不能只剩UID，否则会对比错误的玩家。"
         )
         image_sources = self.format_message_dict.get("image_sources") or [
-            {"source": "message", "url": url} for url in self.format_message_dict.get("images") or []]
+            {"source": "message", "url": url} for url in self.format_message_dict.get("images") or []
+        ]
         if image_sources:
-            parts.append("本次消息图片素材（reply=引用图片，current=当前图片）："
-                         + json.dumps(image_sources[:8], ensure_ascii=False, escape_forward_slashes=False)
-                         + "。这些url可以原样传给图片/表情工具，不需要用户再发链接；不要把地址贴进最终回复。")
-        parts.append("需要头像或消息图片时，若提供了bot_api_query，先查get_user_avatar/get_message_images，"
-                     "取得地址后继续调用图片工具。工具确实失败才能说明获取失败。")
+            parts.append(
+                "本次消息图片素材（reply=引用图片，current=当前图片）："
+                + json.dumps(image_sources[:8], ensure_ascii=False, escape_forward_slashes=False)
+                + "。这些url可以原样传给图片/表情工具，不需要用户再发链接；不要把地址贴进最终回复。"
+            )
+        parts.append(
+            "需要头像或消息图片时，若提供了bot_api_query，先查get_user_avatar/get_message_images，"
+            "取得地址后继续调用图片工具。工具确实失败才能说明获取失败。"
+        )
         return "".join(parts)
 
     def _build_payload(self, send_message_list: list) -> tuple[dict, bool]:
         """构建发给大模型的 payload 与工具 schema"""
         if self.messages_handler.current_images:
-            logger.info(
-                f"检测到图片且当前模型为 {self.model_info['model']}，正在构建多模态请求..."
-            )
+            logger.info(f"检测到图片且当前模型为 {self.model_info['model']}，正在构建多模态请求...")
             current_msg = send_message_list[-1]
             vision_content = [{"type": "text", "text": current_msg["content"]}]
             for img_url in self.messages_handler.current_images:
-                vision_content.append(
-                    {"type": "image_url", "image_url": {"url": img_url}}
-                )
+                vision_content.append({"type": "image_url", "image_url": {"url": img_url}})
             send_message_list[-1] = {
                 "role": current_msg["role"],
                 "content": vision_content,
             }
 
-        current_stream_flag = self.model_info.get("stream", False)
+        current_stream_flag = self.model_info.get("stream", True)
         data = {
             "model": self.model_info["model"],
             "messages": send_message_list,
@@ -266,24 +309,18 @@ class LlmPayloadMixin:
         if extra_payload := self.model_info.get("extra_payload"):
             if isinstance(extra_payload, dict):
                 data.update(extra_payload)
-        selected_plugins, model_supports_tools, search_enabled = (
-            self._tool_schema_request_inputs()
-        )
+        selected_plugins, model_supports_tools, search_enabled = self._tool_schema_request_inputs()
         schema_record = getattr(self, "_tool_schema_record", None)
         if schema_record is None:
-            all_plugins_set, tools_schema = (
-                self.tool_snapshot.get_llm_payload_tools(
-                    selected_plugins,
-                    tools_enabled=model_supports_tools,
-                    search_enabled=search_enabled,
-                    is_superuser=self.is_superuser,
-                )
+            all_plugins_set, tools_schema = self.tool_snapshot.get_llm_payload_tools(
+                selected_plugins,
+                tools_enabled=model_supports_tools,
+                search_enabled=search_enabled,
+                is_superuser=self.is_superuser,
             )
         else:
             if not isinstance(schema_record, ToolSchemaRecord):
-                raise ToolSchemaCacheUnavailableError(
-                    "tool schema cache consumer record 类型非法"
-                )
+                raise ToolSchemaCacheUnavailableError("tool schema cache consumer record 类型非法")
             context = self.tool_snapshot.capture_llm_payload_schema_context(
                 selected_plugins,
                 tools_enabled=model_supports_tools,
@@ -291,26 +328,27 @@ class LlmPayloadMixin:
                 is_superuser=self.is_superuser,
             )
             runtime = getattr(self, "agent_runtime", None)
-            if (
-                runtime is not None
-                and context.generation
-                != runtime.coordinator.resources.generation
-            ):
-                raise ToolSchemaCacheUnavailableError(
-                    "tool schema cache materialize generation 漂移"
-                )
+            if runtime is not None and context.generation != runtime.coordinator.resources.generation:
+                raise ToolSchemaCacheUnavailableError("tool schema cache materialize generation 漂移")
             if schema_record.key != context.cache_key:
-                raise ToolSchemaCacheUnavailableError(
-                    "tool schema cache materialize identity 漂移"
-                )
+                raise ToolSchemaCacheUnavailableError("tool schema cache materialize identity 漂移")
             all_plugins_set, tools_schema = schema_record.materialize()
         logger.debug(f"LLM 最终将要注入的插件集合: {all_plugins_set}")
 
         if tools_schema:
             data["tools"] = tools_schema
-            send_message_list[0]["content"] += image_output_hint({
-                item.get("function", {}).get("name", "") for item in tools_schema
-            })
+            if any(item["function"]["name"] == "discover_tools" for item in tools_schema):
+                send_message_list[0]["content"] += (
+                    "遇到缺少工具/函数或多步骤任务缺少下一步工具时，先用discover_tools检索并补齐，"
+                    "查看下一轮工具schema后继续任务；未经检索不要直接宣称工具不可用。"
+                    "检索不代表执行，权限与修改确认不变，结果未知的副作用只核对状态。"
+                )
+            from .speech_tools import speech_prompt
+
+            send_message_list[0]["content"] += speech_prompt({item.get("function", {}).get("name", "") for item in tools_schema})
+            send_message_list[0]["content"] += image_output_hint(
+                {item.get("function", {}).get("name", "") for item in tools_schema}
+            )
 
             mention_hint = self._build_tool_mention_hint()
 
@@ -331,18 +369,20 @@ class LlmPayloadMixin:
             else:
                 progress_rule = (
                     "1. 调用工具时不要输出执行前话术，直接在同一次回复中发起 tool_calls；"
-                    "固定进度提示由运行时按配置发送，工具结果和最终总结仍须正常输出。"
+                    "插件指令由运行时独立发送完整的‘七七正在帮你投递：/指令 参数’，"
+                    "贴表情不替代此提示；其他工具进度按配置发送，工具结果和最终总结仍须正常输出。"
                 )
             from .delivery_policy import POLICY_PROMPT, single_delivery_enabled
-            multi_rule = (POLICY_PROMPT if single_delivery_enabled() else
-                "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
+
+            multi_rule = (
+                POLICY_PROMPT
+                if single_delivery_enabled()
+                else "2. 如果用户的请求包含多个步骤逻辑，你必须在获取到前置工具的结果后，"
                 "自动且连续地调用下一个工具，直至彻底完成要求。"
-                "可以跨插件调用多个功能；互不依赖的查询可以在同一轮提出，后续参数应基于前置结果。")
+                "可以跨插件调用多个功能；互不依赖的查询可以在同一轮提出，后续参数应基于前置结果。"
+            )
             send_message_list[0]["content"] += (
-                "。特别注意："
-                + progress_rule
-                + multi_rule
-                + "3. 造梦卡片的数字、角色和装备信息必须以原始文字及结构化字段为准。"
+                "。特别注意：" + progress_rule + multi_rule + "3. 造梦卡片的数字、角色和装备信息必须以原始文字及结构化字段为准。"
                 "存在render_id且text_truncated=true或所需字段未展示时，必须用read_rendered_view"
                 "按pointer读取原卡片文字、字段及位置；分页未读全应继续读取，不要凭图片猜数字。"
                 "原始数据过期或缺少时重新查询对应功能，不能编造未读取的值。"
@@ -357,13 +397,13 @@ class LlmPayloadMixin:
             if mention_hint:
                 send_message_list[0]["content"] += " 4. " + mention_hint
 
-            current_stream_flag = False
-            logger.debug("检测到需要调用工具，已自动将本次请求切换为非流式")
+            logger.debug("工具请求沿用模型流式能力，完整校验后执行工具")
             logger.debug(f"实际发送给大模型的 tools_schema: {tools_schema}")
         data["stream"] = current_stream_flag
         if current_stream_flag:
             data["stream_options"] = {"include_usage": True}
         from .usage_ledger import apply_glm_policy
+
         apply_glm_policy(self.model_info, data)
         return data, current_stream_flag
 
@@ -380,23 +420,19 @@ class LlmPayloadMixin:
 
             if token.startswith("[history_at:"):
                 target = (self.format_message_dict.get("history_mentions") or {}).get(match.group(2), {})
-                return "@" + (target.get("name") or "历史查询对象")
+                return "@" + display_mention_name(target.get("name"))
 
             if token.startswith("[at:"):
                 try:
                     idx = int(match.group(1))
                     if idx == 0:
                         name = reply_user.get("name") or reply_user.get("qq")
-                        return f"@{name}" if name else "@回复对象"
+                        return f"@{display_mention_name(name)}" if name else "@回复对象"
 
                     mention_idx = idx - 1
                     if 0 <= mention_idx < len(mentions):
-                        name = (
-                            mentions[mention_idx].get("name")
-                            or mentions[mention_idx].get("qq")
-                            or f"目标{idx}"
-                        )
-                        return f"@{name}"
+                        name = mentions[mention_idx].get("name") or mentions[mention_idx].get("qq") or f"目标{idx}"
+                        return f"@{display_mention_name(name)}"
                 except Exception:
                     pass
                 return "@提及对象"

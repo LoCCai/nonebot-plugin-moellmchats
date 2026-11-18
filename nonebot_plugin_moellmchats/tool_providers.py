@@ -669,17 +669,20 @@ class ToolTrustPolicy:
         if expected_compatibility and self.spec.effect is not ToolEffect.MUTATING:
             raise ToolTrustPolicyError("NoneBot compatibility tool 必须保守标记为 mutating")
         direct = self.spec.confirmation_mode is ToolConfirmationMode.TRUSTED_LOW_RISK_DIRECT
+        from .builtin_tools import is_trusted_speech_tool_spec
+
+        package_speech = self.source is ToolSource.REGISTERED and is_trusted_speech_tool_spec(self.spec)
         capability = self.spec.policy.effective_v2 if self.spec.policy is not None else None
         if capability is not None and (capability.bot_read or capability.bot_send or capability.bot_manage):
             from .builtin_tools import is_trusted_protocol_tool_spec
 
-            if self.source is not ToolSource.BUILTIN or not is_trusted_protocol_tool_spec(self.spec):
-                raise ToolTrustPolicyError("只有包内可信协议 Builtin 可声明 Bot capability")
+            if not package_speech and (self.source is not ToolSource.BUILTIN or not is_trusted_protocol_tool_spec(self.spec)):
+                raise ToolTrustPolicyError("只有包内可信协议 Builtin 或固定语音工具可声明 Bot capability")
         if direct:
             from .builtin_tools import is_trusted_protocol_tool_spec
 
-            if self.source is not ToolSource.BUILTIN or not is_trusted_protocol_tool_spec(self.spec):
-                raise ToolTrustPolicyError("只有包内可信协议 Builtin 可声明低风险免确认")
+            if not package_speech and (self.source is not ToolSource.BUILTIN or not is_trusted_protocol_tool_spec(self.spec)):
+                raise ToolTrustPolicyError("只有包内可信协议 Builtin 或固定语音工具可声明低风险免确认")
         expected_confirmation = self.spec.effect is ToolEffect.MUTATING and not expected_compatibility and not direct
         if self.confirmation_required is not expected_confirmation:
             raise ToolTrustPolicyError("trust policy confirmation policy 不一致")

@@ -35,9 +35,12 @@ class _StreamResponse:
     async def lines(self):
         for chunk in self.chunks:
             self.consumed += 1
-            yield b"data: " + json.dumps({"choices": [{"delta": {"content": chunk}}]}).encode()
-        yield b'data: {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 8}}'
-        yield b"data: [DONE]"
+            yield b"data: " + json.dumps({"choices": [{"delta": {"content": chunk}}]}).encode() + b"\n"
+            yield b"\n"
+        yield b'data: {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 8}}\n'
+        yield b"\n"
+        yield b"data: [DONE]\n"
+        yield b"\n"
 
     async def __aenter__(self):
         return self
@@ -58,18 +61,25 @@ async def _stream(monkeypatch, chunks, *, max_segments=5, is_segment=True, tempe
     monkeypatch.setattr(module.asyncio, "sleep", pacing)
     response = _StreamResponse(chunks)
     result = await api.stream_llm_chat(
-        SimpleNamespace(post=lambda *args, **kwargs: response), "https://model.invalid",
-        {}, {}, None, is_segment=is_segment,
+        SimpleNamespace(post=lambda *args, **kwargs: response),
+        "https://model.invalid",
+        {},
+        {},
+        None,
+        is_segment=is_segment,
     )
     sent = [call.args[0] for call in api.send_emotion_message.await_args_list]
     return result, sent, usage, pacing, response
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", [
-    "方向对照：\n|方程|方向|\n|---|---|\n|$r=a(1+\\sin\\theta)$|朝下|\n面积 $A=3\\pi/2$。",
-    "公式：\\[A=3\\pi/2\\]。\n\n" + "说明。\n" * 400,
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "方向对照：\n|方程|方向|\n|---|---|\n|$r=a(1+\\sin\\theta)$|朝下|\n面积 $A=3\\pi/2$。",
+        "公式：\\[A=3\\pi/2\\]。\n\n" + "说明。\n" * 400,
+    ],
+)
 async def test_stream_keeps_complete_formulas_and_tables_for_rendering(monkeypatch, text):
     result, sent, _, _, response = await _stream(monkeypatch, list(text), render_buffer=True)
     assert result[1] == text
@@ -165,9 +175,7 @@ def test_sse_payload_extracts_only_json_objects() -> None:
     assert decode(b'data: {"choices": []}') == {"choices": []}
     assert decode(b'data:{"choices": []}') == {"choices": []}
     assert decode(b'  data: {"a": 1}  ') == {"a": 1}
-    assert decode(b'{"usage": {"prompt_tokens": 1}}') == {
-        "usage": {"prompt_tokens": 1}
-    }
+    assert decode(b'{"usage": {"prompt_tokens": 1}}') == {"usage": {"prompt_tokens": 1}}
 
 
 def test_bad_sse_line_log_never_contains_payload(
@@ -216,9 +224,7 @@ async def test_http_400_policy_detection_uses_only_structured_code_or_type() -> 
             )
         )
     )
-    invalid = await api._check_400_error(
-        _ErrorResponse("not-json audit safety content_filter")
-    )
+    invalid = await api._check_400_error(_ErrorResponse("not-json audit safety content_filter"))
 
     assert ordinary is not None
     assert "API请求被拒绝" in ordinary

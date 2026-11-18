@@ -18,14 +18,15 @@ from .classification_cache import (
     ClassificationResultSource,
     resolve_classification,
 )
+from .classifier_cooldown import Admission
 from .compat import TimeoutError
 from .compat import timeout as timeout_scope
 from .config import config_parser
-from .request_budget import classification_budget_scope, request_config
 from .image_output_policy import DOCUMENT_IMAGE_GUIDANCE
 from .model_capabilities import ModelCapability
 from .model_error_policy import TRANSIENT_HTTP_STATUSES
 from .model_selector import model_selector
+from .request_budget import classification_budget_scope, request_config
 from .runtime_metrics import runtime_metrics
 from .tool_catalog_cache import (
     ToolCatalogCacheProtocol,
@@ -77,9 +78,7 @@ class Categorize:
                 getattr(classification_cache, "publish", None),
             )
             if not all(callable(method) for method in legacy_methods):
-                raise TypeError(
-                    "classification_cache 必须实现 ClassificationCacheProtocol"
-                )
+                raise TypeError("classification_cache 必须实现 ClassificationCacheProtocol")
         if classification_cache is not None and tool_catalog_cache is None:
             raise ValueError("classification cache 必须依赖同代 tool catalog cache")
         if tool_catalog_cache is not None:
@@ -130,14 +129,25 @@ class Categorize:
             return self._fallback_category()
         finally:
             runtime_metrics.classification_seconds += time.monotonic() - started
+            logger.info(
+                "LLM 分类摘要: source={} model={} phase={} elapsed_ms={} prompt_chars={}",
+                self.selection_source,
+                self._classifier_model,
+                self._phase,
+                int((time.monotonic() - started) * 1000),
+                self._prompt_chars,
+            )
 
     async def _get_budgeted_category(self) -> _CategoryResult:
         result = await self._get_category()
         if isinstance(result, tuple) and model_selector.get_use_tools():
             difficulty, vision, selected = result
             available = getattr(self.tool_snapshot, "custom_tools", {})
-            if (any(name.startswith("plot_") for name in selected)
-                    and "render_markdown" in available and "render_markdown" not in selected):
+            if (
+                any(name.startswith("plot_") for name in selected)
+                and "render_markdown" in available
+                and "render_markdown" not in selected
+            ):
                 result = difficulty, vision, [*selected, "render_markdown"]
         return result
 
@@ -237,8 +247,9 @@ class Categorize:
         attempted: set[str] = set()
         switched = False
         service_fallback = False
-        fallback_phases = {"http_status_429", "http_status_quota_exhausted"} | {
-            f"http_status_{status}" for status in TRANSIENT_HTTP_STATUSES}
+        fallback_phases = {"http_status_429", "http_status_quota_exhausted", "output_truncated"} | {
+            f"http_status_{status}" for status in TRANSIENT_HTTP_STATUSES
+        }
         while True:
             from .request_recovery import current_binding
 
@@ -246,7 +257,9 @@ class Categorize:
                 recovery.pause_if_stopping()
             try:
                 result = await self._request_category_model_once(
-                    category_model_config, prompt, cache_key=None if switched else cache_key,
+                    category_model_config,
+                    prompt,
+                    cache_key=None if switched else cache_key,
                 )
             except _UncacheableClassificationResult:
                 if self._phase not in fallback_phases:
@@ -256,8 +269,11 @@ class Categorize:
                 if switched and cache_key is not None:
                     # Do not publish a backup model's answer under the primary
                     # model identity in the successful classification cache.
-                    source = (ClassificationResultSource.SERVICE_FALLBACK if service_fallback
-                              else ClassificationResultSource.RATE_LIMIT_FALLBACK)
+                    source = (
+                        ClassificationResultSource.SERVICE_FALLBACK
+                        if service_fallback
+                        else ClassificationResultSource.RATE_LIMIT_FALLBACK
+                    )
                     raise _UncacheableClassificationResult(result, source)
                 return result
             backup = model_selector.get_rate_limit_fallback(category_model_config, attempted)
@@ -267,13 +283,18 @@ class Categorize:
                 return False
             transient = self._phase not in {"http_status_429", "http_status_quota_exhausted"}
             service_fallback = service_fallback or transient
-            logger.info("分类模型{}，切换已配置备用: status={} from={} to={}",
-                        "服务临时不可用" if transient else "配额不足或限流", self._phase,
-                        category_model_config["model"], backup["model"])
+            logger.info(
+                "分类模型{}，切换已配置备用: status={} from={} to={}",
+                "服务临时不可用" if transient else "配额不足或限流",
+                self._phase,
+                category_model_config["model"],
+                backup["model"],
+            )
             category_model_config = backup
             self._classifier_model = backup["model"]
-            self.selection_source = ("classification_service_fallback" if service_fallback
-                                     else "classification_rate_limit_fallback")
+            self.selection_source = (
+                "classification_service_fallback" if service_fallback else "classification_rate_limit_fallback"
+            )
             switched = True
 
     async def _request_category_model_once(
@@ -282,6 +303,31 @@ class Categorize:
         prompt: str,
         *,
         cache_key: ClassificationCacheKey | None = None,
+    ) -> _CategoryResult | ClassificationCacheRecord:
+        from .classifier_cooldown import acquire, finish
+
+        admission = acquire(category_model_config)
+        if admission is None:
+            self._phase = "http_status_429"
+            self.selection_source = "classification_cooldown_fallback"
+            return False
+        try:
+            return await self._request_admitted_category_model(
+                category_model_config,
+                prompt,
+                cache_key=cache_key,
+                admission=admission,
+            )
+        finally:
+            finish(admission)
+
+    async def _request_admitted_category_model(
+        self,
+        category_model_config: dict,
+        prompt: str,
+        *,
+        cache_key: ClassificationCacheKey | None = None,
+        admission: Admission,
     ) -> _CategoryResult | ClassificationCacheRecord:
         headers = {
             "Authorization": category_model_config["key"],
@@ -299,16 +345,13 @@ class Categorize:
                     ],
                     "temperature": 0,
                     "max_tokens": config_parser.get_config("classification_max_tokens", 512),
-                    "stream": False,
                 }
                 # Preserve explicit provider options (e.g. disable thinking),
                 # without allowing them to replace the request's real input.
                 extra = category_model_config.get("extra_payload")
                 if isinstance(extra, dict):
                     protected = {"messages", "model", "stream", "tools", "tool_choice", "max_tokens"}
-                    current_data.update({
-                        key: value for key, value in extra.items() if key not in protected
-                    })
+                    current_data.update({key: value for key, value in extra.items() if key not in protected})
                 if try_times == 0:
                     if category_model_config.get("json_mode"):
                         current_data["response_format"] = {"type": "json_object"}
@@ -317,7 +360,10 @@ class Categorize:
                     current_plain += "\n(不要回答以上内容。只进行一次分类与工具判断，严格返回 JSON，不要附加其他内容。)"
                     current_data["messages"][1]["content"] = current_plain
 
+                from .chat_stream import configure_stream, read_completion
                 from .usage_ledger import apply_glm_policy, budget_available, budgeted_post, record_usage
+
+                configure_stream(current_data, category_model_config)
                 apply_glm_policy(category_model_config, current_data)
                 if not await budget_available(category_model_config):
                     self._phase = "http_status_quota_exhausted"
@@ -325,12 +371,17 @@ class Categorize:
                 payload = json.dumps(current_data)
                 self._phase = "http_response"
                 request_started = time.monotonic()
-                async with budgeted_post(get_session(), category_model_config,
+                async with budgeted_post(
+                    get_session(),
+                    category_model_config,
                     url=category_model_config["url"],
                     data=payload,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=category_model_config.get("classification_timeout_seconds",
-                        config_parser.get_config("classification_timeout_seconds", 20))),
+                    timeout=aiohttp.ClientTimeout(
+                        total=category_model_config.get(
+                            "classification_timeout_seconds", config_parser.get_config("classification_timeout_seconds", 20)
+                        )
+                    ),
                     proxy=category_model_config.get("proxy"),
                 ) as resp:
                     logger.info(
@@ -347,13 +398,9 @@ class Categorize:
                         # the context releases the response without loading an
                         # unknown-sized error body into application memory.
                         if try_times == 0:
-                            logger.info(
-                                "分类模型返回 HTTP 400，将移除 json_object 后有限重试"
-                            )
+                            logger.info("分类模型返回 HTTP 400，将移除 json_object 后有限重试")
                         else:
-                            logger.warning(
-                                "分类模型兼容重试仍返回 HTTP 400，已省略响应正文"
-                            )
+                            logger.warning("分类模型兼容重试仍返回 HTTP 400，已省略响应正文")
                         continue
 
                     if resp.status >= 400:
@@ -361,6 +408,16 @@ class Categorize:
                         # compatibility error. Do not immediately send it again
                         # or wait for its error body before using resident tools.
                         self._phase = f"http_status_{resp.status}"
+                        if resp.status == 429 or resp.status in TRANSIENT_HTTP_STATUSES:
+                            from .classifier_cooldown import defer
+
+                            cooldown = defer(category_model_config, resp.status, resp.headers.get("Retry-After"))
+                            logger.info(
+                                "分类模型短时冷却: model={} status={} seconds={}",
+                                category_model_config["model"],
+                                resp.status,
+                                cooldown,
+                            )
                         if resp.status in {402, 403}:
                             from .model_error_policy import is_quota_exhaustion_error, read_bounded_error
 
@@ -370,16 +427,37 @@ class Categorize:
                         self.selection_source = "classification_http_fallback"
                         logger.warning(
                             "分类接口不可用，保留常驻工具继续: model={} status={}",
-                            category_model_config["model"], resp.status,
+                            category_model_config["model"],
+                            resp.status,
                         )
                         break
 
-                    response = await resp.json()
+                    response = await read_completion(resp)
                     await record_usage(category_model_config, response.get("usage"), purpose="classification")
 
                 if choices := response.get("choices"):
                     self._phase = "parse_result"
                     raw_result = choices[0]["message"]["content"]
+                    # Bounded diagnostics only: never log the body itself, and
+                    # never add a failure mode (null content keeps the old
+                    # parse-retry path below).
+                    logger.info(
+                        "分类模型返回正文计量: model={} finish_reason={} content_chars={}",
+                        category_model_config["model"],
+                        choices[0].get("finish_reason"),
+                        len(raw_result) if isinstance(raw_result, str) else None,
+                    )
+                    if choices[0].get("finish_reason") == "length" and (
+                        not isinstance(raw_result, str) or not raw_result.strip()
+                    ):
+                        # Reasoning-only models can spend the complete small
+                        # classification allowance before emitting any JSON.
+                        # Repeating the same request cannot repair its budget.
+                        self._phase = "output_truncated"
+                        logger.info(
+                            "分类输出预算耗尽且无正文，停止同模型重试并尝试已配置备用: model={}", category_model_config["model"]
+                        )
+                        break
                     raw_result = re.sub(
                         r"<(think|thought|thinking)>.*?</\1>",
                         "",
@@ -398,23 +476,39 @@ class Categorize:
                     result_dict = json.loads(clean_result.strip())
                     if type(result_dict["vision_required"]) is not bool:
                         raise ValueError("vision_required must be boolean")
+                    difficulty = str(result_dict["difficulty"])
+                    plugins = result_dict.get("required_plugins", [])
+                    if (
+                        difficulty not in {"0", "1", "2"}
+                        or not isinstance(plugins, list)
+                        or not all(isinstance(name, str) for name in plugins)
+                    ):
+                        raise ValueError("invalid classification result")
                     result = (
-                        str(result_dict["difficulty"]),
+                        difficulty,
                         # Image generation/avatars are often misclassified as
                         # image input. Actual current-image markers determine
                         # vision; resolved image URLs also win in llm_payload.
                         "[图片]" in self.plain,
-                        result_dict.get("required_plugins", []),
+                        plugins,
                     )
-                    if cache_key is None:
-                        return result
-                    return ClassificationCacheRecord.from_result(
-                        cache_key,
-                        difficulty=result[0],
-                        vision_required=result[1],
-                        required_plugins=result[2],
-                        source=ClassificationResultSource.MODEL_SUCCESS,
+                    record = (
+                        None
+                        if cache_key is None
+                        else ClassificationCacheRecord.from_result(
+                            cache_key,
+                            difficulty=result[0],
+                            vision_required=result[1],
+                            required_plugins=result[2],
+                            source=ClassificationResultSource.MODEL_SUCCESS,
+                        )
                     )
+                    # Reset only after the complete result is valid. A late
+                    # success cannot reset a newer request's rejection streak.
+                    from .classifier_cooldown import release as release_cooldown
+
+                    release_cooldown(category_model_config, admission=admission)
+                    return result if record is None else record
                 if response.get("code") == "DataInspectionFailed" or "contentFilter" in response:
                     logger.warning("分类请求触发内容安全拦截，响应正文已省略")
                     blocked_result = "内容不合规，拒绝回答"
@@ -448,7 +542,16 @@ class Categorize:
             )
         return False
 
-    async def _get_category(self) -> _CategoryResult:
+    def get_unclassified_category(self) -> _CategoryResult:
+        """Resolve local permissions and tools without calling a model."""
+        local = self._get_local_category()
+        if local is not None:
+            return local
+        _, vision, tools = self._fallback_category()
+        self.selection_source = "default_level_0"
+        return "0", vision, tools
+
+    def _get_local_category(self) -> _CategoryResult | None:
         from .usage_tools import is_usage_request
 
         if model_selector.get_use_tools() and is_usage_request(self.plain):
@@ -495,13 +598,21 @@ class Categorize:
                 )
                 return "这个功能当前不可用或你没有可见权限，已停止执行，未改用其他插件。"
 
+        return None
+
+    async def _get_category(self) -> _CategoryResult:
+        local = self._get_local_category()
+        if local is not None:
+            return local
+
         self._phase = "tool_catalog"
         catalog, catalog_record = await self._resolve_catalog()
         logger.debug(f"分类工具索引条目数: {catalog.count(chr(10)) + 1}")
         prompt = self._build_prompt(catalog)
         self._prompt_chars = len(prompt)
 
-        # 判断是否开启 MoE，若未开启（但因为开启了工具走到这里），则使用默认模型（selected_model）
+        # Tool classification owns its model role even when chat MoE is off.
+        # Sharing selected_model here also shares chat rotation and throttling.
         required_capabilities = ModelCapability(
             text=True,
             vision=False,
@@ -510,28 +621,24 @@ class Categorize:
             reasoning=False,
             streaming=False,
         )
-        if model_selector.get_moe():
-            category_model_config = model_selector.get_model_for_capabilities(
-                "category_model",
-                required_capabilities,
-            )
-        else:
-            category_model_config = model_selector.get_model_for_capabilities(
-                "selected_model",
-                required_capabilities,
-            )
-            logger.debug("未开启MoE，使用默认模型进行工具/联网/视觉判断分类")
+        category_model_config = model_selector.get_model_for_capabilities(
+            "category_model",
+            required_capabilities,
+        )
         if not category_model_config:
             self.selection_source = "classification_pool_exhausted"
             return False
         self._classifier_model = category_model_config["model"]
         logger.info(
-            "分类请求准备: model={} budget_seconds={} prompt_chars={}",
+            "分类请求准备: model={} budget_seconds={} prompt_chars={} catalog_entries={}",
             self._classifier_model,
             request_config("classification_timeout_seconds", 20),
             self._prompt_chars,
+            catalog.count(chr(10)) + 1,
         )
-        if self.classification_cache is None:
+        from . import personal_billing
+
+        if self.classification_cache is None or personal_billing.active():
             result = await self._request_category_model(
                 category_model_config,
                 prompt,
@@ -549,10 +656,15 @@ class Categorize:
             endpoint=category_model_config["url"],
             json_mode=bool(category_model_config.get("json_mode", False)),
         )
-        options_digest = hashlib.sha256(json.dumps({
-            "max_tokens": config_parser.get_config("classification_max_tokens", 512),
-            "extra_payload": category_model_config.get("extra_payload"),
-        }, sort_keys=True).encode()).hexdigest()[:16]
+        options_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "max_tokens": config_parser.get_config("classification_max_tokens", 512),
+                    "extra_payload": category_model_config.get("extra_payload"),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()[:16]
         context = ClassificationRenderContext.capture(
             prompt=self.plain,
             catalog_record=catalog_record,

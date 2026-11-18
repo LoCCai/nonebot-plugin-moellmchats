@@ -28,11 +28,7 @@ def ensure_cancellable_mutating_handler(
     spec: Any,
     func: Any,
 ) -> None:
-    if (
-        spec is not None
-        and spec.effect == ToolEffect.MUTATING
-        and not inspect.iscoroutinefunction(func)
-    ):
+    if spec is not None and spec.effect == ToolEffect.MUTATING and not inspect.iscoroutinefunction(func):
         # Cancelling asyncio.to_thread() only abandons the await; the worker
         # thread continues and may commit a side effect after the caller has
         # observed a timeout. Refuse this unsafe contract before it starts.
@@ -44,10 +40,7 @@ def ensure_cancellable_mutating_handler(
 
 
 def is_tool_superuser(bot: Any, event: Any) -> bool:
-    superusers = {
-        str(user_id)
-        for user_id in getattr(getattr(bot, "config", None), "superusers", set())
-    }
+    superusers = {str(user_id) for user_id in getattr(getattr(bot, "config", None), "superusers", set())}
     return str(getattr(event, "user_id", "")) in superusers
 
 
@@ -69,9 +62,7 @@ def _structured_result_fields(
         if key in value:
             item = value[key]
             if not isinstance(item, str):
-                raise ToolExecutionError(
-                    f"工具结构化结果 {key} 必须是字符串"
-                )
+                raise ToolExecutionError(f"工具结构化结果 {key} 必须是字符串")
             text_values.append(item)
     text = next((item for item in text_values if item), "")
 
@@ -80,15 +71,9 @@ def _structured_result_fields(
         if key in value:
             item = value[key]
             if not isinstance(item, (list, tuple)):
-                raise ToolExecutionError(
-                    f"工具结构化结果 {key} 必须是字符串数组"
-                )
-            if not all(
-                isinstance(image, str) and image.strip() for image in item
-            ):
-                raise ToolExecutionError(
-                    f"工具结构化结果 {key} 只能包含非空字符串"
-                )
+                raise ToolExecutionError(f"工具结构化结果 {key} 必须是字符串数组")
+            if not all(isinstance(image, str) and image.strip() for image in item):
+                raise ToolExecutionError(f"工具结构化结果 {key} 只能包含非空字符串")
             image_values.append(item)
     images = next((item for item in image_values if item), ())
     return (
@@ -108,23 +93,13 @@ def _normalize_result(value: Any, *, spec: Any) -> ToolResult:
         else config_parser.get_config("max_tool_result_chars", 6_000)
     )
     image_limit = config_parser.get_config("max_tool_images", 4)
-    if (
-        not isinstance(result_limit, int)
-        or isinstance(result_limit, bool)
-        or result_limit <= 0
-    ):
+    if not isinstance(result_limit, int) or isinstance(result_limit, bool) or result_limit <= 0:
         raise ToolExecutionError("工具结果字符上限配置无效")
-    if (
-        not isinstance(image_limit, int)
-        or isinstance(image_limit, bool)
-        or image_limit <= 0
-    ):
+    if not isinstance(image_limit, int) or isinstance(image_limit, bool) or image_limit <= 0:
         raise ToolExecutionError("工具结果图片上限配置无效")
 
     if isinstance(value, (ToolResult, dict)):
-        text, images, files, structured, citations, metadata = (
-            _structured_result_fields(value)
-        )
+        text, images, files, structured, citations, metadata = _structured_result_fields(value)
         if not isinstance(text, str):
             raise ToolExecutionError("工具结构化结果 text 必须是字符串")
         if not isinstance(images, (list, tuple)):
@@ -174,6 +149,8 @@ async def _prepare_custom_tool_call(
         raise ToolExecutionError(f"工具 {tool_name} handler 不可调用")
     spec = tool_entry.get("tool_spec")
     if spec is not None:
+        from .builtin_tools import is_trusted_speech_tool_spec
+
         if spec.permission == "superuser" and not is_tool_superuser(bot, event):
             raise ToolExecutionError(f"工具 {tool_name} 仅允许超级用户执行")
         ensure_cancellable_mutating_handler(tool_name, spec, func)
@@ -181,6 +158,7 @@ async def _prepare_custom_tool_call(
             spec.effect == ToolEffect.MUTATING
             and not confirmed
             and not allow_pending_mutating
+            and not (is_trusted_speech_tool_spec(spec) and func is spec.handler)
         ):
             raise ToolExecutionError(f"工具 {tool_name} 尚未完成二阶段确认")
 
@@ -189,10 +167,7 @@ async def _prepare_custom_tool_call(
         sig = inspect.signature(func)
     except (TypeError, ValueError) as error:
         raise ToolExecutionError(f"工具 {tool_name} handler 参数签名不可检查") from error
-    if not any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in sig.parameters.values()
-    ):
+    if not any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in sig.parameters.values()):
         unexpected = [key for key in call_arguments if key not in sig.parameters]
         if unexpected:
             available = [
@@ -205,10 +180,7 @@ async def _prepare_custom_tool_call(
                     inspect.Parameter.KEYWORD_ONLY,
                 )
             ]
-            raise ToolExecutionError(
-                f"{tool_name} 不支持参数 {', '.join(unexpected)}；"
-                f"可用参数：{', '.join(available) or '无'}"
-            )
+            raise ToolExecutionError(f"{tool_name} 不支持参数 {', '.join(unexpected)}；可用参数：{', '.join(available) or '无'}")
 
     # Validate only model-controlled values. Injecting trusted runtime objects before
     # URL validation would unnecessarily traverse Bot/Event internals.
@@ -286,7 +258,5 @@ async def execute_custom_tool(
             )
     except TimeoutError:
         runtime_metrics.tool_timeouts += 1
-        raise ToolExecutionTimeoutError(
-            f"工具执行超过 {timeout} 秒预算"
-        ) from None
+        raise ToolExecutionTimeoutError(f"工具执行超过 {timeout} 秒预算") from None
     return _normalize_result(result, spec=spec)

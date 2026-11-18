@@ -13,8 +13,8 @@ try:
 except ImportError:
     import tomli as tomllib
 from collections import defaultdict
-import random
 import os
+import random
 
 import aiohttp
 from nonebot.log import logger
@@ -29,12 +29,51 @@ from .private_files import (
 
 config_path: Path = store.get_plugin_config_dir()
 
+
+def parse_api_keys(value: Any) -> list[str]:
+    """Accept host strings, JSON arrays and native sequences without logging secrets."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return []
+        if value.startswith("["):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                raise ValueError("API Key 列表须为有效 JSON 数组") from None
+        else:
+            value = value.replace("\r", "\n").replace(",", "\n").splitlines()
+    if not isinstance(value, (list, tuple)) or len(value) > 128:
+        raise ValueError("API Key 须为字符串或最多128项的字符串列表")
+    keys = []
+    for key in value:
+        if not isinstance(key, str):
+            raise ValueError("API Key 列表只能包含字符串")
+        key = key.strip()
+        if key.lower().startswith("bearer "):
+            key = key[7:].strip()
+        if not key:
+            continue
+        if any(char.isspace() for char in key):
+            raise ValueError("单个 API Key 不能包含空白字符")
+        if key not in keys:
+            keys.append(key)
+    return keys
+
+
 MEDIA_ROLES = {
-    "image_model": ("绘图", "image"), "multimodal_model": ("多模态", "chat"),
-    "chat_summary_model": ("群聊总结", "chat"), "embedding_model": ("文本向量", "embedding"),
+    "image_model": ("绘图", "image"),
+    "multimodal_model": ("多模态", "chat"),
+    "image_detailed_model": ("精细绘图", "image"),
+    "chat_summary_model": ("群聊总结", "chat"),
+    "embedding_model": ("文本向量", "embedding"),
     "multimodal_embedding_model": ("多模态向量", "multimodal_embedding"),
-    "transcription_model": ("语音识别", "transcription"), "speech_model": ("语音合成", "speech"),
-    "video_model": ("视频生成", "video"), "model_3d": ("三维生成", "3d"),
+    "transcription_model": ("语音识别", "transcription"),
+    "speech_model": ("语音合成", "speech"),
+    "video_model": ("视频生成", "video"),
+    "model_3d": ("三维生成", "3d"),
     "music_model": ("音乐生成", "music"),
 }
 
@@ -111,11 +150,7 @@ class ModelSelector(ModelPoolMixin):
         from .runtime_snapshot import runtime_snapshots
 
         snapshot = runtime_snapshots.active()
-        if (
-            globals().get("model_selector") is self
-            and snapshot is not None
-            and snapshot.model_state is not None
-        ):
+        if globals().get("model_selector") is self and snapshot is not None and snapshot.model_state is not None:
             return snapshot.model_state
         return self.capture_state()
 
@@ -132,8 +167,7 @@ class ModelSelector(ModelPoolMixin):
         providers = provider_data.get("providers", {})
         global_default = provider_data.get("global_default", {})
         if not isinstance(providers, dict) or not all(
-            isinstance(name, str) and isinstance(info, dict)
-            for name, info in providers.items()
+            isinstance(name, str) and isinstance(info, dict) for name, info in providers.items()
         ):
             raise ValueError("providers.toml: providers 必须是配置表")
         if not isinstance(global_default, dict):
@@ -174,11 +208,7 @@ class ModelSelector(ModelPoolMixin):
         base_url = base_url.rstrip("/")
         if base_url.endswith("/chat/completions"):
             # 如果配置的是完整路径，且需要请求 /models，则进行替换
-            return (
-                base_url
-                if endpoint == "/chat/completions"
-                else base_url.replace("/chat/completions", endpoint)
-            )
+            return base_url if endpoint == "/chat/completions" else base_url.replace("/chat/completions", endpoint)
         return base_url + endpoint
 
     def _normalize_key(self, key: str) -> str:
@@ -191,32 +221,38 @@ class ModelSelector(ModelPoolMixin):
         """Resolve a host secret by name; never persist the resolved value."""
         if name := info.get("api_key_config"):
             from nonebot import get_driver
+
             if not isinstance(name, str) or not name.isidentifier():
                 raise ValueError("api_key_config 必须是配置项名称")
             value = getattr(get_driver().config, name.lower(), None)
-            return value or os.environ.get(name.upper(), "")
-        return info.get("api_key", "")
+            value = value or os.environ.get(name.upper(), "")
+        else:
+            value = info.get("api_key", "")
+        keys = parse_api_keys(value)
+        if isinstance(value, str) and not value.lstrip().startswith("[") and len(keys) <= 1:
+            return keys[0] if keys else ""
+        return keys
+
+    def _model_keys(self, model_data: Mapping) -> list[str]:
+        pool = []
+        for field in ("keys", "key"):
+            for key in parse_api_keys(model_data.get(field)):
+                normalized = self._normalize_key(key)
+                if normalized not in pool:
+                    pool.append(normalized)
+        return pool
 
     def _get_random_key(self, model_data: dict) -> str:
-        """Key 提取与随机方法，保证只返回字符串"""
-        pool = []
-        # 1. 提取新版规范的 keys 列表
-        if "keys" in model_data and isinstance(model_data["keys"], list):
-            pool.extend(model_data["keys"])
-        # 2. 提取旧版的 key 字段（兼容老 JSON 中误写的 list 或 单个字符串）
-        if "key" in model_data:
-            raw_key = model_data["key"]
-            if isinstance(raw_key, list):
-                pool.extend(raw_key)
-            elif isinstance(raw_key, str) and raw_key.strip():
-                pool.append(raw_key)
-        # 3. 过滤空值并去重
-        valid_keys = list({key for key in pool if key})
+        """兼容旧方法名；多个 Key 轮询分流，始终只返回一个字符串。"""
+        valid_keys = self._model_keys(model_data)
         if not valid_keys:
             return ""
-        # 随机抽取并严格确保拥有 Bearer 前缀
-        chosen_key = random.choice(valid_keys)
-        return self._normalize_key(chosen_key)
+        if not hasattr(self, "_key_rotation"):
+            self._key_rotation = {}
+        pool = tuple(valid_keys)
+        index = self._key_rotation.get(pool, 0) % len(pool)
+        self._key_rotation[pool] = (index + 1) % len(pool)
+        return valid_keys[index]
 
     def load_providers(self, *, strict: bool = False):
         """初始化并读取 providers.toml，如果不存在则自动生成模板"""
@@ -224,7 +260,7 @@ class ModelSelector(ModelPoolMixin):
         if not self.providers_file.exists():
             template = """# AI服务商配置文件
 # base_url: 基础API地址（直接写Base URL即可，程序会自动补全 /chat/completions 及 /models）
-# api_key: API 密钥，自动补齐 Bearer。支持字符串或字符串列表随机轮询。
+# api_key: API 密钥，自动补齐 Bearer。支持单字符串、字符串列表或 JSON 数组字符串，多个 Key 轮询分流。
 # proxy: [可选] 该服务商的全局代理
 # models: [可选] 手动补充的模型列表。若API不支持 /models 自动获取，或获取不全时可在这里手动指定作为补充。
 # extra_payload: [可选] 字典格式。必须写在 global_default、default_config、
@@ -300,10 +336,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                         if "model" not in info:  # 确保模型原名存在
                             info["model"] = mid
                         if "key" in info:
-                            raw_key = info["key"]
-                            info["keys"] = (
-                                [raw_key] if not isinstance(raw_key, list) else raw_key
-                            )
+                            info["keys"] = self._model_keys(info)
                         unique_mid = f"{mid} ({provider})"
                         self.models[unique_mid] = info
             except Exception as e:
@@ -354,6 +387,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 model_data = {
                     "url": url,
                     "key": keys,
+                    "keys": keys,
                     "model": mid,
                     "provider": provider,
                 }
@@ -397,29 +431,21 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             headers = {"Authorization": self._normalize_key(api_key)}
             proxy = info.get("proxy")
             try:
-                async with session.get(
-                    url, headers=headers, proxy=proxy, timeout=timeout
-                ) as resp:
+                async with session.get(url, headers=headers, proxy=proxy, timeout=timeout) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         models = [m["id"] for m in data.get("data", []) if "id" in m]
-                        logger.info(
-                            f"成功从服务商 {provider} 获取 {len(models)} 个可用模型。"
-                        )
+                        logger.info(f"成功从服务商 {provider} 获取 {len(models)} 个可用模型。")
                         return provider, models
                     else:
-                        logger.warning(
-                            f"从服务商 {provider} 获取模型失败，HTTP状态码: {resp.status}"
-                        )
+                        logger.warning(f"从服务商 {provider} 获取模型失败，HTTP状态码: {resp.status}")
             except Exception as e:
                 from .diagnostics import exception_metadata
 
                 logger.warning("服务商模型列表请求异常 provider={} details={}", provider, exception_metadata(e))
             return provider, None
 
-        results = await asyncio.gather(
-            *[_fetch_one(p, i) for p, i in self.providers.items()]
-        )
+        results = await asyncio.gather(*[_fetch_one(p, i) for p, i in self.providers.items()])
         # Keep last-known-good provider entries on a transient /models failure.
         # The cache is a separate runtime read: revalidate it immediately before
         # opening rather than relying on startup checks or the later atomic write.
@@ -433,9 +459,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             old_cache = {}
         configured = set(self.providers)
         new_cache = {
-            provider: models
-            for provider, models in old_cache.items()
-            if provider in configured and isinstance(models, list)
+            provider: models for provider, models in old_cache.items() if provider in configured and isinstance(models, list)
         }
         for provider, models in results:
             if models is not None:
@@ -454,13 +478,12 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def validate_model_config(self, persist: bool = False) -> tuple[bool, list[str]]:
         warnings = []
         changed = False
-        available_models = [name for name in self.get_sorted_model_names()
-                            if self.models[name].get("model_type", "chat") == "chat"]
+        available_models = [
+            name for name in self.get_sorted_model_names() if self.models[name].get("model_type", "chat") == "chat"
+        ]
 
         if not available_models:
-            return False, [
-                "当前未找到可用模型，请先检查 providers.toml 并执行“刷新模型”。"
-            ]
+            return False, ["当前未找到可用模型，请先检查 providers.toml 并执行“刷新模型”。"]
 
         fallback_model = available_models[0]
 
@@ -479,18 +502,14 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                     self.model_config[key] = fallback
                     changed = True
                     if current_val:
-                        warnings.append(
-                            f"模型 {current_val} 不可用或存在同名冲突，已自动回退到 {fallback}"
-                        )
+                        warnings.append(f"模型 {current_val} 不可用或存在同名冲突，已自动回退到 {fallback}")
                     else:
                         warnings.append(f"未配置相关模型，已自动设置为 {fallback}")
                 else:
                     if current_val:
                         self.model_config[key] = ""
                         changed = True
-                        warnings.append(
-                            f"模型 {current_val} 不可用或存在同名冲突，已清空配置"
-                        )
+                        warnings.append(f"模型 {current_val} 不可用或存在同名冲突，已清空配置")
             elif resolved != current_val:
                 self.model_config[key] = resolved
                 changed = True
@@ -512,9 +531,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 moe_models[difficulty] = self.model_config["selected_model"]
                 changed = True
                 if moe_model:
-                    warnings.append(
-                        f"MoE 难度 {difficulty} 模型不可用或存在冲突，已回退"
-                    )
+                    warnings.append(f"MoE 难度 {difficulty} 模型不可用或存在冲突，已回退")
                 else:
                     warnings.append(f"MoE 难度 {difficulty} 未配置，已回退")
             elif resolved_moe != moe_model:
@@ -523,6 +540,27 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         try:
             self._validate_fallbacks(self.model_config.get("model_fallbacks", {}), self.models)
+            from .daily_quota import quota_policy
+
+            scopes = {}
+            for model in self.models.values():
+                policy = quota_policy(model)
+                if policy:
+                    provider, group, tokens, zone = policy
+                    limit = (tokens, str(zone))
+                    if scopes.setdefault((provider, group), limit) != limit:
+                        raise ValueError("同一 daily_quota 组的额度和时区必须一致")
+            if type(self.model_config.get("ordinary_task_pools", False)) is not bool:
+                raise ValueError("ordinary_task_pools 必须为布尔值")
+            authorized_model = self.model_config.get("authorized_chat_model")
+            if authorized_model is not None and (
+                not isinstance(authorized_model, str)
+                or authorized_model not in self.models
+                or self.models[authorized_model].get("model_type", "chat") != "chat"
+            ):
+                raise ValueError("authorized_chat_model 必须是可用聊天模型的完整名称")
+            if authorized_model and self.model_config.get("capability_routing", {}).get("enabled"):
+                raise ValueError("authorized_chat_model 与 capability_routing 不能同时启用")
             pools = self.model_config.get("model_pools", {})
             self.validate_model_pools(pools, self.models)
             if pools and self.model_config.get("capability_routing", {}).get("enabled"):
@@ -540,15 +578,24 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         if not isinstance(fallbacks, Mapping) or len(fallbacks) > 32:
             raise ValueError("model_fallbacks 必须为最多 32 组模型映射")
         for primary, backups in fallbacks.items():
-            if (not isinstance(primary, str) or primary not in models
-                    or not isinstance(backups, (list, tuple)) or not 1 <= len(backups) <= 4
-                    or not all(isinstance(name, str) and name in models and name != primary for name in backups)
-                    or len(set(backups)) != len(backups)):
+            if (
+                not isinstance(primary, str)
+                or primary not in models
+                or not isinstance(backups, (list, tuple))
+                or not 1 <= len(backups) <= 4
+                or not all(isinstance(name, str) and name in models and name != primary for name in backups)
+                or len(set(backups)) != len(backups)
+            ):
                 raise ValueError("model_fallbacks 须使用存在的完整模型名，每组 1 至 4 个不重复备用模型")
 
-    def get_rate_limit_fallback(self, current: Mapping, attempted: set[str], *,
-                                has_tools: bool = False, has_images: bool = False) -> dict | None:
+    def get_rate_limit_fallback(
+        self, current: Mapping, attempted: set[str], *, has_tools: bool = False, has_images: bool = False
+    ) -> dict | None:
         """Select an untried same-role pool member or an explicit legacy backup."""
+        from . import personal_billing
+
+        if personal_billing.active():
+            return None
         from .runtime_snapshot import mutable_value
 
         state = self._active_state()
@@ -635,15 +682,17 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             Path(file_path),
             json.dumps(config_data, ensure_ascii=False, indent=4),
         )
-        if Path(file_path) == self.model_config_file and hasattr(
-            self, "model_config"
-        ):
+        if Path(file_path) == self.model_config_file and hasattr(self, "model_config"):
             from .runtime_snapshot import runtime_snapshots
 
             runtime_snapshots.patch_current(model_state=self.capture_state())
 
     def get_moe(self):
         # 获取当前是否使用MOE
+        from . import personal_billing
+
+        if personal_billing.active():
+            return personal_billing.config("use_moe", False)
         return self._active_state().model_config["use_moe"]
 
     def get_web_search(self):
@@ -654,29 +703,50 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         return self._active_state().model_config.get("use_tools", False)
 
     def get_config_value(self, key: str, default=None):
+        from . import personal_billing
+
+        if personal_billing.active() and key in {"ordinary_task_pools", "moe_reasoning_efforts"}:
+            return personal_billing.config(key, default)
         return self._active_state().model_config.get(key, default)
 
+    @staticmethod
+    def _authorized_chat_model(state: ModelRuntimeState) -> str | None:
+        from .request_budget import authorized_request
+
+        return state.model_config.get("authorized_chat_model") if authorized_request() else None
+
     def get_model(self, key: str, *, has_tools=False, has_images=False) -> dict:
+        from . import personal_billing
+
+        if personal_billing.active():
+            return personal_billing.model(key, has_tools=has_tools, has_images=has_images)
         # 获取单个模型的配置
         state = self._active_state()
-        role = {"category_model": "category", "summary_model": "category",
-                "selected_model": "0", "chat_summary_model": "2"}.get(key)
-        if role in state.model_config.get("model_pools", {}):
+        role = {"category_model": "category", "summary_model": "category", "selected_model": "0", "chat_summary_model": "2"}.get(
+            key
+        )
+        selected_model = (
+            self._authorized_chat_model(state)
+            if key in {"selected_model", "vision_model", "multimodal_model", "chat_summary_model"}
+            else None
+        )
+        if not selected_model and role in state.model_config.get("model_pools", {}):
             return self._select_pool_model(state, role, has_tools=has_tools, has_images=has_images, rotate=True)
-        selected_model = state.model_config.get(key)
+        selected_model = selected_model or state.model_config.get(key)
         if selected_model and selected_model in state.models:
             from .runtime_snapshot import mutable_value
 
             model_data = mutable_value(state.models[selected_model])
             expected = MEDIA_ROLES.get(key, ("", "chat"))[1]
-            if (model_data.get("model_type", "chat") != expected
-                    and not (key == "image_model" and "model_type" not in model_data)):
+            if model_data.get("model_type", "chat") != expected and not (key == "image_model" and "model_type" not in model_data):
                 return None
             model_data["key"] = self._get_random_key(model_data)
-            if (self.is_model_exhausted(selected_model)
-                    or not model_data["key"]
-                    or (has_tools and model_data.get("no_tools"))
-                    or (has_images and not model_data.get("is_vision"))):
+            if (
+                self.is_model_exhausted(selected_model)
+                or not model_data["key"]
+                or (has_tools and model_data.get("no_tools"))
+                or (has_images and not model_data.get("is_vision"))
+            ):
                 return self.get_rate_limit_fallback(model_data, set(), has_tools=has_tools, has_images=has_images)
             return model_data
         return None
@@ -701,6 +771,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
         if not isinstance(capabilities, ModelCapability):
             raise TypeError("capabilities 必须是 ModelCapability")
+        from . import personal_billing
+
+        if personal_billing.active():
+            return personal_billing.model(key, has_tools=capabilities.tools, has_images=capabilities.vision)
         role = {
             "selected_model": ModelRouteRole.SELECTED,
             "vision_model": ModelRouteRole.VISION,
@@ -714,9 +788,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         snapshot = runtime_snapshots.active()
         generation = (
             snapshot.generation
-            if globals().get("model_selector") is self
-            and snapshot is not None
-            and snapshot.model_state is state
+            if globals().get("model_selector") is self and snapshot is not None and snapshot.model_state is state
             else 0
         )
         routing = build_model_routing_runtime(
@@ -751,11 +823,18 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
 
     def get_moe_current_model(self, difficulty: str, *, has_tools=False, has_images=False) -> dict:
         # 获取当前MOE模型的配置
+        from . import personal_billing
+
+        if personal_billing.active():
+            if difficulty not in {"0", "1", "2"}:
+                raise ValueError("difficulty 必须是 0、1、2")
+            return personal_billing.model("moe_" + difficulty, has_tools=has_tools, has_images=has_images)
         state = self._active_state()
-        if difficulty in state.model_config.get("model_pools", {}):
+        authorized_model = self._authorized_chat_model(state)
+        if not authorized_model and difficulty in state.model_config.get("model_pools", {}):
             return self._select_pool_model(state, difficulty, has_tools=has_tools, has_images=has_images, rotate=True)
         moe_models = state.model_config["moe_models"]
-        model_name = moe_models.get(difficulty)
+        model_name = authorized_model or moe_models.get(difficulty)
         if model_name and model_name in state.models:
             from .runtime_snapshot import mutable_value
 
@@ -763,7 +842,12 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             if model_data.get("model_type", "chat") != "chat":
                 return None
             model_data["key"] = self._get_random_key(model_data)
-            if self.is_model_exhausted(model_name):
+            if (
+                self.is_model_exhausted(model_name)
+                or not model_data["key"]
+                or (has_tools and model_data.get("no_tools"))
+                or (has_images and not model_data.get("is_vision"))
+            ):
                 return self.get_rate_limit_fallback(model_data, set(), has_tools=has_tools, has_images=has_images)
             return model_data
         return None
@@ -787,13 +871,15 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
         }.get(difficulty)
         if role is None:
             raise ValueError("difficulty 必须是 0、1、2")
+        from . import personal_billing
+
+        if personal_billing.active():
+            return personal_billing.model("moe_" + difficulty, has_tools=capabilities.tools, has_images=capabilities.vision)
         state = self._active_state()
         snapshot = runtime_snapshots.active()
         generation = (
             snapshot.generation
-            if globals().get("model_selector") is self
-            and snapshot is not None
-            and snapshot.model_state is state
+            if globals().get("model_selector") is self and snapshot is not None and snapshot.model_state is state
             else 0
         )
         routing = build_model_routing_runtime(
@@ -971,7 +1057,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
             formatted_items = [
                 f"[{idx}] {state.models[umid]['model']}"
                 + ({"free": " [免费]", "paid": " [付费]"}.get(state.models[umid].get("billing_type"), ""))
-                + (f" [{state.models[umid]['model_type']}]" if state.models[umid].get('model_type', 'chat') != 'chat' else '')
+                + (f" [{state.models[umid]['model_type']}]" if state.models[umid].get("model_type", "chat") != "chat" else "")
                 + (" [额度耗尽，已移出池]" if self.is_model_exhausted(umid) else "")
                 for idx, umid in m_list
             ]
@@ -1004,11 +1090,7 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
                 return sorted_names[idx]
 
         # 3. 模糊匹配：用户只输入了模型原始名（如 "deepseek-chat"）
-        matches = [
-            k
-            for k, v in models.items()
-            if v["model"] == query or k.startswith(f"{query} (")
-        ]
+        matches = [k for k, v in models.items() if v["model"] == query or k.startswith(f"{query} (")]
 
         # 找到了唯一结果，自动补全
         if len(matches) == 1:
@@ -1023,19 +1105,10 @@ json_mode = true  # <-- 可在此自定义json结构化输出配置，以方便�
     def _get_resolve_error_msg(self, query: str) -> str:
         """根据查询内容返回准确的错误提示与对应列表"""
         models = self._active_state().models
-        matches = [
-            k
-            for k, v in models.items()
-            if v["model"] == query or k.startswith(f"{query} (")
-        ]
+        matches = [k for k, v in models.items() if v["model"] == query or k.startswith(f"{query} (")]
         if len(matches) > 1:
-            return (
-                f"存在多个匹配 '{query}' 的模型，请使用【编号】进行切换：\n"
-                + self.get_formatted_model_list(query)
-            )
-        return (
-            f"找不到编号或名称为 '{query}' 的模型！\n" + self.get_formatted_model_list()
-        )
+            return f"存在多个匹配 '{query}' 的模型，请使用【编号】进行切换：\n" + self.get_formatted_model_list(query)
+        return f"找不到编号或名称为 '{query}' 的模型！\n" + self.get_formatted_model_list()
 
     def manage_resident_plugins(self, action: str, plugin_name: str) -> str:
         resident = self.model_config.setdefault("resident_plugins", [])

@@ -1,4 +1,5 @@
 """Read event-owned messages and attachments without exposing local paths or signed URLs."""
+
 from __future__ import annotations
 
 import base64
@@ -117,6 +118,7 @@ def _segments(raw: Any) -> list:
     if isinstance(raw, str):
         try:
             from nonebot.adapters.onebot.v11 import Message
+
             return list(Message(raw))
         except Exception:
             return [{"type": "text", "data": {"text": raw}}]
@@ -152,8 +154,14 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
     seen: set[tuple[str, str]] = set()
     calls = 0
 
-    async def walk(raw: Any, depth: int = 0, label: str = "", rendered_data: bool = False,
-                   self_generated: bool = False, explicit_quote: bool = False) -> None:
+    async def walk(
+        raw: Any,
+        depth: int = 0,
+        label: str = "",
+        rendered_data: bool = False,
+        self_generated: bool = False,
+        explicit_quote: bool = False,
+    ) -> None:
         nonlocal calls
         if depth > 8 or document.nodes >= 1000 or document.chars >= MAX_DOCUMENT_CHARS:
             document.partial = True
@@ -182,20 +190,35 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 # A gateway file value may itself be a URL or path. Never use
                 # it as a model-facing display name.
                 name = name.replace("\\", "/").rsplit("/", 1)[-1].split("?", 1)[0][:120]
-                asset = MediaAsset("audio" if kind == "record" else kind, name, data,
-                                   rendered_data=rendered_data and kind == "image",
-                                   self_generated=self_generated, explicit_quote=explicit_quote)
+                asset = MediaAsset(
+                    "audio" if kind == "record" else kind,
+                    name,
+                    data,
+                    rendered_data=rendered_data and kind == "image",
+                    self_generated=self_generated,
+                    explicit_quote=explicit_quote,
+                )
                 reference = media_store.put(context, asset)
                 document.assets.append(reference)
                 document.append(f"[{asset.kind} 素材 {reference} · {name}]")
             elif kind == "node" or (kind == "forward" and data.get("content")):
                 content = data.get("content") or data.get("message") or []
                 if kind == "node":
-                    own = self_generated or str(data.get('uin', data.get('user_id', ''))) == bot_self_id(context.bot, context.event)
-                    await walk(content, depth + 1, f"[转发者 {data.get('name', data.get('uin', '未知'))}]",
-                               rendered_data, own, explicit_quote)
+                    own = self_generated or str(data.get("uin", data.get("user_id", ""))) == bot_self_id(
+                        context.bot, context.event
+                    )
+                    await walk(
+                        content,
+                        depth + 1,
+                        f"[转发者 {data.get('name', data.get('uin', '未知'))}]",
+                        rendered_data,
+                        own,
+                        explicit_quote,
+                    )
                 else:
-                    await containers(content, depth + 1, rendered_data, self_generated=self_generated, explicit_quote=explicit_quote)
+                    await containers(
+                        content, depth + 1, rendered_data, self_generated=self_generated, explicit_quote=explicit_quote
+                    )
             elif kind in {"forward", "json"}:
                 forward_id = str(data.get("id") or data.get("resid") or "") if kind == "forward" else _forward_id(data)
                 if not forward_id or ("forward", forward_id) in seen:
@@ -207,14 +230,26 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
                 calls += 1
                 try:
                     response = await _call(context, "get_forward_msg", id=forward_id)
-                    await containers(response.get("messages", response.get("message", [])), depth + 1, rendered_data,
-                                     self_generated=self_generated, explicit_quote=explicit_quote)
+                    await containers(
+                        response.get("messages", response.get("message", [])),
+                        depth + 1,
+                        rendered_data,
+                        self_generated=self_generated,
+                        explicit_quote=explicit_quote,
+                    )
                 except Exception:
                     document.warnings.append("一部分合并转发未能读取。")
                     document.partial = True
 
-    async def containers(rows: Any, depth: int, rendered_data: bool = False, *, lookup_rendered: bool = False,
-                         self_generated: bool = False, explicit_quote: bool = False) -> None:
+    async def containers(
+        rows: Any,
+        depth: int,
+        rendered_data: bool = False,
+        *,
+        lookup_rendered: bool = False,
+        self_generated: bool = False,
+        explicit_quote: bool = False,
+    ) -> None:
         if depth > 8:
             document.partial = True
             return
@@ -224,17 +259,19 @@ async def collect_message_context(context: ToolContext, *, source: str = "messag
             sender = row.get("sender") or {}
             label = f"[{row.get('time', '')} {sender.get('card') or sender.get('nickname') or sender.get('user_id') or '未知'}]"
             known_card = lookup_rendered and append_rendered_data(row.get("message_id"))
-            own = self_generated or str(sender.get('user_id', row.get('user_id', ''))) == bot_self_id(context.bot, context.event)
-            await walk(row.get("message", row.get("content", [row])), depth, label, rendered_data or known_card,
-                       own, explicit_quote)
+            own = self_generated or str(sender.get("user_id", row.get("user_id", ""))) == bot_self_id(context.bot, context.event)
+            await walk(
+                row.get("message", row.get("content", [row])), depth, label, rendered_data or known_card, own, explicit_quote
+            )
 
     def append_rendered_data(message_id) -> bool:
         from .render_data import rendered_views_for_message
 
         views = rendered_views_for_message(context.bot, context.event, message_id) if message_id is not None else []
         if views:
-            document.append("[卡片原始数据，无需识图；未展示字段请用read_rendered_view继续读取]\n"
-                            + json.dumps(views, ensure_ascii=False))
+            document.append(
+                "[卡片原始数据，无需识图；未展示字段请用read_rendered_view继续读取]\n" + json.dumps(views, ensure_ascii=False)
+            )
         return bool(views)
 
     if source == "group_history":
@@ -351,17 +388,30 @@ async def asset_bytes(context: ToolContext, reference: str) -> MediaAsset:
         from types import SimpleNamespace
 
         from .utils import _image_url
+
         url = await _image_url(SimpleNamespace(data=data), context.bot, context.event) or url
     if not url or urlsplit(str(url)).scheme not in {"http", "https"}:
         if not file_id:
             raise MediaError("该附件缺少可读取的文件标识。")
         attempts = [("get_file", {"file_id": file_id})]
         if (group_id := getattr(context.event, "group_id", None)) is not None:
-            attempts.append(("get_group_file_url", {"group_id": group_id, "file_id": file_id,
-                **({"busid": data["busid"]} if "busid" in data else {})}))
+            attempts.append(
+                (
+                    "get_group_file_url",
+                    {"group_id": group_id, "file_id": file_id, **({"busid": data["busid"]} if "busid" in data else {})},
+                )
+            )
         else:
-            attempts.append(("get_private_file_url", {"user_id": int(context.event.get_user_id()), "file_id": file_id,
-                **({"file_hash": data["file_hash"]} if data.get("file_hash") else {})}))
+            attempts.append(
+                (
+                    "get_private_file_url",
+                    {
+                        "user_id": int(context.event.get_user_id()),
+                        "file_id": file_id,
+                        **({"file_hash": data["file_hash"]} if data.get("file_hash") else {}),
+                    },
+                )
+            )
         for api, params in attempts:
             try:
                 result = await _call(context, api, **params)
@@ -378,7 +428,8 @@ async def asset_bytes(context: ToolContext, reference: str) -> MediaAsset:
     if asset.kind == "audio" and (payload.startswith(b"#!SILK") or payload.startswith(b"\x02#!SILK")):
         raise MediaError("这条QQ语音仍为SILK格式，框架转码未成功；本次没有按MP3提交模型。")
     asset.payload = payload
-    asset.mime = ((mime if mime != "application/octet-stream" else "")
-                  or mimetypes.guess_type(asset.name)[0] or "application/octet-stream")
+    asset.mime = (
+        (mime if mime != "application/octet-stream" else "") or mimetypes.guess_type(asset.name)[0] or "application/octet-stream"
+    )
     media_store._prune()
     return asset

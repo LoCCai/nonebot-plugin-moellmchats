@@ -17,9 +17,14 @@ import pytest
 @pytest.fixture(autouse=True)
 def enabled_legacy_image_feedback(monkeypatch):
     from nonebot_plugin_moellmchats.config import config_parser
+
     original = config_parser.get_config
-    monkeypatch.setattr(config_parser, 'get_config', lambda key, default=None:
-                        False if key == 'skip_self_image_vision' else original(key, default))
+    monkeypatch.setattr(
+        config_parser,
+        "get_config",
+        lambda key, default=None: False if key == "skip_self_image_vision" else original(key, default),
+    )
+
 
 from nonebot_plugin_moellmchats import render_tools as module
 from nonebot_plugin_moellmchats.config import RenderToolsConfig
@@ -49,6 +54,31 @@ from nonebot_plugin_moellmchats.tool_contracts import (
 # ---------------------------------------------------------------------------
 # Configuration model
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("prefix", ["**主动技能**", "下面是已采集的加点："])
+def test_paragraph_followed_by_table_renders_cells_without_requiring_model_blank_line(prefix):
+    import markdown
+
+    source = prefix + "\n| 技能 | 页1 | 页2 |\n|---|---:|:---:|\n| 半月旋 | 39 | 49 |\n"
+    assert "<table>" not in markdown.markdown(source, extensions=["tables"])
+    normalized = module._separate_markdown_tables(source)
+    html = markdown.markdown(normalized, extensions=["tables"])
+    assert html.count("<table>") == 1
+    assert html.count("<th") == 4
+    assert "<td>半月旋</td>" in html
+    assert "39</td>" in html
+    assert "49</td>" in html
+    assert module._separate_markdown_tables(normalized) == normalized
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~"])
+def test_table_normalization_preserves_code_and_uid_content(fence):
+    code = f"{fence}markdown\n文字\n| UID | 等级 |\n|---|---|\n| 123\\|4399\\|11 | 240 |\n{fence}\n"
+    assert module._separate_markdown_tables(code) == code
+    source = "玩家\r\n| UID | 等级 |\r\n|---|---|\r\n| 123\\|4399\\|11 | 240 |\r\n"
+    normalized = module._separate_markdown_tables(source)
+    assert normalized == source.replace("玩家\r\n", "玩家\r\n\r\n", 1)
 
 
 def test_render_tools_config_defaults_and_env_coercion() -> None:
@@ -116,6 +146,17 @@ def test_capability_endpoint_branches() -> None:
     bad = _capability(endpoint="ftp://127.0.0.1:9222")
     assert bad.available is False
     assert "http/https" in bad.reason
+
+
+def test_session_overrides_drop_executable_in_remote_modes() -> None:
+    overrides = {"executable_path": "/tmp/chrome"}
+    assert module._filter_session_overrides(overrides, cdp_endpoint=None, ws_endpoint=None) == overrides
+    for cdp, ws in (("http://10.0.0.1:9223", None), (None, "ws://10.0.0.1:9222")):
+        assert module._filter_session_overrides(dict(overrides), cdp_endpoint=cdp, ws_endpoint=ws) == {}
+    assert module._filter_session_overrides(
+        {"executable_path": "/tmp/chrome", "endpoint_url": "http://10.0.0.1:9223"}, cdp_endpoint=None, ws_endpoint=None
+    ) == {"endpoint_url": "http://10.0.0.1:9223"}
+    assert module._filter_session_overrides({}, cdp_endpoint="http://10.0.0.1:9223", ws_endpoint=None) == {}
 
 
 def test_capability_system_default_tiers() -> None:
@@ -235,14 +276,22 @@ def test_registration_respects_capability(monkeypatch: pytest.MonkeyPatch) -> No
 # Standalone posture (no Qiqi host modules on this import path)
 def test_render_theme_reads_published_host_palette(monkeypatch):
     from types import ModuleType, SimpleNamespace
+
     host = ModuleType("src")
     utils = ModuleType("src.utils")
-    utils.render_theme = SimpleNamespace(stylesheet_context=lambda _: {
-        "theme_family": "qiqi", "theme": "night",
-        "theme_css": (':root[data-theme="light"]{--accent-color:#123456;} '
-                      ':root[data-theme="dark"]{--accent-color:#cbb0ff;--font-color-main:#f2f2fb;--background-color:#141b32;}')})
-    utils.report_theme = SimpleNamespace(post_theme_context=lambda: {"post_theme": "qiqi", "post_mode": "night"},
-                                        graph_palette=lambda _: {"accent": "#cbb0ff"})
+    utils.render_theme = SimpleNamespace(
+        stylesheet_context=lambda _: {
+            "theme_family": "qiqi",
+            "theme": "night",
+            "theme_css": (
+                ':root[data-theme="light"]{--accent-color:#123456;} '
+                ':root[data-theme="dark"]{--accent-color:#cbb0ff;--font-color-main:#f2f2fb;--background-color:#141b32;}'
+            ),
+        }
+    )
+    utils.report_theme = SimpleNamespace(
+        post_theme_context=lambda: {"post_theme": "qiqi", "post_mode": "night"}, graph_palette=lambda _: {"accent": "#cbb0ff"}
+    )
     monkeypatch.setitem(sys.modules, "src", host)
     monkeypatch.setitem(sys.modules, "src.utils", utils)
     result = module.render_theme_reference("zmws")
@@ -261,24 +310,33 @@ def test_render_theme_standalone_fallback(monkeypatch):
     assert result["palette"]["surface"]
 
 
-@pytest.mark.parametrize("card,slot", [("general", "post/post.css"), ("zmws", "zmws/zmws.css")])
+@pytest.mark.parametrize(("card", "slot"), [("general", "post/post.css"), ("zmws", "zmws/zmws.css")])
 def test_render_theme_uses_published_slot_and_design_tokens(monkeypatch, card, slot):
     from types import ModuleType, SimpleNamespace
+
     utils = ModuleType("src.utils")
     calls = []
+
     def context(value):
         calls.append(value)
-        return {"theme_family": "candy", "theme": "night", "theme_css": (
-            ':root[data-theme="light"]{--accent-color:#000000;}'
-            ':root[data-theme="dark"]{--accent-color:#cbb0ff;--menu-radius:26px;'
-            '--background-image:linear-gradient(#2a2140,#3b2d5e);'
-            '--card-shadow:0 14px 32px #10082250;}')}
+        return {
+            "theme_family": "candy",
+            "theme": "night",
+            "theme_css": (
+                ':root[data-theme="light"]{--accent-color:#000000;}'
+                ':root[data-theme="dark"]{--accent-color:#cbb0ff;--menu-radius:26px;'
+                "--background-image:linear-gradient(#2a2140,#3b2d5e);"
+                "--card-shadow:0 14px 32px #10082250;}"
+            ),
+        }
+
     utils.render_theme = SimpleNamespace(stylesheet_context=context)
     monkeypatch.setitem(sys.modules, "src", ModuleType("src"))
     monkeypatch.setitem(sys.modules, "src.utils", utils)
     result = module._render_theme(card)
     assert calls == [slot]
-    assert result["theme"] == "candy" and result["mode"] == "night"
+    assert result["theme"] == "candy"
+    assert result["mode"] == "night"
     assert result["palette"]["radius"] == "26px"
     assert result["palette"]["background-image"] == "linear-gradient(#2a2140,#3b2d5e)"
     assert "#cbb0ff !important" in result["css"]
@@ -289,6 +347,7 @@ def test_render_theme_failure_keeps_rendering_available(monkeypatch):
         if kwargs.get("use_host") is not False:
             raise OSError("unreadable theme")
         return {"theme": "default"}
+
     monkeypatch.setattr(module, "render_theme_reference", broken)
     assert module._render_theme("general")["theme"] == "default"
     with pytest.raises(module.RenderToolError):
@@ -296,7 +355,7 @@ def test_render_theme_failure_keeps_rendering_available(monkeypatch):
 
 
 def test_html_theme_preserves_content_and_follows_authored_styles():
-    html = '<html><HEAD><style>body{background:red}</style></HEAD><body>{{ plain_text }}</body></html>'
+    html = "<html><HEAD><style>body{background:red}</style></HEAD><body>{{ plain_text }}</body></html>"
     themed = module.themed_html(html, {"css": "body{background:blue!important}"})
     assert themed.index("background:blue") > themed.index("background:red")
     assert themed.index("background:blue") < themed.index("</HEAD>")
@@ -774,11 +833,14 @@ async def test_document_images_work_after_image_model_authorization_denial(monke
     assert denied.metadata["status"] == "denied"
     assert f"render_{kind}" in denied.metadata["alternatives"]
     if kind == "html":
-        result = await module.render_html_image(_tool_context=context,
-            html='<html><body><h1>技能思维导图</h1><svg><text x="10" y="20">技能 → 升级</text></svg></body></html>')
+        result = await module.render_html_image(
+            _tool_context=context,
+            html='<html><body><h1>技能思维导图</h1><svg><text x="10" y="20">技能 → 升级</text></svg></body></html>',
+        )
     else:
-        result = await module.render_markdown_image(_tool_context=context,
-            markdown="# 攻略\n\n|技能|等级|\n|---|---|\n|烈焰|10|\n\n```python\nprint(1)\n```")
+        result = await module.render_markdown_image(
+            _tool_context=context, markdown="# 攻略\n\n|技能|等级|\n|---|---|\n|烈焰|10|\n\n```python\nprint(1)\n```"
+        )
     assert "已完成渲染" in result.text
     assert len(bot.sent) == 1
     authorizer.assert_awaited_once()
@@ -853,6 +915,21 @@ async def test_render_markdown_tool_happy_path(monkeypatch: pytest.MonkeyPatch, 
     assert 'data-llm-theme="auto"' in call["args"][0]
     assert "md" not in call["kwargs"]
     assert call["kwargs"]["width"] == 800
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_and_explicit_tool_share_table_boundary_normalization(
+    monkeypatch: pytest.MonkeyPatch, available_capability: RenderCapability
+) -> None:
+    import markdown
+
+    renderer = _FakeRenderer(_tiny_png())
+    monkeypatch.setattr(module, "get_shared_renderer", _as_async(renderer))
+    source = "**五页技能**\n|技能|页1|页2|\n|---|---|---|\n|半月旋|39|49|"
+    await module.markdown_image_payload(markdown=source)
+    html = markdown.markdown(renderer.markdown_calls[0]["args"][0], extensions=["tables"])
+    assert html.count("<table>") == 1
+    assert "<td>半月旋</td>" in html
 
 
 @pytest.mark.asyncio

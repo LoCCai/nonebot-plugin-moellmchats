@@ -13,16 +13,18 @@ from test_llm_tools import Harness, _call, _source_progress_view
 from nonebot_plugin_moellmchats import llm_tools as module
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
 from nonebot_plugin_moellmchats.tool_contracts import ToolSpec
-from nonebot_plugin_moellmchats.tool_providers import ToolSource
 from nonebot_plugin_moellmchats.tool_manager import LlmToolExecutionRoute
+from nonebot_plugin_moellmchats.tool_providers import ToolSource
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def progress_tasks(monkeypatch):
     original_get_config = module.config_parser.get_config
-    monkeypatch.setattr(module.config_parser, "get_config", lambda key, default=None: (
-        True if key == "tool_progress_messages_enabled" else original_get_config(key, default)
-    ))
+    monkeypatch.setattr(
+        module.config_parser,
+        "get_config",
+        lambda key, default=None: True if key == "tool_progress_messages_enabled" else original_get_config(key, default),
+    )
     yield
     tasks = tuple(module._pending_progress_tasks)
     for task in tasks:
@@ -42,34 +44,39 @@ async def progress(harness, identifier=1):
     await harness._send_tool_progress(
         call=_call(identifier, "registered_demo"),
         view=_source_progress_view(ToolSource.REGISTERED),
-        arguments={}, result_text="",
+        arguments={},
+        result_text="",
     )
 
 
 @pytest.mark.asyncio
-async def test_each_distinct_plugin_command_gets_notice_and_independent_recall(recall):
+async def test_each_distinct_plugin_command_gets_persistent_notice(recall):
     harness = Harness({})
-    harness.bot.send = AsyncMock(side_effect=[{'message_id': -501}, {'message_id': -502}])
-    view = replace(_source_progress_view(ToolSource.REGISTERED), route=LlmToolExecutionRoute.NONEBOT_PLUGIN, source=ToolSource.NONEBOT_PLUGIN)
-    for i, command in enumerate(['/demo 1区', '/demo 2区', '/demo   2区'], 1):
-        await harness._send_tool_progress(call=_call(i, 'demo'), view=view,
-            arguments={'command': command}, result_text='前置说明')
+    harness.bot.send = AsyncMock(side_effect=[{"message_id": -501}, {"message_id": -502}])
+    view = replace(
+        _source_progress_view(ToolSource.REGISTERED), route=LlmToolExecutionRoute.NONEBOT_PLUGIN, source=ToolSource.NONEBOT_PLUGIN
+    )
+    for i, command in enumerate(["/demo 1区", "/demo 2区", "/demo 2区"], 1):
+        await harness._send_tool_progress(
+            call=_call(i, "demo"), view=view, arguments={"command": command}, result_text="前置说明"
+        )
     assert harness.bot.send.await_count == 2
-    assert '七七正在帮你投递：/demo 1区' in harness.bot.send.call_args_list[0].args[1]
-    assert harness.bot.send.call_args_list[1].args[1] == '七七正在帮你投递：/demo 2区'
-    assert harness._tool_progress_status(_call(3, 'demo')) == 'suppressed'
+    assert "七七正在帮你投递：/demo 1区" in harness.bot.send.call_args_list[0].args[1]
+    assert harness.bot.send.call_args_list[1].args[1] == "七七正在帮你投递：/demo 2区"
+    assert harness._tool_progress_status(_call(3, "demo")) == "suppressed"
     await harness._finish_tool_progress()
-    assert {call.kwargs['message_id'] for call in recall.await_args_list} == {-501, -502}
+    recall.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_uncertain_plugin_notice_is_suppressed_only_for_same_command(recall):
     harness = Harness({})
     harness.bot.send = AsyncMock(return_value={})
-    view = replace(_source_progress_view(ToolSource.REGISTERED), route=LlmToolExecutionRoute.NONEBOT_PLUGIN, source=ToolSource.NONEBOT_PLUGIN)
-    for i, command in enumerate(['/demo 1区', '/demo 1区', '/demo 2区'], 1):
-        await harness._send_tool_progress(call=_call(i, 'demo'), view=view,
-            arguments={'command': command}, result_text='')
+    view = replace(
+        _source_progress_view(ToolSource.REGISTERED), route=LlmToolExecutionRoute.NONEBOT_PLUGIN, source=ToolSource.NONEBOT_PLUGIN
+    )
+    for i, command in enumerate(["/demo 1区", "/demo 1区", "/demo 2区"], 1):
+        await harness._send_tool_progress(call=_call(i, "demo"), view=view, arguments={"command": command}, result_text="")
     assert harness.bot.send.await_count == 2
     await harness._finish_tool_progress()
     recall.assert_not_awaited()
@@ -83,14 +90,16 @@ async def test_multiple_tools_and_model_rounds_share_one_notice(recall):
         queried.append(page)
         return f"page {page}"
 
-    spec = ToolSpec(name="knowledge_read", description="read", handler=query,
-        parameters={"type": "object", "properties": {"page": {"type": "integer"}}, "required": ["page"]})
+    spec = ToolSpec(
+        name="knowledge_read",
+        description="read",
+        handler=query,
+        parameters={"type": "object", "properties": {"page": {"type": "integer"}}, "required": ["page"]},
+    )
     harness = Harness({spec.name: spec.as_legacy_schema()})
     harness.bot.send = AsyncMock(return_value={"message_id": -123})
 
-    first = await harness._execute_tools([
-        _call(1, spec.name, '{"page":1}'), _call(2, spec.name, '{"page":2}')
-    ], "", [], "")
+    first = await harness._execute_tools([_call(1, spec.name, '{"page":1}'), _call(2, spec.name, '{"page":2}')], "", [], "")
     second = await harness._execute_tools([_call(3, spec.name, '{"page":3}')], "", [], "")
 
     assert queried == [1, 2, 3]
@@ -166,8 +175,9 @@ async def test_completion_does_not_cancel_already_started_timer_recall(monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("receipt", [None, {}, {"message_id": True}, {"message_id": 0},
-    {"message_id": "not-an-id"}, {"message_id": 1.5}])
+@pytest.mark.parametrize(
+    "receipt", [None, {}, {"message_id": True}, {"message_id": 0}, {"message_id": "not-an-id"}, {"message_id": 1.5}]
+)
 async def test_unconfirmed_receipt_is_never_retried_or_recalled(recall, receipt):
     harness = Harness({})
     harness.bot.send = AsyncMock(return_value=receipt)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import importlib
+import json
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -37,6 +38,80 @@ from nonebot_plugin_moellmchats.tool_providers import (
     nonebot_plugin_provider,
     registered_tool_provider,
 )
+
+
+@pytest.mark.asyncio
+async def test_hot_budget_reload_preserves_inflight_policy_and_rejects_bad_candidate(tmp_path, monkeypatch):
+    from nonebot_plugin_moellmchats import request_budget as policy
+    from nonebot_plugin_moellmchats.config import config_parser
+
+    path = tmp_path / "config.json"
+    original_path = config_parser.filepath
+    previous = runtime_snapshots.current()
+    baseline = mutable_value(previous.config) if previous is not None else dict(config_parser.config)
+    low = {**baseline, "ordinary_request_budget": {"reasoning_effort": "low", "tool_rounds": 4, "output_tokens": 4096}}
+    high = {
+        **baseline,
+        "ordinary_request_budget": {
+            "reasoning_effort": "high",
+            "tool_rounds": 6,
+            "output_tokens": 8192,
+            "request_seconds": 360,
+            "model_seconds": 90,
+        },
+    }
+    ready, resume = asyncio.Event(), asyncio.Event()
+    running = None
+
+    def observed():
+        payload = {"max_tokens": 16384, "reasoning_effort": "max"}
+        policy.apply_payload_budget({}, payload)
+        return payload, policy.budget_limit("max_tool_rounds", 12)
+
+    async def inflight(snapshot):
+        with runtime_snapshots.bind(snapshot), policy.request_budget_scope(authorized=False):
+            before = observed()
+            ready.set()
+            await resume.wait()
+            return before, observed()
+
+    try:
+        monkeypatch.setattr(config_parser, "filepath", path)
+        path.write_text(json.dumps(low))
+        await runtime_reloader.reload("test-budget-low")
+        old = runtime_snapshots.current()
+        running = asyncio.create_task(inflight(old))
+        await asyncio.wait_for(ready.wait(), timeout=1)
+        path.write_text(json.dumps(high))
+        await runtime_reloader.reload("test-budget-high")
+        current = runtime_snapshots.current()
+        assert current.generation > old.generation
+        with runtime_snapshots.bind(current), policy.request_budget_scope(authorized=False):
+            assert observed() == ({"max_tokens": 8192, "reasoning_effort": "high"}, 6)
+            assert policy.budget_limit("request_timeout_seconds", 480) == 360
+            assert policy.budget_limit("model_timeout_seconds", 180) == 90
+            assert policy.budget_limit("max_tool_rounds", 2) == 2
+            with policy.classification_budget_scope():
+                assert observed()[0] == {"max_tokens": 512, "reasoning_effort": "low"}
+        with runtime_snapshots.bind(current), policy.request_budget_scope(authorized=True):
+            assert observed()[0] == {"max_tokens": 16384, "reasoning_effort": "max"}
+        resume.set()
+        assert await asyncio.wait_for(running, timeout=1) == (
+            ({"max_tokens": 4096, "reasoning_effort": "low"}, 4),
+            ({"max_tokens": 4096, "reasoning_effort": "low"}, 4),
+        )
+        path.write_text(json.dumps({**high, "ordinary_request_budget": {"tool_rounds": True}}))
+        with pytest.raises(ValueError, match="ordinary_request_budget"):
+            await runtime_reloader.reload("test-budget-invalid")
+        assert runtime_snapshots.current() is current
+        with policy.request_budget_scope(authorized=False):
+            assert observed() == ({"max_tokens": 8192, "reasoning_effort": "high"}, 6)
+    finally:
+        resume.set()
+        if running is not None:
+            await running
+        monkeypatch.setattr(config_parser, "filepath", original_path)
+        await runtime_reloader.reload("test-budget-restore")
 
 
 @pytest.mark.asyncio
@@ -75,10 +150,7 @@ async def test_runtime_generation_pins_custom_tool_source(
     monkeypatch,
 ) -> None:
     path = tool_manager.custom_tools_dir / "artifact_generation_test.py"
-    original_source = (
-        b"async def artifact_generation_test():\n"
-        b"    return 'generation-old'\n"
-    )
+    original_source = b"async def artifact_generation_test():\n    return 'generation-old'\n"
     calls = []
 
     async def execute_artifact(
@@ -126,8 +198,7 @@ async def test_runtime_generation_pins_custom_tool_source(
         assert discovered.spec is artifact.spec
 
         path.write_text(
-            "async def artifact_generation_test():\n"
-            "    raise RuntimeError('live source must not be read')\n",
+            "async def artifact_generation_test():\n    raise RuntimeError('live source must not be read')\n",
             encoding="utf-8",
         )
         tool_result = await entry["func"]()
@@ -150,9 +221,7 @@ async def test_runtime_generation_pins_custom_tool_source(
 def test_tool_manager_forwards_generation_to_both_artifact_loaders(
     monkeypatch,
 ) -> None:
-    manager_module = importlib.import_module(
-        "nonebot_plugin_moellmchats.tool_manager"
-    )
+    manager_module = importlib.import_module("nonebot_plugin_moellmchats.tool_manager")
     calls: list[tuple[str, int]] = []
 
     def load_files(_files, *, generation: int):
@@ -188,6 +257,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         parameters={"type": "object", "properties": {}},
         handler=lambda: None,
     )
+
     async def mcp_handler(**_kwargs):
         return None
 
@@ -328,15 +398,15 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
         "legacy_plugin_names",
         "mcp_server_identifiers",
         "generated_state_revision",
-            "generated_state_digest",
-            "generated_active",
-            "intent_owners",
-            "directory_entry_count",
-            "directory_digest",
-            "picmenu_plugin_count",
-            "picmenu_feature_count",
-            "picmenu_digest",
-        }
+        "generated_state_digest",
+        "generated_active",
+        "intent_owners",
+        "directory_entry_count",
+        "directory_digest",
+        "picmenu_plugin_count",
+        "picmenu_feature_count",
+        "picmenu_digest",
+    }
     provider_catalog = snapshot.provider_catalog
     assert provider_catalog is not None
     assert provider_catalog.schema_version == 3
@@ -352,16 +422,12 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert provider_catalog.tools_for_provider("registered")[0].spec is registered
     assert provider_catalog.tools_for_provider("custom-file") == ()
     assert provider_catalog.tools_for_provider("generated") == ()
-    assert provider_catalog.trust_policy_for(registered.name).boundary is (
-        ToolExecutionBoundary.IN_PROCESS
-    )
+    assert provider_catalog.trust_policy_for(registered.name).boundary is (ToolExecutionBoundary.IN_PROCESS)
     builtin_record = provider_catalog.tools[WEB_SEARCH_TOOL_SPEC.name]
     assert builtin_record.provider_id == "builtin"
     assert builtin_record.spec is WEB_SEARCH_TOOL_SPEC
     assert builtin_record.trust.value == "trusted"
-    assert provider_catalog.trust_policy_for(
-        WEB_SEARCH_TOOL_SPEC.name
-    ).result_provenance is ToolResultProvenance.EXTERNAL
+    assert provider_catalog.trust_policy_for(WEB_SEARCH_TOOL_SPEC.name).result_provenance is ToolResultProvenance.EXTERNAL
     assert WEB_SEARCH_TOOL_SPEC.name not in snapshot.custom_tools
     plugin_entry = snapshot.plugin_info[plugin_name]
     plugin_record = provider_catalog.tools[plugin_name]
@@ -375,9 +441,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     if metadata_dependencies:
         assert snapshot.tool_dependencies[plugin_name] == {registered.name}
         assert registered.name in snapshot.expand_dependencies({plugin_name})
-    assert provider_catalog.trust_policy_for(plugin_name).boundary is (
-        ToolExecutionBoundary.BOUNDED_EVENT
-    )
+    assert provider_catalog.trust_policy_for(plugin_name).boundary is (ToolExecutionBoundary.BOUNDED_EVENT)
     assert plugin_name not in snapshot.custom_tools
     mcp_entry = snapshot.custom_tools[mcp_spec.name]
     mcp_record = provider_catalog.tools[mcp_spec.name]
@@ -385,9 +449,7 @@ async def test_runtime_candidate_shadows_provider_catalog_without_cutover(
     assert mcp_record.spec.handler is mcp_handler
     assert mcp_entry["func"] is mcp_handler
     assert mcp_entry["source"] == "mcp"
-    assert provider_catalog.trust_policy_for(mcp_spec.name).boundary is (
-        ToolExecutionBoundary.EXTERNAL_PROXY
-    )
+    assert provider_catalog.trust_policy_for(mcp_spec.name).boundary is (ToolExecutionBoundary.EXTERNAL_PROXY)
     assert provider_catalog.trust_summary() == {
         "trusted": len(builtin_tool_specs()) + 1,
         "reviewed": 1,
@@ -532,9 +594,7 @@ async def test_plugin_tool_collision_retains_previous_generation() -> None:
     path = tool_manager.custom_tools_dir / "collision_test.py"
     try:
         path.write_text(
-            "async def nonebot_plugin_localstore():\n"
-            "    'collision'\n"
-            "    return 'bad'\n",
+            "async def nonebot_plugin_localstore():\n    'collision'\n    return 'bad'\n",
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="provider 工具名冲突"):
@@ -836,9 +896,7 @@ async def test_watcher_preserves_published_empty_picmenu_fingerprint(
         reload_module.config_parser,
         "get_config",
         lambda key, default=None: (
-            True if key == "runtime_watch_enabled" else 0
-            if key == "runtime_watch_interval_seconds"
-            else default
+            True if key == "runtime_watch_enabled" else 0 if key == "runtime_watch_interval_seconds" else default
         ),
     )
 
@@ -1163,9 +1221,7 @@ async def test_watcher_backoff_is_bounded_and_resets_after_success(
 
     initial = _WATCH_FAILURE_BACKOFF_INITIAL_SECONDS
     maximum = _WATCH_FAILURE_BACKOFF_MAX_SECONDS
-    assert sleeps == [
-        min(initial * (2**exponent), maximum) for exponent in range(8)
-    ] + [initial]
+    assert sleeps == [min(initial * (2**exponent), maximum) for exponent in range(8)] + [initial]
     assert len(errors) == 9
     assert outcomes == []
 

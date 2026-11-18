@@ -7,6 +7,7 @@ import re
 from nonebot.log import logger
 import ujson as json
 
+from .chat_stream import Completion, events
 from .llm_state import token_usage_history
 from .model_error_policy import (
     TRANSIENT_HTTP_STATUSES,
@@ -31,11 +32,7 @@ class LlmApiMixin:
 
     @staticmethod
     def _usage_integer(value: object) -> int:
-        if (
-            not isinstance(value, int)
-            or isinstance(value, bool)
-            or not 0 <= value <= (1 << 63) - 1
-        ):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= (1 << 63) - 1:
             return 0
         return value
 
@@ -45,22 +42,16 @@ class LlmApiMixin:
         try:
             payload = usage if isinstance(usage, Mapping) else {}
             prompt_tokens = self._usage_integer(payload.get("prompt_tokens"))
-            completion_tokens = self._usage_integer(
-                payload.get("completion_tokens")
-            )
+            completion_tokens = self._usage_integer(payload.get("completion_tokens"))
             prompt_details = payload.get("prompt_tokens_details")
             if not isinstance(prompt_details, Mapping):
                 prompt_details = {}
             completion_details = payload.get("completion_tokens_details")
             if not isinstance(completion_details, Mapping):
                 completion_details = {}
-            cached_tokens = self._usage_integer(
-                prompt_details.get("cached_tokens")
-            )
+            cached_tokens = self._usage_integer(prompt_details.get("cached_tokens"))
             if cached_tokens == 0:
-                cached_tokens = self._usage_integer(
-                    payload.get("prompt_cache_hit_tokens")
-                )
+                cached_tokens = self._usage_integer(payload.get("prompt_cache_hit_tokens"))
             cached_tokens = min(cached_tokens, prompt_tokens)
             reasoning_tokens = min(
                 self._usage_integer(completion_details.get("reasoning_tokens")),
@@ -199,9 +190,7 @@ class LlmApiMixin:
         """检查是否为400错误及敏感内容拦截，返回错误提示或None"""
         if response.status == 400:
             error_content = await response.text()
-            logger.warning(
-                f"API 请求返回 400，响应正文已省略，长度 {len(error_content)}"
-            )
+            logger.warning(f"API 请求返回 400，响应正文已省略，长度 {len(error_content)}")
             # 1. 尝试解析 API 返回的具体报错信息
             error_info = self._extract_api_error_info(error_content)
             detail_msg = error_info.get("message", "")
@@ -214,16 +203,14 @@ class LlmApiMixin:
             # This exact provider error also occurs for unsupported image URLs
             # and dimensions. It is not evidence of a safety block or depletion.
             self._last_api_provider_rejected = bool(
-                has_images and str(error_info.get("code")) == "400001"
+                has_images
+                and str(error_info.get("code")) == "400001"
                 and error_info.get("type") == "invalid_request_error"
                 and "internal MaaS component" in detail_msg
             )
-            logger.warning("LLM 400 请求特征：images={} provider_rejected={}",
-                           has_images, self._last_api_provider_rejected)
+            logger.warning("LLM 400 请求特征：images={} provider_rejected={}", has_images, self._last_api_provider_rejected)
             if request_data is not None:
-                logger.warning(
-                    "LLM 请求返回 400；为保护群聊内容和密钥，已省略完整 Payload。"
-                )
+                logger.warning("LLM 请求返回 400；为保护群聊内容和密钥，已省略完整 Payload。")
             else:
                 logger.warning("LLM 请求失败；对话内容已从日志中省略")
 
@@ -239,9 +226,7 @@ class LlmApiMixin:
                 error_reply += f"\n参数：{param}"
             if detail_msg:
                 # 截取前150个字符，防止大段长英文代码刷屏，影响群聊体验
-                truncated_msg = (
-                    detail_msg[:150] + "..." if len(detail_msg) > 150 else detail_msg
-                )
+                truncated_msg = detail_msg[:150] + "..." if len(detail_msg) > 150 else detail_msg
                 error_reply += f"\n原因：{truncated_msg}"
             else:
                 error_reply += "，请检查后台日志。"
@@ -259,14 +244,18 @@ class LlmApiMixin:
             self._last_api_http_status = 403
             return False, "模型额度已耗尽，将选择备用模型。", None, ""
         from .request_recovery import current_binding
+
         durable_stream = current_binding() is not None
         render_buffer = getattr(self, "_buffer_structured_reply", lambda: False)()
-        buffer_reply = durable_stream or render_buffer
+        speech_buffer = getattr(self, "_buffer_speech_reply", lambda: False)()
+        deferred = getattr(self, "_defer_model_output", False)
+        buffer_reply = durable_stream or render_buffer or speech_buffer or deferred or bool(data.get("tools"))
         # Keep a durable answer atomic: a broken stream cannot replay a visible prefix.
         buffer = []
         assistant_result = []  # 后处理助手回复
         punctuation_buffer = ""  # 存标点
-        reasoning_buffer = []  # 思考内容
+        completion = Completion()
+        self._last_stream_delivered = False
         is_thinking = False  # 状态机：是否在思考中
         tag_buffer = ""  # 未确定是否为思考标签的字符，不提前发送
         thought_tags = ("<thought>", "<think>", "</thought>", "</think>")
@@ -286,8 +275,8 @@ class LlmApiMixin:
                 self._last_api_output_started = True
                 assistant_result.append(await self.send_emotion_message(part))
 
-        async with budgeted_post(session, accounting_model,
-            url, headers=headers, json=data, proxy=proxy, timeout=timeout
+        async with budgeted_post(
+            session, accounting_model, url, headers=headers, json=data, proxy=proxy, timeout=timeout
         ) as resp:
             self._last_api_http_status = resp.status
             if resp.status in TRANSIENT_HTTP_STATUSES:
@@ -308,33 +297,10 @@ class LlmApiMixin:
                 except (TypeError, ValueError, OverflowError):
                     max_segments = 5
                 current_segment = 0
-                async for line in resp.content:
-                    if self._is_sse_done(line):
-                        break  # 结束标记，退出循环
-                    if not line:
-                        continue
-
-                    json_data = self._decode_sse_payload(line)
-                    if json_data is None:
-                        continue
-                    if usage := json_data.get("usage"):
-                        self._record_token_usage(usage)
-                        await record_usage(accounting_model, usage, purpose="chat_stream")
-                    content = ""
-                    # 以此尝试获取完整消息或流式增量
-                    choices = json_data.get("choices", [{}])
-                    if not choices:  # 防止choices为空列表的情况
-                        continue
-                    reasoning_delta = ""
-                    if message := json_data.get("choices", [{}])[0].get("message", {}):
-                        content = message.get("content", "")
-                        reasoning_delta = message.get("reasoning_content", "")
-                    elif message := json_data.get("choices", [{}])[0].get("delta", {}):
-                        content = message.get("content", "")
-                        reasoning_delta = message.get("reasoning_content", "")
-
-                    if reasoning_delta:
-                        reasoning_buffer.append(reasoning_delta)
+                async for line in events(resp):
+                    content = completion.feed(line)
+                    if completion.done:
+                        break
 
                     if content:
                         for char in content:
@@ -353,8 +319,7 @@ class LlmApiMixin:
                             if is_thinking:
                                 continue
                             for visible_char in visible:
-                                if (is_segment and self.temperament != "ai助手"
-                                        and current_segment < max_segments - 1):
+                                if is_segment and self.temperament != "ai助手" and current_segment < max_segments - 1:
                                     if visible_char in ["。", "？", "！", "—", "\n"]:
                                         punctuation_buffer += visible_char
                                         continue
@@ -367,6 +332,21 @@ class LlmApiMixin:
                                         punctuation_buffer = ""
                                 buffer.append(visible_char)
 
+                assembled = completion.result()
+                self._last_completion_finish_reason = completion.finish_reason
+                if completion.usage:
+                    self._record_token_usage(completion.usage)
+                    await record_usage(accounting_model, completion.usage, purpose="chat_stream")
+                calls = assembled["choices"][0]["message"].get("tool_calls")
+                reasoning = "".join(completion.reasoning)
+                # Tool prefaces are not final answers. Return only fully validated
+                # calls to the existing permission, confirmation and budget chain.
+                if calls or deferred:
+                    remaining = "".join(buffer) + punctuation_buffer
+                    if not is_thinking:
+                        remaining += tag_buffer
+                    return True, "".join(assistant_result) + remaining, calls, reasoning
+
                 # Reserve the last segment for the complete remaining answer.
                 remaining = "".join(buffer) + punctuation_buffer
                 if not is_thinking:
@@ -375,46 +355,43 @@ class LlmApiMixin:
                 if assistant_result:
                     if buffer_reply:
                         from .image_output_policy import should_render_markdown
+
                         complete = "".join(assistant_result)
                         self._last_api_output_started = True
-                        if durable_stream or should_render_markdown(complete):
+                        if durable_stream or speech_buffer or should_render_markdown(complete):
                             assistant_result = [await self.send_emotion_message(complete)]
                         else:
                             assistant_result = []
                             for start in range(0, len(complete), 1200):
                                 if assistant_result:
-                                    await asyncio.sleep(min(2.0, 0.5 + len(complete[start:start + 1200]) / 1200))
-                                assistant_result.append(await self.send_emotion_message(complete[start:start + 1200]))
+                                    await asyncio.sleep(min(2.0, 0.5 + len(complete[start : start + 1200]) / 1200))
+                                assistant_result.append(await self.send_emotion_message(complete[start : start + 1200]))
+                    self._last_stream_delivered = True
                     return (
                         True,
                         "".join(assistant_result),
                         None,
-                        "".join(reasoning_buffer),
+                        reasoning,
                     )
+                return True, "", None, reasoning
             else:
                 error_text = await resp.text()
-                logger.warning(
-                    f"API返回非200状态码 {resp.status}，响应正文已省略，长度 {len(error_text)}"
-                )
+                logger.warning(f"API返回非200状态码 {resp.status}，响应正文已省略，长度 {len(error_text)}")
                 detail = self._extract_api_error_detail(error_text)
                 error_reply = f"API请求异常 (HTTP {resp.status})"
                 if detail:
-                    error_reply += (
-                        f"\n原因：{detail[:150]}{'...' if len(detail) > 150 else ''}"
-                    )
+                    error_reply += f"\n原因：{detail[:150]}{'...' if len(detail) > 150 else ''}"
                 return False, error_reply, None, ""
         return False, "API请求异常", None, ""
 
-    async def none_stream_llm_chat(
-        self, session, url, headers, data, proxy, timeout=None
-    ) -> tuple[bool, str, list, str]:
+    async def none_stream_llm_chat(self, session, url, headers, data, proxy, timeout=None) -> tuple[bool, str, list, str]:
         accounting_model = getattr(self, "model_info", {})
         if not await budget_available(accounting_model):
             self._last_api_quota_exhausted = True
             self._last_api_http_status = 403
             return False, "模型额度已耗尽，将选择备用模型。", None, ""
-        async with budgeted_post(session, accounting_model,
-            url=url, json=data, headers=headers, proxy=proxy, timeout=timeout
+        async with budgeted_post(
+            session, accounting_model, url=url, json=data, headers=headers, proxy=proxy, timeout=timeout
         ) as resp:
             self._last_api_http_status = resp.status
             if resp.status in TRANSIENT_HTTP_STATUSES:
@@ -429,20 +406,15 @@ class LlmApiMixin:
                 return False, error_msg, None, ""
             if resp.status != 200:
                 error_text = await resp.text()
-                logger.warning(
-                    f"API返回非200状态码 {resp.status}，响应正文已省略，长度 {len(error_text)}"
-                )
+                logger.warning(f"API返回非200状态码 {resp.status}，响应正文已省略，长度 {len(error_text)}")
                 detail = self._extract_api_error_detail(error_text)
                 error_reply = f"API返回异常 (HTTP {resp.status})"
                 if detail:
-                    error_reply += (
-                        f"\n原因：{detail[:150]}{'...' if len(detail) > 150 else ''}"
-                    )
+                    error_reply += f"\n原因：{detail[:150]}{'...' if len(detail) > 150 else ''}"
                 return False, error_reply, None, ""
             response = await resp.json()
             if response:
-                await record_usage(accounting_model, response.get("usage"),
-                                   purpose="chat_tools" if data.get("tools") else "chat")
+                await record_usage(accounting_model, response.get("usage"), purpose="chat_tools" if data.get("tools") else "chat")
             if not response:
                 logger.warning("API返回空响应")
                 return False, "API返回异常：响应体为空", None, ""
@@ -457,9 +429,7 @@ class LlmApiMixin:
             content = message.get("content", "")
             # 清理思考内容
             if content:
-                content = re.sub(
-                    r"<(think|thought)>.*?</\1>", "", content, flags=re.DOTALL
-                )
+                content = re.sub(r"<(think|thought)>.*?</\1>", "", content, flags=re.DOTALL)
                 content = content.strip()
 
             # 清洗完再判断并返回 tool_calls

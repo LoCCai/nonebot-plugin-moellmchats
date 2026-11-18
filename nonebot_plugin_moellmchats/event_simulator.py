@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
@@ -64,7 +64,9 @@ from nonebot.rule import TrieRule
 from .admission import AdmissionRejected, get_dispatch_controller
 from .compat import timeout as timeout_scope
 from .config import config_parser
+from .conversation_slots import conversation_slots
 from .mention_context import mention_scope
+from .native_sessions import NATIVE_SESSION_KEY, confirm_native_reply, stage_native_reply
 from .onebot_facade import onebot_protocol
 from .protocol_registry import protocol_registry
 from .runtime_metrics import runtime_metrics
@@ -75,6 +77,7 @@ if TYPE_CHECKING:
 _capture_key: ContextVar[str | None] = ContextVar("moellm_capture_key", default=None)
 _synthetic_plugin: ContextVar[str | None] = ContextVar("moellm_synthetic_plugin", default=None)
 _captures: dict[str, dict] = {}
+_final_delivery: ContextVar[dict | None] = ContextVar("moellm_final_delivery", default=None)
 _SESSION_ORIGIN_KEY = "_moellm_session_original_message_id"
 _SEND_ACTIONS = {
     "send_msg",
@@ -82,6 +85,8 @@ _SEND_ACTIONS = {
     "send_private_msg",
     "send_message",
 }
+_FILE_UPLOAD_ACTIONS = {"upload_group_file", "upload_private_file"}
+_DELIVERY_ACTIONS = _SEND_ACTIONS | _FILE_UPLOAD_ACTIONS | {"send_group_forward_msg", "send_private_forward_msg"}
 _AT_PATTERN = re.compile(r"\[(at:(\d+)|at_all|history_at:([a-f0-9]{32})|CQ:at,qq=([1-9][0-9]{0,11}))\]")
 _MENTION_QUERY_COMMANDS = frozenset(
     {
@@ -155,6 +160,7 @@ class PluginDispatchResult:
     api_unknown: int = 0
     api_read_failed: int = 0
     api_read_recovered: int = 0
+    api_delivery_recovered: int = 0
     api_unresolved_failed: int = 0
     api_unresolved_unknown: int = 0
     mutating_api_succeeded: int = 0
@@ -176,6 +182,7 @@ class PluginDispatchResult:
             "api_unknown",
             "api_read_failed",
             "api_read_recovered",
+            "api_delivery_recovered",
             "api_unresolved_failed",
             "api_unresolved_unknown",
             "mutating_api_succeeded",
@@ -270,17 +277,133 @@ def _api_effect(protocol: str, api: str) -> str | None:
 
 def _unknown_api_result(exception: Exception) -> bool:
     if isinstance(exception, (ActionFailed, ApiNotAvailable)):
-        return False
+        info = getattr(exception, "info", {})
+        wording = getattr(exception, "wording", None) or (info.get("wording", "") if isinstance(info, dict) else "")
+        # A gateway may wrap a transport failure as ActionFailed. Explicit QQ
+        # rejection and a missing acknowledgement have different replay rules.
+        return any(
+            term in str(wording).lower()
+            for term in (
+                "timed out",
+                "timeout",
+                "client closed",
+                "client disconnected",
+                "connection closed",
+                "stale socket",
+                "no message receipt",
+                "delivery was not confirmed",
+                "econnreset",
+                "epipe",
+            )
+        )
     return isinstance(
         exception,
         (NetworkError, TimeoutError, asyncio.TimeoutError, ConnectionError),
     )
 
 
+def _delivery_matches(scope, bot, data):
+    if scope is None or scope["capture_key"] != _capture_key.get():
+        return False
+    if str(getattr(bot, "self_id", "")) != scope["bot_id"]:
+        return False
+    field, target = scope["target"]
+    return str(data.get(field, "")) == target
+
+
+@asynccontextmanager
+async def capture_final_delivery(bot, event):
+    """Settle retries only inside one host-managed, completed delivery.
+
+    The host still owns its image -> file -> slices policy. A successful API
+    for another target or another message can never erase this one's failure.
+    """
+    key = _capture_key.get()
+    context = _captures.get(key) if key is not None else None
+    if context is None:
+        yield
+        return
+    field = "group_id" if getattr(event, "group_id", None) is not None else "user_id"
+    scope = {
+        "capture_key": key,
+        "bot_id": str(bot.self_id),
+        "target": (field, str(getattr(event, field))),
+        "failed": 0,
+        "confirmed": 0,
+        "unknown": False,
+    }
+    existing = _final_delivery.get()
+    if existing is not None and all(existing[k] == scope[k] for k in ("capture_key", "bot_id", "target")):
+        yield
+        return
+    token = _final_delivery.set(scope)
+    try:
+        yield
+        if scope["confirmed"] and not scope["unknown"]:
+            recovered = scope["failed"]
+            context["api_delivery_recovered"] += recovered
+            context["api_unresolved_failed"] = max(0, context["api_unresolved_failed"] - recovered)
+    finally:
+        _final_delivery.reset(token)
+
+
+def _extract_forward_data(nodes, *, protocol: str) -> dict:
+    # Custom forward nodes carry content; reference-only nodes do not. Never
+    # fetch arbitrary historical messages or represent IDs as quote content.
+    limit = max(1, min(int(config_parser.get_config("max_tool_result_chars", 6000)), 64000))
+    texts, image_count, visited = [], 0, 0
+    remaining = limit
+
+    def walk(values, depth=0):
+        nonlocal remaining, image_count, visited
+        if depth > 6 or not isinstance(values, (list, tuple)):
+            return
+        for node in values:
+            visited += 1
+            if visited > 200 or remaining <= 0:
+                return
+            data = node.get("data", {}) if isinstance(node, dict) else getattr(node, "data", {})
+            content = data.get("content") if isinstance(data, dict) else None
+            if content is None:
+                continue
+            try:
+                cls = _message_class(protocol)
+                if isinstance(content, list):
+                    content = [
+                        cls.get_segment_class()(type=s["type"], data=s.get("data", {})) if isinstance(s, dict) else s
+                        for s in content
+                    ]
+                message = cls(content)
+            except (TypeError, ValueError):
+                continue
+            for segment in message:
+                if segment.type == "node":
+                    walk([segment], depth + 1)
+                elif segment.type == "text":
+                    value = str(segment.data.get("text", ""))
+                    texts.append(value[:remaining])
+                    remaining = max(0, remaining - len(value))
+                elif segment.type == "image":
+                    image_count += 1
+                if remaining <= 0:
+                    break
+
+    walk(nodes)
+    text = "\n".join(texts)
+    if remaining <= 0 or visited > 200:
+        text += "\n...[合并转发正文已截断]"
+    if image_count:
+        text += f"\n[合并转发内含图片 {image_count} 张]"
+    if not text:
+        text = "已发送合并转发；节点仅含消息引用或非文本内容，未取得正文，不能推断具体数据。"
+    return {"text": text, "images": []}
+
+
 async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
     """Stage API evidence; only ``on_called_api`` may commit success."""
     key = _capture_key.get()
     if key is None:
+        stage_native_reply(bot, api, data)
         return
     context = _captures.get(key)
     if context is None:
@@ -300,19 +423,29 @@ async def _capture_outgoing_api(bot: Bot, api: str, data: dict) -> None:
         )
         data["message"] = fixed
         output = _extract_send_data(fixed, protocol=protocol)
+    if api in {"send_group_forward_msg", "send_private_forward_msg"}:
+        output = _extract_forward_data(data.get("messages") or data.get("nodes") or [], protocol=protocol)
     context["pending_api"][id(data)] = {
         "api": api,
         "effect": _api_effect(protocol, api),
         "output": output,
     }
-    if api in _SEND_ACTIONS and message is not None:
+    if api in _DELIVERY_ACTIONS and _delivery_matches(_final_delivery.get(), bot, data):
+        context["pending_api"][id(data)]["final_delivery"] = _final_delivery.get()
+    if api in _DELIVERY_ACTIONS:
         from .request_recovery import _message_json, current_binding
 
         binding = current_binding()
         if binding is not None:
             # Arbitrary plugins own their send path. Record evidence without
             # forging receipts or replaying their side effects after restart.
-            entry = {"message": _message_json(bot, data["message"]), "kwargs": {}, "state": "sending", "external": True}
+            entry = {
+                "message": _message_json(bot, message) if message is not None else [],
+                "kwargs": {},
+                "state": "sending",
+                "external": True,
+                "delivery_api": api,
+            }
             binding.record["outbox"].append(entry)
             context["pending_api"][id(data)]["recovery_entry"] = entry
             await binding.save()
@@ -327,9 +460,9 @@ async def _confirm_outgoing_api(
 ) -> None:
     """Commit captured output/effect only after the adapter confirms success."""
 
-    del bot
     key = _capture_key.get()
     if key is None:
+        confirm_native_reply(bot, exception, api, data, result)
         return
     context = _captures.get(key)
     if context is None:
@@ -337,17 +470,28 @@ async def _confirm_outgoing_api(
     staged = context["pending_api"].pop(id(data), None)
     if staged is None:
         staged = {"api": api, "effect": None, "output": None}
+    from .request_recovery import has_delivery_receipt
+
+    missing_receipt = exception is None and api in (_DELIVERY_ACTIONS - _FILE_UPLOAD_ACTIONS) and not has_delivery_receipt(result)
+    unknown_result = missing_receipt or (exception is not None and _unknown_api_result(exception))
+    failed = exception is not None or missing_receipt
     entry = staged.get("recovery_entry")
     if entry is not None:
-        from .request_recovery import current_binding, has_delivery_receipt
+        from .request_recovery import current_binding
 
         binding = current_binding()
-        entry["state"] = "sent" if exception is None and has_delivery_receipt(result) else "unknown"
+        # Upload APIs acknowledge success without a chat message_id. Never
+        # invent one, and never label a definite rejection as an unknown send.
+        entry["state"] = "unknown" if unknown_result else "cancelled" if failed else "sent"
         if binding is not None:
             await binding.save()
-    if exception is not None:
+    scope = staged.get("final_delivery")
+    if scope is not None:
+        scope["unknown"] |= bool(unknown_result)
+        scope["failed"] += int(failed)
+        scope["confirmed"] += int(not failed)
+    if failed:
         context["api_failed"] += 1
-        unknown_result = _unknown_api_result(exception)
         if unknown_result:
             context["api_unknown"] += 1
         if staged.get("effect") == "read_only":
@@ -366,6 +510,13 @@ async def _confirm_outgoing_api(
     output = staged.get("output")
     if isinstance(output, dict):
         context["messages"].append(output)
+    elif api in _FILE_UPLOAD_ACTIONS:
+        context["messages"].append(
+            {
+                "text": "已确认将结果作为群文件发送。" if api == "upload_group_file" else "已确认将结果作为私聊文件发送。",
+                "images": [],
+            }
+        )
 
 
 V11Bot.on_calling_api(_capture_outgoing_api)
@@ -420,6 +571,50 @@ def _restore_query_mentions(command: str, source: dict) -> str:
     return head + separator + arguments
 
 
+def normalize_plugin_command(command: str, source: dict | None = None) -> str:
+    """Bind copied moderation labels only to unique current-message mentions."""
+    source = source or {}
+    command = _restore_query_mentions(command, source)
+    parts = re.fullmatch(r"(\S+)(\s+)([\s\S]*)", command)
+    if parts and parts[1].lstrip("/!！") in {"ban", "禁言", "unban", "解禁", "解除禁言", "取消禁言"}:
+        names: dict[str, dict[str, int]] = {}
+        for index, target in enumerate(source.get("mentions") or [], 1):
+            name, qq = str(target.get("name") or ""), str(target.get("qq") or "")
+            # Explicit identity tokens always win over lookalike nicknames.
+            if name.strip() and qq and not name.strip().isdecimal() and "[" not in name and "]" not in name:
+                names.setdefault(name, {}).setdefault(qq, index)
+        arguments = parts[3]
+        replacements: list[tuple[int, int, int, str]] = []
+        for name, identities in sorted(names.items(), key=lambda pair: -len(pair[0])):
+            # Only a copied @label can be repaired. Bare words may be other
+            # operands, and overlapping labels can refer to different users.
+            pattern = r"(?<!\S)@" + re.escape(name) + r"(?=\s|$)"
+            for match in re.finditer(pattern, arguments):
+                if len(identities) != 1:
+                    raise MentionIdentityRequired("管理目标存在同名，请使用当前消息的真实 @ 身份，已停止执行")
+                qq, index = next(iter(identities.items()))
+                if any(
+                    start < match.end() and match.start() < end and qq != other_qq for start, end, _, other_qq in replacements
+                ):
+                    raise MentionIdentityRequired("管理目标昵称存在歧义，请使用当前消息的真实 @ 身份，已停止执行")
+                replacements.append((match.start(), match.end(), index, qq))
+        covered_until = 0
+        normalized: list[str] = []
+        for start, end, index, _ in sorted(replacements, key=lambda item: (item[0], -item[1])):
+            if start < covered_until:
+                continue
+            normalized.extend((arguments[covered_until:start], f"[at:{index}]"))
+            covered_until = end
+        normalized.append(arguments[covered_until:])
+        arguments = "".join(normalized)
+        command = parts[1] + parts[2] + arguments
+        if re.search(r"(?<!\S)@", arguments):
+            raise MentionIdentityRequired("管理指令中的昵称不是有效目标，请使用本轮真实 @ 映射，已停止执行")
+    if re.search(r"[\x00-\x08\x0b-\x1f\x7f]", command):
+        raise MentionIdentityRequired("指令含无效控制字符，请保留本轮真实 @ 身份后重新生成，已停止执行")
+    return command
+
+
 def _build_fake_message(
     command: str,
     source: dict | None = None,
@@ -427,7 +622,7 @@ def _build_fake_message(
     protocol: str = "onebot_v11",
 ) -> Any:
     source = source or {}
-    command = _restore_query_mentions(command, source)
+    command = normalize_plugin_command(command, source)
     mentions = source.get("mentions") or []
     reply_user = source.get("reply_user") or {}
     message_class = _message_class(protocol)
@@ -617,6 +812,14 @@ async def _dispatch_targeted(bot: Bot, event, plugin_name: str) -> None:
         local_state = state.copy()
         if context is not None:
             local_state[_SESSION_ORIGIN_KEY] = context["original_id"]
+            marker = matcher._default_state.get(NATIVE_SESSION_KEY) if matcher.temp else None
+            local_state[NATIVE_SESSION_KEY] = marker or {
+                "session": uuid.uuid4().hex,
+                "scope": mention_scope(event),
+                "plugin": plugin_name,
+                "plugin_id": plugin_id,
+                "command": event.get_plaintext().split(maxsplit=1)[0][:64],
+            }
         try:
             await _observe_and_run_matcher(
                 matcher,
@@ -695,7 +898,9 @@ def _dispatch_result(
         int(context.get("api_unresolved_failed", 0)),
         max(
             0,
-            int(context.get("api_failed", 0)) - int(context.get("api_read_failed", 0)),
+            int(context.get("api_failed", 0))
+            - int(context.get("api_read_failed", 0))
+            - int(context.get("api_delivery_recovered", 0)),
         ),
         unresolved_unknown,
     )
@@ -746,6 +951,7 @@ def _dispatch_result(
         api_unknown=int(context.get("api_unknown", 0)),
         api_read_failed=int(context.get("api_read_failed", 0)),
         api_read_recovered=read_recovered,
+        api_delivery_recovered=int(context.get("api_delivery_recovered", 0)),
         api_unresolved_failed=unresolved_failed,
         api_unresolved_unknown=unresolved_unknown,
         mutating_api_succeeded=int(context.get("mutating_api_succeeded", 0)),
@@ -766,6 +972,7 @@ def _empty_dispatch_context() -> dict[str, Any]:
         "api_unknown": 0,
         "api_read_failed": 0,
         "api_read_recovered": 0,
+        "api_delivery_recovered": 0,
         "api_unresolved_failed": 0,
         "api_unresolved_unknown": 0,
         "mutating_api_succeeded": 0,
@@ -872,7 +1079,7 @@ class EventSimulator:
         try:
             if "[history_at:" in command_str and plugin_name != "qi_zmws":
                 raise MentionIdentityRequired("此插件不支持历史玩家查询目标，已停止执行")
-            async with get_dispatch_controller().slot():
+            async with get_dispatch_controller().slot(), conversation_slots.activity(command_str):
                 fake_event, fake_id = _build_event(original_event, command_str, format_message_dict)
                 capture_id = uuid.uuid4().hex
                 context = _empty_dispatch_context()

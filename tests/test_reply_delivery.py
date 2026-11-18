@@ -1,10 +1,14 @@
+import asyncio
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from nonebot.adapters.onebot.v11.exception import ActionFailed
+from nonebot.adapters.onebot.v11.exception import ActionFailed, NetworkError
+from nonebot.exception import ApiNotAvailable, FinishedException
 import pytest
 
+import nonebot_plugin_moellmchats as plugin
+from nonebot_plugin_moellmchats import delivery_errors
 from nonebot_plugin_moellmchats import moe_llm as module
 from nonebot_plugin_moellmchats.delivery_errors import reply_delivery_failure
 from nonebot_plugin_moellmchats.moe_llm import MoeLlm
@@ -20,6 +24,81 @@ def test_send_ack_timeout_is_unknown_and_diagnostics_do_not_contain_reply_or_cre
         "result_unknown": True,
         "retry": False,
     }
+
+
+@pytest.mark.parametrize(
+    "wording",
+    [
+        "SQLITE_BUSY: database is locked",
+        "SQLITE_LOCKED: database table is locked",
+    ],
+)
+def test_storage_failure_after_send_is_unknown_and_never_retried(wording):
+    failure = ActionFailed(status="failed", retcode=100, data=None, wording=wording)
+    assert reply_delivery_failure(failure) == {
+        "error_type": "ActionFailed",
+        "retcode": 100,
+        "result_unknown": True,
+        "retry": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["llm_matcher", "ai_matcher"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        ActionFailed(status="failed", retcode=100, data=None, wording="SQLITE_BUSY: database is locked"),
+        ActionFailed(status="failed", retcode=100, data=None, wording="message rejected"),
+        NetworkError("connection closed"),
+        ApiNotAvailable("OneBot V11"),
+    ],
+)
+async def test_empty_input_matcher_finishes_after_exactly_one_send_without_model(monkeypatch, entry, failure):
+    matcher = getattr(plugin, entry)
+    send = AsyncMock(side_effect=failure)
+
+    async def finish_reply(message=None):
+        if message is not None:
+            await send(message)
+        raise FinishedException
+
+    finish = AsyncMock(side_effect=finish_reply)
+    model = AsyncMock()
+    voice = AsyncMock(return_value=False)
+    log = Mock()
+    monkeypatch.setattr(matcher, "send", send)
+    monkeypatch.setattr(matcher, "finish", finish)
+    monkeypatch.setattr(plugin, "handle_llm", model)
+    monkeypatch.setattr(plugin, "acknowledge_mention", AsyncMock())
+    monkeypatch.setattr(plugin._speech_library, "try_ping_voice", voice)
+    monkeypatch.setattr(plugin, "get_reply_messages", lambda _kind: ["招呼语"])
+    monkeypatch.setattr(plugin.config_parser, "get_config", lambda _key, default=None: True)
+    monkeypatch.setattr(delivery_errors, "logger", log, raising=False)
+    from nonebot.adapters.onebot.v11 import Message
+
+    kwargs = {"bot": object(), "event": SimpleNamespace(message=Message())}
+    if entry == "ai_matcher":
+        kwargs["args"] = Message()
+    with pytest.raises(FinishedException):
+        await matcher.handlers[0].call(**kwargs)
+    send.assert_awaited_once()
+    assert str(send.await_args.args[0]) == "招呼语"
+    finish.assert_awaited_once()
+    model.assert_not_awaited()
+    assert log.warning.call_count == (1 if failure else 0)
+    if failure:
+        assert log.warning.call_args.args[1] == reply_delivery_failure(failure)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [asyncio.CancelledError(), RuntimeError("bug")])
+async def test_local_reply_does_not_hide_cancellation_or_programming_errors(failure):
+    matcher = SimpleNamespace(send=AsyncMock(side_effect=failure), finish=AsyncMock())
+    with pytest.raises(type(failure)):
+        await delivery_errors.finish_local_reply(matcher, "招呼语")
+    matcher.finish.assert_not_awaited()
 
 
 @pytest.mark.asyncio

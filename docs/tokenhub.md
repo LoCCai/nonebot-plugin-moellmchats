@@ -1,4 +1,4 @@
-# 腾讯 TokenHub 模型与工具
+# 腾讯 TokenHub、智谱模型与工具
 
 使用广州 OpenAI 兼容入口 `https://tokenhub.tencentmaas.com/v1`。`providers.toml` 可以引用宿主 NoneBot 配置中的密钥，解析后的密钥只保留在内存中：
 
@@ -16,7 +16,7 @@ no_tools = false
 extra_payload = { thinking = { type = "disabled" } }
 ```
 
-宿主 `.env.prod` 中的 `txhy_api_key` 是唯一密钥来源。`api_key_config` 也适用于其他服务商；原 `api_key` 字符串和列表继续支持。`discover_models=false` 让手动能力目录保持稳定；`disabled_models` 可以排除已确认不可用的模型，远程缓存及下次刷新不会将其重新加入。
+宿主 `.env.prod` 中的 `txhy_api_key` 是唯一密钥来源。`api_key_config` 也适用于其他服务商，例如智谱的 `glm_api_key`；均支持单字符串、原生列表、JSON 数组字符串及逗号/换行分隔的多个 Key。多个 Key 去重后轮询分流。`discover_models=false` 让手动能力目录保持稳定；`disabled_models` 可以排除已确认不可用的模型，远程缓存及下次刷新不会将其重新加入。
 
 `model_type` 区分 `chat`、`image`、`video`、`3d`、`speech`、`music`、`transcription`、`embedding`、`multimodal_embedding`。非对话模型不能加入分类/聊天池，也不能设置为识图或聊天固定模型。历史未声明类型的模型保持兼容。
 
@@ -43,4 +43,6 @@ GLM 5.3 系列不能关闭思考，低延迟请求可设 `reasoning_effort=low`�
 
 图像、视频、3D 生成沿用宿主绘图手动授权，并在等待生成槽位后复查授权。常用 `generate_image` 直接发送图片；扩展原生接口返回任务结果和下载链接供 AI 继续处理。当前会话的语音附件在配置语音识别模型后先转写，再交给资料分析模型，避免把音频错传给只支持图片/视频的视觉模型。
 
-当前能力目录依据腾讯公开指南固定 52 种调用方式，覆盖 81 个非对话模型。参数文档和目录随代码发布；存在于平台 `/models` 列表并不代表账号已领取该模型的免费资源包。
+智谱 `cogview-3-flash` 使用 `/images/generations`，不支持聊天 SSE 或参考图改图；配置为绘图角色后，`generate_image` 会直接发图，参考图请求跳转到已配置的改图备用模型。`cogvideox-flash` 使用 `glm_video` 能力，先查询指南，再通过 `call_model_capability(operation="glm_video", parameters={"prompt":"白云在天空中飘动"})` 提交。返回后使用 `get_model_task` 查询，完成时返回视频地址；不循环等待或重复生成。任务绑定提交时的 Key，移除该 Key 后明确提示，避免切到另一账号查询失败。
+
+当前能力目录保留腾讯公开指南中的 52 种调用方式，并增加智谱图片、视频能力。参数文档和目录随代码发布；存在于平台 `/models` 列表并不代表账号已领取该模型的免费资源包。
