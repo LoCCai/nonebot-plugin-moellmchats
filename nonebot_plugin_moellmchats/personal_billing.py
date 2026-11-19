@@ -24,6 +24,10 @@ def active():
     return _adapter is not None and _adapter.active()
 
 
+def speech_transport():
+    return getattr(_adapter, 'speech_audio', None) if active() else None
+
+
 def snapshot():
     return _adapter.snapshot() if _adapter is not None else None
 

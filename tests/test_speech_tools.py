@@ -560,3 +560,13 @@ async def test_three_models_reach_existing_reports_with_user_group_and_cache(mon
         assert '"audio_tokens": 8' in next(row["raw_usage"] for row in rows if row["usage_known"])
     finally:
         await runner.cleanup()
+
+@pytest.mark.asyncio
+async def test_managed_speech_uses_only_host_transport(monkeypatch):
+    from nonebot_plugin_moellmchats import personal_billing
+    async def host(payload, *, timeout_seconds):
+        assert payload['model'] == 'mimo-v2.5-tts'
+        raise RuntimeError('denied')
+    monkeypatch.setattr(personal_billing,'speech_transport',lambda:host)
+    with pytest.raises(speech.SpeechError, match='渠道'):
+        await speech._request_audio({'model':'mimo-v2.5-tts'},timeout_seconds=5)

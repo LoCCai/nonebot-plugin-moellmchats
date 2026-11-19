@@ -99,7 +99,8 @@ def speech_enabled() -> bool:
 
 
 def speech_available() -> bool:
-    return bool(speech_enabled() and speech_config.mi_api_key.get_secret_value())
+    from . import personal_billing
+    return bool(speech_enabled() and (personal_billing.speech_transport() or speech_config.mi_api_key.get_secret_value()))
 
 
 def mark_voice_sent(*, tool_reply: str | None = None) -> None:
@@ -195,6 +196,14 @@ def build_payload(text: str, kind: str, *, reference: bytes | None = None, style
 async def _request_audio(payload: dict, *, timeout_seconds: float | None = None) -> bytes:
     from . import personal_billing
 
+    transport = personal_billing.speech_transport()
+    if transport:
+        try:
+            return _validate_audio(await transport(payload, timeout_seconds=timeout_seconds))
+        except Exception as error:
+            # A host owns the payer and the receipt. Never retry against a
+            # shared upstream key after a managed submission.
+            raise SpeechError(personal_billing.error_message(error) or "语音渠道暂不可用，请核对原结果。") from None
     if personal_billing.active():
         raise SpeechError("语音接口尚未接入个人计费，本次未调用公共密钥。")
     if not speech_available():
