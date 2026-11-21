@@ -14,6 +14,7 @@ from nonebot import get_driver
 from nonebot.log import logger
 
 from .config import config_parser, image_generation_config
+from .vision_input import download_reference_image, vision_parts
 from .media_context import (
     MAX_DOCUMENT_CHARS,
     MediaAsset,
@@ -22,7 +23,6 @@ from .media_context import (
     asset_bytes,
     collect_message_context,
     context_scope,
-    download_media,
     media_store,
 )
 from .media_documents import extract_document
@@ -180,7 +180,9 @@ async def _prepared_content(
                     # Keep extracted text for fallback models without native files.
                     parts.append({"type": "file", "file": {"file_url": url}, "_text_fallback": bool(extracted.strip())})
                 for picture in pictures:
-                    parts.append(await media_part(MediaAsset("image", asset.name, payload=picture, mime="image/png")))
+                    parts.extend(await vision_parts(picture))
+            elif asset.kind == "image" or asset.mime.startswith("image/"):
+                parts.extend(await vision_parts(asset.payload or b""))
             else:
                 parts.append(await media_part(asset))
         except MediaError as error:
@@ -289,7 +291,7 @@ async def generate_image(
     image_refs: list[str] | None = None,
     image_urls: list[str] | None = None,
     continue_previous: bool = False,
-    size: str = "1024x1024",
+    size: str | None = None,
     mode: str = "default",
 ) -> ToolResult:
     if not await can_generate_image(_tool_context):
@@ -310,7 +312,7 @@ async def generate_image(
         scope = context_scope(_tool_context)
         if mode not in {"default", "detailed"}:
             raise MediaError("绘图模式仅支持 default 或 detailed。")
-        dimensions = image_dimensions(size)
+        dimensions = image_dimensions(size) if size is not None else None
         if re.search(r"(?<![a-z0-9])4\s*k(?![a-z0-9])", prompt, re.I) and dimensions not in {(3840, 2160), (2160, 3840)}:
             raise MediaError("绘图描述要求4K，但size未设为4K；请使用3840x2160或2160x3840。本次未生成图片。")
         fingerprint = hashlib.sha256(
@@ -338,7 +340,7 @@ async def generate_image(
                 asset = await asset_bytes(_tool_context, reference)
                 references.append(asset.payload or b"")
             for url in image_urls or []:
-                image, _ = await download_media(url)
+                image, _ = await download_reference_image(url)
                 references.append(image)
             if continue_previous and not references:
                 previous = _previous_images.get(scope)
@@ -363,6 +365,11 @@ async def generate_image(
                             text="该绘图请求已有计费回执，未重复生成或扣费；请核对原结果。",
                             metadata={"status": "already_attempted"},
                         )
+                size_receipt = {}
+                if size is None and references:
+                    options["size_receipt"] = size_receipt
+                else:
+                    size = size or "1024x1024"
                 picture, model = await generate_picture(prompt, references, size=size, **options)
             picture, actual_width, actual_height = await asyncio.to_thread(_drawing_output, picture)
             generated = True
@@ -379,7 +386,8 @@ async def generate_image(
                     del _drawing_requests[next(iter(_drawing_requests))]
             # Send exactly once. A send failure must not repeat generation.
             await deliver_image(_tool_context, picture)
-        matched = (actual_width, actual_height) == dimensions
+        size = size_receipt.get("size", size)
+        matched = size == f"{actual_width}x{actual_height}"
         note = "" if matched else " 与请求尺寸不符，不可宣称已达到请求分辨率；不要自动重新生成。"
         fee_note = (
             " 本次使用1次绘图专用额度。"
@@ -483,7 +491,7 @@ GENERATE_IMAGE_TOOL = _spec(
             "pattern": "^[1-9][0-9]{2,3}x[1-9][0-9]{2,3}$",
             "maxLength": 9,
             "description": (
-                "实际输出像素，默认1024x1024。用户要求4K时必须填3840x2160（横版）或2160x3840（竖版），不能仅在prompt写4K"
+                "用户指定的输出像素。改图默认省略，由工具按原图比例与模型能力选尺寸；无参考图默认1024x1024。用户要求4K时必须填3840x2160（横版）或2160x3840（竖版），不能仅在prompt写4K"
                 "。2K可用2048x1152。新GPT Image支持符合约束的自定义尺寸；4K不等于detailed模式。"
             ),
         },

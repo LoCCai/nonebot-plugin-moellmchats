@@ -428,17 +428,22 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         return result
 
     async def _request_with_rate_limit_fallback(self, session, headers, data, stream):
+        from .media_context import MediaError
         from .vision_input import inline_qq_images
 
         if data.get("messages"):
             cache = getattr(self, "_vision_input_cache", None)
             if cache is None:
                 cache = self._vision_input_cache = {}
-            data["messages"] = await inline_qq_images(
-                data["messages"],
-                cache,
-                timeout=min(12.0, self._remaining_request_seconds() / 4),
-            )
+            try:
+                data["messages"] = await inline_qq_images(
+                    data["messages"],
+                    cache,
+                    timeout=min(12.0, self._remaining_request_seconds() / 4),
+                )
+            except MediaError as error:
+                self._last_api_error_non_retryable = True
+                return False, str(error), None, "", stream
         attempted = getattr(self, "_rate_limit_attempted_models", None)
         if attempted is None:
             attempted = self._rate_limit_attempted_models = set()

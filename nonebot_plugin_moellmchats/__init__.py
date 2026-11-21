@@ -20,7 +20,7 @@ from nonebot.params import CommandArg, RegexGroup
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata, require
 from nonebot.plugin.on import on_command, on_fullmatch, on_message, on_notice, on_regex
-from nonebot.rule import to_me
+from nonebot.rule import Rule, to_me
 
 require("nonebot_plugin_localstore")
 
@@ -44,6 +44,7 @@ from . import usage_tools as _usage_tools  # noqa: F401
 from .agent_context_runtime import runtime_resource_host
 from .chain_view import render_chain_image
 from .chat_runtime import (
+    addressed_to_chat,
     acknowledge_mention,
     cd,
     chat_rule,
@@ -435,7 +436,7 @@ async def group_llm_switch_command(event: MessageEvent):
 
 
 llm_matcher = on_message(
-    rule=to_me() & chat_rule,
+    rule=Rule(addressed_to_chat, chat_rule),
     priority=99,
     block=True,
 )

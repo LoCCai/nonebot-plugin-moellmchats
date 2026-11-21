@@ -336,7 +336,7 @@ class _PublicResolver(aiohttp.resolver.DefaultResolver):
         return rows
 
 
-async def download_media(url: str) -> tuple[bytes, str]:
+async def download_media(url: str, *, max_bytes: int = MAX_MEDIA_BYTES) -> tuple[bytes, str]:
     """Validate every redirect and the addresses actually used by the connector."""
     current = url
     try:
@@ -350,13 +350,13 @@ async def download_media(url: str) -> tuple[bytes, str]:
                         continue
                     if response.status != 200:
                         raise MediaError(f"附件下载失败（HTTP {response.status}）。")
-                    if response.content_length and response.content_length > MAX_MEDIA_BYTES:
-                        raise MediaError("附件超过 20MiB，请缩小或分段后重试。")
+                    if response.content_length and response.content_length > max_bytes:
+                        raise MediaError(f"附件超过 {max_bytes // (1024 * 1024)} MiB，请缩小或分段后重试。")
                     data = bytearray()
                     async for chunk in response.content.iter_chunked(65536):
                         data.extend(chunk)
-                        if len(data) > MAX_MEDIA_BYTES:
-                            raise MediaError("附件超过 20MiB，请缩小或分段后重试。")
+                        if len(data) > max_bytes:
+                            raise MediaError(f"附件超过 {max_bytes // (1024 * 1024)} MiB，请缩小或分段后重试。")
                     return bytes(data), response.headers.get("content-type", "").split(";", 1)[0]
         raise MediaError("附件重定向次数过多。")
     except MediaError:
@@ -423,7 +423,12 @@ async def asset_bytes(context: ToolContext, reference: str) -> MediaAsset:
                 continue
     if not url:
         raise MediaError("QQ 框架未返回可下载地址；该附件目前无法读取。")
-    payload, mime = await download_media(str(url))
+    if asset.kind == "image":
+        from .vision_input import download_reference_image
+
+        payload, mime = await download_reference_image(str(url))
+    else:
+        payload, mime = await download_media(str(url))
     asset.data["resolved_url"] = str(url)
     if asset.kind == "audio" and (payload.startswith(b"#!SILK") or payload.startswith(b"\x02#!SILK")):
         raise MediaError("这条QQ语音仍为SILK格式，框架转码未成功；本次没有按MP3提交模型。")

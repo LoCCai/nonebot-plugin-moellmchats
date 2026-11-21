@@ -59,6 +59,36 @@ def image_dimensions(size: str) -> tuple[int, int]:
     return width, height
 
 
+def reference_output_size(reference: bytes, custom: bool) -> str:
+    """Pick a supported canvas by the first reference's displayed aspect and pixel count."""
+    import math
+    from PIL import Image
+
+    with Image.open(BytesIO(reference)) as image:
+        w, h = image.size
+        if image.getexif().get(274) in (5, 6, 7, 8):
+            w, h = h, w
+    if not custom:
+        return min(LEGACY_IMAGE_SIZES, key=lambda size: abs(
+            math.log((image_dimensions(size)[0] / image_dimensions(size)[1]) / (w / h))
+        ))
+    ratio = max(1 / 3, min(3.0, w / h))
+    pixels = min(max(w * h, 655_360), 8_294_400, 3840**2 / max(ratio, 1 / ratio))
+    ideal_w = math.sqrt(pixels * ratio)
+    ideal_h = math.sqrt(pixels / ratio)
+    # Grid rounding at an area or aspect boundary can cross it. Check adjacent grid points.
+    candidates = []
+    for width in range(max(16, int(ideal_w // 16) * 16 - 16), min(3840, int(ideal_w // 16) * 16 + 32) + 1, 16):
+        for height in range(max(16, int(ideal_h // 16) * 16 - 16), min(3840, int(ideal_h // 16) * 16 + 32) + 1, 16):
+            size = f"{width}x{height}"
+            try:
+                image_dimensions(size)
+            except MediaError:
+                continue
+            candidates.append(((width / ideal_w - 1)**2 + (height / ideal_h - 1)**2, size))
+    return min(candidates)[1]
+
+
 def configured_model(role: str) -> dict:
     model = model_selector.get_model(role)
     if not model or not model.get("key"):
@@ -217,11 +247,13 @@ async def complete_media(
 
 
 async def generate_picture(
-    prompt: str, references: list[bytes], *, size: str = "1024x1024", mode: str = "default"
+    prompt: str, references: list[bytes], *, size: str | None = None, mode: str = "default", size_receipt: dict | None = None
 ) -> tuple[bytes, str]:
     if len(references) > 6:
         raise MediaError("最多 6 张参考图。")
-    width, height = image_dimensions(size)
+    requested_size = size
+    if size is not None:
+        image_dimensions(size)
     uris = [image_uri(data) for data in references]
     root = configured_model("image_model")
     if mode != "default":
@@ -235,6 +267,11 @@ async def generate_picture(
     for _ in range(5):
         if recovery := current_binding():
             recovery.pause_if_stopping()
+        size = requested_size or (reference_output_size(references[0], current.get("supports_custom_image_sizes") is True)
+                                  if references else "1024x1024")
+        width, height = image_dimensions(size)
+        if size_receipt is not None:
+            size_receipt["size"] = size
         if size not in LEGACY_IMAGE_SIZES and current.get("supports_custom_image_sizes") is not True:
             raise MediaError("当前绘图模型未配置自定义尺寸支持，本次未发起绘图；请使用支持4K的模型或1024/1536尺寸。")
         base = current["url"].rstrip("/").removesuffix("/chat/completions")

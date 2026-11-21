@@ -85,3 +85,32 @@ def test_large_drawing_compression_preserves_native_pixels(monkeypatch):
     assert (width, height) == (3840, 2160)
     assert len(calls) == 1
     assert data.startswith(b"RIFF")
+
+
+@pytest.mark.parametrize("source,custom,expected", [
+    ((8256,4030), False, "1536x1024"),
+    ((8256,4030), True, "3840x1872"),
+    ((1024,1536), True, "1024x1536"),
+    ((1152,2048), True, "1152x2048"),
+    ((700,7000), True, "1280x3840"),
+])
+def test_edit_canvas_follows_reference_and_model(source, custom, expected):
+    payload = BytesIO()
+    Image.new("1", source).save(payload, format="PNG")
+    assert models.reference_output_size(payload.getvalue(), custom) == expected
+
+
+@pytest.mark.asyncio
+async def test_automatic_edit_canvas_reaches_provider(tmp_path, monkeypatch):
+    selector = _selector(tmp_path, monkeypatch)
+    selector.models["model-a (good)"].update(image_api_format="openai", supports_custom_image_sizes=False)
+    post = AsyncMock(return_value=(200, {"data": [{"b64_json": base64.b64encode(_png()).decode()}]}))
+    monkeypatch.setattr(models, "_post", post)
+    photo = BytesIO()
+    Image.new("RGB",(1800,900)).save(photo, format="JPEG")
+    receipt = {}
+    await models.generate_picture("保留构图", [photo.getvalue()], size_receipt=receipt)
+    assert receipt == {"size": "1536x1024"}
+    fields = {head["name"]: value for head, _, value in post.call_args.kwargs["form"]._fields}
+    assert fields["size"] == "1536x1024"
+    assert fields["image[]"] == photo.getvalue()

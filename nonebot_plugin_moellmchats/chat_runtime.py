@@ -129,6 +129,18 @@ async def _mention_reaction(bot: Bot, event: MessageEvent, phase: str) -> None:
         logger.debug("LLM 表情反馈未完成：phase={} error_type={}", phase, type(error).__name__)
 
 
+async def addressed_to_chat(bot: Bot, event: MessageEvent) -> bool:
+    if event.is_tome():
+        return True
+    if onebot_protocol(bot, event) != "onebot_v11" or event_scene(event) != "group":
+        return False
+    self_id = bot_self_id(bot, event)
+    return any(
+        seg.type == "at" and str(seg.data.get("qq", "")) == self_id
+        for seg in event_message(event)
+    )
+
+
 async def chat_rule(bot: Bot, event: MessageEvent) -> bool:
     from .event_simulator import is_synthetic_event
 

@@ -322,7 +322,7 @@ async def test_drawing_denied_before_any_media_or_provider_call(monkeypatch, arg
     generate = AsyncMock()
     send = AsyncMock()
     monkeypatch.setattr(tools, "asset_bytes", source)
-    monkeypatch.setattr(tools, "download_media", download)
+    monkeypatch.setattr(tools, "download_reference_image", download)
     monkeypatch.setattr(tools, "generate_picture", generate)
     monkeypatch.setattr(tools, "deliver_image", send)
     context = _context()

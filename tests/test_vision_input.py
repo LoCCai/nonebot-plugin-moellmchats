@@ -53,10 +53,42 @@ async def test_remote_image_cached_without_mutating_original_or_dropping_text(mo
 
 
 @pytest.mark.asyncio
-async def test_failed_fetch_preserves_image_and_cancellation_propagates(monkeypatch):
+async def test_failed_fetch_reports_error_and_cancellation_propagates(monkeypatch):
     messages = [{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://gchat.qpic.cn/test"}}]}]
     monkeypatch.setattr(media_context,"download_media",AsyncMock(side_effect=ValueError("expired")))
-    assert await inline_qq_images(messages,{},timeout=1) == messages
+    with pytest.raises(media_context.MediaError, match="QQ 图片"):
+        await inline_qq_images(messages,{},timeout=1)
     monkeypatch.setattr(media_context,"download_media",AsyncMock(side_effect=asyncio.CancelledError))
     with pytest.raises(asyncio.CancelledError):
         await inline_qq_images(messages,{},timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_chat_preview_and_drawing_reference_are_separate(monkeypatch):
+    from nonebot_plugin_moellmchats.vision_input import download_reference_image, vision_parts
+    # Compressible large PNG, representative of a source above the byte threshold.
+    source = picture((3600,1800))
+    monkeypatch.setattr(media_context, "MAX_MEDIA_BYTES", 256 * 1024)
+    image = Image.open(io.BytesIO(source))
+    raw = io.BytesIO()
+    image.save(raw,format="PNG",compress_level=0)
+    monkeypatch.setattr(media_context,"download_media",AsyncMock(return_value=(raw.getvalue(),"image/png")))
+    ref, mime = await download_reference_image("https://gchat.qpic.cn/example")
+    assert mime == "image/jpeg" and len(ref) <= media_context.MAX_MEDIA_BYTES
+    assert Image.open(io.BytesIO(ref)).size == image.size
+    parts = await vision_parts(ref)
+    assert len(parts) == 1
+    thumb = base64.b64decode(parts[0]["image_url"]["url"].split(",",1)[1])
+    assert Image.open(io.BytesIO(thumb)).size == (2048,1024)
+
+
+def test_drawing_transparency_survives_reencoding():
+    from nonebot_plugin_moellmchats.vision_input import _reduce_photo
+    canvas = Image.new("RGBA",(360,180),(12,34,56,0))
+    ImageDraw.Draw(canvas).rectangle((40,40,150,120),fill="blue")
+    raw = io.BytesIO()
+    canvas.save(raw,format="PNG")
+    data,mime = _reduce_photo(raw.getvalue())
+    with Image.open(io.BytesIO(data)) as out:
+        assert mime == "image/webp" and out.size == canvas.size
+        assert out.getpixel((1,1))[3] == 0 and out.getpixel((60,60))[3] == 255
