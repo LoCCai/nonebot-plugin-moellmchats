@@ -74,8 +74,10 @@ async def test_cumulative_tool_limit_forces_summary_before_round_limit(monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("eligible", [True, False])
-async def test_conversation_retry_keeps_current_image_and_runs_at_most_once(monkeypatch, eligible):
+@pytest.mark.parametrize("mode", ["conversation", "parameter", "resuming", "summary"])
+async def test_conversation_retry_keeps_current_image_and_runs_at_most_once(monkeypatch, mode):
+    from unittest.mock import AsyncMock
+
     chat, _ = _empty_reply_chat(monkeypatch, [])
     current = {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/new"}}]}
     original = [
@@ -91,19 +93,27 @@ async def test_conversation_retry_keeps_current_image_and_runs_at_most_once(monk
         handler.get_send_message_list = lambda **_kwargs: original[1:]
         return handler
     monkeypatch.setattr(module, "MessagesHandler", history)
+    if mode == "resuming":
+        recovery = SimpleNamespace(record={"state": "recovering"}, checkpoint=AsyncMock(),
+                                   pause_if_stopping=lambda: None)
+        monkeypatch.setattr(module, "current_binding", lambda: recovery)
+        monkeypatch.setattr(module, "resume_checkpoint", lambda _record: (original[1:], [], False))
+        chat._tool_retry_blocked_tools = set()
+    elif mode == "summary":
+        chat._request_tool_calls_used = 15
     attempts = []
 
     async def reject(_session, _headers, data, stream):
         attempts.append(data["messages"])
         chat._last_api_http_status = 400
         chat._last_api_error_non_retryable = True
-        chat._last_api_conversation_rejected = eligible
+        chat._last_api_conversation_rejected = mode != "parameter"
         return False, "rejected", None, "", stream
 
     chat._request_with_rate_limit_fallback = reject
     assert await chat.get_llm_chat() == "rejected"
-    assert len(attempts) == (2 if eligible else 1)
-    if eligible:
+    assert len(attempts) == (2 if mode == "conversation" else 1)
+    if mode == "conversation":
         assert [row["role"] for row in attempts[-1]] == ["system", "user"]
         assert attempts[-1][-1] == current
     chat._send_retry_notice.assert_not_awaited()

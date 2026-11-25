@@ -823,7 +823,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                         break
                     if self._last_api_error_non_retryable:
                         if (self._last_api_http_status == 400 and self._last_api_conversation_rejected
-                                and not trimmed_retry_done and not tools_executed
+                                and not (trimmed_retry_done or tools_executed or resuming or force_summary)
                                 and retry_times + 1 < max_retry_times):
                             trimmed = self._trim_context_for_retry(send_message_list)
                             if trimmed is not None:
