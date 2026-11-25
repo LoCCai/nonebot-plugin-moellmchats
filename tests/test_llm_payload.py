@@ -179,3 +179,11 @@ def test_payload_passes_disabled_model_boundary_without_search_read(
     assert data["stream"] is True
     assert stream is True
     assert messages[0]["content"] == "system"
+
+
+def test_registration_questions_select_the_corresponding_lookup():
+    route = PayloadHarness._registration_tool
+    assert route("查询我的注册天数") == "bot_api_query"
+    assert route("查查我的QQ注册时间") == "bot_api_query"
+    assert route("查询我造梦无双入坑时间") == "zmws_player_query"
+    assert route("查询造梦无双的战力") is None

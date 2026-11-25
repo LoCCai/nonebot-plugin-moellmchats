@@ -74,6 +74,14 @@ class LlmPayloadMixin:
             lambda: snapshot.build_llm_payload_schema_record(context),
         )
 
+    @staticmethod
+    def _registration_tool(plain: str) -> str | None:
+        if "造梦" in plain and re.search(r"入坑|创角|创建.{0,2}角色|注册", plain):
+            return "zmws_player_query"
+        if re.search(r"Q龄|QQ.{0,6}注册|(?:我|本人)(?:的)?注册(?:天数|时间|日期|多久)", plain, re.I):
+            return "bot_api_query"
+        return None
+
     async def _prepare_model_info(self, plain: str):
         """预处理：获取模型信息、处理难度分类与视觉判断"""
         self._tool_schema_record = None
@@ -139,6 +147,11 @@ class LlmPayloadMixin:
             and "speak_text" not in self.required_plugins
         ):
             self.required_plugins.append("speak_text")
+
+        registration_tool = self._registration_tool(plain)
+        if (model_selector.get_use_tools() and registration_tool in self.tool_snapshot.custom_tools
+                and registration_tool not in self.required_plugins):
+            self.required_plugins = [*self.required_plugins, registration_tool]
 
         requires_tools = bool(
             model_selector.get_use_tools()
@@ -279,6 +292,11 @@ class LlmPayloadMixin:
         parts.append(
             "需要头像或消息图片时，若提供了bot_api_query，先查get_user_avatar/get_message_images，"
             "取得地址后继续调用图片工具。工具确实失败才能说明获取失败。"
+        )
+        parts.append(
+            "问QQ注册日期、注册天数或Q龄时，调用bot_api_query的get_stranger_info，自己的QQ省略user_id。"
+            "明确问造梦创角或入坑时间时调用zmws_player_query(registration=true)，自己的游戏角色省略uid。"
+            "工具未列出时先发现对应工具。以注册字段的真实查询结果为准，采集日期与注册日期是两种数据。"
         )
         return "".join(parts)
 

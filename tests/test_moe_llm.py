@@ -74,6 +74,42 @@ async def test_cumulative_tool_limit_forces_summary_before_round_limit(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("eligible", [True, False])
+async def test_conversation_retry_keeps_current_image_and_runs_at_most_once(monkeypatch, eligible):
+    chat, _ = _empty_reply_chat(monkeypatch, [])
+    current = {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/new"}}]}
+    original = [
+        {"role": "system", "content": "System"},
+        {"role": "user", "content": "previous question"},
+        {"role": "assistant", "content": "previous answer"},
+        current,
+    ]
+    chat._build_payload = lambda history: ({"messages": [*original], "stream": False}, False)
+    init = module.MessagesHandler
+    def history(user):
+        handler = init(user)
+        handler.get_send_message_list = lambda **_kwargs: original[1:]
+        return handler
+    monkeypatch.setattr(module, "MessagesHandler", history)
+    attempts = []
+
+    async def reject(_session, _headers, data, stream):
+        attempts.append(data["messages"])
+        chat._last_api_http_status = 400
+        chat._last_api_error_non_retryable = True
+        chat._last_api_conversation_rejected = eligible
+        return False, "rejected", None, "", stream
+
+    chat._request_with_rate_limit_fallback = reject
+    assert await chat.get_llm_chat() == "rejected"
+    assert len(attempts) == (2 if eligible else 1)
+    if eligible:
+        assert [row["role"] for row in attempts[-1]] == ["system", "user"]
+        assert attempts[-1][-1] == current
+    chat._send_retry_notice.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_reasoning_only_completion_cannot_finish_silently(monkeypatch):
     chat, _ = _empty_reply_chat(monkeypatch, [(True, "", None, "private reasoning")] * 3)
     result = await chat.get_llm_chat()

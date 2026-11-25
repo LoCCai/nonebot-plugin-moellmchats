@@ -227,8 +227,29 @@ async def test_http_400_policy_detection_uses_only_structured_code_or_type() -> 
     invalid = await api._check_400_error(_ErrorResponse("not-json audit safety content_filter"))
 
     assert ordinary is not None
-    assert "API请求被拒绝" in ordinary
+    assert "HTTP 400" in ordinary
     assert ordinary != "图片或内容可能包含敏感信息"
     assert blocked == "图片或内容可能包含敏感信息"
     assert invalid is not None
-    assert "API请求被拒绝" in invalid
+    assert "HTTP 400" in invalid
+
+
+@pytest.mark.asyncio
+async def test_nested_gateway_error_recognizes_conversation_rejection_without_relaying_body() -> None:
+    api = _Api()
+    payload = {"error": {
+        "code": 11133, "extError": {"code": "invalid_parameter_value"},
+        "requestId": "trace-123", "retry_policy": {"retry": False},
+        "displayTips": {"en": "This model does not accept the current conversation. private details"},
+    }}
+    body = json.dumps(payload)
+    info = api._extract_api_error_info(body)
+    assert (info["code"], info["extCode"], info["requestId"], info["retry"]) == (
+        "11133", "invalid_parameter_value", "trace-123", "false")
+    reply = await api._check_400_error(_ErrorResponse(body))
+    assert api._last_api_conversation_rejected
+    assert "拒收了当前对话" in reply and "trace-123" in reply
+    assert "private details" not in reply
+    payload["error"]["extError"] = {"code": "content_filter"}
+    assert await api._check_400_error(_ErrorResponse(json.dumps(payload))) == "图片或内容可能包含敏感信息"
+    assert not api._last_api_conversation_rejected

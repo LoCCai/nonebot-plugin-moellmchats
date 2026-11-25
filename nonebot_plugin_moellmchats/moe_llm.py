@@ -455,6 +455,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
             self._last_api_error_non_retryable = False
             self._last_api_output_started = False
             self._last_api_provider_rejected = False
+            self._last_api_conversation_rejected = False
             request_timeout = self._llm_request_timeout()
 
             async def model_operation():
@@ -582,6 +583,18 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 return await self._get_llm_chat()
         finally:
             await self._finish_tool_progress()
+
+    @staticmethod
+    def _trim_context_for_retry(messages: list) -> list | None:
+        """Remove older turns while retaining instructions and the latest user input."""
+        start = next((index for index in range(len(messages) - 1, -1, -1)
+                      if messages[index].get("role") == "user"), None)
+        if start is None or messages[-1].get("role") != "user":
+            return None
+        instructions = [row for row in messages[:start] if row.get("role") in {"system", "developer"}]
+        if len(instructions) == start:
+            return None
+        return [*instructions, *messages[start:]]
 
     async def _get_llm_chat(self) -> str | bool:
         recovery = current_binding()
@@ -747,6 +760,7 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
         session = get_session()
         self._waiting_confirmation = False
         tools_executed = False
+        trimmed_retry_done = False
         # 修改：增加上限至 max_tool_rounds + 1，以容纳最后一次强制总结
         for tool_round in range(max_tool_rounds + 1):
             if authorized_request():
@@ -775,11 +789,14 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                 )
 
             # 网络请求重试逻辑
+            retrying_trimmed = False
             for retry_times in range(max_retry_times):
                 self._last_api_error_non_retryable = False
-                if retry_times > 0:
+                self._last_api_conversation_rejected = False
+                if retry_times > 0 and not retrying_trimmed:
                     await self._send_retry_notice(retry_times)
                     await asyncio.sleep(2 ** (retry_times + 1))
+                retrying_trimmed = False
                 try:
                     (
                         success,
@@ -805,6 +822,15 @@ class MoeLlm(LlmApiMixin, LlmPayloadMixin, LlmToolsMixin):
                     if success:
                         break
                     if self._last_api_error_non_retryable:
+                        if (self._last_api_http_status == 400 and self._last_api_conversation_rejected
+                                and not trimmed_retry_done and not tools_executed
+                                and retry_times + 1 < max_retry_times):
+                            trimmed = self._trim_context_for_retry(send_message_list)
+                            if trimmed is not None:
+                                trimmed_retry_done = retrying_trimmed = True
+                                send_message_list = data["messages"] = trimmed
+                                logger.info("模型拒收对话，保留本轮输入并缩短历史后重试一次")
+                                continue
                         break
                 except AgentContextRuntimeError:
                     raise

@@ -30,6 +30,21 @@ def test_tall_screenshot_keeps_top_bottom_and_legible_width():
     assert tiles[-1].getpixel((20,tiles[-1].height-20))[0] > 200
 
 
+def test_tile_batch_compresses_below_individual_and_total_limits(monkeypatch):
+    from nonebot_plugin_moellmchats import vision_input
+
+    tile = Image.effect_noise((1400, 1400), 100).convert("RGB")
+    raw = io.BytesIO()
+    tile.save(raw, format="JPEG", quality=88, optimize=True)
+    limit = len(raw.getvalue())
+    monkeypatch.setattr(vision_input, "_TILE_MAX_BYTES", limit - 1)
+    monkeypatch.setattr(vision_input, "_TILES_MAX_BYTES", limit)
+    result = vision_input._encode_tiles([tile, tile])
+    assert len(result) == 2 and sum(map(len, result)) <= limit
+    assert all(len(value) < limit for value in result)
+    assert all(min(Image.open(io.BytesIO(value)).size) >= 1024 for value in result)
+
+
 @pytest.mark.parametrize("url", ["https://multimedia.nt.qq.com.cn.evil.invalid/a", "file:///tmp/a", "data:image/png;base64,AA=="])
 def test_only_exact_qq_hosts_are_downloaded(url):
     assert not qq_image_url(url)

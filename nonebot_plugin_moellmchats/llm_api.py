@@ -104,7 +104,7 @@ class LlmApiMixin:
 
     def _extract_api_error_info(self, error_text: str) -> dict[str, str]:
         """从 API 错误响应中提取常见结构化字段，解析失败时返回空字典。"""
-        info = {"code": "", "message": "", "type": "", "param": ""}
+        info = dict.fromkeys(("code", "message", "type", "param", "extCode", "requestId", "retry", "tips"), "")
 
         def set_if_empty(key: str, value):
             if info[key] or value is None:
@@ -120,16 +120,30 @@ class LlmApiMixin:
         if not isinstance(err_json, dict):
             return {}
 
-        candidates = []
-        if isinstance(err_json.get("error"), dict):
-            candidates.append(err_json["error"])
-        candidates.append(err_json)
+        error = err_json.get("error")
+        candidates = [error, err_json] if isinstance(error, dict) else [err_json]
+        extra_errors = [candidate["extError"] for candidate in candidates
+                        if isinstance(candidate.get("extError"), dict)]
+        candidates.extend(extra_errors)
+        for extra in extra_errors:
+            set_if_empty("extCode", extra.get("code") or extra.get("error_code"))
 
         for candidate in candidates:
             set_if_empty("code", candidate.get("code") or candidate.get("error_code"))
             set_if_empty("message", candidate.get("message") or candidate.get("msg"))
             set_if_empty("type", candidate.get("type"))
             set_if_empty("param", candidate.get("param"))
+
+        for candidate in candidates:
+            set_if_empty("requestId", candidate.get("requestId"))
+            policy = candidate.get("retry_policy")
+            if isinstance(policy, dict) and isinstance(policy.get("retry"), bool):
+                set_if_empty("retry", str(policy["retry"]).lower())
+            for key in ("displayTips", "displayMsg"):
+                value = candidate.get(key)
+                if isinstance(value, dict):
+                    value = value.get("en") or value.get("zh")
+                set_if_empty("tips", value)
 
         return {key: value for key, value in info.items() if value}
 
@@ -188,6 +202,7 @@ class LlmApiMixin:
 
     async def _check_400_error(self, response, request_data=None) -> str | None:
         """检查是否为400错误及敏感内容拦截，返回错误提示或None"""
+        self._last_api_conversation_rejected = False
         if response.status == 400:
             error_content = await response.text()
             logger.warning(f"API 请求返回 400，响应正文已省略，长度 {len(error_content)}")
@@ -197,8 +212,14 @@ class LlmApiMixin:
             # Only exact normalized structured code/type values prove a
             # content-policy rejection.  Free-form messages mentioning words
             # such as "audit" or "safety" are ordinary provider errors.
-            if is_content_policy_error_info(error_info):
+            if (is_content_policy_error_info(error_info)
+                    or is_content_policy_error_info({"code": error_info.get("extCode")})):
                 return "图片或内容可能包含敏感信息"
+            tips = error_info.get("tips", "").casefold()
+            self._last_api_conversation_rejected = (
+                "does not accept the current conversation" in tips
+                or ("当前对话" in tips and ("不接受" in tips or "不支持" in tips))
+            )
             has_images = request_data is not None and self._payload_contains_image(request_data)
             # This exact provider error also occurs for unsupported image URLs
             # and dimensions. It is not evidence of a safety block or depletion.
@@ -214,24 +235,15 @@ class LlmApiMixin:
             else:
                 logger.warning("LLM 请求失败；对话内容已从日志中省略")
 
-            # 4. 组装更详细的聊天回复文本
-            error_reply = "API请求被拒绝 (400)"
-            if has_images:
-                error_reply += "\n提示：请求包含图片；此提示不代表图片是错误原因。"
-            if code := error_info.get("code"):
-                error_reply += f"\n错误码：{code}"
-            if error_type := error_info.get("type"):
-                error_reply += f"\n类型：{error_type}"
-            if param := error_info.get("param"):
-                error_reply += f"\n参数：{param}"
-            if detail_msg:
-                # 截取前150个字符，防止大段长英文代码刷屏，影响群聊体验
-                truncated_msg = detail_msg[:150] + "..." if len(detail_msg) > 150 else detail_msg
-                error_reply += f"\n原因：{truncated_msg}"
-            else:
-                error_reply += "，请检查后台日志。"
-
-            return error_reply
+            reply = ("七七这次没能完成回答，模型拒收了当前对话。"
+                     if self._last_api_conversation_rejected
+                     else "七七这次请求被模型拒绝了（HTTP 400）。")
+            if self._last_api_conversation_rejected and has_images:
+                reply += "可以把长图分几段，或减少引用的消息。"
+            identifiers = (("错误码", "code"), ("分类", "extCode"), ("追踪号", "requestId"))
+            details = [f"{label} {value}" for label, key in identifiers
+                       if re.fullmatch(r"[A-Za-z0-9_.:-]{1,96}", value := error_info.get(key, ""))]
+            return reply + ("\n" + " · ".join(details) if details else "")
 
         return None
 

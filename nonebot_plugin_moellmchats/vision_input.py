@@ -20,6 +20,9 @@ _QQ_IMAGE_HOSTS = {"multimedia.nt.qq.com.cn", "multimedia.nt.qq.com", "gchat.qpi
 _EDGE = 2048
 _TILES = 8
 _QQ_PHOTO_MAX_BYTES = 64 * 1024 * 1024
+_TILE_MAX_BYTES = 3 * 1024 * 1024
+_TILES_MAX_BYTES = 8 * 1024 * 1024
+_TILE_MIN_SHORT_EDGE = 1024
 _photo_slots = asyncio.Semaphore(2)
 
 
@@ -95,19 +98,42 @@ def image_tiles(payload: bytes) -> tuple[str, ...]:
         image = image.resize((max(1, round(w * scale)), max(1, round(h * scale))))
         w, h = image.size
         count = min(_TILES, max(1, math.ceil((max(w, h) - 128) / (_EDGE - 128))))
-    results = []
+    tiles = []
     for index in range(count):
         extent = max(w, h)
         start = round(max(0, extent - _EDGE) * index / max(1, count - 1))
         box = ((0, start, w, min(h, start + _EDGE)) if h >= w
                else (start, 0, min(w, start + _EDGE), h))
-        tile = image.crop(box)
-        output = io.BytesIO()
-        tile.save(output, format="JPEG", quality=88, optimize=True)
-        if output.tell() > 3 * 1024 * 1024:
-            raise ValueError("image tile byte limit")
-        results.append("data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii"))
-    return tuple(results)
+        tiles.append(image.crop(box))
+    return tuple("data:image/jpeg;base64," + base64.b64encode(tile).decode("ascii")
+                 for tile in _encode_tiles(tiles))
+
+
+def _encode_tiles(tiles: list) -> list[bytes]:
+    from PIL import Image
+    from .media_context import MediaError
+
+    while True:
+        for quality in (88, 80, 72, 64):
+            encoded = []
+            for tile in tiles:
+                output = io.BytesIO()
+                tile.save(output, format="JPEG", quality=quality, optimize=True)
+                encoded.append(output.getvalue())
+            if (all(len(tile) <= _TILE_MAX_BYTES for tile in encoded)
+                    and sum(map(len, encoded)) <= _TILES_MAX_BYTES):
+                return encoded
+        resized = []
+        for tile in tiles:
+            short_edge = min(tile.size)
+            scale = max(_TILE_MIN_SHORT_EDGE / short_edge, 0.85)
+            if scale < 1:
+                size = tuple(round(side * scale) for side in tile.size)
+                tile = tile.resize(size, Image.Resampling.LANCZOS)
+            resized.append(tile)
+        if all(new is old for new, old in zip(resized, tiles)):
+            raise MediaError("图片压缩后仍超出传输大小，请裁切或分段发送。")
+        tiles = resized
 
 
 async def vision_parts(payload: bytes) -> list[dict]:
